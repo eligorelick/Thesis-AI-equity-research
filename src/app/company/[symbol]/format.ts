@@ -3,44 +3,37 @@
  * the underlying data — rounding happens only here at the render boundary.
  */
 
+import {
+  formatCurrency,
+  formatLargeNumber,
+  formatMultiple,
+  formatNumber,
+  formatPct,
+} from "@/report/format";
+
 export function fmtNum(v: number | null | undefined, digits = 2): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "n/a";
-  return v.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
+  return formatNumber(v, digits);
 }
 
 export function fmtPct(v: number | null | undefined, digits = 1): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "n/a";
-  return `${v.toFixed(digits)}%`;
+  return formatPct(v, digits);
 }
 
 export function fmtSignedPct(v: number | null | undefined, digits = 1): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "n/a";
-  return `${v >= 0 ? "+" : ""}${v.toFixed(digits)}%`;
+  return formatPct(v, digits, true);
 }
 
 /** Compact currency scale: 1.23T / 45.6B / 789M / 12.3K. */
 export function fmtBig(v: number | null | undefined): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "n/a";
-  const abs = Math.abs(v);
-  const sign = v < 0 ? "-" : "";
-  if (abs >= 1e12) return `${sign}${(abs / 1e12).toFixed(2)}T`;
-  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`;
-  return `${sign}${abs.toFixed(2)}`;
+  return formatLargeNumber(v);
 }
 
 export function fmtMoney(v: number | null | undefined, digits = 2): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "n/a";
-  return `$${v.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+  return formatCurrency(v, digits);
 }
 
 export function fmtX(v: number | null | undefined, digits = 1): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "n/m";
-  return `${v.toFixed(digits)}×`;
+  return formatMultiple(v, digits);
 }
 
 /** upside/downside vs price, given per-share intrinsic value. */

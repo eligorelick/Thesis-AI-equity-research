@@ -251,6 +251,9 @@ export const SourcedClaimSchema = z
   .object({
     text: z.string(),
     label: ClaimLabelSchema,
+    /** Canonical structured citation identity (1.2.0+). */
+    sourceId: z.string().trim().min(1).optional(),
+    /** Legacy display/source field retained for persisted-report compatibility. */
     source: z.string().trim().min(1),
     asOf: IsoDateSchema.nullable(),
   })
@@ -271,6 +274,9 @@ export const TracedNumberSchema = z
     currency: z.string().regex(/^[A-Z]{3}$/).nullable().optional(),
     /** Fiscal/forecast period; optional only for legacy reports. */
     period: z.string().trim().min(1).nullable().optional(),
+    /** Canonical structured citation identity (1.2.0+). */
+    sourceId: z.string().trim().min(1).optional(),
+    /** Legacy display/source field retained for persisted-report compatibility. */
     source: z.string().trim().min(1),
     asOf: IsoDateSchema.nullable(),
     /** null = not yet verified; set by the verification pass (the application contract §5). */
@@ -375,11 +381,42 @@ export type ProvenanceCoverage = z.infer<typeof ProvenanceCoverageSchema>;
 export const DISCLAIMER_TEXT =
   "Informational only — not investment advice." as const;
 
+export const DataCompletenessSchema = z
+  .object({
+    state: z.enum(["complete", "degraded", "blocked"]),
+    criticalCount: z.number().int().nonnegative(),
+    warningCount: z.number().int().nonnegative(),
+    edgar: z.enum(["available", "missing"]),
+    xbrl: z.enum(["checked", "skipped", "failed"]),
+    forensicValidation: z.enum(["complete", "provisional"]),
+  })
+  .strict();
+export type DataCompleteness = z.infer<typeof DataCompletenessSchema>;
+
+export const ExecutionMetadataEntrySchema = z
+  .object({
+    step: z.string(),
+    requestedModel: z.string(),
+    effectiveModel: z.string(),
+    requestedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable(),
+    effectiveEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable(),
+    fallbackUsed: z.boolean(),
+    adjustments: z.array(z.enum(["model-floor", "fallback", "effort-stripped"])),
+  })
+  .strict();
+export type ExecutionMetadataEntry = z.infer<typeof ExecutionMetadataEntrySchema>;
+
 export const MetaSchema = z
   .object({
     symbol: z.string(),
     companyName: z.string(),
     generatedAt: z.string(),
+    /** Job/report lifecycle identifiers and timestamps (1.2.0+). */
+    runId: z.string().optional(),
+    reportId: z.number().int().positive().optional(),
+    startedAt: z.string().optional(),
+    completedAt: z.string().optional(),
+    persistedAt: z.string().optional(),
     specVersion: z.string(),
     model: z.string(),
     verifyModel: z.string().optional(),
@@ -394,6 +431,10 @@ export const MetaSchema = z
     verificationRate: z.number().nullable(),
     /** Explicit provenance metrics; optional only for reports before 1.2.0. */
     provenanceCoverage: ProvenanceCoverageSchema.optional(),
+    /** Provider/critical-section gate; optional for legacy persisted reports. */
+    dataCompleteness: DataCompletenessSchema.optional(),
+    /** Requested versus effective per-pass execution settings. */
+    execution: z.array(ExecutionMetadataEntrySchema).optional(),
     /**
      * DISCLAIMER: stored verbatim from the constant in force at generation time.
      * Parse-side accepts ANY non-empty string so a future edit to DISCLAIMER_TEXT
@@ -1015,6 +1056,11 @@ export const CostBreakdownEntrySchema = z
     step: z.string(),
     model: z.string(),
     costUsd: z.number(),
+    requestedModel: z.string().optional(),
+    requestedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
+    effectiveEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
+    fallbackUsed: z.boolean().optional(),
+    adjustments: z.array(z.enum(["model-floor", "fallback", "effort-stripped"])).optional(),
   })
   .strict();
 export type CostBreakdownEntry = z.infer<typeof CostBreakdownEntrySchema>;
@@ -1041,7 +1087,7 @@ export const DisagreementSchema = z
     topic: z.string(),
     bullView: ratingSafeString(),
     bearView: ratingSafeString(),
-    kind: z.enum(["fact", "interpretation"]),
+    kind: z.enum(["fact", "interpretation", "entity"]),
     judgeResolution: ratingSafeString(),
   })
   .strict();
@@ -1705,6 +1751,10 @@ const ALWAYS_FILLED_BY_GENERATION = new Set([
   "insiderActivity",
   "compensation",
   "tam",
+  // Fresh model output must carry the canonical source identity separately
+  // from the legacy display field. The Zod field stays optional only so old
+  // persisted reports remain readable.
+  "sourceId",
 ]);
 
 export function requireAlwaysFilledFields<T>(schema: T): T {

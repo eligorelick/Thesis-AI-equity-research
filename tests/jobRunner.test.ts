@@ -311,7 +311,13 @@ function fakeReport(judge: JudgeOutput): Report {
 }
 
 /** A mock PipelinePasses recording calls; passes cost/usage through. */
-function mockPasses(over: Partial<{ verificationRate: number }> = {}): {
+function mockPasses(over: Partial<{
+  verificationRate: number;
+  bullCostUsd: number;
+  bearCostUsd: number;
+  judgeCostUsd: number;
+  verifyCostUsd: number;
+}> = {}): {
   passes: PipelinePasses;
   calls: string[];
 } {
@@ -319,7 +325,7 @@ function mockPasses(over: Partial<{ verificationRate: number }> = {}): {
   const bull: PassResultLike<AnalystCase> = {
     data: fakeAnalystCase(),
     model: "claude-opus-4-8",
-    costUsd: 0.9,
+    costUsd: over.bullCostUsd ?? 0.9,
     fallbackUsed: false,
     usage: { input_tokens: 15000, output_tokens: 6000, cache_creation_input_tokens: 75000, cache_read_input_tokens: 0 },
     webSearches: 7,
@@ -327,7 +333,7 @@ function mockPasses(over: Partial<{ verificationRate: number }> = {}): {
   const bear: PassResultLike<AnalystCase> = {
     data: fakeAnalystCase(),
     model: "claude-opus-4-8",
-    costUsd: 0.47,
+    costUsd: over.bearCostUsd ?? 0.47,
     fallbackUsed: false,
     usage: { input_tokens: 15000, output_tokens: 6000, cache_creation_input_tokens: 0, cache_read_input_tokens: 300000 },
     webSearches: 6,
@@ -336,14 +342,14 @@ function mockPasses(over: Partial<{ verificationRate: number }> = {}): {
   const judgeResult: PassResultLike<JudgeOutput> = {
     data: judge,
     model: "claude-opus-4-8",
-    costUsd: 0.4,
+    costUsd: over.judgeCostUsd ?? 0.4,
     fallbackUsed: false,
     usage: { input_tokens: 12000, output_tokens: 12000, cache_read_input_tokens: 75000 },
   };
   const verify: VerifyPassResult = {
     verifiedReport: fakeReport(judge),
     verificationRate: over.verificationRate ?? 1,
-    costUsd: 0.2,
+    costUsd: over.verifyCostUsd ?? 0.2,
     model: "claude-opus-4-8",
     fallbackUsed: false,
     usage: { input_tokens: 12000, output_tokens: 4000, cache_read_input_tokens: 75000 },
@@ -596,8 +602,42 @@ describe("runJob — full pipeline with mock passes", () => {
       expect(parsed.data.meta.costUsd).toBeCloseTo(totalCost, 4);
       expect(parsed.data.meta.pipelineVersion).toBe("stage-c-1.0.0");
       expect(parsed.data.meta.verificationRate).toBe(1);
+      expect(parsed.data.meta.runId).toBe(jobId);
+      expect(parsed.data.meta.reportId).toBe(result.reportId);
+      expect(parsed.data.meta.startedAt).toBeDefined();
+      expect(parsed.data.meta.completedAt).toBeDefined();
+      expect(parsed.data.meta.persistedAt).toBeDefined();
+      expect(parsed.data.meta.execution?.map((entry) => entry.step)).toEqual([
+        "bull",
+        "bear",
+        "synthesize",
+        "verify",
+      ]);
       expect(parsed.data.appendix.costBreakdown.length).toBe(4);
     }
+  });
+
+  it("preserves cost precision beyond four decimals in persisted report metadata", async () => {
+    const { jobId } = createJob("AAPL");
+    const { passes } = mockPasses({
+      bullCostUsd: 0.1111114,
+      bearCostUsd: 0.2222226,
+      judgeCostUsd: 0.3333337,
+      verifyCostUsd: 0,
+    });
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle("AAPL"),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const report = ReportSchema.parse(JSON.parse(row.reportJson!));
+    const exact = 0.1111114 + 0.2222226 + 0.3333337;
+
+    expect(report.meta.costUsd).toBe(exact);
+    expect(row.costUsd).toBe(exact);
+    expect(report.meta.costUsd).not.toBe(Math.round(exact * 1e4) / 1e4);
   });
 
   it("passes the union of bull, bear, and judge fetched URLs to verification", async () => {
@@ -1462,6 +1502,8 @@ describe("runJob — per-pass timing", () => {
     // Verify starts when it actually runs (after the judge), not alongside it.
     expect(byStep.verify.startedAt).toBeDefined();
     expect(byStep.synthesize.startedAt! <= byStep.verify.startedAt!).toBe(true);
+    expect(byStep.synthesize.finishedAt! <= byStep.verify.startedAt!).toBe(true);
+    expect(byStep.synthesize.completedAt).toBe(byStep.synthesize.finishedAt);
     expect(byStep.verify.status).toBe("done");
   });
 });

@@ -56,7 +56,10 @@ import {
   type AnalystCase,
   type JudgeOutput,
   type ProvenanceCoverage,
+  type ExecutionMetadataEntry,
 } from "@/report/schema";
+import { buildDataCompleteness } from "@/report/completeness";
+import { buildExecutionMetadataEntry } from "@/report/execution";
 import { buildDataBundle, type BuildDataBundleOptions } from "@/pipeline/dataBundle";
 import { runStageB, type ComputedMetrics } from "@/pipeline/compute";
 import { validateBundle, type ValidationReport } from "@/pipeline/stageA/validate";
@@ -279,6 +282,10 @@ export interface ReportMetaInput {
   costUsd: number;
   verificationRate: number | null;
   asOfMap: Record<string, string>;
+  execution?: ExecutionMetadataEntry[];
+  runId?: string;
+  startedAt?: string;
+  completedAt?: string;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -338,6 +345,7 @@ export function initialSteps(): StepProgress[] {
 interface RunState {
   jobId: string;
   symbol: string;
+  startedAt: string;
   steps: StepProgress[];
   totalCostUsd: number;
 }
@@ -382,6 +390,7 @@ function startStep(state: RunState, step: PipelineStep): void {
   const s = findStep(state, step);
   s.status = "running";
   s.startedAt = nowIso();
+  delete s.completedAt;
   delete s.finishedAt;
   delete s.detail;
   persistSteps(state);
@@ -404,6 +413,7 @@ function finishStep(
   const s = findStep(state, step);
   s.status = status;
   s.finishedAt ??= nowIso();
+  s.completedAt = s.finishedAt;
   if (detail !== undefined) s.detail = detail;
   if (costUsd !== undefined) s.costUsd = costUsd;
   persistSteps(state);
@@ -414,6 +424,7 @@ function finishStep(
 function stampStepFinished(state: RunState, step: PipelineStep): void {
   const s = findStep(state, step);
   s.finishedAt = nowIso();
+  s.completedAt = s.finishedAt;
   persistSteps(state);
   emitStep(state, step);
 }
@@ -1047,6 +1058,7 @@ export function sweepAbandonedJobs(
           if (step.status === "running") {
             step.status = "error";
             step.finishedAt = now.toISOString();
+            step.completedAt = step.finishedAt;
             step.detail = message;
           } else if (step.status === "pending") {
             step.status = "skipped";
@@ -1173,6 +1185,7 @@ export async function runJob<TPayload = unknown>(
   const state: RunState = {
     jobId,
     symbol: jobRow.symbol,
+    startedAt: jobRow.createdAt,
     steps: initialSteps(),
     // Rehydrate any cost already logged under this jobId BEFORE any early exit
     // (no-key / model-resolution-failure / compute-throw): a resumed run's
@@ -1367,15 +1380,53 @@ export async function runJob<TPayload = unknown>(
     ): Promise<RunJobResult> => {
       startStep(state, "synthesize");
 
-      const generatedAt = now().toISOString();
-      const buildMeta = (verificationRate: number | null): ReportMetaInput => ({
+      const buildMeta = (
+        verificationRate: number | null,
+        judge: PassResultLike<JudgeOutput>,
+      ): ReportMetaInput => ({
         symbol: state.symbol,
         companyName: companyNameOf(bundle, state.symbol),
-        generatedAt,
+        // Generation completes after verification data exists; persistence is
+        // stamped separately by persistReport.
+        generatedAt: now().toISOString(),
         model: analysisModel,
-        costUsd: round4(state.totalCostUsd),
+        // Preserve the exact sum in report JSON. Presentation rounds each row
+        // and the displayed total to six decimals through the shared formatter.
+        costUsd: state.totalCostUsd,
         verificationRate,
         asOfMap: { ...bundle.asOf },
+        runId: state.jobId,
+        startedAt: state.startedAt,
+        execution: [
+          buildExecutionMetadataEntry({
+            step: "bull",
+            requestedModel: analysisModel,
+            effectiveModel: bull.model,
+            requestedEffort: analysisEffort,
+            fallbackUsed: bull.fallbackUsed,
+          }),
+          buildExecutionMetadataEntry({
+            step: "bear",
+            requestedModel: analysisModel,
+            effectiveModel: bear.model,
+            requestedEffort: analysisEffort,
+            fallbackUsed: bear.fallbackUsed,
+          }),
+          buildExecutionMetadataEntry({
+            step: "synthesize",
+            requestedModel: analysisModel,
+            effectiveModel: judge.model,
+            requestedEffort: analysisEffort,
+            fallbackUsed: judge.fallbackUsed,
+          }),
+          buildExecutionMetadataEntry({
+            step: "verify",
+            requestedModel: "deterministic",
+            effectiveModel: "deterministic",
+            requestedEffort: null,
+            fallbackUsed: false,
+          }),
+        ],
       });
 
       let assembled: {
@@ -1428,6 +1479,9 @@ export async function runJob<TPayload = unknown>(
           break;
         }
         logPassCost(state, "synthesize", judge);
+        // The judge is complete before verification begins. Persist this
+        // transition now so lifecycle logs cannot imply overlap or inversion.
+        finishStep(state, "synthesize", "done", passDetail(judge), judge.costUsd);
 
         // 2) Verify pass. Verification failing is NOT a schema-validation failure
         //    (the judge output is valid) — do not burn a retry; persist the
@@ -1479,7 +1533,7 @@ export async function runJob<TPayload = unknown>(
 
         // 3) Assemble the final Report. A throw here is a report-schema (Zod)
         //    validation failure — retryable per SPEC §2 (re-invoke the judge).
-        const meta = buildMeta(verificationRate);
+        const meta = buildMeta(verificationRate, judge);
         const costBreakdown = buildCostBreakdown(state);
         let report: Report;
         try {
@@ -1509,12 +1563,15 @@ export async function runJob<TPayload = unknown>(
           const detail = `report assembly attempt ${attempt + 1}/${maxJudgeRetries + 1} failed${retrying ? "; retrying judge" : ""}: ${lastValidationDetail}`;
           updateRunningStepDetail(state, "synthesize", detail);
           updateRunningStepDetail(state, "verify", detail);
-          if (retrying) continue; // feed the Zod error back
+          if (retrying) {
+            finishStep(state, "verify", "error", detail);
+            startStep(state, "synthesize");
+            continue; // feed the Zod error back
+          }
           break;
         }
 
-        // Success for this attempt — finish synthesize + verify and record.
-        finishStep(state, "synthesize", "done", passDetail(judge), judge.costUsd);
+        // Success for this attempt — synthesis already completed before verify.
         if (verifyError !== null) {
           finishStep(state, "verify", "error", verifyError);
         } else {
@@ -1556,6 +1613,7 @@ export async function runJob<TPayload = unknown>(
       }
 
       const { report, verificationRate, verifyLog, meta, costBreakdown } = assembled;
+      meta.completedAt = findStep(state, "verify").completedAt ?? findStep(state, "verify").finishedAt;
 
       // Reconcile runner-owned meta onto the assembled report (cost/rate/model
       // are the runner's source of truth; the passes may not know the final cost).
@@ -1848,6 +1906,7 @@ function abortRun(state: RunState, reason: unknown): RunJobResult {
     if (step.status === "running") {
       step.status = "error";
       step.finishedAt = nowIso();
+      step.completedAt = step.finishedAt;
       step.detail = message;
       emitStep(state, step.step);
     } else if (step.status === "pending") {
@@ -1887,7 +1946,7 @@ function persistDataOnly(
     companyName: companyNameOf(bundle, state.symbol),
     generatedAt,
     model,
-    costUsd: round4(state.totalCostUsd),
+    costUsd: state.totalCostUsd,
     bundle,
     validation,
     computed,
@@ -1940,6 +1999,7 @@ function markSkipped(state: RunState, step: PipelineStep, reason: string): void 
     s.status = "skipped";
     s.startedAt ??= nowIso();
     s.finishedAt = nowIso();
+    s.completedAt = s.finishedAt;
     s.detail = reason;
     persistSteps(state);
     emitStep(state, step);
@@ -1958,22 +2018,40 @@ function persistReport(
   verificationRate: number | null,
   status: string,
 ): number {
-  const now = nowIso();
+  const createdAt = nowIso();
   return getDb().transaction((tx) => {
     const inserted = tx
       .insert(reports)
       .values({
         symbol: state.symbol,
-        createdAt: now,
+        createdAt,
         model,
         status,
         reportJson: JSON.stringify(report),
         verificationRate,
-        costUsd: round4(state.totalCostUsd),
+        costUsd: state.totalCostUsd,
         specVersion: REPORT_SPEC_VERSION,
       })
       .returning({ id: reports.id })
       .get();
+    const parsed = ReportSchema.safeParse(report);
+    if (parsed.success) {
+      const persistedReport: Report = {
+        ...parsed.data,
+        meta: {
+          ...parsed.data.meta,
+          runId: state.jobId,
+          reportId: inserted.id,
+          persistedAt: nowIso(),
+        },
+      };
+      tx
+        .update(reports)
+        .set({ reportJson: JSON.stringify(persistedReport) })
+        .where(eq(reports.id, inserted.id))
+        .run();
+    }
+    const completedAt = nowIso();
     tx
       .update(jobs)
       .set({
@@ -1981,7 +2059,7 @@ function persistReport(
         status: "done",
         error: null,
         stepsJson: JSON.stringify(state.steps),
-        updatedAt: now,
+        updatedAt: completedAt,
       })
       .where(eq(jobs.id, state.jobId))
       .run();
@@ -2038,11 +2116,30 @@ function reconcileMeta(
       verificationRate: meta.verificationRate,
       disclaimer: DISCLAIMER_TEXT,
       asOfMap: { ...meta.asOfMap, ...report.meta.asOfMap },
+      execution: meta.execution ?? report.meta.execution,
+      dataCompleteness: report.meta.dataCompleteness,
+      runId: meta.runId ?? report.meta.runId,
+      startedAt: meta.startedAt ?? report.meta.startedAt,
+      completedAt: meta.completedAt ?? report.meta.completedAt,
     },
     appendix: {
       ...report.appendix,
       verificationRate: meta.verificationRate,
-      costBreakdown: costBreakdown.length > 0 ? costBreakdown : report.appendix.costBreakdown,
+      costBreakdown: costBreakdown.length > 0
+        ? costBreakdown.map((entry) => {
+            const execution = meta.execution?.find((item) => item.step === entry.step);
+            return execution
+              ? {
+                  ...entry,
+                  requestedModel: execution.requestedModel,
+                  requestedEffort: execution.requestedEffort,
+                  effectiveEffort: execution.effectiveEffort,
+                  fallbackUsed: execution.fallbackUsed,
+                  adjustments: execution.adjustments,
+                }
+              : entry;
+          })
+        : report.appendix.costBreakdown,
     },
   };
   if (verifyLog !== undefined && Array.isArray(verifyLog)) {
@@ -2158,6 +2255,7 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
       costUsd: input.costUsd,
       verificationRate: null,
       provenanceCoverage: emptyCoverage,
+      dataCompleteness: buildDataCompleteness(missingData),
       disclaimer: DISCLAIMER_TEXT,
       asOfMap,
     },

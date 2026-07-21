@@ -26,9 +26,11 @@ import {
 } from "@/report/schema";
 import {
   esc,
+  PRINT_CSS,
   reportToPrintBody,
   reportToPrintHtml,
 } from "@/report/export/printHtml";
+import { REPORT_SECTION_MANIFEST } from "@/report/sectionManifest";
 
 const FIXTURE_PATH = path.join(
   process.cwd(),
@@ -115,6 +117,22 @@ describe("reportToPrintHtml — full schema-valid report", () => {
     ]) {
       expect(body).toContain(title);
     }
+  });
+
+  it("uses the central 1..14 manifest exactly once and in order", () => {
+    let previous = -1;
+    for (const section of REPORT_SECTION_MANIFEST) {
+      const heading = `<span class="secno">${section.index}</span> ${esc(section.printTitle)}`;
+      const position = body.indexOf(heading);
+      expect(position, section.key).toBeGreaterThan(previous);
+      expect(body.indexOf(heading, position + 1), section.key).toBe(-1);
+      previous = position;
+    }
+  });
+
+  it("keeps subheadings and table rows with the content they introduce", () => {
+    expect(PRINT_CSS).toMatch(/h2\.sec, h3, h4 \{ break-after: avoid-page/);
+    expect(PRINT_CSS).toMatch(/tr \{ break-inside: avoid/);
   });
 
   it("auto-print script is opt-in", () => {

@@ -46,6 +46,18 @@ import type {
   Valuation,
 } from "@/report/schema";
 import { citationOutcomeLabel } from "@/report/schema";
+import {
+  formatCostUsd,
+  formatFinancialValue,
+  formatPct,
+  formatVerificationClaim,
+  roundedDisplayedCostTotal,
+} from "@/report/format";
+import {
+  REPORT_SECTION_MANIFEST,
+  reportSection,
+  type ReportSectionKey,
+} from "@/report/sectionManifest";
 
 /* ======================================================================== *
  * Escaping + deterministic formatting
@@ -110,36 +122,13 @@ function num(v: number | null | undefined, digits = 2): string {
   return v.toFixed(digits);
 }
 
-function large(v: number | null | undefined): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return DASH;
-  const abs = Math.abs(v);
-  const sign = v < 0 ? "-" : "";
-  if (abs >= 1e12) return `${sign}${(abs / 1e12).toFixed(2)}T`;
-  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`;
-  return `${sign}${abs.toFixed(2)}`;
-}
-
 function tracedValue(n: TracedNumber): string {
-  const u = n.unit.trim().toLowerCase();
-  if (u === "%" || u === "pct" || u === "percent") return `${num(n.value, 1)}%`;
-  if (u === "x" || u === "×" || u === "multiple") return `${num(n.value, 1)}×`;
-  if (u === "usd" || u === "$" || u === "usd/share" || u === "$/share")
-    return `$${num(n.value, 2)}`;
-  if (u === "usd_large" || u === "usd-large" || u === "$_large")
-    return `$${large(n.value)}`;
-  if (u === "large" || u === "count_large") return large(n.value);
-  if (u === "bps") return `${num(n.value, 0)} bps`;
-  if (u === "years" || u === "yr" || u === "y") return `${num(n.value, 1)}y`;
-  if (u === "" || u === "number" || u === "count")
-    return num(n.value, Number.isInteger(n.value) ? 0 : 2);
-  return `${num(n.value)} ${n.unit}`;
+  return formatFinancialValue(n.value, n.unit);
 }
 
 function signedPct(v: number | null | undefined, digits = 1): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return DASH;
-  return `${v >= 0 ? "+" : ""}${v.toFixed(digits)}%`;
+  return formatPct(v, digits, true);
 }
 
 function asOfTag(asOf: string | null): string {
@@ -168,6 +157,11 @@ function gradeClass(grade: string): string {
 
 function h2(index: number, title: string): string {
   return `<h2 class="sec"><span class="secno">${index}</span> ${esc(title)}</h2>`;
+}
+
+function sectionHeading(key: ReportSectionKey): string {
+  const section = reportSection(key);
+  return h2(section.index, section.printTitle);
 }
 
 /** A table from escaped header + body cells (cells may carry inner markup). */
@@ -297,7 +291,7 @@ function sectionVerdict(report: Report): string {
     v.executiveSummary && v.executiveSummary.length > 0
       ? `<h3>Executive summary</h3>${claimList(v.executiveSummary)}`
       : "";
-  return `<section class="block">${h2(1, "Verdict")}<p class="synthesis">${esc(
+  return `<section class="block">${sectionHeading("verdict")}<p class="synthesis">${esc(
     v.synthesis,
   )}</p>${execSummary}${strip}</section>`;
 }
@@ -330,7 +324,7 @@ function sectionScores(scores: Scoring): string {
   const compositeChip = c.band
     ? `<span class="chip ${gradeClass(c.band)}">${esc(c.band)}</span>`
     : DASH;
-  return `<section class="block">${h2(1, "Scorecard (deterministic)")}
+  return `<section class="block"><h3>Scorecard (deterministic)</h3>
     <p>Composite: <strong class="mono">${
       c.score === null ? DASH : Math.round(c.score)
     } / 100</strong> ${compositeChip}</p>
@@ -347,7 +341,7 @@ const PROJECTION_METRIC_LABEL: Record<Projections["series"][number]["metric"], s
 
 function sectionProjections(p: Projections): string {
   if (p.series.length === 0) {
-    return `<section class="block">${h2(11, "Weighted Projections")}<p class="faint">Not applicable${
+    return `<section class="block">${sectionHeading("projections")}<p class="faint">Not applicable${
       p.notApplicableReason ? `: ${esc(p.notApplicableReason)}` : "."
     }</p></section>`;
   }
@@ -370,13 +364,13 @@ function sectionProjections(p: Projections): string {
       )}${assumptions}`;
     })
     .join("");
-  return `<section class="block">${h2(11, "Weighted Projections")}
+  return `<section class="block">${sectionHeading("projections")}
     <p class="faint">Horizon ${p.horizonYears}y · unbacktested display-prior weights ${p.scenarioWeights.bull}/${p.scenarioWeights.base}/${p.scenarioWeights.bear} (bull/base/bear). Forward figures are ESTIMATEs, not facts or empirically calibrated odds.</p>
     ${blocks}</section>`;
 }
 
 function sectionBusiness(b: Business): string {
-  return `<section class="block">${h2(2, "Business & Segments")}
+  return `<section class="block">${sectionHeading("business")}
     <h3>What they sell</h3>${claimList(b.whatTheySell)}
     <h3>Product segments</h3>${segmentTable(b.segments.product)}
     <h3>Geographic segments</h3>${segmentTable(b.segments.geographic)}
@@ -384,7 +378,7 @@ function sectionBusiness(b: Business): string {
 }
 
 function sectionFundamentals(f: Fundamentals): string {
-  return `<section class="block">${h2(3, "Fundamentals")}${gradeBlock(
+  return `<section class="block">${sectionHeading("fundamentals")}${gradeBlock(
     "Fundamentals",
     f.graded,
   )}
@@ -403,7 +397,7 @@ function sectionBalanceSheet(bs: BalanceSheet): string {
     `<h3>${esc(title)}</h3>${claimList(g.commentary)}${
       g.numbers.length > 0 ? numbersTable(g.numbers) : ""
     }`;
-  return `<section class="block">${h2(4, "Balance Sheet & Capital")}
+  return `<section class="block">${sectionHeading("balanceSheet")}
     ${bs.graded ? gradeBlock("Balance Sheet & Capital", bs.graded) : ""}
     ${group("Debt profile", bs.debtProfile)}
     ${group("Coverage", bs.coverage)}
@@ -505,7 +499,7 @@ function sectionValuation(v: Valuation, scenarioTargets?: ScenarioTargets, fairV
   }
   for (const sc of v.scenarios) parts.push(scenarioCard(sc));
 
-  return `<section class="block">${h2(5, "Valuation")}${parts.join("")}</section>`;
+  return `<section class="block">${sectionHeading("valuation")}${parts.join("")}</section>`;
 }
 
 function scenarioCard(sc: Scenario): string {
@@ -545,7 +539,7 @@ function sectionQuality(q: Quality): string {
           q.flags.map((f) => [esc(f.severity), esc(f.text), esc(f.source)]),
         )
       : `<p class="faint">No forensic flags raised.</p>`;
-  return `<section class="block">${h2(6, "Quality & Red Flags")}${gradeBlock(
+  return `<section class="block">${sectionHeading("quality")}${gradeBlock(
     "Quality",
     q.graded,
   )}<h3>Forensic scores</h3>${forensic}<h3>Flags</h3>${flags}</section>`;
@@ -565,7 +559,7 @@ function sectionTechnicals(t: Technicals): string {
           t.flags.map((f) => [esc(f.severity), esc(f.text), esc(f.source)]),
         )
       : "";
-  return `<section class="block">${h2(7, "Technicals")}${gradeBlock(
+  return `<section class="block">${sectionHeading("technicals")}${gradeBlock(
     "Technicals",
     t.graded,
   )}<h3>Structured read</h3>${read}${
@@ -587,7 +581,7 @@ function sectionLeadership(l: Leadership): string {
         }</p>${claimList(e.reasoning)}</div>`,
     )
     .join("");
-  return `<section class="block">${h2(8, "Leadership & Governance")}${gradeBlock(
+  return `<section class="block">${sectionHeading("leadership")}${gradeBlock(
     "Leadership",
     l.graded,
   )}<h3>Executives</h3>${execs}<h3>Insider activity</h3>${claimList(
@@ -623,7 +617,7 @@ function sectionCompetitive(c: Competitive): string {
         )}): ${esc(m.reasoning.map((r) => r.text).join(" "))}</li>`,
     )
     .join("");
-  return `<section class="block">${h2(9, "Competitive Landscape")}${gradeBlock(
+  return `<section class="block">${sectionHeading("competitive")}${gradeBlock(
     "Moat",
     c.moatGraded,
   )}<h3>Peer table</h3>${peers}<h3>Moat assessment</h3><ul>${moat}</ul>
@@ -651,15 +645,12 @@ function sectionCatalystsRisks(cr: CatalystsRisks): string {
       esc(r.reasoning.text),
     ]),
   );
-  return `<section class="block prominent">${h2(
-    10,
-    "Catalysts & Risks",
-  )}<h3>Catalysts</h3>${catalysts}<h3>Risks</h3>${risks}</section>`;
+  return `<section class="block prominent">${sectionHeading("catalystsRisks")}<h3>Catalysts</h3>${catalysts}<h3>Risks</h3>${risks}</section>`;
 }
 
 function sectionOutlook(report: Report): string {
   const o = report.outlook;
-  return `<section class="block">${h2(11, "Future Outlook")}
+  return `<section class="block">${sectionHeading("outlook")}
     <h3>Segment trajectories</h3>${claimList(o.segmentTrajectories)}
     ${o.tam && o.tam.length > 0 ? `<h3>TAM</h3>${claimList(o.tam)}` : ""}
     <h3>Estimate-revision trend</h3>${claimList(o.estimateRevisionTrend)}
@@ -681,7 +672,7 @@ function sectionMacro(m: Macro): string {
       esc(s.relevance),
     ]),
   );
-  return `<section class="block">${h2(12, "Macro Context")}${series}${
+  return `<section class="block">${sectionHeading("macro")}${series}${
     m.sensitivityNotes.length > 0
       ? `<h3>Sensitivity notes</h3>${claimList(m.sensitivityNotes)}`
       : ""
@@ -702,7 +693,7 @@ function disagreementsBlock(disagreements: readonly Disagreement[]): string {
   return `<h3>Bull/bear disagreements</h3><ul class="disagreements">${items}</ul>`;
 }
 
-function sectionAppendix(a: Appendix): string {
+function sectionAppendix(a: Appendix, disagreements: readonly Disagreement[]): string {
   const sources = table(
     ["Provider", "Endpoint", "As of", "Fetched at"],
     a.sources.map((s) => [
@@ -724,23 +715,24 @@ function sectionAppendix(a: Appendix): string {
           ]),
         )
       : `<p class="faint">No gaps &mdash; full data coverage.</p>`;
-  const totalCost = a.costBreakdown.reduce((s, e) => s + e.costUsd, 0);
+  const totalCost = roundedDisplayedCostTotal(a.costBreakdown.map((entry) => entry.costUsd));
   const cost = table(
     ["Step", "Model", "Cost (USD)"],
-    a.costBreakdown.map((e) => [esc(e.step), esc(e.model), `$${e.costUsd.toFixed(4)}`]),
+    a.costBreakdown.map((e) => [esc(e.step), esc(e.model), formatCostUsd(e.costUsd)]),
   );
   const vlog =
     a.verificationLog && a.verificationLog.length > 0
       ? table(
           ["Claim", "Outcome", "Note"],
           a.verificationLog.map((v) => [
-            esc(v.claim),
+            esc(formatVerificationClaim(v.claim)),
             esc(citationOutcomeLabel(v.outcome)),
             esc(v.note ?? DASH),
           ]),
         )
       : "";
-  return `<section class="block">${h2(13, "Appendix")}
+  return `<section class="block">${sectionHeading("appendix")}
+    ${disagreementsBlock(disagreements)}
     <h3>Sources</h3>${sources}
     <h3>Missing-data manifest</h3>${missing}
     <h3>Citation coverage</h3><p>Citation coverage: <strong>${
@@ -750,9 +742,7 @@ function sectionAppendix(a: Appendix): string {
     }</strong> <span class="muted">— share of report figures traceable to a citation or payload value; a provenance check, not a correctness/accuracy check.</span></p>${
       a.provenanceCoverage ? provenanceCoverageHtml(a.provenanceCoverage) : ""
     }${vlog}
-    <h3>Cost breakdown</h3>${cost}<p>Total: <strong>$${totalCost.toFixed(
-      4,
-    )}</strong></p></section>`;
+    <h3>Cost breakdown</h3>${cost}<p>Total: <strong>${formatCostUsd(totalCost)}</strong></p></section>`;
 }
 
 /* ======================================================================== *
@@ -761,16 +751,31 @@ function sectionAppendix(a: Appendix): string {
 
 function headerBlock(report: Report): string {
   const m = report.meta;
+  const displayedCost = roundedDisplayedCostTotal(
+    report.appendix.costBreakdown.map((entry) => entry.costUsd),
+  );
   const meta = table(
     ["Field", "Value"],
     [
       ["Generated", m.generatedAt],
       ["Model", m.model],
+      ...(m.execution
+        ? [[
+            "Pass execution",
+            m.execution.map((entry) => `${entry.step}: requested ${entry.requestedModel}/${entry.requestedEffort ?? "n/a"}; effective ${entry.effectiveModel}/${entry.effectiveEffort ?? "n/a"}${entry.adjustments.length > 0 ? ` (${entry.adjustments.join(", ")})` : ""}`).join(" | "),
+          ]]
+        : []),
       // Legacy reports carry a verifyModel label (removed setting) — keep it.
       ...(m.verifyModel !== undefined ? [["Verify model", m.verifyModel]] : []),
       ["Spec version", m.specVersion],
       ["Pipeline version", m.pipelineVersion],
-      ["Cost (USD)", `$${m.costUsd.toFixed(4)}`],
+      ...(m.dataCompleteness
+        ? [[
+            "Data completeness",
+            `${m.dataCompleteness.state}; EDGAR ${m.dataCompleteness.edgar}; XBRL ${m.dataCompleteness.xbrl}; forensics ${m.dataCompleteness.forensicValidation}`,
+          ]]
+        : []),
+      ["Cost (USD)", formatCostUsd(displayedCost)],
       [
         "Citation coverage",
         m.verificationRate === null
@@ -792,24 +797,25 @@ function headerBlock(report: Report): string {
  * standalone document and the React print page. Does NOT include <html>/<head>.
  */
 export function reportToPrintBody(report: Report): string {
+  const sections: Record<ReportSectionKey, string> = {
+    verdict: `${sectionVerdict(report)}${report.scores ? sectionScores(report.scores) : ""}`,
+    business: sectionBusiness(report.business),
+    fundamentals: sectionFundamentals(report.fundamentals),
+    balanceSheet: sectionBalanceSheet(report.balanceSheet),
+    valuation: sectionValuation(report.valuation, report.scenarioTargets, report.fairValue),
+    quality: sectionQuality(report.quality),
+    technicals: sectionTechnicals(report.technicals),
+    leadership: sectionLeadership(report.leadership),
+    competitive: sectionCompetitive(report.competitive),
+    catalystsRisks: sectionCatalystsRisks(report.catalystsRisks),
+    outlook: sectionOutlook(report),
+    projections: report.projections ? sectionProjections(report.projections) : "",
+    macro: sectionMacro(report.macro),
+    appendix: sectionAppendix(report.appendix, report.disagreements),
+  };
   return [
     headerBlock(report),
-    sectionVerdict(report),
-    report.scores ? sectionScores(report.scores) : "",
-    sectionCatalystsRisks(report.catalystsRisks),
-    sectionBusiness(report.business),
-    sectionFundamentals(report.fundamentals),
-    sectionBalanceSheet(report.balanceSheet),
-    sectionValuation(report.valuation, report.scenarioTargets, report.fairValue),
-    sectionQuality(report.quality),
-    sectionTechnicals(report.technicals),
-    sectionLeadership(report.leadership),
-    sectionCompetitive(report.competitive),
-    sectionOutlook(report),
-    report.projections ? sectionProjections(report.projections) : "",
-    sectionMacro(report.macro),
-    disagreementsBlock(report.disagreements),
-    sectionAppendix(report.appendix),
+    ...REPORT_SECTION_MANIFEST.map((section) => sections[section.key]),
   ]
     .filter((b) => b.length > 0)
     .join("\n");
@@ -879,8 +885,8 @@ ul.claims li { margin: 3pt 0; }
 .disagreements ul { margin: 2pt 0; }
 @media print {
   .print-doc { max-width: none; padding: 0; margin: 0; }
-  h2.sec { break-after: avoid; }
-  table, .scenario, .gradeblock, .exec { break-inside: avoid; }
+  h2.sec, h3, h4 { break-after: avoid-page; page-break-after: avoid; }
+  table, .scenario, .gradeblock, .exec, tr { break-inside: avoid; page-break-inside: avoid; }
   @page { margin: 0.6in 0.5in; }
 }
 `;

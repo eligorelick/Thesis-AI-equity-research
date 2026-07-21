@@ -147,8 +147,8 @@ function legacyProjectDbPath(): string {
   return path.join(process.cwd(), "data", "thesis.db");
 }
 
-function migrateLegacyProjectDbIfNeeded(targetFile: string): void {
-  if (hasExplicitDbPath()) return;
+function importLegacyProjectDbIfExplicitlyEnabled(targetFile: string): void {
+  if (hasExplicitDbPath() || process.env.THESIS_IMPORT_LEGACY_DB?.trim() !== "1") return;
 
   const legacy = path.resolve(legacyProjectDbPath());
   const target = path.resolve(targetFile);
@@ -170,7 +170,16 @@ function migrateLegacyProjectDbIfNeeded(targetFile: string): void {
  */
 export function createDatabase(file: string = defaultDbPath()): DatabaseHandle {
   if (file !== ":memory:") {
-    migrateLegacyProjectDbIfNeeded(file);
+    const active = path.resolve(file);
+    const workspace = path.resolve(legacyProjectDbPath());
+    console.info(`[db] active database: ${active}`);
+    if (workspace !== active && fs.existsSync(workspace)) {
+      console.warn(
+        `[db] stale workspace database detected at ${workspace}; it is not used. ` +
+        "Set THESIS_IMPORT_LEGACY_DB=1 only for an intentional one-time import.",
+      );
+    }
+    importLegacyProjectDbIfExplicitlyEnabled(file);
     fs.mkdirSync(path.dirname(file), { recursive: true });
   }
   const sqlite = new Database(file);

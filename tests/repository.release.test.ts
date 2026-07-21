@@ -142,4 +142,12 @@ describe("public release contract", () => {
       /Apple Inc\.|\bAAPL\b|Timothy D\. Cook|Cupertino|0000320193|416[,.]?161|182[,.]?447|232\.8|verbatim (sample|response)/i,
     );
   });
+
+  it("publishes only the explicitly synthetic report fixture", () => {
+    const reportFixtures = publicFiles().filter((file) =>
+      file.startsWith("fixtures/report/"),
+    );
+
+    expect(reportFixtures).toEqual(["fixtures/report/DEMO-sample.json"]);
+  });
 });

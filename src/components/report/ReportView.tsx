@@ -30,6 +30,11 @@
 import type { ReactNode } from "react";
 
 import type { Report } from "@/report/schema";
+import {
+  REPORT_SECTION_MANIFEST,
+  reportSection,
+  type ReportSectionKey,
+} from "@/report/sectionManifest";
 
 import { sectionAnchorId } from "./primitives";
 import {
@@ -66,47 +71,16 @@ export function isDataOnlyReport(report: Report): boolean {
  * Right-rail anchor nav
  * ------------------------------------------------------------------------ */
 
-interface NavEntry {
-  id: string;
-  index: string;
-  label: string;
-  /** Prominent entries (Catalysts & Risks) get accent styling. */
-  accent?: boolean;
-}
-
-const NAV_ENTRIES: NavEntry[] = [
-  { id: "business", index: "02", label: "Business" },
-  { id: "fundamentals", index: "03", label: "Fundamentals" },
-  { id: "balanceSheet", index: "04", label: "Balance Sheet" },
-  { id: "valuation", index: "05", label: "Valuation" },
-  { id: "quality", index: "06", label: "Quality" },
-  { id: "technicals", index: "07", label: "Technicals" },
-  { id: "leadership", index: "08", label: "Leadership" },
-  { id: "competitive", index: "09", label: "Competitive" },
-  { id: "catalystsRisks", index: "10", label: "Catalysts & Risks", accent: true },
-  { id: "outlook", index: "11", label: "Outlook" },
-  { id: "projections", index: "12", label: "Projections" },
-  { id: "macro", index: "13", label: "Macro" },
-  { id: "appendix", index: "14", label: "Appendix" },
-];
-
 function AnchorNav() {
   return (
     <nav className="sticky top-4 hidden max-h-[calc(100vh-6rem)] w-48 shrink-0 flex-col gap-0.5 overflow-y-auto xl:flex">
       <div className="mono px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-faint">
         sections
       </div>
-      <a
-        href={`#${sectionAnchorId("verdict")}`}
-        className="mono flex items-baseline gap-2 px-2 py-1 text-[11px] text-muted hover:bg-raised hover:text-accent"
-      >
-        <span className="text-faint">01</span>
-        <span>Verdict</span>
-      </a>
-      {NAV_ENTRIES.map((e) => (
+      {REPORT_SECTION_MANIFEST.map((e) => (
         <a
-          key={e.id}
-          href={`#${sectionAnchorId(e.id)}`}
+          key={e.key}
+          href={`#${sectionAnchorId(e.key)}`}
           className={`mono flex items-baseline gap-2 px-2 py-1 text-[11px] hover:bg-raised ${
             e.accent
               ? "text-accent hover:text-accent"
@@ -114,7 +88,7 @@ function AnchorNav() {
           }`}
         >
           <span className={e.accent ? "text-accent/70" : "text-faint"}>
-            {e.index}
+            {String(e.index).padStart(2, "0")}
           </span>
           <span>{e.label}</span>
         </a>
@@ -170,6 +144,31 @@ export function ReportView({
   fundamentalsChart?: ReactNode;
 }) {
   const dataOnly = isDataOnlyReport(report);
+  const sections: Record<ReportSectionKey, ReactNode> = {
+    verdict: (
+      <div id={sectionAnchorId("verdict")} className="scroll-mt-28">
+        <VerdictHeader verdict={report.verdict} />
+        {report.verdict.executiveSummary && report.verdict.executiveSummary.length > 0 && (
+          <div className="mt-3"><ExecutiveSummary claims={report.verdict.executiveSummary} /></div>
+        )}
+        {report.scores && <div className="mt-3"><CompositeScorecard scores={report.scores} /></div>}
+        <div className="mt-3"><GradeStripBar gradeStrip={report.verdict.gradeStrip} /></div>
+      </div>
+    ),
+    business: <BusinessSegments business={report.business} index={reportSection("business").index} />,
+    fundamentals: <FundamentalsSection fundamentals={report.fundamentals} index={reportSection("fundamentals").index} chart={fundamentalsChart} />,
+    balanceSheet: <BalanceSheetSection balanceSheet={report.balanceSheet} index={reportSection("balanceSheet").index} />,
+    valuation: <ValuationSection valuation={report.valuation} scenarioTargets={report.scenarioTargets} fairValue={report.fairValue} index={reportSection("valuation").index} />,
+    quality: <QualityFlags quality={report.quality} index={reportSection("quality").index} />,
+    technicals: <TechnicalsSection technicals={report.technicals} index={reportSection("technicals").index} chart={technicalsChart} />,
+    leadership: <LeadershipSection leadership={report.leadership} index={reportSection("leadership").index} />,
+    competitive: <CompetitiveSection competitive={report.competitive} index={reportSection("competitive").index} />,
+    catalystsRisks: <CatalystsRisksPanel catalystsRisks={report.catalystsRisks} index={reportSection("catalystsRisks").index} />,
+    outlook: <OutlookSection outlook={report.outlook} index={reportSection("outlook").index} />,
+    projections: report.projections ? <ProjectionsSection projections={report.projections} index={reportSection("projections").index} /> : null,
+    macro: <MacroSection macro={report.macro} index={reportSection("macro").index} />,
+    appendix: <AppendixSection appendix={report.appendix} disagreements={report.disagreements} index={reportSection("appendix").index} />,
+  };
 
   return (
     <div className="mx-auto flex max-w-[1400px] flex-col gap-3 p-4">
@@ -191,63 +190,9 @@ export function ReportView({
       <div className="flex gap-4">
         {/* Main column */}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          {/* §1 Verdict */}
-          <div id={sectionAnchorId("verdict")} className="scroll-mt-28">
-            <VerdictHeader verdict={report.verdict} />
-            {report.verdict.executiveSummary &&
-              report.verdict.executiveSummary.length > 0 && (
-                <div className="mt-3">
-                  <ExecutiveSummary claims={report.verdict.executiveSummary} />
-                </div>
-              )}
-            {report.scores && (
-              <div className="mt-3">
-                <CompositeScorecard scores={report.scores} />
-              </div>
-            )}
-            <div className="mt-3">
-              <GradeStripBar gradeStrip={report.verdict.gradeStrip} />
-            </div>
-          </div>
-
-          {/* Catalysts & Risks — pinned near the top, visually prominent. */}
-          <CatalystsRisksPanel
-            catalystsRisks={report.catalystsRisks}
-            index={10}
-          />
-
-          {/* §2–§13 in SPEC order (Catalysts also anchored above at #10). */}
-          <BusinessSegments business={report.business} index={2} />
-          <FundamentalsSection
-            fundamentals={report.fundamentals}
-            index={3}
-            chart={fundamentalsChart}
-          />
-          <BalanceSheetSection balanceSheet={report.balanceSheet} index={4} />
-          <ValuationSection
-            valuation={report.valuation}
-            scenarioTargets={report.scenarioTargets}
-            fairValue={report.fairValue}
-            index={5}
-          />
-          <QualityFlags quality={report.quality} index={6} />
-          <TechnicalsSection
-            technicals={report.technicals}
-            index={7}
-            chart={technicalsChart}
-          />
-          <LeadershipSection leadership={report.leadership} index={8} />
-          <CompetitiveSection competitive={report.competitive} index={9} />
-          <OutlookSection outlook={report.outlook} index={11} />
-          {report.projections && (
-            <ProjectionsSection projections={report.projections} index={12} />
-          )}
-          <MacroSection macro={report.macro} index={13} />
-          <AppendixSection
-            appendix={report.appendix}
-            disagreements={report.disagreements}
-            index={14}
-          />
+          {REPORT_SECTION_MANIFEST.map((section) => (
+            <div key={section.key} className="contents">{sections[section.key]}</div>
+          ))}
         </div>
 
         {/* Right-rail anchor nav (denser than tabs). */}

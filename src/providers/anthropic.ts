@@ -43,6 +43,7 @@ import type {
   BetaWebSearchTool20260318,
   MessageCreateParamsNonStreaming,
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
+import { modelSupportsEffort } from "@/report/execution";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
 import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
 
@@ -425,9 +426,7 @@ export function thinkingConfigFor(model: string): BetaThinkingConfigParam | unde
  * all support it.
  */
 export function supportsEffort(model: string): boolean {
-  if (model.startsWith("claude-haiku-")) return false;
-  if (model === "claude-sonnet-4-5" || model.startsWith("claude-sonnet-4-5-")) return false;
-  return true;
+  return modelSupportsEffort(model);
 }
 
 export interface BuiltPassRequest {

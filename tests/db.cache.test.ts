@@ -121,7 +121,7 @@ describe("default database path", () => {
     expect(defaultDbPath()).toBe(path.join(dir, "thesis.db"));
   });
 
-  it("migrates a legacy project data/thesis.db into the app-data path on first default open", () => {
+  it("does not silently import a stale workspace DB and reports the active path", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "thesis-db-migrate-"));
     const projectDir = path.join(root, "project");
     const appDataDir = path.join(root, "appdata");
@@ -134,14 +134,19 @@ describe("default database path", () => {
     vi.spyOn(process, "cwd").mockReturnValue(projectDir);
     vi.stubEnv("THESIS_DB_PATH", "");
     vi.stubEnv("THESIS_DATA_DIR", appDataDir);
+    vi.stubEnv("THESIS_IMPORT_LEGACY_DB", "");
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-    const migrated = createDatabase();
+    const active = createDatabase();
 
     expect(fs.existsSync(targetPath)).toBe(true);
     expect(
-      migrated.sqlite.prepare('SELECT "value" FROM "settings" WHERE "key" = ?').get("legacy.marker"),
-    ).toEqual({ value: "present" });
-    migrated.sqlite.close();
+      active.sqlite.prepare('SELECT "value" FROM "settings" WHERE "key" = ?').get("legacy.marker"),
+    ).toBeUndefined();
+    expect(info).toHaveBeenCalledWith(expect.stringContaining(path.resolve(targetPath)));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(path.resolve(legacyPath)));
+    active.sqlite.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
 

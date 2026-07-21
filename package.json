@@ -25,6 +25,10 @@
   "engines": {
     "node": ">=20.9.0"
   },
+  "overrides": {
+    "postcss": "$postcss",
+    "esbuild": "0.28.1"
+  },
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
     "build": "next build",
@@ -34,6 +38,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
+    "export:corrected": "tsx src/report/export/correctedCli.ts",
     "db:push": "node --conditions=react-server node_modules/drizzle-kit/bin.cjs push",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
   },

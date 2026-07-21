@@ -736,6 +736,56 @@ describe("verify-pass tracing", () => {
     );
   });
 
+  it("canonicalizes one legacy rendered citation while rejecting duplicated date tags", async () => {
+    const { payload } = buildInputs();
+    const deps = makeDeps(new MockRunPass());
+    const record = payload.provenanceRegistry![0]!;
+    const root = {
+      numbers: [
+        {
+          value: record.value,
+          unit: record.unit,
+          currency: record.currency,
+          period: record.period,
+          source: `[${record.id} · ${record.asOf}]`,
+          asOf: record.asOf,
+          verified: null,
+        },
+        {
+          value: record.value,
+          unit: record.unit,
+          currency: record.currency,
+          period: record.period,
+          source: `${record.id} · ${record.asOf} · ${record.asOf}`,
+          asOf: record.asOf,
+          verified: null,
+        },
+      ],
+      claims: [
+        {
+          text: "structured source wins over a malformed legacy display field",
+          label: "FACT",
+          sourceId: record.id,
+          source: `${record.id} · ${record.asOf} · ${record.asOf}`,
+          asOf: record.asOf,
+        },
+      ],
+    };
+
+    const result = await runVerifyPass(
+      deps,
+      payload,
+      root as unknown as JudgeOutput,
+      { fetchedUrls: [] },
+    );
+    const numbers = collectTracedNumbers(result.verifiedReport);
+
+    expect(numbers.map((number) => number.verified)).toEqual([true, false]);
+    expect(numbers[0]?.sourceId).toBe(record.id);
+    expect(result.coverage.factualClaims).toEqual({ supported: 1, total: 1, rate: 1 });
+    expect(result.log.some((entry) => entry.claim.includes(`${record.asOf} · ${record.asOf}`))).toBe(false);
+  });
+
   it("resolves a faithful citation that omits the optional period the payload never rendered", async () => {
     // The registry derives `period` from a figure LABEL (e.g. FY2027) and never
     // renders it as a citable tag; TracedNumber.period is optional. A byte-faithful
@@ -815,6 +865,23 @@ describe("verify-pass tracing", () => {
     const payload = assembleContextPayload(bundle, computed, validation);
     const serialized = serializePayloadForPrompt(payload);
     expect(serialized).toContain("WACC clamped 24.0% → 20.0% (ceiling)");
+  });
+
+  it("preserves empty-provider and EDGAR gaps from the fetched bundle", () => {
+    const { bundle, computed } = buildInputs();
+    bundle.gaps.push(
+      { field: "fmp.price-target-consensus", reason: "provider returned an empty response", severity: "warn" },
+      { field: "edgar.companyFacts", reason: "EDGAR request failed", severity: "critical" },
+    );
+    const validation = validateBundle(bundle, { now: new Date("2026-07-06T00:00:00Z") });
+    const payload = assembleContextPayload(bundle, computed, validation);
+
+    expect(payload.missingData).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: "fmp.price-target-consensus" }),
+        expect.objectContaining({ field: "edgar.companyFacts" }),
+      ]),
+    );
   });
 
   it("separates FACT/ESTIMATE citation coverage from JUDGMENT citation coverage", async () => {
@@ -1524,6 +1591,25 @@ describe("mock-driven bull/bear/judge passes", () => {
     expect(text).toContain("BEAR CASE");
     expect(text).toContain("Return ONLY valid JSON");
     expect(judgeCall?.outputSchema).toBeUndefined();
+  });
+
+  it("requires the LLY judge to explicitly resolve deterministic entity conflicts", async () => {
+    const { payload } = buildInputs("LLY");
+    const bull = analystCase("bull");
+    const bear = analystCase("bear");
+    bull.thesis[0].text = "TRIUMPH evaluates retatrutide.";
+    bear.thesis[0].text = "TRIUMPH evaluates Foundayo (orforglipron).";
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", judgeOutput());
+
+    const run = await runJudgePass(makeDeps(mock), payload, bull, bear);
+
+    expect(run.ok).toBe(false);
+    if (!run.ok) {
+      expect(run.validationError).toMatch(/entity conflict/i);
+    }
+    const judgeCall = mock.calls.find((call) => call.field === "llm.judge");
+    expect(JSON.stringify(judgeCall?.messages)).toMatch(/DETERMINISTIC ENTITY CONFLICTS/);
   });
 
   it("sets the judge output cap above 32k so full reports do not truncate at the old live limit", async () => {

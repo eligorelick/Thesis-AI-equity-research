@@ -61,6 +61,8 @@ export interface StepProgress {
   step: PipelineStep;
   status: "pending" | "running" | "done" | "error" | "skipped";
   startedAt?: string;
+  /** Canonical terminal timestamp; finishedAt is retained for legacy readers. */
+  completedAt?: string;
   finishedAt?: string;
   detail?: string;
   /** Running USD cost attributable to this step (LLM passes) */

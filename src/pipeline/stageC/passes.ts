@@ -78,6 +78,20 @@ import {
   type ProvenanceFailureReason,
 } from "@/pipeline/stageC/provenance";
 import {
+  citationAsOf,
+  citationSourceId,
+  serializeCitationRef,
+} from "@/pipeline/stageC/citations";
+import {
+  LLY_ENTITY_REGISTRY,
+  collectEntityConflicts,
+  validateEntityText,
+  validateJudgeEntityResolution,
+  type EntityIssue,
+} from "@/pipeline/stageC/entityValidation";
+import { buildDataCompleteness } from "@/report/completeness";
+import { buildExecutionMetadataEntry } from "@/report/execution";
+import {
   SHARED_RULES_BLOCK,
   buildBullFraming,
   buildBearFraming,
@@ -887,6 +901,15 @@ export function judgeUserTurns(
   bull: AnalystCase,
   bear: AnalystCase,
 ): { role: "user"; content: RunPassContentBlock[] }[] {
+  const entityConflicts = entityConflictsForCases(payload, bull, bear);
+  const entityConflictBlock = entityConflicts.length === 0
+    ? ""
+    : [
+        "",
+        "DETERMINISTIC ENTITY CONFLICTS (must be resolved explicitly):",
+        JSON.stringify(entityConflicts),
+        "Add kind=entity disagreements that name the canonical entity and explain the supported resolution. Do not silently choose or rename an entity.",
+      ].join("\n");
   return [
     buildCachedUserMessage(
       payload,
@@ -898,6 +921,7 @@ export function judgeUserTurns(
         "",
         "BEAR CASE (independent analyst):",
         JSON.stringify(bear),
+        entityConflictBlock,
         "",
         "JUDGE_OUTPUT JSON Schema reference:",
         JSON.stringify(judgeOutputToJsonSchema()),
@@ -907,6 +931,112 @@ export function judgeUserTurns(
       ].join("\n"),
     ),
   ];
+}
+
+function analystClaimTexts(value: unknown): string[] {
+  const texts: string[] = [];
+  const walk = (node: unknown): void => {
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      node.forEach((value) => walk(value));
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    if (typeof record.text === "string" && typeof record.label === "string") {
+      texts.push(record.text);
+    }
+    Object.values(record).forEach(walk);
+  };
+  walk(value);
+  return texts;
+}
+
+function entityConflictsForCases(
+  payload: ContextPayload,
+  bull: AnalystCase,
+  bear: AnalystCase,
+): EntityIssue[] {
+  if (payload.symbol.toUpperCase() !== LLY_ENTITY_REGISTRY.symbol) return [];
+  return collectEntityConflicts(
+    analystClaimTexts(bull),
+    analystClaimTexts(bear),
+    LLY_ENTITY_REGISTRY,
+  );
+}
+
+function unresolvedJudgeEntityConflicts(
+  payload: ContextPayload,
+  bull: AnalystCase,
+  bear: AnalystCase,
+  output: JudgeOutput,
+): EntityIssue[] {
+  const unresolved = validateJudgeEntityResolution(
+    entityConflictsForCases(payload, bull, bear),
+    output.disagreements,
+  );
+  if (payload.symbol.toUpperCase() !== LLY_ENTITY_REGISTRY.symbol) return unresolved;
+  const reportIssues: EntityIssue[] = [];
+  const walk = (node: unknown, structuredSource: string | null = null): void => {
+    if (typeof node === "string") {
+      reportIssues.push(
+        ...validateEntityText(node, LLY_ENTITY_REGISTRY, structuredSource).issues.filter(
+          (issue) => structuredSource !== null || issue.code !== "primary-source-required",
+        ),
+      );
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      node.forEach((value) => walk(value));
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    if (typeof record.text === "string" && typeof record.label === "string") {
+      const rawSource = citationSourceId(record);
+      const primarySource = rawSource?.startsWith("web:") ? rawSource.slice(4) : rawSource;
+      reportIssues.push(...validateEntityText(record.text, LLY_ENTITY_REGISTRY, primarySource).issues);
+      for (const [key, value] of Object.entries(record)) {
+        if (key !== "text") walk(value);
+      }
+      return;
+    }
+    Object.values(record).forEach((value) => walk(value));
+  };
+  const reportWithoutExplicitConflictQuotes = { ...output } as Partial<JudgeOutput>;
+  delete reportWithoutExplicitConflictQuotes.disagreements;
+  walk(reportWithoutExplicitConflictQuotes);
+  const deduped = new Map<string, EntityIssue>();
+  for (const issue of [...unresolved, ...reportIssues]) {
+    deduped.set(`${issue.code}\u0000${issue.recordId}\u0000${issue.observed}`, issue);
+  }
+  return [...deduped.values()];
+}
+
+function entityConflictFailure(
+  successful: PassResult<JudgeOutput>,
+  unresolved: readonly EntityIssue[],
+): PassRun<JudgeOutput> {
+  const details = unresolved
+    .map((issue) => `${issue.code}: ${issue.text}`)
+    .join("; ");
+  const reason = `judge left deterministic entity conflicts unresolved: ${details}`;
+  return {
+    ok: false,
+    gap: {
+      field: "llm.judge.entities",
+      reason,
+      severity: "critical",
+      attemptedSources: ["canonical-entity-registry", "judge-disagreements"],
+    },
+    error: { kind: "schema", message: reason },
+    validationError: reason,
+    rawText: JSON.stringify(successful.output),
+    usage: successful.usage,
+    costUsd: successful.costUsd,
+    fallbackUsed: successful.fallbackUsed,
+    model: successful.model,
+    webSearches: successful.webSearches,
+  };
 }
 
 function parseProbabilityLike(value: unknown): number | null {
@@ -1010,7 +1140,7 @@ const parseJudgeOutput = (raw: unknown) => {
  * prompt text and enforce the exact Zod schema after parsing, with retry on
  * validation failure.
  */
-export function runJudgePass(
+export async function runJudgePass(
   deps: PassDeps,
   payload: ContextPayload,
   bull: AnalystCase,
@@ -1027,7 +1157,7 @@ export function runJudgePass(
             content: `Your previous output FAILED report-schema validation with this error. Fix EXACTLY these issues and re-emit the full JUDGE_OUTPUT schema:\n${validationFeedback}`,
           },
         ];
-  return runStructuredPass<JudgeOutput>({
+  const run = await runStructuredPass<JudgeOutput>({
     deps,
     system: SHARED_RULES_BLOCK,
     userTurns,
@@ -1037,6 +1167,9 @@ export function runJudgePass(
     model: judgeModelFor(deps.model),
     field: "llm.judge",
   });
+  if (!run.ok) return run;
+  const unresolved = unresolvedJudgeEntityConflicts(payload, bull, bear, run.result.output);
+  return unresolved.length === 0 ? run : entityConflictFailure(run.result, unresolved);
 }
 
 /* ------------------------------------------------------------------------ *
@@ -1078,7 +1211,7 @@ function collectTracedNumberRefs(root: unknown): TracedNumberRef[] {
   const isTraced = (o: Record<string, unknown>): boolean =>
     typeof o.value === "number" &&
     typeof o.unit === "string" &&
-    typeof o.source === "string" &&
+    (typeof o.sourceId === "string" || typeof o.source === "string") &&
     ("asOf" in o) &&
     ("verified" in o);
   const walk = (node: unknown, path: string): void => {
@@ -1122,7 +1255,7 @@ function collectSourcedClaimRefs(root: unknown): SourcedClaimRef[] {
       typeof obj.text === "string" &&
       typeof obj.label === "string" &&
       labels.has(obj.label) &&
-      typeof obj.source === "string" &&
+      (typeof obj.sourceId === "string" || typeof obj.source === "string") &&
       "asOf" in obj
     ) {
       out.push({ claim: obj as unknown as SourcedClaim, path: path || "$" });
@@ -1140,24 +1273,27 @@ function claimSourceMatch(
   citationRegistry: readonly CitationProvenanceRecord[],
   fetchedUrls: ReadonlySet<string>,
 ): { supported: boolean; reason: "supported" | "unknown-source" | "date-mismatch" } {
+  const sourceId = citationSourceId(claim);
+  if (sourceId === null) return { supported: false, reason: "unknown-source" };
+  const asOf = citationAsOf(claim);
   const candidates = [
     ...numericRegistry
-      .filter((record) => record.id === claim.source)
+      .filter((record) => record.id === sourceId)
       .map((record) => record.asOf),
     ...citationRegistry
-      .filter((record) => record.id === claim.source)
+      .filter((record) => record.id === sourceId)
       .map((record) => record.asOf),
   ];
   if (candidates.length > 0) {
     // A judgment can be timeless while still citing exact evidence. FACT and
     // ESTIMATE claims must reproduce the source's as-of date exactly.
     const dateMatches =
-      claim.label === "JUDGMENT" || candidates.some((asOf) => asOf === claim.asOf);
+      claim.label === "JUDGMENT" || candidates.some((candidate) => candidate === asOf);
     return dateMatches
       ? { supported: true, reason: "supported" }
       : { supported: false, reason: "date-mismatch" };
   }
-  const canonical = canonicalizeFetchedUrl(claim.source);
+  const canonical = canonicalizeFetchedUrl(sourceId);
   return canonical !== null && fetchedUrls.has(canonical)
     ? { supported: true, reason: "supported" }
     : { supported: false, reason: "unknown-source" };
@@ -1210,7 +1346,12 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
   let traced = 0;
 
   for (const { number, path } of numbers) {
-    const record = registry.find((entry) => entry.id === number.source);
+    const sourceId = citationSourceId(number);
+    const sourceAsOf = citationAsOf(number);
+    if (sourceId !== null) number.sourceId = sourceId;
+    const record = sourceId === null
+      ? undefined
+      : registry.find((entry) => entry.id === sourceId);
     let reason: ProvenanceFailureReason;
     let ok = false;
     if (!record) {
@@ -1235,8 +1376,8 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
             unit: normalized.unit,
             currency,
             period,
-            asOf: number.asOf ?? "",
-            source: number.source,
+            asOf: sourceAsOf ?? "",
+            source: sourceId ?? "",
           },
           registry,
         );
@@ -1250,7 +1391,10 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
       : record?.kind === "computed"
         ? "computed-derived"
         : "payload-match";
-    const rendered = `${number.value} ${number.unit} [${number.source}${number.asOf ? ` · ${number.asOf}` : ""}]`;
+    const renderedCitation = sourceId === null
+      ? "[unsupported citation]"
+      : serializeCitationRef({ sourceId, asOf: sourceAsOf });
+    const rendered = `${number.value} ${number.unit} ${renderedCitation}`;
     if (ok) {
       traced += 1;
       log.push({
@@ -1260,7 +1404,7 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
         traceKind,
         path,
         evidenceKind: "number",
-        source: number.source,
+        source: sourceId ?? number.source,
         reason: "supported",
       });
     } else {
@@ -1272,7 +1416,7 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
         traceKind,
         path,
         evidenceKind: "number",
-        source: number.source,
+        source: sourceId ?? number.source,
         reason,
       });
     }
@@ -1283,6 +1427,8 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
   let judgmentsCited = 0;
   let judgmentsTotal = 0;
   for (const { claim, path } of claims) {
+    const sourceId = citationSourceId(claim);
+    if (sourceId !== null) claim.sourceId = sourceId;
     const match = claimSourceMatch(claim, registry, citationRegistry, fetchedUrls);
     const supported = match.supported;
     const judgment = claim.label === "JUDGMENT";
@@ -1293,7 +1439,9 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
       factualTotal += 1;
       if (supported) factualSupported += 1;
     }
-    const registryRecord = registry.find((record) => record.id === claim.source);
+    const registryRecord = sourceId === null
+      ? undefined
+      : registry.find((record) => record.id === sourceId);
     log.push({
       claim: claim.text,
       outcome: supported ? "verified" : "unverified",
@@ -1307,7 +1455,7 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
         : "untraced",
       path,
       evidenceKind: judgment ? "judgment" : "factual-claim",
-      source: claim.source,
+      source: sourceId ?? claim.source,
       reason: match.reason,
     });
   }
@@ -1711,6 +1859,13 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
     judgments: { cited: 0, total: 0, rate: null },
   };
 
+  const missingData = dedupManifest([
+    ...args.bundle.gaps,
+    ...args.computed.gaps,
+    ...(args.validationGaps ?? []),
+    ...degradationDisclosures(args.computed.degradation),
+  ]);
+
   const meta: ReportMeta = {
     symbol: args.symbol,
     companyName,
@@ -1721,6 +1876,16 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
     costUsd: totalCost(args.costEntries),
     verificationRate: args.verify.verificationRate,
     provenanceCoverage: coverage,
+    dataCompleteness: buildDataCompleteness(missingData),
+    execution: args.costEntries.map((entry) =>
+      buildExecutionMetadataEntry({
+        step: entry.step,
+        requestedModel: entry.requestedModel ?? entry.model,
+        effectiveModel: entry.model,
+        requestedEffort: entry.requestedEffort ?? null,
+        fallbackUsed: entry.fallbackUsed ?? false,
+      }),
+    ),
     disclaimer: DISCLAIMER_TEXT,
     asOfMap: buildAsOfMap(args.bundle),
   };
@@ -1732,11 +1897,7 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
   // report can never be less transparent than the LLM's own input.
   const appendix: Appendix = {
     sources: buildSources(args.bundle),
-    missingData: dedupManifest([
-      ...args.computed.gaps,
-      ...(args.validationGaps ?? []),
-      ...degradationDisclosures(args.computed.degradation),
-    ]),
+    missingData,
     verificationRate: args.verify.verificationRate,
     provenanceCoverage: coverage,
     verificationLog: args.verify.log,
@@ -1894,11 +2055,48 @@ export async function runJudgeVerifyAssemble(
       return { ok: false, gap: judgeRun.gap, error: judgeRun.error, attempts: attempt + 1 };
     }
 
+    const unresolvedEntities = unresolvedJudgeEntityConflicts(
+      payload,
+      bull,
+      bear,
+      judgeRun.result.output,
+    );
+    if (unresolvedEntities.length > 0) {
+      const entityFailure = entityConflictFailure(judgeRun.result, unresolvedEntities);
+      if (!entityFailure.ok) {
+        lastZodError = entityFailure.validationError ?? entityFailure.error.message;
+        lastRawOutput = entityFailure.rawText ?? null;
+        if (attempt < MAX_JUDGE_RETRIES) continue;
+        break;
+      }
+    }
+
     const verify = await runVerifyPass(deps, payload, judgeRun.result.output);
 
     const costEntries: CostBreakdownEntry[] = [
       ...assemble.priorCostEntries,
-      { step: "synthesize", model: judgeRun.result.model, costUsd: judgeRun.result.costUsd },
+      {
+        step: "synthesize",
+        model: judgeRun.result.model,
+        costUsd: judgeRun.result.costUsd,
+        requestedModel: deps.model,
+        requestedEffort: deps.effort ?? "high",
+        effectiveEffort: buildExecutionMetadataEntry({
+          step: "synthesize",
+          requestedModel: deps.model,
+          effectiveModel: judgeRun.result.model,
+          requestedEffort: deps.effort ?? "high",
+          fallbackUsed: judgeRun.result.fallbackUsed,
+        }).effectiveEffort,
+        fallbackUsed: judgeRun.result.fallbackUsed,
+        adjustments: buildExecutionMetadataEntry({
+          step: "synthesize",
+          requestedModel: deps.model,
+          effectiveModel: judgeRun.result.model,
+          requestedEffort: deps.effort ?? "high",
+          fallbackUsed: judgeRun.result.fallbackUsed,
+        }).adjustments,
+      },
     ];
 
     try {

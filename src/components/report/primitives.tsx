@@ -28,90 +28,24 @@ import type {
   SourcedClaim,
   TracedNumber,
 } from "@/report/schema";
+import {
+  formatCurrency,
+  formatTracedValue,
+} from "@/report/format";
 import { ClaimText } from "./ClaimText";
+
+export {
+  formatCurrency,
+  formatLargeNumber,
+  formatMultiple,
+  formatNumber,
+  formatPct,
+  formatTracedValue,
+} from "@/report/format";
 
 /* ======================================================================== *
  * Formatting helpers (tabular; render-boundary rounding only)
  * ======================================================================== */
-
-/** Plain decimal with grouping. `n/a` for null/undefined/non-finite. */
-export function formatNumber(
-  v: number | null | undefined,
-  digits = 2,
-): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "n/a";
-  return v.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
-
-/** `$1,234.56`. */
-export function formatCurrency(
-  v: number | null | undefined,
-  digits = 2,
-): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "n/a";
-  return `$${v.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  })}`;
-}
-
-/** `12.3%`. Pass `signed` to force a leading `+` on positives. */
-export function formatPct(
-  v: number | null | undefined,
-  digits = 1,
-  signed = false,
-): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "n/a";
-  const sign = signed && v >= 0 ? "+" : "";
-  return `${sign}${v.toFixed(digits)}%`;
-}
-
-/** Compact magnitude: `3.50T` / `45.61B` / `789.00M` / `12.3K`. Tabular. */
-export function formatLargeNumber(v: number | null | undefined): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "n/a";
-  const abs = Math.abs(v);
-  const sign = v < 0 ? "-" : "";
-  if (abs >= 1e12) return `${sign}${(abs / 1e12).toFixed(2)}T`;
-  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`;
-  return `${sign}${abs.toFixed(2)}`;
-}
-
-/** `1.8×`. `n/m` (not meaningful) for null. */
-export function formatMultiple(
-  v: number | null | undefined,
-  digits = 1,
-): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "n/m";
-  return `${v.toFixed(digits)}×`;
-}
-
-/**
- * Render a {@link TracedNumber}'s value according to its declared `unit`.
- * Unit strings are as-reported free-text; we pattern-match the common ones and
- * fall back to a plain number + the raw unit suffix.
- */
-export function formatTracedValue(n: TracedNumber): string {
-  const u = n.unit.trim().toLowerCase();
-  if (u === "%" || u === "pct" || u === "percent") return formatPct(n.value);
-  if (u === "x" || u === "×" || u === "multiple") return formatMultiple(n.value);
-  if (u === "usd" || u === "$" || u === "usd/share" || u === "$/share")
-    return formatCurrency(n.value);
-  if (u === "usd_large" || u === "usd-large" || u === "$_large")
-    return `$${formatLargeNumber(n.value)}`;
-  if (u === "large" || u === "count_large") return formatLargeNumber(n.value);
-  if (u === "bps") return `${formatNumber(n.value, 0)} bps`;
-  if (u === "years" || u === "yr" || u === "y")
-    return `${formatNumber(n.value, 1)}y`;
-  if (u === "" || u === "number" || u === "count")
-    return formatNumber(n.value, Number.isInteger(n.value) ? 0 : 2);
-  // Unknown unit — show the number and append the raw unit for transparency.
-  return `${formatNumber(n.value)} ${n.unit}`;
-}
 
 /* ======================================================================== *
  * Small shared bits

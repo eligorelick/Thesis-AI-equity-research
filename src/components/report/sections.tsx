@@ -54,6 +54,11 @@ import type {
   Verdict,
 } from "@/report/schema";
 import { citationOutcomeLabel } from "@/report/schema";
+import {
+  formatCostUsd,
+  formatVerificationClaim,
+  roundedDisplayedCostTotal,
+} from "@/report/format";
 import type { Grade } from "@/types/core";
 
 import { SensitivityHeatmap } from "@/components/charts/SensitivityHeatmap";
@@ -61,7 +66,6 @@ import { ProjectionFanChart } from "@/components/charts/lazy";
 
 import {
   ClaimList,
-  formatCurrency,
   formatMultiple,
   formatNumber,
   formatPct,
@@ -1657,11 +1661,11 @@ export function AppendixSection({
       header: "cost",
       align: "right",
       render: (c) => (
-        <span className="mono text-fg">{formatCurrency(c.costUsd, 4)}</span>
+        <span className="mono text-fg">{formatCostUsd(c.costUsd)}</span>
       ),
     },
   ];
-  const totalCost = appendix.costBreakdown.reduce((a, c) => a + c.costUsd, 0);
+  const totalCost = roundedDisplayedCostTotal(appendix.costBreakdown.map((entry) => entry.costUsd));
   const rate = appendix.verificationRate;
   const provenance = appendix.provenanceCoverage;
   const log = appendix.verificationLog ?? [];
@@ -1689,7 +1693,7 @@ export function AppendixSection({
           <span className="text-fg">
             {rate === null ? "n/a" : `${(rate * 100).toFixed(1)}%`}
           </span>{" "}
-          · <span className="text-fg">{formatCurrency(totalCost, 2)}</span>
+          · <span className="text-fg">{formatCostUsd(totalCost)}</span>
         </span>
       }
     >
@@ -1789,7 +1793,7 @@ export function AppendixSection({
                         <Badge tone={tone}>{citationOutcomeLabel(l.outcome)}</Badge>
                       </td>
                       <td className="px-2 py-1 text-[10px] leading-snug text-muted">
-                        {l.claim}
+                        {formatVerificationClaim(l.claim)}
                         {l.note && (
                           <span className="text-faint"> — {l.note}</span>
                         )}
@@ -1814,6 +1818,9 @@ export function AppendixSection({
 
 export function ReportMetaStrip({ report }: { report: Report }) {
   const m = report.meta;
+  const displayedCost = roundedDisplayedCostTotal(
+    report.appendix.costBreakdown.map((entry) => entry.costUsd),
+  );
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border border-edge bg-panel px-3 py-2">
       <div className="flex items-baseline gap-3">
@@ -1826,9 +1833,14 @@ export function ReportMetaStrip({ report }: { report: Report }) {
         <span>
           model <span className="mono text-muted">{m.model}</span>
         </span>
+        {m.execution && (
+          <span title={m.execution.map((entry) => `${entry.step}: requested ${entry.requestedModel}/${entry.requestedEffort ?? "n/a"}; effective ${entry.effectiveModel}/${entry.effectiveEffort ?? "n/a"}${entry.adjustments.length ? ` (${entry.adjustments.join(", ")})` : ""}`).join("\n")}>
+            passes <span className="mono text-muted">{m.execution.map((entry) => `${entry.step}:${entry.effectiveModel.replace(/^claude-/, "")}`).join(" · ")}</span>
+          </span>
+        )}
         <span>
           cost{" "}
-          <span className="mono text-muted">{formatCurrency(m.costUsd, 2)}</span>
+          <span className="mono text-muted">{formatCostUsd(displayedCost)}</span>
         </span>
         <span title="Citation coverage: share of figures traceable to a citation or payload value — provenance, not correctness.">
           cited{" "}
@@ -1845,6 +1857,14 @@ export function ReportMetaStrip({ report }: { report: Report }) {
           </span>
         </span>
         <span className="mono">spec {m.specVersion}</span>
+        {m.dataCompleteness && m.dataCompleteness.state !== "complete" && (
+          <span
+            className={m.dataCompleteness.state === "blocked" ? "font-semibold text-red-500" : "font-semibold text-amber-500"}
+            title="Critical provider gaps make dependent forensic conclusions provisional."
+          >
+            data {m.dataCompleteness.state}; forensics {m.dataCompleteness.forensicValidation}
+          </span>
+        )}
       </div>
     </div>
   );

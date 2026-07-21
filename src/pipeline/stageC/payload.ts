@@ -1225,6 +1225,7 @@ export function assembleContextPayload(
   // CAGR windows) that Stage B computes but that otherwise never reach the model
   // — surfacing them here keeps the prompt and the rendered appendix in agreement.
   const missingData = mergeManifest([
+    bundle.gaps,
     computed.gaps,
     validation.gaps,
     degradationDisclosures(computed.degradation),

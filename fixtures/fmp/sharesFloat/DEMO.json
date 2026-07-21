@@ -1,0 +1,11 @@
+[
+  {
+    "symbol": "DEMO",
+    "date": "2025-12-31",
+    "freeFloat": 90,
+    "floatShares": 180000000,
+    "outstandingShares": 200000000,
+    "source": "synthetic",
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

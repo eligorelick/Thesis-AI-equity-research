@@ -1,0 +1,22 @@
+[
+  {
+    "symbol": "DBNK",
+    "name": "Demonstration Community Bank",
+    "price": 25,
+    "changePercentage": 0.4016,
+    "change": 0.1,
+    "volume": 500000,
+    "dayLow": 24.7,
+    "dayHigh": 25.3,
+    "yearHigh": 28,
+    "yearLow": 20,
+    "marketCap": 5000000000,
+    "priceAvg50": 24.5,
+    "priceAvg200": 23.5,
+    "exchange": "TEST",
+    "open": 24.9,
+    "previousClose": 24.9,
+    "timestamp": 1767139200,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

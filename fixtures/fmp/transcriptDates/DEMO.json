@@ -1,0 +1,26 @@
+[
+  {
+    "quarter": 1,
+    "fiscalYear": 2025,
+    "date": "2025-03-31",
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2025,
+    "date": "2025-06-30",
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2025,
+    "date": "2025-09-30",
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2025,
+    "date": "2025-12-31",
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

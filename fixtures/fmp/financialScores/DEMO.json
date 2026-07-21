@@ -1,0 +1,16 @@
+[
+  {
+    "symbol": "DEMO",
+    "reportedCurrency": "USD",
+    "altmanZScore": 4.5,
+    "piotroskiScore": 7,
+    "workingCapital": 2500000000,
+    "totalAssets": 10000000000,
+    "retainedEarnings": 3800000000,
+    "ebit": 2500000000,
+    "marketCap": 8000000000,
+    "totalLiabilities": 4000000000,
+    "revenue": 12500000000,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

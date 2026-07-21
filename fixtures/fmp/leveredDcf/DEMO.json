@@ -1,0 +1,9 @@
+[
+  {
+    "symbol": "DEMO",
+    "date": "2025-12-31",
+    "dcf": 45,
+    "Stock Price": 40,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

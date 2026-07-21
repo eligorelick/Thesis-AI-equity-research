@@ -1,0 +1,12 @@
+[
+  {
+    "symbol": "DEMO",
+    "strongBuy": 2,
+    "buy": 3,
+    "hold": 4,
+    "sell": 1,
+    "strongSell": 0,
+    "consensus": "Neutral",
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

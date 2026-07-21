@@ -1,0 +1,14 @@
+[
+  {
+    "symbol": "DEMO",
+    "fiscalYear": "2025",
+    "period": "FY",
+    "reportedCurrency": "USD",
+    "date": "2025-12-31",
+    "data": {
+      "Platform": 7500000000,
+      "Services": 5000000000
+    },
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

@@ -1,0 +1,18 @@
+[
+  {
+    "symbol": "DEMO",
+    "cik": "0000000000",
+    "year": 2025,
+    "quarter": 4,
+    "acquiredTransactions": 2,
+    "disposedTransactions": 1,
+    "acquiredDisposedRatio": 2,
+    "totalAcquired": 20000,
+    "totalDisposed": 10000,
+    "averageAcquired": 10000,
+    "averageDisposed": 10000,
+    "totalPurchases": 800000,
+    "totalSales": 400000,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

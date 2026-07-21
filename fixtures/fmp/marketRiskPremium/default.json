@@ -1,0 +1,16 @@
+[
+  {
+    "country": "United States",
+    "continent": "North America",
+    "countryRiskPremium": 0,
+    "totalEquityRiskPremium": 5,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "country": "Exampleland",
+    "continent": "Synthetic",
+    "countryRiskPremium": 2,
+    "totalEquityRiskPremium": 7,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

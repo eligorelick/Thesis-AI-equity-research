@@ -1,0 +1,17 @@
+[
+  {
+    "symbol": "DEMO",
+    "lastMonthCount": 2,
+    "lastMonthAvgPriceTarget": 44,
+    "lastQuarterCount": 5,
+    "lastQuarterAvgPriceTarget": 43,
+    "lastYearCount": 12,
+    "lastYearAvgPriceTarget": 42,
+    "allTimeCount": 20,
+    "allTimeAvgPriceTarget": 41,
+    "publishers": [
+      "Synthetic Research Desk"
+    ],
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

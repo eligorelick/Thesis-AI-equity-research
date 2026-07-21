@@ -1,0 +1,3067 @@
+{
+  "meta": {
+    "symbol": "DEMO",
+    "companyName": "Thesis Example Systems",
+    "generatedAt": "2026-01-15T12:00:00.000Z",
+    "specVersion": "1.2.0",
+    "model": "synthetic-fixture",
+    "pipelineVersion": "synthetic-sample-1.0.0",
+    "costUsd": 0,
+    "verificationRate": 0.92,
+    "disclaimer": "Informational only — not investment advice.",
+    "asOfMap": {
+      "computed.growth.revenueCagr5y": "2025-12-31",
+      "valuation.dcf.perShare": "2025-12-31",
+      "quote.price": "2025-12-31"
+    },
+    "provenanceCoverage": {
+      "numeric": {
+        "supported": 48,
+        "total": 52,
+        "rate": 0.9230769230769231
+      },
+      "factualClaims": {
+        "supported": 22,
+        "total": 24,
+        "rate": 0.9166666666666666
+      },
+      "judgments": {
+        "cited": 5,
+        "total": 6,
+        "rate": 0.8333333333333334
+      }
+    }
+  },
+  "verdict": {
+    "synthesis": "SYNTHETIC DEMONSTRATION — no value represents a real issuer or current market observation. The report demonstrates a balanced fictional research case using deterministic contract data.",
+    "gradeStrip": {
+      "fundamentals": {
+        "grade": "A",
+        "oneLineWhy": "SYNTHETIC demonstration text for grade strip fundamentals one line why; it describes fictional inputs and is not a current market observation.",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for fundamentals reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "computed.growth.margins.gross",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for fundamentals reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "computed.returns.roic",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for fundamentals reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "computed.growth.revenueCagr5y",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "confidence": "high",
+        "keyNumbers": [
+          {
+            "value": 60,
+            "unit": "%",
+            "source": "computed.growth.margins.gross.latest",
+            "asOf": "2025-12-31",
+            "verified": true,
+            "verificationNote": "synthetic provenance example"
+          },
+          {
+            "value": 26,
+            "unit": "%",
+            "source": "computed.returns.roic.latest",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ]
+      },
+      "valuation": {
+        "grade": "C",
+        "oneLineWhy": "SYNTHETIC demonstration text for grade strip valuation one line why; it describes fictional inputs and is not a current market observation.",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for valuation reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "ESTIMATE",
+            "source": "computed.valuation.dcf.perShare",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for valuation reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "ESTIMATE",
+            "source": "computed.valuation.reverseDcf",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "confidence": "medium",
+        "keyNumbers": [
+          {
+            "value": 48,
+            "unit": "usd",
+            "source": "computed.valuation.dcf.perShare",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 5.1,
+            "unit": "x",
+            "source": "computed.valuation.multiples.peNtm",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ]
+      },
+      "technicals": {
+        "grade": "B",
+        "oneLineWhy": "SYNTHETIC demonstration text for grade strip technicals one line why; it describes fictional inputs and is not a current market observation.",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for technicals reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "computed.technicals.smaCross",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for technicals reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "computed.technicals.rsi14",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "confidence": "medium",
+        "keyNumbers": [
+          {
+            "value": 55,
+            "unit": "number",
+            "source": "computed.technicals.rsi14",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ]
+      },
+      "quality": {
+        "grade": "A",
+        "oneLineWhy": "SYNTHETIC demonstration text for grade strip quality one line why; it describes fictional inputs and is not a current market observation.",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for quality reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "computed.forensics.beneish",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for quality reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "computed.forensics.accruals",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "confidence": "high",
+        "keyNumbers": [
+          {
+            "value": -2.4,
+            "unit": "number",
+            "source": "computed.forensics.beneish.score",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ]
+      },
+      "leadership": {
+        "grade": "A",
+        "oneLineWhy": "SYNTHETIC demonstration text for grade strip leadership one line why; it describes fictional inputs and is not a current market observation.",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for leadership reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "computed.capital.shareCountTrend",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for leadership reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "synthetic:fmp-contract",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "confidence": "high",
+        "keyNumbers": [
+          {
+            "value": -1,
+            "unit": "%",
+            "source": "computed.capital.shareCountTrend.fiveYear",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ]
+      },
+      "moat": {
+        "grade": "A",
+        "oneLineWhy": "SYNTHETIC demonstration text for grade strip moat one line why; it describes fictional inputs and is not a current market observation.",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for moat reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "web:https://example.com/synthetic-research",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for moat reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "synthetic:filing-evidence",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "confidence": "high",
+        "keyNumbers": [
+          {
+            "value": 7000000000,
+            "unit": "usd_large",
+            "source": "computed.installedBaseValue",
+            "asOf": "2025-12-31",
+            "verified": false,
+            "verificationNote": "synthetic provenance example"
+          }
+        ]
+      },
+      "balanceSheet": {
+        "grade": "B",
+        "oneLineWhy": "SYNTHETIC demonstration text for grade strip balance sheet one line why; it describes fictional inputs and is not a current market observation.",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for balance sheet reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "computed.capital.netDebtToEbitda",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "confidence": "high",
+        "keyNumbers": [
+          {
+            "value": -0.29,
+            "unit": "x",
+            "source": "computed.capital.netDebtToEbitda",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 16.67,
+            "unit": "x",
+            "source": "computed.capital.interestCoverage",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ]
+      }
+    },
+    "executiveSummary": [
+      {
+        "text": "SYNTHETIC DEMONSTRATION — no value represents a real issuer or current market observation.",
+        "label": "JUDGMENT",
+        "source": "computed.scores.composite",
+        "asOf": "2025-12-31"
+      },
+      {
+        "text": "SYNTHETIC demonstration text for verdict executive summary text; it describes fictional inputs and is not a current market observation.",
+        "label": "ESTIMATE",
+        "source": "computed.projections.revenue.weighted",
+        "asOf": "2025-12-31"
+      },
+      {
+        "text": "SYNTHETIC demonstration text for verdict executive summary text; it describes fictional inputs and is not a current market observation.",
+        "label": "JUDGMENT",
+        "source": "computed.valuation.reverseDcf",
+        "asOf": "2025-12-31"
+      },
+      {
+        "text": "SYNTHETIC demonstration text for verdict executive summary text; it describes fictional inputs and is not a current market observation.",
+        "label": "JUDGMENT",
+        "source": "computed.scores.composite",
+        "asOf": "2025-12-31"
+      }
+    ]
+  },
+  "business": {
+    "whatTheySell": [
+      {
+        "text": "SYNTHETIC demonstration text for business what they sell text; it describes fictional inputs and is not a current market observation.",
+        "label": "FACT",
+        "source": "synthetic:filing-evidence",
+        "asOf": "2025-12-31"
+      },
+      {
+        "text": "SYNTHETIC demonstration text for business what they sell text; it describes fictional inputs and is not a current market observation.",
+        "label": "FACT",
+        "source": "synthetic:fmp-contract",
+        "asOf": "2025-12-31"
+      }
+    ],
+    "segments": {
+      "product": [
+        {
+          "name": "Platform",
+          "revenue": {
+            "value": 7500000000,
+            "unit": "usd_large",
+            "source": "synthetic:segments.product.platform",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          "sharePct": 60
+        },
+        {
+          "name": "Services",
+          "revenue": {
+            "value": 5000000000,
+            "unit": "usd_large",
+            "source": "synthetic:segments.product.services",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          "sharePct": 40
+        }
+      ],
+      "geographic": [
+        {
+          "name": "Domestic test market",
+          "revenue": {
+            "value": 8000000000,
+            "unit": "usd_large",
+            "source": "synthetic:segments.geographic.1",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          "sharePct": 64
+        },
+        {
+          "name": "International test market",
+          "revenue": {
+            "value": 4500000000,
+            "unit": "usd_large",
+            "source": "synthetic:segments.geographic.2",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          "sharePct": 36
+        }
+      ]
+    },
+    "concentrationRisks": [
+      {
+        "text": "SYNTHETIC demonstration text for business concentration risks text; it describes fictional inputs and is not a current market observation.",
+        "label": "FACT",
+        "source": "synthetic:fmp-contract",
+        "asOf": "2025-12-31"
+      },
+      {
+        "text": "SYNTHETIC demonstration text for business concentration risks text; it describes fictional inputs and is not a current market observation.",
+        "label": "JUDGMENT",
+        "source": "synthetic:filing-evidence",
+        "asOf": "2025-12-31"
+      }
+    ]
+  },
+  "fundamentals": {
+    "graded": {
+      "grade": "A",
+      "oneLineWhy": "SYNTHETIC demonstration text for fundamentals graded one line why; it describes fictional inputs and is not a current market observation.",
+      "reasoning": [
+        {
+          "text": "SYNTHETIC demonstration text for graded reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "FACT",
+          "source": "computed.cash.fcf",
+          "asOf": "2025-12-31"
+        }
+      ],
+      "confidence": "high",
+      "keyNumbers": [
+        {
+          "value": 1800000000,
+          "unit": "usd_large",
+          "source": "computed.cash.fcf.latest",
+          "asOf": "2025-12-31",
+          "verified": true
+        }
+      ],
+      "interpretation": "SYNTHETIC demonstration text for fundamentals graded interpretation; it describes fictional inputs and is not a current market observation."
+    },
+    "growthTable": [
+      {
+        "label": "Revenue CAGR",
+        "values": [
+          {
+            "period": "1yr",
+            "value": {
+              "value": 18.4,
+              "unit": "%",
+              "source": "computed.growth.revenueCagr1y",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "3yr",
+            "value": {
+              "value": 16.7,
+              "unit": "%",
+              "source": "computed.growth.revenueCagr3y",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "5yr",
+            "value": {
+              "value": 22.2,
+              "unit": "%",
+              "source": "computed.growth.revenueCagr5y",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ]
+      },
+      {
+        "label": "EPS diluted CAGR",
+        "values": [
+          {
+            "period": "3yr",
+            "value": {
+              "value": 6.5,
+              "unit": "%",
+              "source": "computed.growth.epsDilutedCagr3y",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "5yr",
+            "value": {
+              "value": 19.4,
+              "unit": "%",
+              "source": "computed.growth.epsDilutedCagr5y",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ]
+      }
+    ],
+    "marginTrend": [
+      {
+        "label": "Gross margin",
+        "values": [
+          {
+            "period": "FY2023",
+            "value": {
+              "value": 60,
+              "unit": "%",
+              "source": "computed.growth.margins.gross.2023",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2024",
+            "value": {
+              "value": 60,
+              "unit": "%",
+              "source": "computed.growth.margins.gross.2024",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2025",
+            "value": {
+              "value": 60,
+              "unit": "%",
+              "source": "computed.growth.margins.gross.2025",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ]
+      },
+      {
+        "label": "Operating margin",
+        "values": [
+          {
+            "period": "FY2023",
+            "value": {
+              "value": 20,
+              "unit": "%",
+              "source": "computed.growth.margins.operating.2023",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2024",
+            "value": {
+              "value": 20,
+              "unit": "%",
+              "source": "computed.growth.margins.operating.2024",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2025",
+            "value": {
+              "value": 20,
+              "unit": "%",
+              "source": "computed.growth.margins.operating.2025",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ]
+      }
+    ],
+    "returns": [
+      {
+        "label": "ROIC",
+        "values": [
+          {
+            "period": "FY2025",
+            "value": {
+              "value": 26,
+              "unit": "%",
+              "source": "computed.returns.roic.2025",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ]
+      },
+      {
+        "label": "ROE (DuPont)",
+        "values": [
+          {
+            "period": "FY2025",
+            "value": {
+              "value": 29,
+              "unit": "%",
+              "source": "computed.returns.dupont.roe.2025",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ]
+      }
+    ],
+    "fcf": [
+      {
+        "label": "Free cash flow",
+        "values": [
+          {
+            "period": "FY2024",
+            "value": {
+              "value": 1800000000,
+              "unit": "usd_large",
+              "source": "computed.cash.fcf.2024",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2025",
+            "value": {
+              "value": 1800000000,
+              "unit": "usd_large",
+              "source": "computed.cash.fcf.2025",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ]
+      }
+    ],
+    "commentary": [
+      {
+        "text": "SYNTHETIC demonstration text for fundamentals commentary text; it describes fictional inputs and is not a current market observation.",
+        "label": "JUDGMENT",
+        "source": "computed.growth.margins",
+        "asOf": "2025-12-31"
+      }
+    ]
+  },
+  "balanceSheet": {
+    "debtProfile": {
+      "commentary": [
+        {
+          "text": "SYNTHETIC demonstration text for debt profile commentary text; it describes fictional inputs and is not a current market observation.",
+          "label": "FACT",
+          "source": "computed.capital.netDebt",
+          "asOf": "2025-12-31"
+        }
+      ],
+      "numbers": [
+        {
+          "value": -0.29,
+          "unit": "x",
+          "source": "computed.capital.netDebtToEbitda",
+          "asOf": "2025-12-31",
+          "verified": true
+        }
+      ]
+    },
+    "coverage": {
+      "commentary": [
+        {
+          "text": "SYNTHETIC demonstration text for coverage commentary text; it describes fictional inputs and is not a current market observation.",
+          "label": "FACT",
+          "source": "computed.capital.interestCoverage",
+          "asOf": "2025-12-31"
+        }
+      ],
+      "numbers": [
+        {
+          "value": 16.67,
+          "unit": "x",
+          "source": "computed.capital.interestCoverage",
+          "asOf": "2025-12-31",
+          "verified": true
+        }
+      ]
+    },
+    "capexTrajectory": {
+      "commentary": [
+        {
+          "text": "SYNTHETIC demonstration text for capex trajectory commentary text; it describes fictional inputs and is not a current market observation.",
+          "label": "FACT",
+          "source": "computed.cash.capexIntensity",
+          "asOf": "2025-12-31"
+        }
+      ],
+      "numbers": [
+        {
+          "value": 4.8,
+          "unit": "%",
+          "source": "computed.cash.capexIntensity.pctRevenue",
+          "asOf": "2025-12-31",
+          "verified": true
+        }
+      ]
+    },
+    "capitalAllocation": [
+      {
+        "text": "SYNTHETIC demonstration text for balance sheet capital allocation text; it describes fictional inputs and is not a current market observation.",
+        "label": "FACT",
+        "source": "computed.capital.payout",
+        "asOf": "2025-12-31"
+      },
+      {
+        "text": "SYNTHETIC demonstration text for balance sheet capital allocation text; it describes fictional inputs and is not a current market observation.",
+        "label": "JUDGMENT",
+        "source": "computed.capital.buybackTiming",
+        "asOf": "2025-12-31"
+      }
+    ],
+    "graded": {
+      "grade": "B",
+      "oneLineWhy": "SYNTHETIC demonstration text for balance sheet graded one line why; it describes fictional inputs and is not a current market observation.",
+      "reasoning": [
+        {
+          "text": "SYNTHETIC demonstration text for graded reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "FACT",
+          "source": "computed.capital.netDebtToEbitda",
+          "asOf": "2025-12-31"
+        }
+      ],
+      "confidence": "high",
+      "keyNumbers": [
+        {
+          "value": -0.29,
+          "unit": "x",
+          "source": "computed.capital.netDebtToEbitda",
+          "asOf": "2025-12-31",
+          "verified": true
+        },
+        {
+          "value": 16.67,
+          "unit": "x",
+          "source": "computed.capital.interestCoverage",
+          "asOf": "2025-12-31",
+          "verified": true
+        }
+      ],
+      "interpretation": "SYNTHETIC demonstration text for balance sheet graded interpretation; it describes fictional inputs and is not a current market observation."
+    }
+  },
+  "valuation": {
+    "graded": {
+      "grade": "C",
+      "oneLineWhy": "SYNTHETIC demonstration text for valuation graded one line why; it describes fictional inputs and is not a current market observation.",
+      "reasoning": [
+        {
+          "text": "SYNTHETIC demonstration text for graded reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "ESTIMATE",
+          "source": "computed.valuation.dcf",
+          "asOf": "2025-12-31"
+        }
+      ],
+      "confidence": "medium",
+      "keyNumbers": [
+        {
+          "value": 48,
+          "unit": "usd",
+          "source": "computed.valuation.dcf.perShare",
+          "asOf": "2025-12-31",
+          "verified": true
+        }
+      ],
+      "interpretation": "SYNTHETIC demonstration text for valuation graded interpretation; it describes fictional inputs and is not a current market observation."
+    },
+    "dcf": {
+      "perShare": {
+        "value": 48,
+        "unit": "usd",
+        "source": "computed.valuation.dcf.perShare",
+        "asOf": "2025-12-31",
+        "verified": true
+      },
+      "assumptions": [
+        {
+          "name": "Synthetic assumption 1",
+          "value": "$12.5B",
+          "basis": "SYNTHETIC demonstration text for dcf assumptions basis; it describes fictional inputs and is not a current market observation."
+        },
+        {
+          "name": "Synthetic assumption 2",
+          "value": "8.5%",
+          "basis": "SYNTHETIC demonstration text for dcf assumptions basis; it describes fictional inputs and is not a current market observation."
+        },
+        {
+          "name": "Synthetic assumption 3",
+          "value": "2.5%",
+          "basis": "SYNTHETIC demonstration text for dcf assumptions basis; it describes fictional inputs and is not a current market observation."
+        },
+        {
+          "name": "Synthetic assumption 4",
+          "value": "20.0%",
+          "basis": "SYNTHETIC demonstration text for dcf assumptions basis; it describes fictional inputs and is not a current market observation."
+        },
+        {
+          "name": "Synthetic assumption 5",
+          "value": "$40.00",
+          "basis": "SYNTHETIC demonstration text for dcf assumptions basis; it describes fictional inputs and is not a current market observation."
+        },
+        {
+          "name": "Synthetic assumption 6",
+          "value": "$12.5B",
+          "basis": "SYNTHETIC demonstration text for dcf assumptions basis; it describes fictional inputs and is not a current market observation."
+        }
+      ],
+      "sensitivityGrid": [
+        {
+          "waccPct": 8,
+          "gTermPct": 2,
+          "perShare": 48
+        },
+        {
+          "waccPct": 8,
+          "gTermPct": 2.25,
+          "perShare": 50
+        },
+        {
+          "waccPct": 8,
+          "gTermPct": 2.5,
+          "perShare": 52
+        },
+        {
+          "waccPct": 8,
+          "gTermPct": 2.75,
+          "perShare": 54
+        },
+        {
+          "waccPct": 8,
+          "gTermPct": 3,
+          "perShare": 56
+        },
+        {
+          "waccPct": 8.5,
+          "gTermPct": 2,
+          "perShare": 45
+        },
+        {
+          "waccPct": 8.5,
+          "gTermPct": 2.25,
+          "perShare": 47
+        },
+        {
+          "waccPct": 8.5,
+          "gTermPct": 2.5,
+          "perShare": 49
+        },
+        {
+          "waccPct": 8.5,
+          "gTermPct": 2.75,
+          "perShare": 51
+        },
+        {
+          "waccPct": 8.5,
+          "gTermPct": 3,
+          "perShare": 53
+        },
+        {
+          "waccPct": 9,
+          "gTermPct": 2,
+          "perShare": 42
+        },
+        {
+          "waccPct": 9,
+          "gTermPct": 2.25,
+          "perShare": 44
+        },
+        {
+          "waccPct": 9,
+          "gTermPct": 2.5,
+          "perShare": 46
+        },
+        {
+          "waccPct": 9,
+          "gTermPct": 2.75,
+          "perShare": 48
+        },
+        {
+          "waccPct": 9,
+          "gTermPct": 3,
+          "perShare": 50
+        },
+        {
+          "waccPct": 9.5,
+          "gTermPct": 2,
+          "perShare": 39
+        },
+        {
+          "waccPct": 9.5,
+          "gTermPct": 2.25,
+          "perShare": 41
+        },
+        {
+          "waccPct": 9.5,
+          "gTermPct": 2.5,
+          "perShare": 43
+        },
+        {
+          "waccPct": 9.5,
+          "gTermPct": 2.75,
+          "perShare": 45
+        },
+        {
+          "waccPct": 9.5,
+          "gTermPct": 3,
+          "perShare": 47
+        },
+        {
+          "waccPct": 10,
+          "gTermPct": 2,
+          "perShare": 36
+        },
+        {
+          "waccPct": 10,
+          "gTermPct": 2.25,
+          "perShare": 38
+        },
+        {
+          "waccPct": 10,
+          "gTermPct": 2.5,
+          "perShare": 40
+        },
+        {
+          "waccPct": 10,
+          "gTermPct": 2.75,
+          "perShare": 42
+        },
+        {
+          "waccPct": 10,
+          "gTermPct": 3,
+          "perShare": 44
+        }
+      ],
+      "upsidePct": 20
+    },
+    "reverseDcf": {
+      "impliedMetric": "five-year revenue growth",
+      "impliedValue": 7.5,
+      "narrative": "SYNTHETIC demonstration text for valuation reverse dcf narrative; it describes fictional inputs and is not a current market observation."
+    },
+    "multiples": [
+      {
+        "name": "Synthetic comparison 1",
+        "current": 9,
+        "peerMedian": 12.5,
+        "own5yPercentile": 62,
+        "sectorAppropriate": true
+      },
+      {
+        "name": "Synthetic comparison 2",
+        "current": 5.3,
+        "peerMedian": 13.2,
+        "own5yPercentile": 77,
+        "sectorAppropriate": true
+      },
+      {
+        "name": "Synthetic comparison 3",
+        "current": 4,
+        "peerMedian": 9.5,
+        "own5yPercentile": 61,
+        "sectorAppropriate": true
+      },
+      {
+        "name": "Synthetic comparison 4",
+        "current": 8.3,
+        "peerMedian": 7,
+        "own5yPercentile": 65,
+        "sectorAppropriate": false
+      }
+    ],
+    "scenarios": [
+      {
+        "name": "bull",
+        "probability": 0.25,
+        "priceTarget": {
+          "value": 52,
+          "unit": "usd",
+          "source": "computed.scenarioTargets.bull",
+          "asOf": "2025-12-31",
+          "verified": false,
+          "verificationNote": "synthetic provenance example"
+        },
+        "horizon": "12 months",
+        "assumptions": [
+          "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation."
+        ],
+        "whatWouldHaveToBeTrue": [
+          "SYNTHETIC demonstration text for valuation scenarios what would have to be true; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for valuation scenarios what would have to be true; it describes fictional inputs and is not a current market observation."
+        ]
+      },
+      {
+        "name": "base",
+        "probability": 0.5,
+        "priceTarget": {
+          "value": 48,
+          "unit": "usd",
+          "source": "computed.scenarioTargets.base",
+          "asOf": "2025-12-31",
+          "verified": false,
+          "verificationNote": "synthetic provenance example"
+        },
+        "horizon": "12 months",
+        "assumptions": [
+          "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation."
+        ],
+        "whatWouldHaveToBeTrue": [
+          "SYNTHETIC demonstration text for valuation scenarios what would have to be true; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for valuation scenarios what would have to be true; it describes fictional inputs and is not a current market observation."
+        ]
+      },
+      {
+        "name": "bear",
+        "probability": 0.25,
+        "priceTarget": {
+          "value": 36,
+          "unit": "usd",
+          "source": "computed.scenarioTargets.bear",
+          "asOf": "2025-12-31",
+          "verified": false,
+          "verificationNote": "synthetic provenance example"
+        },
+        "horizon": "12 months",
+        "assumptions": [
+          "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation."
+        ],
+        "whatWouldHaveToBeTrue": [
+          "SYNTHETIC demonstration text for valuation scenarios what would have to be true; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for valuation scenarios what would have to be true; it describes fictional inputs and is not a current market observation."
+        ]
+      }
+    ]
+  },
+  "quality": {
+    "graded": {
+      "grade": "A",
+      "oneLineWhy": "SYNTHETIC demonstration text for quality graded one line why; it describes fictional inputs and is not a current market observation.",
+      "reasoning": [
+        {
+          "text": "SYNTHETIC demonstration text for graded reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "FACT",
+          "source": "computed.forensics",
+          "asOf": "2025-12-31"
+        }
+      ],
+      "confidence": "high",
+      "keyNumbers": [
+        {
+          "value": -2.4,
+          "unit": "number",
+          "source": "computed.forensics.beneish.score",
+          "asOf": "2025-12-31",
+          "verified": true
+        }
+      ],
+      "interpretation": "SYNTHETIC demonstration text for quality graded interpretation; it describes fictional inputs and is not a current market observation."
+    },
+    "forensicScores": {
+      "altman": {
+        "variant": "synthetic-standard",
+        "score": 4.5,
+        "zone": "illustrative"
+      },
+      "beneish": {
+        "variant": "8-index",
+        "score": -2.4,
+        "zone": "illustrative"
+      },
+      "piotroski": {
+        "variant": "synthetic-standard",
+        "score": 7,
+        "zone": "illustrative"
+      },
+      "accruals": {
+        "variant": "synthetic-standard",
+        "score": -0.04,
+        "zone": "illustrative"
+      }
+    },
+    "flags": [
+      {
+        "severity": "low",
+        "text": "SYNTHETIC demonstration text for quality flags text; it describes fictional inputs and is not a current market observation.",
+        "source": "computed.forensics.flags.receivables"
+      }
+    ]
+  },
+  "technicals": {
+    "graded": {
+      "grade": "B",
+      "oneLineWhy": "SYNTHETIC demonstration text for technicals graded one line why; it describes fictional inputs and is not a current market observation.",
+      "reasoning": [
+        {
+          "text": "SYNTHETIC demonstration text for graded reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "FACT",
+          "source": "computed.technicals.smaCross",
+          "asOf": "2025-12-31"
+        }
+      ],
+      "confidence": "medium",
+      "keyNumbers": [
+        {
+          "value": 40,
+          "unit": "usd",
+          "source": "computed.technicals.lastClose",
+          "asOf": "2025-12-31",
+          "verified": true
+        }
+      ],
+      "interpretation": "SYNTHETIC demonstration text for technicals graded interpretation; it describes fictional inputs and is not a current market observation."
+    },
+    "read": {
+      "trend": "SYNTHETIC demonstration text for technicals read trend; it describes fictional inputs and is not a current market observation.",
+      "momentum": "SYNTHETIC demonstration text for technicals read momentum; it describes fictional inputs and is not a current market observation.",
+      "keyLevels": "SYNTHETIC demonstration text for technicals read key levels; it describes fictional inputs and is not a current market observation.",
+      "relativeStrength": "SYNTHETIC demonstration text for technicals read relative strength; it describes fictional inputs and is not a current market observation."
+    },
+    "indicators": [
+      {
+        "value": 55,
+        "unit": "number",
+        "source": "computed.technicals.rsi14",
+        "asOf": "2025-12-31",
+        "verified": true
+      },
+      {
+        "value": 39,
+        "unit": "usd",
+        "source": "computed.technicals.sma50",
+        "asOf": "2025-12-31",
+        "verified": true
+      },
+      {
+        "value": 36,
+        "unit": "usd",
+        "source": "computed.technicals.sma200",
+        "asOf": "2025-12-31",
+        "verified": true
+      },
+      {
+        "value": 8.1,
+        "unit": "%",
+        "source": "computed.technicals.range52w.position",
+        "asOf": "2025-12-31",
+        "verified": true
+      }
+    ],
+    "flags": [
+      {
+        "severity": "low",
+        "text": "SYNTHETIC demonstration text for technicals flags text; it describes fictional inputs and is not a current market observation.",
+        "source": "computed.technicals.distanceFrom200"
+      }
+    ]
+  },
+  "leadership": {
+    "graded": {
+      "grade": "A",
+      "oneLineWhy": "SYNTHETIC demonstration text for leadership graded one line why; it describes fictional inputs and is not a current market observation.",
+      "reasoning": [
+        {
+          "text": "SYNTHETIC demonstration text for graded reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "JUDGMENT",
+          "source": "computed.capital",
+          "asOf": "2025-12-31"
+        }
+      ],
+      "confidence": "high",
+      "keyNumbers": [
+        {
+          "value": -1,
+          "unit": "%",
+          "source": "computed.capital.shareCountTrend.fiveYear",
+          "asOf": "2025-12-31",
+          "verified": true
+        }
+      ],
+      "interpretation": "SYNTHETIC demonstration text for leadership graded interpretation; it describes fictional inputs and is not a current market observation."
+    },
+    "executives": [
+      {
+        "name": "Morgan Example",
+        "title": "Chief Executive Officer",
+        "tenureYears": 6,
+        "grade": "A",
+        "credibilityGrade": "A",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for executives reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "synthetic:fmp-contract",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "evidence": {
+          "guidanceVsActuals": [
+            {
+              "text": "SYNTHETIC demonstration text for evidence guidance vs actuals text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "synthetic:fmp-contract",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "capitalAllocation": [
+            {
+              "text": "SYNTHETIC demonstration text for evidence capital allocation text; it describes fictional inputs and is not a current market observation.",
+              "label": "FACT",
+              "source": "computed.capital.shareCountTrend",
+              "asOf": "2025-12-31"
+            }
+          ]
+        }
+      },
+      {
+        "name": "Avery Example",
+        "title": "Chief Financial Officer",
+        "tenureYears": 4,
+        "grade": "A",
+        "credibilityGrade": "A",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for executives reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "synthetic:fmp-contract",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "evidence": {
+          "compensation": [
+            {
+              "text": "SYNTHETIC demonstration text for evidence compensation text; it describes fictional inputs and is not a current market observation.",
+              "label": "FACT",
+              "source": "synthetic:filing-evidence",
+              "asOf": "2025-12-31"
+            }
+          ]
+        }
+      }
+    ],
+    "insiderSummary": [
+      {
+        "text": "SYNTHETIC demonstration text for leadership insider summary text; it describes fictional inputs and is not a current market observation.",
+        "label": "FACT",
+        "source": "synthetic:fmp-contract",
+        "asOf": "2025-12-31"
+      },
+      {
+        "text": "SYNTHETIC demonstration text for leadership insider summary text; it describes fictional inputs and is not a current market observation.",
+        "label": "FACT",
+        "source": "finnhub:insider-sentiment",
+        "asOf": "2025-12-31"
+      }
+    ],
+    "governanceNotes": [
+      {
+        "text": "SYNTHETIC demonstration text for leadership governance notes text; it describes fictional inputs and is not a current market observation.",
+        "label": "FACT",
+        "source": "synthetic:filing-evidence",
+        "asOf": "2025-12-31"
+      }
+    ]
+  },
+  "competitive": {
+    "moatGraded": {
+      "grade": "A",
+      "oneLineWhy": "SYNTHETIC demonstration text for competitive moat graded one line why; it describes fictional inputs and is not a current market observation.",
+      "reasoning": [
+        {
+          "text": "SYNTHETIC demonstration text for moat graded reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "JUDGMENT",
+          "source": "synthetic:filing-evidence",
+          "asOf": "2025-12-31"
+        }
+      ],
+      "confidence": "high",
+      "keyNumbers": [
+        {
+          "value": 12.4,
+          "unit": "%",
+          "source": "computed.customerRetention",
+          "asOf": "2025-12-31",
+          "verified": false,
+          "verificationNote": "synthetic provenance example"
+        }
+      ],
+      "interpretation": "SYNTHETIC demonstration text for competitive moat graded interpretation; it describes fictional inputs and is not a current market observation."
+    },
+    "peerTable": [
+      {
+        "name": "Alpha Example Software",
+        "symbol": "ALFA",
+        "metrics": [
+          {
+            "value": 8,
+            "unit": "x",
+            "source": "peer.synthetic-peer.peNtm",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 14.7,
+            "unit": "%",
+            "source": "peer.synthetic-peer.grossMargin",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ]
+      },
+      {
+        "name": "Beta Sample Systems",
+        "symbol": "BETA",
+        "metrics": [
+          {
+            "value": 5.5,
+            "unit": "x",
+            "source": "peer.synthetic-peer.peNtm",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 25.2,
+            "unit": "%",
+            "source": "peer.synthetic-peer.grossMargin",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ]
+      },
+      {
+        "name": "Gamma Fictional Cloud",
+        "symbol": "GAMM",
+        "metrics": [
+          {
+            "value": 8.2,
+            "unit": "x",
+            "source": "peer.synthetic-peer.peNtm",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 16.5,
+            "unit": "%",
+            "source": "peer.synthetic-peer.grossMargin",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ]
+      }
+    ],
+    "moatAssessment": [
+      {
+        "source": "switchingCosts",
+        "strength": "wide",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for moat assessment reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "synthetic:filing-evidence",
+            "asOf": "2025-12-31"
+          }
+        ]
+      },
+      {
+        "source": "brand",
+        "strength": "wide",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for moat assessment reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "web:https://example.com/synthetic-research",
+            "asOf": "2025-12-31"
+          }
+        ]
+      },
+      {
+        "source": "scale",
+        "strength": "narrow",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for moat assessment reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "computed.scale",
+            "asOf": "2025-12-31"
+          }
+        ]
+      },
+      {
+        "source": "networkEffects",
+        "strength": "narrow",
+        "reasoning": [
+          {
+            "text": "SYNTHETIC demonstration text for moat assessment reasoning text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "computed.network",
+            "asOf": "2025-12-31"
+          }
+        ]
+      }
+    ],
+    "marketShareDirection": "SYNTHETIC demonstration text for competitive market share direction; it describes fictional inputs and is not a current market observation."
+  },
+  "catalystsRisks": {
+    "catalysts": [
+      {
+        "title": "Synthetic catalyst 1",
+        "expectedDate": "2025-12-31",
+        "direction": "positive",
+        "significance": "high",
+        "reasoning": {
+          "text": "SYNTHETIC demonstration text for catalysts reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "JUDGMENT",
+          "source": "web:https://example.com/synthetic-research",
+          "asOf": "2025-12-31"
+        }
+      },
+      {
+        "title": "Synthetic catalyst 2",
+        "expectedDate": "2025-12-31",
+        "direction": "negative",
+        "significance": "high",
+        "reasoning": {
+          "text": "SYNTHETIC demonstration text for catalysts reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "JUDGMENT",
+          "source": "web:https://example.com/synthetic-research",
+          "asOf": "2025-12-31"
+        }
+      },
+      {
+        "title": "Synthetic catalyst 3",
+        "expectedDate": "2025-12-31",
+        "direction": "mixed",
+        "significance": "medium",
+        "reasoning": {
+          "text": "SYNTHETIC demonstration text for catalysts reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "JUDGMENT",
+          "source": "synthetic:fmp-contract",
+          "asOf": "2025-12-31"
+        }
+      },
+      {
+        "title": "Synthetic catalyst 4",
+        "expectedDate": null,
+        "direction": "positive",
+        "significance": "medium",
+        "reasoning": {
+          "text": "SYNTHETIC demonstration text for catalysts reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "JUDGMENT",
+          "source": "web:https://example.com/synthetic-research",
+          "asOf": "2025-12-31"
+        }
+      }
+    ],
+    "risks": [
+      {
+        "title": "Synthetic risk 1",
+        "severity": "high",
+        "probability": "medium",
+        "source": "synthetic:filing-evidence",
+        "reasoning": {
+          "text": "SYNTHETIC demonstration text for risks reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "JUDGMENT",
+          "source": "synthetic:filing-evidence",
+          "asOf": "2025-12-31"
+        }
+      },
+      {
+        "title": "Synthetic risk 2",
+        "severity": "high",
+        "probability": "medium",
+        "source": "synthetic:filing-evidence",
+        "reasoning": {
+          "text": "SYNTHETIC demonstration text for risks reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "JUDGMENT",
+          "source": "synthetic:filing-evidence",
+          "asOf": "2025-12-31"
+        }
+      },
+      {
+        "title": "Synthetic risk 3",
+        "severity": "medium",
+        "probability": "high",
+        "source": "computed.growth",
+        "reasoning": {
+          "text": "SYNTHETIC demonstration text for risks reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "JUDGMENT",
+          "source": "computed.growth.revenueCagr5y",
+          "asOf": "2025-12-31"
+        }
+      },
+      {
+        "title": "Synthetic risk 4",
+        "severity": "medium",
+        "probability": "medium",
+        "source": "computed.valuation",
+        "reasoning": {
+          "text": "SYNTHETIC demonstration text for risks reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "JUDGMENT",
+          "source": "computed.valuation.multiples",
+          "asOf": "2025-12-31"
+        }
+      },
+      {
+        "title": "Synthetic risk 5",
+        "severity": "low",
+        "probability": "medium",
+        "source": "computed.macro",
+        "reasoning": {
+          "text": "SYNTHETIC demonstration text for risks reasoning text; it describes fictional inputs and is not a current market observation.",
+          "label": "JUDGMENT",
+          "source": "computed.macro.fxSensitivity",
+          "asOf": "2025-12-31"
+        }
+      }
+    ]
+  },
+  "outlook": {
+    "segmentTrajectories": [
+      {
+        "text": "SYNTHETIC demonstration text for outlook segment trajectories text; it describes fictional inputs and is not a current market observation.",
+        "label": "ESTIMATE",
+        "source": "synthesis.outlook.services",
+        "asOf": "2025-12-31"
+      },
+      {
+        "text": "SYNTHETIC demonstration text for outlook segment trajectories text; it describes fictional inputs and is not a current market observation.",
+        "label": "ESTIMATE",
+        "source": "synthesis.outlook.synthetic-product",
+        "asOf": "2025-12-31"
+      }
+    ],
+    "tam": [
+      {
+        "text": "SYNTHETIC demonstration text for outlook tam text; it describes fictional inputs and is not a current market observation.",
+        "label": "JUDGMENT",
+        "source": "synthesis.outlook.tam",
+        "asOf": "2025-12-31"
+      }
+    ],
+    "estimateRevisionTrend": [
+      {
+        "text": "SYNTHETIC demonstration text for outlook estimate revision trend text; it describes fictional inputs and is not a current market observation.",
+        "label": "FACT",
+        "source": "synthetic:fmp-contract",
+        "asOf": "2025-12-31"
+      }
+    ],
+    "guidanceCredibility": [
+      {
+        "text": "SYNTHETIC demonstration text for outlook guidance credibility text; it describes fictional inputs and is not a current market observation.",
+        "label": "JUDGMENT",
+        "source": "synthetic:fmp-contract",
+        "asOf": "2025-12-31"
+      }
+    ],
+    "scenarioNarratives": {
+      "y1": [
+        {
+          "text": "SYNTHETIC demonstration text for scenario narratives y1 text; it describes fictional inputs and is not a current market observation.",
+          "label": "ESTIMATE",
+          "source": "synthesis.outlook.y1",
+          "asOf": "2025-12-31"
+        }
+      ],
+      "y3": [
+        {
+          "text": "SYNTHETIC demonstration text for scenario narratives y3 text; it describes fictional inputs and is not a current market observation.",
+          "label": "ESTIMATE",
+          "source": "synthesis.outlook.y3",
+          "asOf": "2025-12-31"
+        }
+      ],
+      "y5": [
+        {
+          "text": "SYNTHETIC demonstration text for scenario narratives y5 text; it describes fictional inputs and is not a current market observation.",
+          "label": "JUDGMENT",
+          "source": "synthesis.outlook.y5",
+          "asOf": "2025-12-31"
+        }
+      ]
+    }
+  },
+  "macro": {
+    "relevantSeries": [
+      {
+        "seriesId": "DGS10",
+        "name": "Synthetic macro series 1",
+        "latest": {
+          "value": 4,
+          "unit": "%",
+          "source": "fred:DGS10",
+          "asOf": "2025-12-31",
+          "verified": true
+        },
+        "relevance": "SYNTHETIC demonstration text for macro relevant series relevance; it describes fictional inputs and is not a current market observation."
+      },
+      {
+        "seriesId": "UNRATE",
+        "name": "Synthetic macro series 2",
+        "latest": {
+          "value": 4.5,
+          "unit": "%",
+          "source": "fred:UNRATE",
+          "asOf": "2025-12-31",
+          "verified": true
+        },
+        "relevance": "SYNTHETIC demonstration text for macro relevant series relevance; it describes fictional inputs and is not a current market observation."
+      },
+      {
+        "seriesId": "CPIAUCSL",
+        "name": "Synthetic macro series 3",
+        "latest": {
+          "value": 3,
+          "unit": "%",
+          "source": "fred:CPIAUCSL",
+          "asOf": "2025-12-31",
+          "verified": true
+        },
+        "relevance": "SYNTHETIC demonstration text for macro relevant series relevance; it describes fictional inputs and is not a current market observation."
+      },
+      {
+        "seriesId": "DTWEXBGS",
+        "name": "Synthetic macro series 4",
+        "latest": {
+          "value": 100,
+          "unit": "number",
+          "source": "fred:DTWEXBGS",
+          "asOf": "2025-12-31",
+          "verified": true
+        },
+        "relevance": "SYNTHETIC demonstration text for macro relevant series relevance; it describes fictional inputs and is not a current market observation."
+      }
+    ],
+    "sensitivityNotes": [
+      {
+        "text": "SYNTHETIC demonstration text for macro sensitivity notes text; it describes fictional inputs and is not a current market observation.",
+        "label": "JUDGMENT",
+        "source": "computed.macro.rateSensitivity",
+        "asOf": "2025-12-31"
+      },
+      {
+        "text": "SYNTHETIC demonstration text for macro sensitivity notes text; it describes fictional inputs and is not a current market observation.",
+        "label": "FACT",
+        "source": "synthetic:fmp-contract",
+        "asOf": "2025-12-31"
+      }
+    ],
+    "fredAttribution": "This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis."
+  },
+  "appendix": {
+    "sources": [
+      {
+        "provider": "fmp",
+        "endpoint": "/synthetic/f2096f55",
+        "asOf": "2025-12-31",
+        "fetchedAt": "2026-01-15T12:00:00.000Z"
+      },
+      {
+        "provider": "fmp",
+        "endpoint": "/synthetic/d7bfaf38",
+        "asOf": "2025-12-31",
+        "fetchedAt": "2026-01-15T12:00:00.000Z"
+      },
+      {
+        "provider": "fmp",
+        "endpoint": "/synthetic/8802169b",
+        "asOf": "2025-12-31",
+        "fetchedAt": "2026-01-15T12:00:00.000Z"
+      },
+      {
+        "provider": "edgar",
+        "endpoint": "/synthetic/1878e516",
+        "asOf": "2025-12-31",
+        "fetchedAt": "2026-01-15T12:00:00.000Z"
+      },
+      {
+        "provider": "fred",
+        "endpoint": "/synthetic/e40a3559",
+        "asOf": "2025-12-31",
+        "fetchedAt": "2026-01-15T12:00:00.000Z"
+      },
+      {
+        "provider": "finra",
+        "endpoint": "/synthetic/9468989c",
+        "asOf": "2025-12-31",
+        "fetchedAt": "2026-01-15T12:00:00.000Z"
+      },
+      {
+        "provider": "anthropic",
+        "endpoint": "/synthetic/e07bc4df",
+        "asOf": "2025-12-31",
+        "fetchedAt": "2026-01-15T12:00:00.000Z"
+      }
+    ],
+    "missingData": [
+      {
+        "field": "business.socialSentiment",
+        "reason": "SYNTHETIC DEMONSTRATION — no value represents a real issuer or current market observation.",
+        "severity": "info",
+        "attemptedSources": [
+          "finnhub",
+          "fmp"
+        ]
+      },
+      {
+        "field": "valuation.cet1Ratio",
+        "reason": "SYNTHETIC demonstration text for appendix missing data reason; it describes fictional inputs and is not a current market observation.",
+        "severity": "info"
+      }
+    ],
+    "verificationRate": 0.92,
+    "verificationLog": [
+      {
+        "claim": "SYNTHETIC demonstration text for appendix verification log claim; it describes fictional inputs and is not a current market observation.",
+        "outcome": "verified",
+        "note": "SYNTHETIC demonstration text for appendix verification log note; it describes fictional inputs and is not a current market observation."
+      },
+      {
+        "claim": "SYNTHETIC demonstration text for appendix verification log claim; it describes fictional inputs and is not a current market observation.",
+        "outcome": "verified",
+        "note": "SYNTHETIC demonstration text for appendix verification log note; it describes fictional inputs and is not a current market observation."
+      },
+      {
+        "claim": "SYNTHETIC demonstration text for appendix verification log claim; it describes fictional inputs and is not a current market observation.",
+        "outcome": "verified",
+        "note": "SYNTHETIC demonstration text for appendix verification log note; it describes fictional inputs and is not a current market observation."
+      },
+      {
+        "claim": "SYNTHETIC demonstration text for appendix verification log claim; it describes fictional inputs and is not a current market observation.",
+        "outcome": "unverified",
+        "note": "SYNTHETIC demonstration text for appendix verification log note; it describes fictional inputs and is not a current market observation."
+      },
+      {
+        "claim": "SYNTHETIC demonstration text for appendix verification log claim; it describes fictional inputs and is not a current market observation.",
+        "outcome": "unverified",
+        "note": "SYNTHETIC demonstration text for appendix verification log note; it describes fictional inputs and is not a current market observation."
+      }
+    ],
+    "costBreakdown": [
+      {
+        "step": "bull",
+        "model": "synthetic-fixture",
+        "costUsd": 0
+      },
+      {
+        "step": "bear",
+        "model": "synthetic-fixture",
+        "costUsd": 0
+      },
+      {
+        "step": "synthesize",
+        "model": "synthetic-fixture",
+        "costUsd": 0
+      },
+      {
+        "step": "verify",
+        "model": "synthetic-fixture",
+        "costUsd": 0
+      }
+    ],
+    "provenanceCoverage": {
+      "numeric": {
+        "supported": 48,
+        "total": 52,
+        "rate": 0.9230769230769231
+      },
+      "factualClaims": {
+        "supported": 22,
+        "total": 24,
+        "rate": 0.9166666666666666
+      },
+      "judgments": {
+        "cited": 5,
+        "total": 6,
+        "rate": 0.8333333333333334
+      }
+    }
+  },
+  "disagreements": [
+    {
+      "topic": "Synthetic operating-case range",
+      "bullView": "SYNTHETIC demonstration text for disagreements bull view; it describes fictional inputs and is not a current market observation.",
+      "bearView": "SYNTHETIC demonstration text for disagreements bear view; it describes fictional inputs and is not a current market observation.",
+      "kind": "interpretation",
+      "judgeResolution": "SYNTHETIC demonstration text for disagreements judge resolution; it describes fictional inputs and is not a current market observation."
+    },
+    {
+      "topic": "Synthetic operating-case range",
+      "bullView": "SYNTHETIC demonstration text for disagreements bull view; it describes fictional inputs and is not a current market observation.",
+      "bearView": "SYNTHETIC demonstration text for disagreements bear view; it describes fictional inputs and is not a current market observation.",
+      "kind": "fact",
+      "judgeResolution": "SYNTHETIC demonstration text for disagreements judge resolution; it describes fictional inputs and is not a current market observation."
+    }
+  ],
+  "scores": {
+    "aspects": {
+      "fundamentals": {
+        "score": 86,
+        "band": "A",
+        "weightPct": 20,
+        "dataCompleteness": 0.95,
+        "drivers": [
+          {
+            "value": 30.3,
+            "unit": "%",
+            "source": "computed.scores.fundamentals.revenueCagr",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 5.2,
+            "unit": "pp/yr",
+            "source": "computed.scores.fundamentals.operatingMarginSlope",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 13.7,
+            "unit": "%",
+            "source": "computed.scores.fundamentals.epsCagr",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ],
+        "notApplicableReason": null,
+        "note": "SYNTHETIC demonstration text for aspects fundamentals note; it describes fictional inputs and is not a current market observation."
+      },
+      "valuation": {
+        "score": 68,
+        "band": "C",
+        "weightPct": 15,
+        "dataCompleteness": 0.95,
+        "drivers": [
+          {
+            "value": 7.8,
+            "unit": "%",
+            "source": "computed.scores.valuation.dcfUpside",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 8.1,
+            "unit": "pctile",
+            "source": "computed.scores.valuation.peOwnPercentile",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ],
+        "notApplicableReason": null,
+        "note": "SYNTHETIC demonstration text for aspects valuation note; it describes fictional inputs and is not a current market observation."
+      },
+      "quality": {
+        "score": 90,
+        "band": "A",
+        "weightPct": 15,
+        "dataCompleteness": 0.95,
+        "drivers": [
+          {
+            "value": 27.6,
+            "unit": "pp",
+            "source": "computed.scores.quality.roicVsWaccSpread",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 7,
+            "unit": "frac",
+            "source": "computed.scores.quality.piotroskiF",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 4.5,
+            "unit": "z",
+            "source": "computed.scores.quality.altmanZ",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ],
+        "notApplicableReason": null,
+        "note": "SYNTHETIC demonstration text for aspects quality note; it describes fictional inputs and is not a current market observation."
+      },
+      "balanceSheet": {
+        "score": 78,
+        "band": "B",
+        "weightPct": 15,
+        "dataCompleteness": 0.95,
+        "drivers": [
+          {
+            "value": -0.29,
+            "unit": "x",
+            "source": "computed.scores.balanceSheet.netDebtToEbitda",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 16.67,
+            "unit": "x",
+            "source": "computed.scores.balanceSheet.interestCoverage",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 7.4,
+            "unit": "frac",
+            "source": "computed.scores.balanceSheet.fcfConversion",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ],
+        "notApplicableReason": null,
+        "note": "SYNTHETIC demonstration text for aspects balance sheet note; it describes fictional inputs and is not a current market observation."
+      },
+      "moat": {
+        "score": 88,
+        "band": "A",
+        "weightPct": 15,
+        "dataCompleteness": 0.95,
+        "drivers": [
+          {
+            "value": 24.2,
+            "unit": "%",
+            "source": "computed.scores.moat.roicLevel",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 6.5,
+            "unit": "pp",
+            "source": "computed.scores.moat.roicStability",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 30.8,
+            "unit": "%",
+            "source": "computed.scores.moat.grossMarginLevel",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ],
+        "notApplicableReason": null,
+        "note": "SYNTHETIC demonstration text for aspects moat note; it describes fictional inputs and is not a current market observation."
+      },
+      "leadership": {
+        "score": 86,
+        "band": "A",
+        "weightPct": 10,
+        "dataCompleteness": 0.95,
+        "drivers": [
+          {
+            "value": 30.8,
+            "unit": "%",
+            "source": "computed.scores.leadership.buybackDiscipline",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": -1,
+            "unit": "%",
+            "source": "computed.scores.leadership.shareCountTrend",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ],
+        "notApplicableReason": null,
+        "note": "SYNTHETIC demonstration text for aspects leadership note; it describes fictional inputs and is not a current market observation."
+      },
+      "technicals": {
+        "score": 78,
+        "band": "B",
+        "weightPct": 10,
+        "dataCompleteness": 0.95,
+        "drivers": [
+          {
+            "value": 25.5,
+            "unit": "%",
+            "source": "computed.scores.technicals.smaGap",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 55,
+            "unit": "rsi",
+            "source": "computed.scores.technicals.rsi14",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 18.1,
+            "unit": "pp",
+            "source": "computed.scores.technicals.relStrength6m",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ],
+        "notApplicableReason": null,
+        "note": "SYNTHETIC demonstration text for aspects technicals note; it describes fictional inputs and is not a current market observation."
+      }
+    },
+    "composite": {
+      "score": 82,
+      "band": "B",
+      "weights": {
+        "fundamentals": 20,
+        "valuation": 15,
+        "quality": 15,
+        "balanceSheet": 15,
+        "moat": 15,
+        "leadership": 10,
+        "technicals": 10
+      },
+      "methodology": "SYNTHETIC demonstration text for scores composite methodology; it describes fictional inputs and is not a current market observation."
+    },
+    "bandsVersion": "SCORE_BANDS_2026_01"
+  },
+  "projections": {
+    "horizonYears": 5,
+    "scenarioWeights": {
+      "bull": 0.25,
+      "base": 0.5,
+      "bear": 0.25
+    },
+    "weightsVersion": "PROJECTION_WEIGHTS_2026_01",
+    "series": [
+      {
+        "metric": "revenue",
+        "unit": "USD",
+        "historical": [
+          {
+            "period": "FY2021",
+            "value": {
+              "value": 8500000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2022",
+            "value": {
+              "value": 9200000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2023",
+            "value": {
+              "value": 10000000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2024",
+            "value": {
+              "value": 11000000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2025",
+            "value": {
+              "value": 12500000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "bull": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 13800000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 15200000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 16800000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 18500000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 20300000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "base": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 13500000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 14600000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 15700000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 16800000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 18000000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "bear": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 12800000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 13100000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 13500000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 13900000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 14300000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "weighted": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 13400000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 14375000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 15425000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 16500000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 17650000000,
+              "unit": "USD",
+              "source": "computed.projections.revenue.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "assumptions": [
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation."
+        ],
+        "disclosures": []
+      },
+      {
+        "metric": "operatingMargin",
+        "unit": "%",
+        "historical": [
+          {
+            "period": "FY2021",
+            "value": {
+              "value": 16,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2022",
+            "value": {
+              "value": 17,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2023",
+            "value": {
+              "value": 18,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2024",
+            "value": {
+              "value": 19,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2025",
+            "value": {
+              "value": 20,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "bull": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 21,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 22,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 23,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 24,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 25,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "base": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 20.5,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 21,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 21.5,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 22,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 22.5,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "bear": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 19,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 18.5,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 18,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 17.5,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 17,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "weighted": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 20.25,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 20.63,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 21,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 21.38,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 21.75,
+              "unit": "%",
+              "source": "computed.projections.operatingMargin.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "assumptions": [
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation."
+        ],
+        "disclosures": []
+      },
+      {
+        "metric": "fcf",
+        "unit": "USD",
+        "historical": [
+          {
+            "period": "FY2021",
+            "value": {
+              "value": 1100000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2022",
+            "value": {
+              "value": 1250000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2023",
+            "value": {
+              "value": 1400000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2024",
+            "value": {
+              "value": 1550000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2025",
+            "value": {
+              "value": 1800000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "bull": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 2000000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 2250000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 2550000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 2900000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 3300000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "base": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 1900000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 2050000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 2200000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 2350000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 2500000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "bear": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 1700000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 1720000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 1750000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 1780000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 1800000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "weighted": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 1875000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 2017500000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 2175000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 2345000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 2525000000,
+              "unit": "USD",
+              "source": "computed.projections.fcf.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "assumptions": [
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation."
+        ],
+        "disclosures": []
+      },
+      {
+        "metric": "epsDiluted",
+        "unit": "USD/share",
+        "historical": [
+          {
+            "period": "FY2021",
+            "value": {
+              "value": 5.2,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2022",
+            "value": {
+              "value": 5.8,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2023",
+            "value": {
+              "value": 6.4,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2024",
+            "value": {
+              "value": 7.25,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2025",
+            "value": {
+              "value": 8.54,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.historical",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "bull": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 9.4,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 10.5,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 11.8,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 13.2,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 14.8,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.bull",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "base": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 9.1,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 9.8,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 10.6,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 11.5,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 12.5,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.base",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "bear": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 8.5,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 8.6,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 8.8,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 9,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 9.2,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.bear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "weighted": [
+          {
+            "period": "FY2026",
+            "value": {
+              "value": 9.03,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2027",
+            "value": {
+              "value": 9.68,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2028",
+            "value": {
+              "value": 10.45,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2029",
+            "value": {
+              "value": 11.3,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          },
+          {
+            "period": "FY2030",
+            "value": {
+              "value": 12.25,
+              "unit": "USD/share",
+              "source": "computed.projections.epsDiluted.weighted",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          }
+        ],
+        "assumptions": [
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation.",
+          "SYNTHETIC demonstration text for projections series assumptions; it describes fictional inputs and is not a current market observation."
+        ],
+        "disclosures": []
+      }
+    ],
+    "notApplicableReason": null
+  }
+}

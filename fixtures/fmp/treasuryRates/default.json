@@ -1,0 +1,18 @@
+[
+  {
+    "date": "2025-12-31",
+    "month1": 4.1,
+    "month2": 4.05,
+    "month3": 4,
+    "month6": 3.9,
+    "year1": 3.8,
+    "year2": 3.7,
+    "year3": 3.65,
+    "year5": 3.7,
+    "year7": 3.8,
+    "year10": 4,
+    "year20": 4.3,
+    "year30": 4.4,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

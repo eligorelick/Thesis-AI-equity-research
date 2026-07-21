@@ -1,0 +1,338 @@
+{
+ "cik": 19617,
+ "entityName": "JPMORGAN CHASE & CO",
+ "_note": "Trimmed extract of JPM companyfacts (fetched live 2026-07-05, HTTP 200, 7,708,165 bytes). Bank revenue/provision tag evidence for Thesis cross-check engine. AAPL-style RevenueFromContractWithCustomer* tags are ABSENT for JPM.",
+ "facts_us_gaap": {
+  "Revenues": {
+   "label": "Revenues",
+   "unit": "USD",
+   "total_points": 120,
+   "sample_points": [
+    {
+     "start": "2025-01-01",
+     "end": "2025-12-31",
+     "val": 182447000000,
+     "accn": "0001628280-26-008131",
+     "fy": 2025,
+     "fp": "FY",
+     "form": "10-K",
+     "filed": "2026-02-13",
+     "frame": "CY2025"
+    }
+   ]
+  },
+  "RevenuesNetOfInterestExpense": {
+   "label": "Revenues, Net of Interest Expense",
+   "unit": "USD",
+   "total_points": 145,
+   "sample_points": [
+    {
+     "start": "2025-01-01",
+     "end": "2025-12-31",
+     "val": 182447000000,
+     "accn": "0001628280-26-008131",
+     "fy": 2025,
+     "fp": "FY",
+     "form": "10-K",
+     "filed": "2026-02-13",
+     "frame": "CY2025"
+    },
+    {
+     "start": "2026-01-01",
+     "end": "2026-03-31",
+     "val": 49836000000,
+     "accn": "0001628280-26-029344",
+     "fy": 2026,
+     "fp": "Q1",
+     "form": "10-Q",
+     "filed": "2026-05-01",
+     "frame": "CY2026Q1"
+    }
+   ]
+  },
+  "InterestIncomeExpenseNet": {
+   "label": "Interest Income (Expense), Net",
+   "unit": "USD",
+   "total_points": 232,
+   "sample_points": [
+    {
+     "start": "2025-01-01",
+     "end": "2025-12-31",
+     "val": 95443000000,
+     "accn": "0001628280-26-008131",
+     "fy": 2025,
+     "fp": "FY",
+     "form": "10-K",
+     "filed": "2026-02-13",
+     "frame": "CY2025"
+    },
+    {
+     "start": "2026-01-01",
+     "end": "2026-03-31",
+     "val": 25366000000,
+     "accn": "0001628280-26-029344",
+     "fy": 2026,
+     "fp": "Q1",
+     "form": "10-Q",
+     "filed": "2026-05-01",
+     "frame": "CY2026Q1"
+    }
+   ]
+  },
+  "NoninterestIncome": {
+   "label": "Noninterest Income",
+   "unit": "USD",
+   "total_points": 232,
+   "sample_points": [
+    {
+     "start": "2025-01-01",
+     "end": "2025-12-31",
+     "val": 87004000000,
+     "accn": "0001628280-26-008131",
+     "fy": 2025,
+     "fp": "FY",
+     "form": "10-K",
+     "filed": "2026-02-13",
+     "frame": "CY2025"
+    },
+    {
+     "start": "2026-01-01",
+     "end": "2026-03-31",
+     "val": 24470000000,
+     "accn": "0001628280-26-029344",
+     "fy": 2026,
+     "fp": "Q1",
+     "form": "10-Q",
+     "filed": "2026-05-01",
+     "frame": "CY2026Q1"
+    }
+   ]
+  },
+  "NoninterestExpense": {
+   "label": "Noninterest Expense",
+   "unit": "USD",
+   "total_points": 232,
+   "sample_points": [
+    {
+     "start": "2025-01-01",
+     "end": "2025-12-31",
+     "val": 95640000000,
+     "accn": "0001628280-26-008131",
+     "fy": 2025,
+     "fp": "FY",
+     "form": "10-K",
+     "filed": "2026-02-13",
+     "frame": "CY2025"
+    },
+    {
+     "start": "2026-01-01",
+     "end": "2026-03-31",
+     "val": 26850000000,
+     "accn": "0001628280-26-029344",
+     "fy": 2026,
+     "fp": "Q1",
+     "form": "10-Q",
+     "filed": "2026-05-01",
+     "frame": "CY2026Q1"
+    }
+   ]
+  },
+  "ProvisionForLoanLeaseAndOtherLosses": {
+   "label": "Provision for Loan, Lease, and Other Losses",
+   "unit": "USD",
+   "total_points": 232,
+   "sample_points": [
+    {
+     "start": "2025-01-01",
+     "end": "2025-12-31",
+     "val": 14212000000,
+     "accn": "0001628280-26-008131",
+     "fy": 2025,
+     "fp": "FY",
+     "form": "10-K",
+     "filed": "2026-02-13",
+     "frame": "CY2025"
+    },
+    {
+     "start": "2026-01-01",
+     "end": "2026-03-31",
+     "val": 2507000000,
+     "accn": "0001628280-26-029344",
+     "fy": 2026,
+     "fp": "Q1",
+     "form": "10-Q",
+     "filed": "2026-05-01",
+     "frame": "CY2026Q1"
+    }
+   ]
+  },
+  "Deposits": {
+   "label": "Deposits",
+   "unit": "USD",
+   "total_points": 144,
+   "sample_points": [
+    {
+     "end": "2025-12-31",
+     "val": 2559320000000,
+     "accn": "0001628280-26-008131",
+     "fy": 2025,
+     "fp": "FY",
+     "form": "10-K",
+     "filed": "2026-02-13"
+    },
+    {
+     "end": "2025-12-31",
+     "val": 2559320000000,
+     "accn": "0001628280-26-029344",
+     "fy": 2026,
+     "fp": "Q1",
+     "form": "10-Q",
+     "filed": "2026-05-01",
+     "frame": "CY2025Q4I"
+    },
+    {
+     "end": "2026-03-31",
+     "val": 2675520000000,
+     "accn": "0001628280-26-029344",
+     "fy": 2026,
+     "fp": "Q1",
+     "form": "10-Q",
+     "filed": "2026-05-01",
+     "frame": "CY2026Q1I"
+    }
+   ]
+  },
+  "NetIncomeLoss": {
+   "label": "Net Income (Loss) Attributable to Parent",
+   "unit": "USD",
+   "total_points": 237,
+   "sample_points": [
+    {
+     "start": "2025-01-01",
+     "end": "2025-12-31",
+     "val": 57048000000,
+     "accn": "0001628280-26-008131",
+     "fy": 2025,
+     "fp": "FY",
+     "form": "10-K",
+     "filed": "2026-02-13"
+    },
+    {
+     "start": "2025-01-01",
+     "end": "2025-12-31",
+     "val": 57000000000,
+     "accn": "0000019617-26-000096",
+     "fy": null,
+     "fp": null,
+     "form": "DEF 14A",
+     "filed": "2026-04-06",
+     "frame": "CY2025"
+    },
+    {
+     "start": "2026-01-01",
+     "end": "2026-03-31",
+     "val": 16494000000,
+     "accn": "0001628280-26-029344",
+     "fy": 2026,
+     "fp": "Q1",
+     "form": "10-Q",
+     "filed": "2026-05-01",
+     "frame": "CY2026Q1"
+    }
+   ]
+  },
+  "Assets": {
+   "label": "Assets",
+   "unit": "USD",
+   "total_points": 203,
+   "sample_points": [
+    {
+     "end": "2025-12-31",
+     "val": 4424900000000,
+     "accn": "0001628280-26-008131",
+     "fy": 2025,
+     "fp": "FY",
+     "form": "10-K",
+     "filed": "2026-02-13"
+    },
+    {
+     "end": "2025-12-31",
+     "val": 4424900000000,
+     "accn": "0001628280-26-029344",
+     "fy": 2026,
+     "fp": "Q1",
+     "form": "10-Q",
+     "filed": "2026-05-01",
+     "frame": "CY2025Q4I"
+    },
+    {
+     "end": "2026-03-31",
+     "val": 4900475000000,
+     "accn": "0001628280-26-029344",
+     "fy": 2026,
+     "fp": "Q1",
+     "form": "10-Q",
+     "filed": "2026-05-01",
+     "frame": "CY2026Q1I"
+    }
+   ]
+  },
+  "EarningsPerShareDiluted": {
+   "label": "Earnings Per Share, Diluted",
+   "unit": "USD/shares",
+   "total_points": 232,
+   "sample_points": [
+    {
+     "start": "2025-01-01",
+     "end": "2025-12-31",
+     "val": 20.02,
+     "accn": "0001628280-26-008131",
+     "fy": 2025,
+     "fp": "FY",
+     "form": "10-K",
+     "filed": "2026-02-13",
+     "frame": "CY2025"
+    },
+    {
+     "start": "2026-01-01",
+     "end": "2026-03-31",
+     "val": 5.94,
+     "accn": "0001628280-26-029344",
+     "fy": 2026,
+     "fp": "Q1",
+     "form": "10-Q",
+     "filed": "2026-05-01",
+     "frame": "CY2026Q1"
+    }
+   ]
+  },
+  "InterestAndDividendIncomeOperating": {
+   "label": "Interest and Dividend Income, Operating",
+   "unit": "USD",
+   "total_points": 54,
+   "sample_points": [
+    {
+     "start": "2012-01-01",
+     "end": "2012-06-30",
+     "val": 28800000000,
+     "accn": "0000019617-12-000264",
+     "fy": 2012,
+     "fp": "Q2",
+     "form": "10-Q",
+     "filed": "2012-08-09"
+    },
+    {
+     "start": "2012-04-01",
+     "end": "2012-06-30",
+     "val": 14099000000,
+     "accn": "0000019617-12-000264",
+     "fy": 2012,
+     "fp": "Q2",
+     "form": "10-Q",
+     "filed": "2012-08-09",
+     "frame": "CY2012Q2"
+    }
+   ]
+  }
+ }
+}

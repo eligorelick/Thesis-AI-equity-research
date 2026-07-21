@@ -1,0 +1,7 @@
+# Normalize all text files to LF in the repository (checkout as-is on all platforms).
+* text=auto eol=lf
+
+# Binary types — never normalize. (No binaries are tracked today; these guard future additions.)
+*.png binary
+*.db binary
+*.gz binary

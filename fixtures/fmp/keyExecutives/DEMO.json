@@ -1,0 +1,35 @@
+[
+  {
+    "title": "Chief Executive Officer",
+    "name": "Morgan Example",
+    "pay": 3050000,
+    "currencyPay": "USD",
+    "gender": "unspecified",
+    "yearBorn": 1975,
+    "titleSince": "2020-01-01",
+    "active": true,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "title": "Chief Financial Officer",
+    "name": "Avery Example",
+    "pay": 2100000,
+    "currencyPay": "USD",
+    "gender": "unspecified",
+    "yearBorn": 1980,
+    "titleSince": "2021-06-01",
+    "active": true,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "title": "Chief Technology Officer",
+    "name": "Jordan Sample",
+    "pay": 1900000,
+    "currencyPay": "USD",
+    "gender": "unspecified",
+    "yearBorn": 1982,
+    "titleSince": "2019-09-01",
+    "active": true,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

@@ -1,0 +1,22 @@
+[
+  {
+    "symbol": "DEMO",
+    "name": "Thesis Example Systems",
+    "price": 40,
+    "changePercentage": 0.5025,
+    "change": 0.2,
+    "volume": 1200000,
+    "dayLow": 39.5,
+    "dayHigh": 40.5,
+    "yearHigh": 44,
+    "yearLow": 28,
+    "marketCap": 8000000000,
+    "priceAvg50": 39,
+    "priceAvg200": 36,
+    "exchange": "TEST",
+    "open": 39.8,
+    "previousClose": 39.8,
+    "timestamp": 1767139200,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

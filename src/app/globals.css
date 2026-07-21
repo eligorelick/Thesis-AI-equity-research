@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+/* Thesis — dark, dense, terminal-grade theme */
+:root {
+  --bg: #0a0e14;
+  --bg-panel: #0f141c;
+  --bg-raised: #151c26;
+  --border: #1f2937;
+  --border-strong: #2b3648;
+  --fg: #d5dce6;
+  --fg-muted: #8494a8;
+  --fg-faint: #5c6b80;
+  --accent: #3ba7f5;
+  --pos: #2ecc8f;
+  --neg: #f0525f;
+  --warn: #e8b339;
+  --grade-a: #2ecc8f;
+  --grade-b: #8fd14f;
+  --grade-c: #e8b339;
+  --grade-d: #f08c39;
+  --grade-f: #f0525f;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--bg-panel);
+  --color-raised: var(--bg-raised);
+  --color-edge: var(--border);
+  --color-edge-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--fg-muted);
+  --color-faint: var(--fg-faint);
+  --color-accent: var(--accent);
+  --color-pos: var(--pos);
+  --color-neg: var(--neg);
+  --color-warn: var(--warn);
+}
+
+html {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* Every numeral in the app is tabular — hard requirement */
+* {
+  font-variant-numeric: tabular-nums;
+}
+
+.mono,
+code,
+pre {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-panel);
+}

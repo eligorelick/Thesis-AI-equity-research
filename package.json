@@ -1,0 +1,68 @@
+{
+  "name": "thesis",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first equity research engine. Informational only, not investment advice.",
+  "keywords": [
+    "equity-research",
+    "finance",
+    "llm",
+    "anthropic",
+    "nextjs",
+    "local-first",
+    "sec-edgar"
+  ],
+  "homepage": "https://github.com/eligorelick/Thesis-AI-equity-research#readme",
+  "bugs": {
+    "url": "https://github.com/eligorelick/Thesis-AI-equity-research/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eligorelick/Thesis-AI-equity-research.git"
+  },
+  "license": "MIT",
+  "author": "eligorelick",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1",
+    "build": "next build",
+    "start": "next start -H 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "db:push": "node --conditions=react-server node_modules/drizzle-kit/bin.cjs push",
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.3",
+    "better-sqlite3": "^12.11.1",
+    "drizzle-orm": "^0.45.2",
+    "lightweight-charts": "^5.2.0",
+    "next": "^16.2.10",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "recharts": "^3.9.2",
+    "server-only": "^0.0.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.6",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitest/coverage-v8": "^4.1.10",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.2.10",
+    "postcss": "^8.5.20",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}

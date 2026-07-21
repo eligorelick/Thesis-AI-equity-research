@@ -1,0 +1,32 @@
+# Secrets — never commit
+.env
+.env.local
+.env*.local
+
+# Dependencies / build
+node_modules/
+.next/
+out/
+dist/
+coverage/
+
+# Local data (SQLite DB lives outside version control)
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Build artifacts
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Tool/session artifacts
+.claude/
+.superpowers/
+.playwright-mcp/
+.worktrees/
+=

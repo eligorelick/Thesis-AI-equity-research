@@ -1,0 +1,52 @@
+[
+  {
+    "symbol": "DEMO",
+    "date": "2025-12-31",
+    "epsActual": 2.3,
+    "epsEstimated": 2.2,
+    "revenueActual": 3300000000,
+    "revenueEstimated": 3200000000,
+    "lastUpdated": "2026-01-15",
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "symbol": "DEMO",
+    "date": "2025-09-30",
+    "epsActual": 2.2,
+    "epsEstimated": 2.1,
+    "revenueActual": 3200000000,
+    "revenueEstimated": 3100000000,
+    "lastUpdated": "2026-01-15",
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "symbol": "DEMO",
+    "date": "2025-06-30",
+    "epsActual": 2.15,
+    "epsEstimated": 2.05,
+    "revenueActual": 3100000000,
+    "revenueEstimated": 3000000000,
+    "lastUpdated": "2026-01-15",
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "symbol": "DEMO",
+    "date": "2025-03-31",
+    "epsActual": 2.1,
+    "epsEstimated": 2,
+    "revenueActual": 2900000000,
+    "revenueEstimated": 2850000000,
+    "lastUpdated": "2026-01-15",
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "symbol": "DEMO",
+    "date": "2024-12-31",
+    "epsActual": 2,
+    "epsEstimated": 1.95,
+    "revenueActual": 3000000000,
+    "revenueEstimated": 2950000000,
+    "lastUpdated": "2026-01-15",
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

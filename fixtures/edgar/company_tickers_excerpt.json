@@ -1,0 +1,127 @@
+{
+ "0": {
+  "cik_str": 1045810,
+  "ticker": "NVDA",
+  "title": "NVIDIA CORP"
+ },
+ "1": {
+  "cik_str": 1652044,
+  "ticker": "GOOGL",
+  "title": "Alphabet Inc."
+ },
+ "2": {
+  "cik_str": 320193,
+  "ticker": "AAPL",
+  "title": "Apple Inc."
+ },
+ "3": {
+  "cik_str": 789019,
+  "ticker": "MSFT",
+  "title": "MICROSOFT CORP"
+ },
+ "4": {
+  "cik_str": 1018724,
+  "ticker": "AMZN",
+  "title": "AMAZON COM INC"
+ },
+ "5": {
+  "cik_str": 1730168,
+  "ticker": "AVGO",
+  "title": "Broadcom Inc."
+ },
+ "6": {
+  "cik_str": 1318605,
+  "ticker": "TSLA",
+  "title": "Tesla, Inc."
+ },
+ "7": {
+  "cik_str": 1326801,
+  "ticker": "META",
+  "title": "Meta Platforms, Inc."
+ },
+ "8": {
+  "cik_str": 723125,
+  "ticker": "MU",
+  "title": "MICRON TECHNOLOGY INC"
+ },
+ "9": {
+  "cik_str": 1067983,
+  "ticker": "BRK-B",
+  "title": "BERKSHIRE HATHAWAY INC"
+ },
+ "10": {
+  "cik_str": 59478,
+  "ticker": "LLY",
+  "title": "ELI LILLY & Co"
+ },
+ "11": {
+  "cik_str": 19617,
+  "ticker": "JPM",
+  "title": "JPMORGAN CHASE & CO"
+ },
+ "12": {
+  "cik_str": 2488,
+  "ticker": "AMD",
+  "title": "ADVANCED MICRO DEVICES INC"
+ },
+ "13": {
+  "cik_str": 104169,
+  "ticker": "WMT",
+  "title": "Walmart Inc."
+ },
+ "14": {
+  "cik_str": 937966,
+  "ticker": "ASML",
+  "title": "ASML HOLDING NV"
+ },
+ "15": {
+  "cik_str": 1403161,
+  "ticker": "V",
+  "title": "VISA INC."
+ },
+ "16": {
+  "cik_str": 50863,
+  "ticker": "INTC",
+  "title": "INTEL CORP"
+ },
+ "17": {
+  "cik_str": 200406,
+  "ticker": "JNJ",
+  "title": "JOHNSON & JOHNSON"
+ },
+ "18": {
+  "cik_str": 34088,
+  "ticker": "XOM",
+  "title": "EXXON MOBIL CORP"
+ },
+ "19": {
+  "cik_str": 6951,
+  "ticker": "AMAT",
+  "title": "APPLIED MATERIALS INC /DE"
+ },
+ "20": {
+  "cik_str": 707549,
+  "ticker": "LRCX",
+  "title": "LAM RESEARCH CORP"
+ },
+ "21": {
+  "cik_str": 1141391,
+  "ticker": "MA",
+  "title": "Mastercard Inc"
+ },
+ "22": {
+  "cik_str": 858877,
+  "ticker": "CSCO",
+  "title": "CISCO SYSTEMS, INC."
+ },
+ "23": {
+  "cik_str": 18230,
+  "ticker": "CAT",
+  "title": "CATERPILLAR INC"
+ },
+ "24": {
+  "cik_str": 1551152,
+  "ticker": "ABBV",
+  "title": "AbbVie Inc."
+ }
+}

@@ -1,0 +1,80 @@
+{
+ "_meta": {
+  "verified": "2026-07-05",
+  "source": "data.sec.gov/api/xbrl/companyfacts, forms filtered to 10-K/10-Q before dedup (max filed)",
+  "banks": {
+   "JPM": "CIK0000019617 (prior round)",
+   "BAC": "CIK0000070858",
+   "WFC": "CIK0000072971",
+   "C": "CIK0000831001"
+  }
+ },
+ "revenue_tag_current": {
+  "JPM": "RevenuesNetOfInterestExpense (also Revenues, annual only)",
+  "BAC": "Revenues (RevenuesNetOfInterestExpense ABSENT)",
+  "WFC": "RevenuesNetOfInterestExpense (Revenues stale 2020-09-30)",
+  "C": "Revenues (RevenuesNetOfInterestExpense ABSENT)"
+ },
+ "provision_tag_current": {
+  "JPM": "ProvisionForLoanLeaseAndOtherLosses",
+  "BAC": "NONE - compute FinancingReceivableExcludingAccruedInterestCreditLossExpenseReversal + OffBalanceSheetCreditLossLiabilityCreditLossExpenseReversal",
+  "WFC": "ProvisionForLoanLeaseAndOtherLosses",
+  "C": "ProvisionForLoanLossesExpensed"
+ },
+ "fy2025_fixtures": {
+  "BAC": {
+   "Revenues": 113097000000,
+   "InterestIncomeExpenseNet": 60096000000,
+   "NoninterestIncome": 53001000000,
+   "NoninterestExpense": 69727000000,
+   "NetIncomeLoss": 30509000000,
+   "EarningsPerShareDiluted": 3.81,
+   "provision_computed": 5675000000,
+   "Deposits@2025-12-31": 2018729000000,
+   "Assets@2025-12-31": 3411738000000
+  },
+  "WFC": {
+   "RevenuesNetOfInterestExpense": 83699000000,
+   "InterestIncomeExpenseNet": 47484000000,
+   "NoninterestIncome": 36215000000,
+   "NoninterestExpense": 54842000000,
+   "NetIncomeLoss": 21338000000,
+   "EarningsPerShareDiluted": 6.26,
+   "ProvisionForLoanLeaseAndOtherLosses": 3658000000,
+   "Deposits@2025-12-31": 1426207000000,
+   "Assets@2025-12-31": 2148631000000
+  },
+  "C": {
+   "Revenues": 85225000000,
+   "InterestIncomeExpenseNet": 59792000000,
+   "NoninterestIncome": 25433000000,
+   "NoninterestExpense": 55132000000,
+   "NetIncomeLoss": 14306000000,
+   "EarningsPerShareDiluted": 6.99,
+   "ProvisionForLoanLossesExpensed": 9497000000,
+   "Deposits@2025-12-31": 1403573000000,
+   "Assets@2025-12-31": 2657202000000
+  }
+ },
+ "q1_2026_fixtures": {
+  "BAC": {
+   "Revenues": 30272000000,
+   "NetIncomeLoss": 8584000000,
+   "EarningsPerShareDiluted": 1.11,
+   "Assets@2026-03-31": 3496186000000
+  },
+  "WFC": {
+   "RevenuesNetOfInterestExpense": 21446000000,
+   "NetIncomeLoss": 5253000000,
+   "EarningsPerShareDiluted": 1.6,
+   "Assets@2026-03-31": 2205752000000
+  },
+  "C": "NO Q1-2026 DATA in companyfacts as of 2026-07-05 despite 10-Q filed 2026-05-07 (max end across all us-gaap = 2025-12-31)"
+ },
+ "identity_check_NII_plus_NonII_equals_TotalRevenue": {
+  "BAC": "60096+53001=113097 OK",
+  "WFC": "47484+36215=83699 OK",
+  "C": "59792+25433=85225 OK",
+  "JPM": "95443+87004=182447 OK (prior round)"
+ }
+}

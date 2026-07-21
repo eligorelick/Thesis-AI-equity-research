@@ -1,0 +1,30 @@
+[
+  {
+    "symbol": "ALFA",
+    "companyName": "Alpha Example Software",
+    "price": 30,
+    "mktCap": 6000000000,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "symbol": "BETA",
+    "companyName": "Beta Sample Systems",
+    "price": 50,
+    "mktCap": 9000000000,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "symbol": "GAMM",
+    "companyName": "Gamma Fictional Cloud",
+    "price": 20,
+    "mktCap": 4000000000,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  },
+  {
+    "symbol": "DEMO",
+    "companyName": "Thesis Example Systems",
+    "price": 40,
+    "mktCap": 8000000000,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

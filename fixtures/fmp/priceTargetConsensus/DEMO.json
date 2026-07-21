@@ -1,0 +1,10 @@
+[
+  {
+    "symbol": "DEMO",
+    "targetHigh": 52,
+    "targetLow": 36,
+    "targetConsensus": 44,
+    "targetMedian": 45,
+    "__fixture_note": "SYNTHETIC TEST DATA — invented values; not observed market or issuer data"
+  }
+]

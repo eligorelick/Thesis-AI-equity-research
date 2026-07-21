@@ -21,6 +21,7 @@ import "server-only";
 
 import { z } from "zod";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
+import { fetchWithRedirectPolicy } from "@/providers/http";
 
 /**
  * Mandatory FRED attribution — must be displayed verbatim, visibly, in the app.
@@ -311,13 +312,13 @@ async function fredRequest(url: string, config: FredConfig): Promise<HttpText> {
     const controller = timeoutMs > 0 ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
     try {
-      res = await fetchImpl(url, {
+      res = await fetchWithRedirectPolicy(url, {
         headers: { Accept: "application/json, text/csv, */*" },
         signal:
           controller && config.signal
             ? AbortSignal.any([controller.signal, config.signal])
             : controller?.signal ?? config.signal,
-      });
+      }, fetchImpl);
       const text = await res.text().catch(() => "");
       if (res.ok) return { ok: true, status: res.status, text };
       lastFailure = `HTTP ${res.status}`;

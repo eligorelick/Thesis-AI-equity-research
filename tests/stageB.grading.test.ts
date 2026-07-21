@@ -110,7 +110,7 @@ function capital(over: Partial<CapitalResult> = {}): CapitalResult {
 function forensics(over: Partial<ForensicsReport> = {}): ForensicsReport {
   return {
     altmanSelection: { variant: "original", notes: [] },
-    altman: { variant: "original", score: 4.2, zone: "safe", thresholds: { distressBelow: 1.8, safeAbove: 3 }, components: { x1: null, x2: null, x3: null, x4: null, x5: null }, notes: [], gaps: [], asOf: { balanceSheet: null, incomeStatement: null, marketCap: null } },
+    altman: { variant: "original", score: 4.2, zone: "safe", thresholds: { distressBelow: 1.81, safeAbove: 3 }, components: { x1: null, x2: null, x3: null, x4: null, x5: null }, notes: [], gaps: [], asOf: { balanceSheet: null, incomeStatement: null, marketCap: null } },
     beneish: { score: -2.6, verdict: "unlikely", indices: {} as never, tataBalanceSheet: null, neutralized: [], clamped: [], notes: [], gaps: [], asOf: { current: null, prior: null } },
     piotroski: { score: 8, outOf: 9, signals: {} as never, notes: [], gaps: [], asOf: { current: null, prior: null, prior2: null } },
     accruals: { cashFlowAccrualRatio: 0.03, balanceSheetAccrualRatio: null, aggregateAccrualsCashFlow: null, aggregateAccrualsBalanceSheet: null, noaCurrent: null, noaPrior: null, scaler: "avgNOA", scalerValue: null, band: "unremarkable", notes: [], gaps: [], asOf: { current: null, prior: null } },
@@ -439,19 +439,19 @@ describe("grading — Altman variant-aware banding", () => {
     expect(normalizeAltmanForBanding(0.4, "original")).toBe(0.4);
   });
 
-  it("maps each variant's published zone anchors onto the original 1.8/2.99 anchors", () => {
+  it("maps each variant's published zone anchors onto the original 1.81/2.99 anchors", () => {
     for (const variant of ["private", "z2", "z2-em"] as const) {
       const z = ALTMAN_ZONES[variant];
-      expect(normalizeAltmanForBanding(z.distressBelow, variant)).toBeCloseTo(1.8, 9);
+      expect(normalizeAltmanForBanding(z.distressBelow, variant)).toBeCloseTo(1.81, 9);
       expect(normalizeAltmanForBanding(z.safeAbove, variant)).toBeCloseTo(2.99, 9);
     }
   });
 
   it("is affine beyond the anchors (relative grey-zone position preserved)", () => {
-    // z2 grey-zone midpoint (1.85) must land at the original grey midpoint (2.395).
-    expect(normalizeAltmanForBanding(1.85, "z2")).toBeCloseTo((1.8 + 2.99) / 2, 9);
-    // Above safe: z2 2.7 -> 1.8 + (2.7 - 1.1) * (1.19 / 1.5).
-    expect(normalizeAltmanForBanding(2.7, "z2")).toBeCloseTo(1.8 + (2.7 - 1.1) * (1.19 / 1.5), 9);
+    // z2 grey-zone midpoint (1.85) must land at the original grey midpoint.
+    expect(normalizeAltmanForBanding(1.85, "z2")).toBeCloseTo((1.81 + 2.99) / 2, 9);
+    // Above safe: z2 2.7 -> 1.81 + (2.7 - 1.1) * (1.18 / 1.5).
+    expect(normalizeAltmanForBanding(2.7, "z2")).toBeCloseTo(1.81 + (2.7 - 1.1) * (1.18 / 1.5), 9);
   });
 
   function forensicsWithAltman(variant: "original" | "z2", score: number): ForensicsReport {

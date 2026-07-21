@@ -339,12 +339,12 @@ const PIOTROSKI_BAND: readonly BandPoint[] = [
   [0.89, 90],
   [1.0, 96],
 ];
-// Altman Z-score banded on the ORIGINAL 1968 scale (1.8 distress / 2.99 safe).
+// Altman Z-score banded on the ORIGINAL 1968 scale (1.81 distress / 2.99 safe).
 // Scores from other variants (private, Z″, Z″-EM) live on different scales and
 // MUST be passed through normalizeAltmanForBanding() first.
 const ALTMAN_Z_BAND: readonly BandPoint[] = [
   [1.0, 15],
-  [1.8, 35],
+  [1.81, 35],
   [2.5, 55],
   [3.0, 72],
   [5.0, 92],
@@ -353,7 +353,7 @@ const ALTMAN_Z_BAND: readonly BandPoint[] = [
 /**
  * Map an Altman score from its variant's scale onto the original 1968 scale
  * (which ALTMAN_Z_BAND is calibrated to) by anchoring the variant's published
- * distress/safe thresholds (ALTMAN_ZONES) to the original's 1.8/2.99. Affine,
+ * distress/safe thresholds (ALTMAN_ZONES) to the original's 1.81/2.99. Affine,
  * so relative position inside (and beyond) the grey zone is preserved: a Z″
  * score of 2.7 (safe on the 1.10/2.60 scale) now bands like a safe original
  * score instead of a grey one.

@@ -371,6 +371,27 @@ describe("reportToMarkdown", () => {
     expect(md).toContain("| Period | Bull | Base | Weighted | Bear |");
   });
 
+  it("does not crash when an in-memory projection has unequal scenario arrays", () => {
+    const malformed = clone(report);
+    if (!malformed.projections || malformed.projections.series.length === 0) {
+      throw new Error("fixture must carry projections");
+    }
+    malformed.projections.series[0]!.bull = malformed.projections.series[0]!.bull.slice(0, 1);
+    expect(() => reportToMarkdown(malformed)).not.toThrow();
+  });
+
+  it("collapses claim newlines so bullet formatting remains one claim per line", () => {
+    const malformed = clone(report);
+    const firstClaim = malformed.verdict.executiveSummary?.[0];
+    if (!firstClaim) throw new Error("fixture must carry an executive-summary claim");
+    malformed.verdict.executiveSummary = [
+      { ...firstClaim, text: "first\r\nsecond\rthird\nfourth" },
+    ];
+    const rendered = reportToMarkdown(malformed);
+    expect(rendered).toContain("first second third fourth");
+    expect(rendered).not.toContain("first\nsecond");
+  });
+
   it("is deterministic — same input yields byte-identical output", () => {
     const a = reportToMarkdown(loadFixtureReport());
     const b = reportToMarkdown(loadFixtureReport());

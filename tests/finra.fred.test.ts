@@ -249,6 +249,18 @@ describe("finra daysToCover sentinel handling", () => {
     expect(parseShortInterestRows([{ symbolCode: "AAPL" }])).toBeNull(); // missing required fields
   });
 
+  it("keeps valid rows when one FINRA row is malformed and discloses the discard", () => {
+    const valid = {
+      symbolCode: "AAPL",
+      settlementDate: "2026-06-15",
+      currentShortPositionQuantity: 10,
+    };
+    const rows = parseShortInterestRows([valid, { symbolCode: "BROKEN", settlementDate: 42 }]);
+    expect(rows).toHaveLength(1);
+    expect(rows?.[0]?.symbol).toBe("AAPL");
+    expect(rows?.[0]?.notes.join(" ")).toMatch(/malformed|discarded/i);
+  });
+
   it("sorts parsed rows ascending by settlementDate", () => {
     const mk = (settlementDate: string) => ({
       symbolCode: "AAPL",

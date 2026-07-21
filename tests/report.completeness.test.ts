@@ -38,4 +38,24 @@ describe("report data completeness", () => {
       forensicValidation: "complete",
     });
   });
+
+  it("does not mark expected structural EDGAR gaps as missing or provisional", () => {
+    expect(
+      buildDataCompleteness([
+        {
+          field: "edgar.tenQMdna",
+          reason: "no standardized Part I Item 2 MD&A for this foreign issuer",
+          severity: "info",
+          expected: true,
+        },
+      ]),
+    ).toEqual({
+      state: "complete",
+      criticalCount: 0,
+      warningCount: 0,
+      edgar: "available",
+      xbrl: "checked",
+      forensicValidation: "complete",
+    });
+  });
 });

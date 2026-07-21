@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   LLY_ENTITY_REGISTRY,
+  getEntityRegistry,
   collectEntityConflicts,
   validateEntityText,
   validateJudgeEntityResolution,
@@ -40,6 +41,11 @@ const SYNTHETIC_ENTITY_REGISTRY: EntityRegistry = {
 };
 
 describe("canonical entity validation", () => {
+  it("returns only explicitly curated issuer registries", () => {
+    expect(getEntityRegistry("lly")).toBe(LLY_ENTITY_REGISTRY);
+    expect(getEntityRegistry("AAPL")).toBeNull();
+  });
+
   it("accepts primary-supported canonical drug and trial relationships", () => {
     const result = validateEntityText(
       "ACHIEVE-4 evaluated Foundayo (orforglipron).",

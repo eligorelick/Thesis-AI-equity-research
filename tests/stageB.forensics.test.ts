@@ -137,6 +137,28 @@ describe("computeAltman — verified coefficients", () => {
     });
   });
 
+  it("uses the canonical 1.81 distress boundary for the original variant", () => {
+    expect(ALTMAN_ZONES.original.distressBelow).toBe(1.81);
+    const distressed = computeAltman(
+      {
+        balance: {
+          date: "2025-12-31",
+          totalCurrentAssets: 50,
+          totalCurrentLiabilities: 40,
+          totalAssets: 100,
+          retainedEarnings: 10,
+          totalLiabilities: 60,
+          totalStockholdersEquity: 40,
+        },
+        income: { date: "2025-12-31", ebit: 0, revenue: 0 },
+        marketCap: 0,
+      },
+      "original",
+    );
+    // A direct boundary check is less brittle than manufacturing every X term.
+    expect(distressed.thresholds.distressBelow).toBe(1.81);
+  });
+
   it("missing current assets/liabilities -> null score + 'unclassified balance sheet' gap", () => {
     const r = computeAltman(
       {
@@ -242,9 +264,9 @@ describe("computeAltman — verified coefficients", () => {
 });
 
 describe("classifyAltmanZone — thresholds straddled per variant", () => {
-  it("original 1.80 / 2.99", () => {
-    expect(classifyAltmanZone(1.7999, "original")).toBe("distress");
-    expect(classifyAltmanZone(1.8, "original")).toBe("grey"); // boundary -> grey
+  it("original 1.81 / 2.99", () => {
+    expect(classifyAltmanZone(1.8099, "original")).toBe("distress");
+    expect(classifyAltmanZone(1.81, "original")).toBe("grey"); // boundary -> grey
     expect(classifyAltmanZone(2.99, "original")).toBe("grey");
     expect(classifyAltmanZone(2.9901, "original")).toBe("safe");
   });
@@ -268,7 +290,7 @@ describe("classifyAltmanZone — thresholds straddled per variant", () => {
   });
   it("zone table matches research anchors", () => {
     expect(ALTMAN_ZONES).toEqual({
-      original: { distressBelow: 1.8, safeAbove: 2.99 },
+      original: { distressBelow: 1.81, safeAbove: 2.99 },
       private: { distressBelow: 1.23, safeAbove: 2.9 },
       z2: { distressBelow: 1.1, safeAbove: 2.6 },
       "z2-em": { distressBelow: 4.35, safeAbove: 5.85 },

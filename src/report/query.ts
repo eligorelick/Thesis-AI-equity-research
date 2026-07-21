@@ -39,7 +39,7 @@ export function getLatestDoneReport(symbol: string): LatestReport | null {
     .select()
     .from(reports)
     .where(and(eq(reports.symbol, symbol), eq(reports.status, "done")))
-    .orderBy(desc(reports.createdAt))
+    .orderBy(desc(reports.createdAt), desc(reports.id))
     .limit(1)
     .get();
 

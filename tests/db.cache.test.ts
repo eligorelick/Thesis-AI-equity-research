@@ -91,6 +91,12 @@ describe("buildCacheKey determinism", () => {
   it("stableStringify preserves array order and null values", () => {
     expect(stableStringify({ ids: [3, 1, 2], flag: null })).toBe('{"flag":null,"ids":[3,1,2]}');
   });
+
+  it("rejects non-finite numbers and undefined array elements instead of collapsing them to null", () => {
+    expect(() => stableStringify({ value: Number.NaN })).toThrow(/finite/i);
+    expect(() => stableStringify({ value: Number.POSITIVE_INFINITY })).toThrow(/finite/i);
+    expect(() => stableStringify({ values: [undefined] })).toThrow(/undefined/i);
+  });
 });
 
 describe("default database path", () => {

@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeBackoffMs,
   fetchWithPolicy,
+  fetchWithRedirectPolicy,
   getBandwidthTotals,
   getProviderLimiter,
   HttpRequestAbortedError,
@@ -107,6 +108,52 @@ describe("computeBackoffMs / parseRetryAfterMs", () => {
 });
 
 describe("fetchWithPolicy retry policy", () => {
+  it("follows same-origin redirects but returns cross-origin redirects without forwarding secrets", async () => {
+    const calls: Array<{ url: string; redirect?: RequestRedirect }> = [];
+    const impl = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, redirect: init?.redirect });
+      if (url.endsWith("/start")) return new Response(null, { status: 302, headers: { location: "/next" } });
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof fetch;
+    const followed = await fetchWithRedirectPolicy(
+      "https://provider.test/start",
+      { headers: { apikey: "secret" } },
+      impl,
+    );
+    expect(followed.status).toBe(200);
+    expect(calls.map((c) => c.url)).toEqual(["https://provider.test/start", "https://provider.test/next"]);
+    expect(calls.every((c) => c.redirect === "manual")).toBe(true);
+
+    const cross = (async () =>
+      new Response(null, { status: 302, headers: { location: "https://169.254.169.254/latest" } })) as unknown as typeof fetch;
+    const blocked = await fetchWithRedirectPolicy("https://provider.test/start", { headers: { apikey: "secret" } }, cross);
+    expect(blocked.status).toBe(302);
+  });
+
+  it.each([301, 302, 303, 307, 308])("handles POST redirect semantics for %s", async (status) => {
+    const calls: Array<{ method: string; body: BodyInit | null | undefined }> = [];
+    const impl = (async (_input: string | URL, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? "GET", body: init?.body });
+      return calls.length === 1
+        ? new Response(null, { status, headers: { location: "/next" } })
+        : new Response("ok", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const response = await fetchWithRedirectPolicy(
+      "https://provider.test/start",
+      { method: "POST", headers: { "content-type": "application/json" }, body: '{"x":1}' },
+      impl,
+    );
+    expect(response.status).toBe(200);
+    expect(calls[0]).toEqual({ method: "POST", body: '{"x":1}' });
+    if ([301, 302, 303].includes(status)) {
+      expect(calls[1]).toEqual({ method: "GET", body: undefined });
+    } else {
+      expect(calls[1]).toEqual({ method: "POST", body: '{"x":1}' });
+    }
+  });
+
   it("retries 429 then succeeds", async () => {
     const { fetch, calls } = respondingFetch([
       { status: 429, body: "slow down" },

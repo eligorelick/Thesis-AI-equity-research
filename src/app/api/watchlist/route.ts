@@ -18,6 +18,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { assertSameOrigin } from "@/app/api/sameOrigin";
+import { SYMBOL_MAX_LENGTH, SYMBOL_PATTERN } from "@/symbol";
 import {
   addToWatchlist,
   listWatchlist,
@@ -33,8 +34,8 @@ const symbolBody = z.object({
     .string()
     .trim()
     .min(1, "symbol is required")
-    .max(12, "symbol too long")
-    .regex(/^[A-Za-z0-9.\-]+$/, "symbol must be alphanumeric (with . or -)"),
+    .max(SYMBOL_MAX_LENGTH, "symbol too long")
+    .regex(SYMBOL_PATTERN, "symbol must start/end alphanumeric (with . or - inside)"),
 });
 
 interface WatchlistPayload {

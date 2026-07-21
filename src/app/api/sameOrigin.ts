@@ -2,7 +2,7 @@
  * assertSameOrigin — browser-CSRF guard for the mutating localhost API routes.
  *
  * Threat model: Thesis is a local-first, single-user app whose API listens on
- * localhost (and, under `next dev`, on every interface — i.e. the LAN). A
+ * localhost (and, when explicitly configured, on a LAN interface). A
  * drive-by web page open in the user's browser can fire cross-site fetch/form
  * POSTs at these routes and trigger PAID Anthropic report runs, burn provider
  * quota, or flip settings. Two distinct attacks must be stopped:

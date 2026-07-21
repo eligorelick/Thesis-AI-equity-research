@@ -239,7 +239,7 @@ export const ALTMAN_COEFFICIENTS = {
 
 /** Verified zone thresholds per variant (research §1.1–1.3). */
 export const ALTMAN_ZONES = {
-  original: { distressBelow: 1.8, safeAbove: 2.99 },
+  original: { distressBelow: 1.81, safeAbove: 2.99 },
   private: { distressBelow: 1.23, safeAbove: 2.9 },
   z2: { distressBelow: 1.1, safeAbove: 2.6 },
   "z2-em": { distressBelow: 4.35, safeAbove: 5.85 },

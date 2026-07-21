@@ -74,6 +74,7 @@ export interface ValidateIncomeRow {
   netIncome?: number;
   interestExpense?: number;
   sellingGeneralAndAdministrativeExpenses?: number;
+  reportedCurrency?: string | null;
 }
 
 /** Balance-sheet row fields the validator reads (FMP field names). */
@@ -292,6 +293,33 @@ function checkBalanceSheetIdentity(bundle: ValidatableBundle, c: Collector): voi
 
     const deltaPct = (Math.abs(assets - (liabilities + equity.value)) / assets) * 100;
     const pass = deltaPct <= IDENTITY_TOLERANCE_PCT;
+
+    // FMP uses literal zero for both a genuinely unlevered issuer and an
+    // undisclosed liabilities field.  Preserve a passing identity when the
+    // zero is internally consistent, but do not manufacture a hard failure
+    // from an ambiguous zero-liability operand when the identity cannot be
+    // evaluated reliably.
+    if (liabilities === 0 && !pass) {
+      c.checks.push({
+        id,
+        name,
+        status: "skipped",
+        detail:
+          `totalLiabilities is zero and assets ${assets} do not reconcile to equity ${equity.value} ` +
+          `(${equity.basis}) — zero may be an undisclosed sentinel; identity is ambiguous`,
+        deltaPct,
+        asOf: date,
+      });
+      c.gaps.push(
+        gapEntry(
+          `validation.${id}`,
+          `totalLiabilities is zero and identity is ambiguous at ${date} — check skipped rather than reported as a statement failure`,
+          "warn",
+        ),
+      );
+      continue;
+    }
+
     c.checks.push({
       id,
       name,
@@ -425,6 +453,27 @@ function crossCheckRow(
     }
 
     const v = concept.value.data;
+    const statementCurrency = normCurrency(row.reportedCurrency);
+    const xbrlCurrency = normCurrency(v.unit.split("/")[0]);
+    if (statementCurrency !== null && xbrlCurrency !== null && statementCurrency !== xbrlCurrency) {
+      c.checks.push({
+        id,
+        name,
+        status: "skipped",
+        detail:
+          `statement reportedCurrency ${statementCurrency} differs from XBRL unit ${xbrlCurrency} ` +
+          `— numeric cross-check suppressed to avoid comparing mixed currencies`,
+        asOf: end,
+      });
+      c.gaps.push(
+        gapEntry(
+          `validation.${id}`,
+          `FMP↔XBRL ${spec.fmpField} cross-check skipped: statement currency ${statementCurrency} != XBRL unit ${xbrlCurrency}`,
+          "info",
+        ),
+      );
+      continue;
+    }
     const result = crossCheck(fmpValue, v.value, CROSS_CHECK_TOLERANCE_PCT);
     // ProfitLoss (the netIncome fallback tag, tried only when NetIncomeLoss
     // isn't resolved for this period) is a CONSOLIDATED us-gaap figure that can

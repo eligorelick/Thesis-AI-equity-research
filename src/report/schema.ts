@@ -1221,7 +1221,35 @@ export const ProjectionSeriesSchema = z
     assumptions: z.array(ratingSafeString()),
     disclosures: z.array(ManifestEntrySchema),
   })
-  .strict();
+  .strict()
+  .superRefine((series, ctx) => {
+    const scenarioKeys = ["bull", "base", "bear", "weighted"] as const;
+    if (!scenarioKeys.every((key) => Array.isArray(series[key]))) return;
+    const expectedLength = series.base.length;
+    for (const key of scenarioKeys) {
+      if (series[key].length !== expectedLength) {
+        ctx.addIssue({
+          code: "custom",
+          path: [key],
+          message: "Projection scenario arrays must have equal lengths",
+        });
+      }
+    }
+    if (scenarioKeys.every((key) => series[key].length === expectedLength)) {
+      for (let i = 0; i < expectedLength; i++) {
+        const period = series.base[i]?.period;
+        for (const key of scenarioKeys) {
+          if (series[key][i]?.period !== period) {
+            ctx.addIssue({
+              code: "custom",
+              path: [key, i, "period"],
+              message: "Projection scenario periods must align",
+            });
+          }
+        }
+      }
+    }
+  });
 export type ProjectionSeries = z.infer<typeof ProjectionSeriesSchema>;
 
 export const ProjectionsSchema = z

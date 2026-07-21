@@ -348,7 +348,7 @@ export function computeGrowth(
   const fcfCagrs = CAGR_WINDOWS.map((w) => cagrForWindow(fcfSeries, w));
 
   // --- Margin series + trend ---------------------------------------------------
-  const marginRows = inc.slice(0, MARGIN_SERIES_MAX_YEARS + 1).reverse(); // oldest → newest
+  const marginRows = inc.slice(0, MARGIN_SERIES_MAX_YEARS).reverse(); // oldest → newest
   const buildMargin = (
     numerator: (r: GrowthIncomeRow) => number | null | undefined,
     label: string,

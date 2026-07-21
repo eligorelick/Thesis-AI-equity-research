@@ -1897,6 +1897,28 @@ describe("runJob — resume from persisted analyst snapshots", () => {
  * ------------------------------------------------------------------------ */
 
 describe("review regressions — cost rehydration, live-job guard, resumability predicate", () => {
+  it("rejects a direct resume of a healthy completed job", async () => {
+    const { jobId } = createJob("AAPL");
+    const passes = mockPasses();
+    const first = await runJob(jobId, passes.passes, {
+      bundle: fakeBundle("AAPL"),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    expect(first.status).toBe("done");
+    const before = handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all();
+
+    await expect(
+      runJob(jobId, passes.passes, {
+        bundle: fakeBundle("AAPL"),
+        hasAnthropicKey: true,
+        now: NOW,
+        resume: true,
+      }),
+    ).rejects.toThrow(/not resumable|already synthesized/i);
+    expect(handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all()).toHaveLength(before.length);
+  });
+
   it("a resumed run that degrades (no key) still reports the job's true prior spend", async () => {
     const { jobId } = createJob("AAPL");
     // Seed prior spend as if bull/bear ran on an earlier attempt.

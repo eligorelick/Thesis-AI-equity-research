@@ -347,7 +347,8 @@ function sectionProjections(p: Projections): string {
   }
   const blocks = p.series
     .map((s) => {
-      const rows = s.base.map((_, i) => [
+      const horizon = Math.min(s.base.length, s.bull.length, s.weighted.length, s.bear.length);
+      const rows = s.base.slice(0, horizon).map((_, i) => [
         esc(s.base[i].period),
         `<span class="mono">${esc(tracedValue(s.bull[i].value))}</span>`,
         `<span class="mono">${esc(tracedValue(s.base[i].value))}</span>`,

@@ -137,6 +137,25 @@ export function bootstrapSchema(sqlite: Database.Database): void {
   ensureColumn(sqlite, "jobs", "bullJson", "TEXT");
   ensureColumn(sqlite, "jobs", "bearJson", "TEXT");
   ensureColumn(sqlite, "jobs", "payloadFingerprint", "TEXT");
+  // A pre-index database may contain duplicate active rows from the old
+  // check-then-insert route. Retain the newest row and terminalize older
+  // duplicates before installing the cross-process uniqueness constraint.
+  sqlite.exec(`
+    UPDATE "jobs" AS old
+       SET "status" = 'error',
+           "error" = 'duplicate active job superseded during database migration'
+     WHERE "status" IN ('queued', 'running')
+       AND EXISTS (
+         SELECT 1 FROM "jobs" AS newer
+          WHERE newer."symbol" = old."symbol"
+            AND newer."status" IN ('queued', 'running')
+            AND (newer."updatedAt" > old."updatedAt"
+              OR (newer."updatedAt" = old."updatedAt" AND newer."id" > old."id"))
+       )
+  `);
+  sqlite.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS "idx_jobs_active_symbol" ON "jobs" ("symbol") WHERE "status" IN ('queued', 'running')`,
+  );
 }
 
 // ---------------------------------------------------------------------------

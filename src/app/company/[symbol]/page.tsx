@@ -48,6 +48,8 @@ import { getLatestDoneReport, type LatestReport } from "@/report/query";
 import { fmtBig, fmtMoney, fmtNum, fmtPct, fmtSignedPct, fmtX, upsidePct } from "./format";
 import { GenerateReport } from "./GenerateReport";
 import { ReportTabs } from "./ReportTabs";
+import { isValidSymbol } from "@/symbol";
+import { notFound } from "next/navigation";
 
 // The bundle reads keys from process.env at request time and hits the network
 // (live EDGAR/FINRA/FRED even keyless) — never statically render this route.
@@ -805,7 +807,14 @@ function UnknownTicker({ symbol, gap }: { symbol: string; gap: ManifestEntry | n
 
 export default async function CompanyPage({ params }: { params: Promise<{ symbol: string }> }) {
   const { symbol: rawSymbol } = await params;
-  const symbol = decodeURIComponent(rawSymbol).toUpperCase().trim();
+  let decodedSymbol: string;
+  try {
+    decodedSymbol = decodeURIComponent(rawSymbol);
+  } catch {
+    notFound();
+  }
+  const symbol = decodedSymbol!.toUpperCase().trim();
+  if (!isValidSymbol(symbol)) notFound();
 
   // Render the shell + sidebar immediately and STREAM the heavy pipeline body in
   // behind a Suspense boundary, so navigating to a ticker paints instantly

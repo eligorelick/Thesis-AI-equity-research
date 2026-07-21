@@ -12,7 +12,7 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { costLog, jobs, reports } from "@/db/schema";
-import { ReportSchema } from "@/report/schema";
+import { ReportSchema, withLenientLegacyRead } from "@/report/schema";
 import type { StepProgress } from "@/types/core";
 
 /* ------------------------------------------------------------------------ *
@@ -217,13 +217,14 @@ export function getJobSnapshot(jobId: string): JobSnapshot | null {
   };
 }
 
-function reportJsonIsDataOnly(reportJson: string | null): boolean {
+export function reportJsonIsDataOnly(reportJson: string | null): boolean {
   if (reportJson === null) return false;
   try {
-    const parsed = ReportSchema.safeParse(JSON.parse(reportJson));
-    return parsed.success
-      ? parsed.data.appendix.missingData.some((m) => m.field === "analysis.llm")
-      : false;
+    const raw = JSON.parse(reportJson);
+    const parsed = ReportSchema.safeParse(raw);
+    if (parsed.success) return parsed.data.appendix.missingData.some((m) => m.field === "analysis.llm");
+    const legacy = withLenientLegacyRead(() => ReportSchema.safeParse(raw));
+    return legacy.success && legacy.data.appendix.missingData.some((m) => m.field === "analysis.llm");
   } catch {
     return false;
   }

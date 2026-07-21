@@ -24,12 +24,12 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { assertSameOrigin } from "@/app/api/sameOrigin";
 import {
-  createJob,
-  getReusableActiveJobForSymbol,
+  getOrCreateJobForSymbol,
   runJob,
   sweepAbandonedJobs,
 } from "@/pipeline/jobRunner";
 import { noopPasses, resolvePasses } from "./resolvePasses";
+import { SYMBOL_MAX_LENGTH, SYMBOL_PATTERN } from "@/symbol";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,8 +39,8 @@ const postBody = z.object({
     .string()
     .trim()
     .min(1, "symbol is required")
-    .max(12, "symbol too long")
-    .regex(/^[A-Za-z0-9.\-]+$/, "symbol must be alphanumeric (with . or -)"),
+    .max(SYMBOL_MAX_LENGTH, "symbol too long")
+    .regex(SYMBOL_PATTERN, "symbol must start/end alphanumeric (with . or - inside)"),
 });
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -70,12 +70,11 @@ export async function POST(request: Request): Promise<NextResponse> {
   // checking for a reusable one.
   sweepAbandonedJobs();
 
-  const active = getReusableActiveJobForSymbol(symbol);
-  if (active !== null) {
-    return NextResponse.json({ jobId: active.jobId, existing: true }, { status: 202 });
+  const job = getOrCreateJobForSymbol(symbol);
+  if (job.existing) {
+    return NextResponse.json({ jobId: job.jobId, existing: true }, { status: 202 });
   }
-
-  const { jobId } = createJob(symbol);
+  const { jobId } = job;
 
   // Kick off the pipeline in the background — do NOT await. Resolve the passes
   // at runtime; a missing module degrades to a data-only report inside runJob.

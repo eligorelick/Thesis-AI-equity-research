@@ -178,7 +178,7 @@ function table(headers: string[], rows: string[][]): string {
 function claimList(claims: readonly SourcedClaim[]): string {
   if (claims.length === 0) return `- ${DASH}`;
   return claims
-    .map((c) => `- **[${c.label}]** ${c.text}${asOfSuffix(c.asOf)} \`src: ${c.source}\``)
+    .map((c) => `- **[${c.label}]** ${c.text.replace(/\r\n?|\n/g, " ")}${asOfSuffix(c.asOf)} \`src: ${c.source}\``)
     .join("\n");
 }
 
@@ -333,7 +333,8 @@ function renderProjections(p: Projections): string {
   ];
   for (const s of p.series) {
     lines.push(`### ${PROJECTION_METRIC_LABEL[s.metric]} (${s.unit})`, "");
-    const rows = s.base.map((_, i) => [
+    const horizon = Math.min(s.base.length, s.bull.length, s.weighted.length, s.bear.length);
+    const rows = s.base.slice(0, horizon).map((_, i) => [
       s.base[i].period,
       tracedValue(s.bull[i].value),
       tracedValue(s.base[i].value),

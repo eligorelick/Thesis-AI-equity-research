@@ -148,6 +148,20 @@ export const LLY_ENTITY_REGISTRY: EntityRegistry = {
   ],
 };
 
+/**
+ * Curated entity registries keyed by issuer symbol. An absent entry is
+ * deliberate: entity validation is not inferred from provider text, so an
+ * uncovered ticker is reported as having no curated entity checks rather than
+ * being compared against another issuer's registry.
+ */
+const ENTITY_REGISTRIES: ReadonlyMap<string, EntityRegistry> = new Map([
+  [LLY_ENTITY_REGISTRY.symbol, LLY_ENTITY_REGISTRY],
+]);
+
+export function getEntityRegistry(symbol: string): EntityRegistry | null {
+  return ENTITY_REGISTRIES.get(symbol.trim().toUpperCase()) ?? null;
+}
+
 function acquisition(
   id: string,
   canonicalName: string,

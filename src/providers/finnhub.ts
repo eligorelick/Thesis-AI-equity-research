@@ -18,6 +18,7 @@ import "server-only";
 
 import { z } from "zod";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
+import { fetchWithRedirectPolicy } from "@/providers/http";
 
 /** Cache TTL for insider sentiment, seconds (24 h). */
 export const FINNHUB_TTL_SECONDS = 86400;
@@ -159,13 +160,13 @@ async function finnhubRequest(
     const controller = timeoutMs > 0 ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
     try {
-      res = await fetchImpl(url, {
+      res = await fetchWithRedirectPolicy(url, {
         headers: { "X-Finnhub-Token": config.apiKey ?? "", Accept: "application/json" },
         signal:
           controller && config.signal
             ? AbortSignal.any([controller.signal, config.signal])
             : controller?.signal ?? config.signal,
-      });
+      }, fetchImpl);
       lastStatus = res.status;
       if (res.ok) {
         try {

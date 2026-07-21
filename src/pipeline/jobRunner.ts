@@ -30,7 +30,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, lt, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, notInArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { costLog, jobs, reports } from "@/db/schema";
 import { getConfig } from "@/config/env";
@@ -65,7 +65,7 @@ import { runStageB, type ComputedMetrics } from "@/pipeline/compute";
 import { validateBundle, type ValidationReport } from "@/pipeline/stageA/validate";
 import type { DataBundle } from "@/pipeline/types";
 import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
-import { publishJobEvent, type JobEvent } from "@/pipeline/events";
+import { parseStepsJson, publishJobEvent, type JobEvent } from "@/pipeline/events";
 
 /* ------------------------------------------------------------------------ *
  * PipelinePasses — injected Stage C contract (loose/structural types)
@@ -415,9 +415,24 @@ function finishStep(
   s.finishedAt ??= nowIso();
   s.completedAt = s.finishedAt;
   if (detail !== undefined) s.detail = detail;
-  if (costUsd !== undefined) s.costUsd = costUsd;
+  const logged = sumLoggedStepCost(state.jobId, step);
+  if (costUsd !== undefined || logged > 0) {
+    // A step may contain several billed attempts (judge retries, fallback
+    // calls, or a partial-resume side). The cost log is authoritative; retain
+    // the passed value only for hook-less callers that did not log a row.
+    s.costUsd = logged > 0 ? logged : costUsd;
+  }
   persistSteps(state);
   emitStep(state, step);
+}
+
+function sumLoggedStepCost(jobId: string, step: PipelineStep): number {
+  const rows = getDb()
+    .select({ costUsd: costLog.costUsd })
+    .from(costLog)
+    .where(and(eq(costLog.jobId, jobId), eq(costLog.step, step)))
+    .all();
+  return rows.reduce((total, row) => total + row.costUsd, 0);
 }
 
 /** Stamp a running step's finishedAt (pass-finish hook) without finalizing it. */
@@ -623,6 +638,55 @@ export function createJob(symbol: string): { jobId: string } {
     })
     .run();
   return { jobId };
+}
+
+/**
+ * Atomically reuse or create the active job for a symbol. The partial unique
+ * SQLite index is the final arbiter across processes; the transaction keeps
+ * the common check+insert path together and converts a concurrent uniqueness
+ * race into the already-existing row response.
+ */
+export function getOrCreateJobForSymbol(symbol: string):
+  | { jobId: string; existing: true; status: "queued" | "running"; updatedAt: string }
+  | { jobId: string; existing: false } {
+  const sym = symbol.trim().toUpperCase();
+  const db = getDb();
+  try {
+    return db.transaction((tx) => {
+      const active = tx
+        .select({ id: jobs.id, status: jobs.status, updatedAt: jobs.updatedAt })
+        .from(jobs)
+        .where(and(eq(jobs.symbol, sym), inArray(jobs.status, ["queued", "running"])))
+        .orderBy(desc(jobs.updatedAt), desc(jobs.id))
+        .get();
+      if (active && isReusableStatus(active.status)) {
+        return { jobId: active.id, existing: true, status: active.status, updatedAt: active.updatedAt };
+      }
+      const jobId = randomUUID();
+      const now = nowIso();
+      tx.insert(jobs)
+        .values({
+          id: jobId,
+          symbol: sym,
+          status: "queued",
+          stepsJson: JSON.stringify(initialSteps()),
+          createdAt: now,
+          updatedAt: now,
+          error: null,
+          reportId: null,
+        })
+        .run();
+      return { jobId, existing: false };
+    });
+  } catch (err) {
+    // Another process may have won the unique active-symbol insert after our
+    // snapshot. Read it back and return it; do not bill/start a second run.
+    const active = getReusableActiveJobForSymbol(sym);
+    if (active !== null) {
+      return { ...active, existing: true };
+    }
+    throw err;
+  }
 }
 
 export interface ReusableActiveJob {
@@ -1180,6 +1244,16 @@ export async function runJob<TPayload = unknown>(
       totalCostUsd: round4(sumLoggedCost(jobId)),
       dataOnly: false,
     };
+  }
+
+  if (opts.resume === true && (jobRow.status === "done" || jobRow.status === "error")) {
+    const steps = parseStepsJson(jobRow.stepsJson);
+    const snapshots = readPassSnapshots(jobId);
+    const resumable =
+      stepsShowResumableFailure(steps) !== null || snapshotsCoverResume(snapshots, steps);
+    if (!resumable) {
+      throw new Error(`runJob: job "${jobId}" is not resumable (already synthesized or no reusable analyst work)`);
+    }
   }
 
   const state: RunState = {

@@ -80,6 +80,15 @@ describe("reportToPrintHtml — full schema-valid report", () => {
     body = reportToPrintBody(report);
   });
 
+  it("does not crash when an in-memory projection has unequal scenario arrays", () => {
+    const malformed = JSON.parse(JSON.stringify(report)) as Report;
+    if (!malformed.projections || malformed.projections.series.length === 0) {
+      throw new Error("fixture must carry projections");
+    }
+    malformed.projections.series[0]!.bear = malformed.projections.series[0]!.bear.slice(0, 1);
+    expect(() => reportToPrintBody(malformed)).not.toThrow();
+  });
+
   it("emits a well-formed standalone document", () => {
     expect(html.startsWith("<!doctype html>")).toBe(true);
     expect(html).toContain("<html lang=\"en\">");

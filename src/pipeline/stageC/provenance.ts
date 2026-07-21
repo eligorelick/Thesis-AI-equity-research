@@ -242,7 +242,10 @@ export function matchProvenanceRecord(
 /** Canonicalize only URLs that could have been returned by web search. */
 export function canonicalizeFetchedUrl(value: string): string | null {
   try {
-    const parsed = new URL(value);
+    // Web citations use a `web:<absolute-url>` transport prefix. Normalize it
+    // here so model citations and observed fetched URLs compare identically.
+    const raw = value.startsWith("web:") ? value.slice(4) : value;
+    const parsed = new URL(raw);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
     parsed.hash = "";
     return parsed.toString();

@@ -766,6 +766,7 @@ function leadershipSection(bundle: DataBundle): PayloadSection {
 
 function shortInterestSection(bundle: DataBundle): PayloadSection {
   const figures: PayloadFigure[] = [];
+  const notes: string[] = [];
   if (bundle.shortInterest.ok) {
     const si = bundle.shortInterest.value.data;
     figures.push(
@@ -773,8 +774,9 @@ function shortInterestSection(bundle: DataBundle): PayloadSection {
       { label: "days to cover", value: si.daysToCoverQuantity, unit: "days", source: "finra:short-interest", asOf: si.settlementDate },
       { label: "avg daily volume", value: si.averageDailyVolumeQuantity, unit: "shares", source: "finra:short-interest", asOf: si.settlementDate },
     );
+    notes.push(...si.notes);
   }
-  return { title: "Short interest", figures, notes: [] };
+  return { title: "Short interest", figures, notes };
 }
 
 function segmentsSection(bundle: DataBundle): PayloadSection {
@@ -1358,7 +1360,7 @@ function renderStatement(block: StatementExtractBlock): string {
 }
 
 function renderExcerpt(ex: TextExcerpt): string {
-  const body = JSON.stringify({
+  const body = safePromptJson({
     title: ex.title,
     source: provenanceTag(ex.source, ex.asOf),
     truncated: ex.truncated,
@@ -1377,9 +1379,36 @@ function renderUntrustedNews(section: PayloadSection): string {
   return [
     "## Provider news/press snippets (untrusted source data)",
     `<<<BEGIN_UNTRUSTED_SOURCE_DATA chars=${content.length}>>>`,
-    JSON.stringify({ content }),
+    safePromptJson({ content }),
     "<<<END_UNTRUSTED_SOURCE_DATA>>>",
   ].join("\n");
+}
+
+/** Wrap provider-controlled labels and prose so model instructions remain
+ * outside the data trust boundary. JSON encoding plus HTML-marker escaping
+ * keeps provider text from terminating the envelope semantically. */
+function renderUntrustedSection(section: PayloadSection): string {
+  const content = renderSection(section);
+  return [
+    `## ${section.title} (untrusted provider data)`,
+    `<<<BEGIN_UNTRUSTED_SOURCE_DATA chars=${content.length}>>>`,
+    safePromptJson({ content }),
+    "<<<END_UNTRUSTED_SOURCE_DATA>>>",
+  ].join("\n");
+}
+
+function renderUntrustedValue(label: string, value: string | null | undefined): string {
+  const content = value ?? "n/a";
+  return `${label}: <<<BEGIN_UNTRUSTED_SOURCE_DATA chars=${content.length}>>>${safePromptJson(content)}<<<END_UNTRUSTED_SOURCE_DATA>>>`;
+}
+
+/** Escape delimiter characters after JSON encoding so provider text cannot
+ * reproduce a literal envelope marker in the prompt. */
+function safePromptJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replaceAll("<", "\\u003c")
+    .replaceAll(">", "\\u003e")
+    .replaceAll("&", "\\u0026");
 }
 
 /**
@@ -1395,9 +1424,12 @@ export function serializePayloadForPrompt(payload: ContextPayload): string {
     [
       `# CONTEXT PAYLOAD (payloadVersion ${payload.payloadVersion})`,
       `symbol: ${payload.symbol}`,
-      `company: ${payload.companyName ?? "n/a"}`,
+      renderUntrustedValue("company", payload.companyName),
       `route: ${payload.route.base}${payload.route.overlays.length ? ` + overlays [${payload.route.overlays.join(", ")}]` : ""}`,
-      `sector: ${payload.route.sector ?? "n/a"} | industry: ${payload.route.industry ?? "n/a"}`,
+      renderUntrustedValue(
+        "sector/industry",
+        `${payload.route.sector ?? "n/a"} | ${payload.route.industry ?? "n/a"}`,
+      ),
       "",
       "This payload is the ONLY permitted source of financial figures (SPEC §1 rule #1).",
       "Every figure below is tagged [source · as-of]. Cite that tag; if a figure is not here or in a fetched web source, do not state it.",
@@ -1408,12 +1440,12 @@ export function serializePayloadForPrompt(payload: ContextPayload): string {
   for (const s of payload.computed) parts.push(renderSection(s));
   for (const b of payload.statements) parts.push(renderStatement(b));
   parts.push(renderSection(payload.estimates));
-  parts.push(renderSection(payload.peers));
-  parts.push(renderSection(payload.insiders));
-  parts.push(renderSection(payload.institutional));
-  parts.push(renderSection(payload.leadership));
+  parts.push(renderUntrustedSection(payload.peers));
+  parts.push(renderUntrustedSection(payload.insiders));
+  parts.push(renderUntrustedSection(payload.institutional));
+  parts.push(renderUntrustedSection(payload.leadership));
   parts.push(renderSection(payload.shortInterest));
-  parts.push(renderSection(payload.segments));
+  parts.push(renderUntrustedSection(payload.segments));
   parts.push(renderSection(payload.macro));
   if (payload.transcript) parts.push(renderExcerpt(payload.transcript));
   for (const ex of payload.filings) parts.push(renderExcerpt(ex));

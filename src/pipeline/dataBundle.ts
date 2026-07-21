@@ -81,6 +81,7 @@ import {
 } from "@/providers/finnhub";
 import { getConfig } from "@/config/env";
 import {
+  derive13FCoverage,
   resolve13FQuarter,
   type BenchmarkPrices,
   type DataBundle,
@@ -529,6 +530,13 @@ function sortRowsNumeric<TRow extends FmpRawRow>(
  * Derive the next expected earnings date: the earliest future-dated row of
  * /stable/earnings (future rows carry epsActual=null — DATA_MAP §2.1).
  */
+function isValidIsoDate(date: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const ms = Date.parse(`${date}T00:00:00Z`);
+  if (!Number.isFinite(ms)) return false;
+  return new Date(ms).toISOString().slice(0, 10) === date;
+}
+
 export function deriveNextEarnings(
   earnings: FetchResult<FmpPayload<FmpEarningsRow>>,
   todayIso: string,
@@ -540,7 +548,7 @@ export function deriveNextEarnings(
   }
   const dated = earnings.value.data.rows
     .map((r) => ({ row: r, date: typeof r.date === "string" ? r.date.slice(0, 10) : "" }))
-    .filter((x) => x.date !== "" && x.date >= todayIso)
+    .filter((x) => isValidIsoDate(x.date) && x.date >= todayIso)
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   const next = dated[0];
   if (next === undefined) {
@@ -1312,6 +1320,21 @@ export async function buildDataBundle(
   const insiderStats = await pInsiderStats;
   const positionsSummary = sortRows(await pPositions);
   const topHolders = await pHolders;
+  // positionsSummary is the authoritative coverage date for the institutional
+  // validation family. Only fall back to topHolders when that endpoint has no
+  // usable rows; combining dates from separate endpoints could label older
+  // holdings with a newer quarter returned by the other endpoint.
+  const institutionalRows =
+    positionsSummary.ok && positionsSummary.value.data.rows.length > 0
+      ? positionsSummary.value.data.rows
+      : topHolders.ok
+        ? topHolders.value.data.rows
+        : [];
+  const actual13F = derive13FCoverage(
+    institutionalRows,
+    q13,
+    nowDate,
+  );
   const peers = await pPeers;
   const segProduct = markSegmentationGapExpected(sortRows(await pSegProduct));
   const segGeo = markSegmentationGapExpected(sortRows(await pSegGeo));
@@ -1509,9 +1532,9 @@ export async function buildDataBundle(
     insiderTrades,
     insiderStats,
     institutional: {
-      year: q13.year,
-      quarter: q13.quarter,
-      quarterEnd: q13.quarterEnd,
+      year: actual13F.year,
+      quarter: actual13F.quarter,
+      quarterEnd: actual13F.quarterEnd,
       positionsSummary,
       topHolders,
     },

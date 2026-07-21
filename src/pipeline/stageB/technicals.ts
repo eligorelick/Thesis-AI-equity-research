@@ -28,7 +28,7 @@ import type { ManifestEntry } from "@/types/core";
 // Input types
 // ---------------------------------------------------------------------------
 
-/** One EOD bar, FMP field names, rows sorted ASC by date. */
+/** One EOD bar, FMP field names. Computation normalizes rows to ASC by date. */
 export interface OhlcvRow {
   /** ISO date "YYYY-MM-DD" (longer strings are truncated to the date part) */
   date: string;

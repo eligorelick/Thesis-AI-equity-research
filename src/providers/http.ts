@@ -233,6 +233,63 @@ export interface HttpResult {
   attempts: number;
 }
 
+/**
+ * Fetch a provider URL without allowing native redirect handling to cross an
+ * origin (or downgrade HTTPS). Provider API keys and bearer tokens must never
+ * be sent to a redirect target that the provider did not explicitly own.
+ * Same-origin redirects are followed for compatibility with provider edge
+ * caches; cross-origin redirects are returned as the original 3xx response so
+ * callers can surface a normal provider gap.
+ */
+export async function fetchWithRedirectPolicy(
+  input: string | URL,
+  init: RequestInit | undefined,
+  fetchImpl: (input: string | URL, init?: RequestInit) => Promise<Response> = fetch,
+  maxRedirects = 5,
+): Promise<Response> {
+  let current = new URL(String(input));
+  const origin = current.origin;
+  const originalProtocol = current.protocol;
+  let currentInit: RequestInit = { ...init, redirect: "manual" };
+
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    const response = await fetchImpl(current.toString(), currentInit);
+    if (response.status < 300 || response.status >= 400) return response;
+
+    const location = response.headers.get("location");
+    if (!location) return response;
+    if (hop === maxRedirects) return response;
+
+    let target: URL;
+    try {
+      target = new URL(location, current);
+    } catch {
+      return response;
+    }
+
+    // Provider defaults are HTTPS. Permit HTTP only for loopback test/dev
+    // endpoints, never for a remote host.
+    const loopback = target.hostname === "localhost" || target.hostname === "127.0.0.1" || target.hostname === "[::1]";
+    if (target.protocol !== originalProtocol || (target.protocol !== "https:" && !loopback)) return response;
+    if (target.origin !== origin) return response;
+
+    // Match Fetch's method rewriting for legacy 301/302/303 redirects while
+    // preserving the body for 307/308. This avoids replaying a POST body to a
+    // redirected path that the provider intended to receive as a GET.
+    if ([301, 302, 303].includes(response.status)) {
+      const method = (currentInit.method ?? "GET").toUpperCase();
+      if (method !== "GET" && method !== "HEAD") {
+        const nextHeaders = new Headers(currentInit.headers);
+        nextHeaders.delete("content-length");
+        nextHeaders.delete("content-type");
+        currentInit = { ...currentInit, method: "GET", body: undefined, headers: nextHeaders };
+      }
+    }
+    current = target;
+  }
+  return new Response(null, { status: 508, statusText: "redirect loop" });
+}
+
 /** Hard transport failure after retries exhausted (network error / timeout). */
 export class HttpTransportError extends Error {
   readonly url: string;
@@ -325,7 +382,11 @@ export async function fetchWithPolicy(
     );
 
     try {
-      const response = await fetchImpl(url, { ...init, signal: attemptSignal });
+      const response = await fetchWithRedirectPolicy(
+        url,
+        { ...init, signal: attemptSignal },
+        fetchImpl,
+      );
       const bodyText = await response.text();
       const bytes = byteLength(bodyText);
       recordBandwidth(provider, bytes, url);

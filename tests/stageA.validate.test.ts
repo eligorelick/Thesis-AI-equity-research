@@ -19,6 +19,7 @@ import {
   type ValidateIncomeRow,
 } from "@/pipeline/stageA/validate";
 import {
+  derive13FCoverage,
   latestQuarterEndOnOrBefore,
   quarterEndIso,
   resolve13FQuarter,
@@ -72,10 +73,10 @@ function xp(p: XbrlPoint): Record<string, unknown> {
   };
 }
 
-function makeFacts(tags: Record<string, Record<string, unknown>[]>): CompanyFacts {
+function makeFacts(tags: Record<string, Record<string, unknown>[]>, unit = "USD"): CompanyFacts {
   const usGaap: Record<string, unknown> = {};
   for (const [tag, points] of Object.entries(tags)) {
-    usGaap[tag] = { label: tag, units: { USD: points } };
+    usGaap[tag] = { label: tag, units: { [unit]: points } };
   }
   return { cik: 320193, entityName: "Test Co", facts: { "us-gaap": usGaap } };
 }
@@ -215,6 +216,64 @@ describe("currency consistency (audit 2026-07-11 #6)", () => {
   });
 });
 
+describe("balance-sheet identity zero-liability handling", () => {
+  it("does not manufacture a failure when zero liabilities are ambiguous", () => {
+    const { check: result } = check(
+      makeBundle({
+        balanceAnnual: ok({
+          rows: [{ date: "2025-09-27", totalAssets: 100, totalLiabilities: 0, totalEquity: 40 }],
+        }, "2025-09-27"),
+      }),
+      "balanceSheetIdentity.2025-09-27",
+    );
+    expect(result.status).toBe("skipped");
+    expect(result.detail).toMatch(/zero liabilities|ambiguous/i);
+  });
+
+  it("accepts a legitimate zero-liability identity when it balances", () => {
+    const { check: result } = check(
+      makeBundle({
+        balanceAnnual: ok({
+          rows: [{ date: "2025-09-27", totalAssets: 100, totalLiabilities: 0, totalEquity: 100 }],
+        }, "2025-09-27"),
+      }),
+      "balanceSheetIdentity.2025-09-27",
+    );
+    expect(result.status).toBe("pass");
+  });
+});
+
+describe("FMP-XBRL currency guard", () => {
+  it("skips numeric cross-checks when statement and XBRL currencies differ", () => {
+    const bundle = makeBundle({
+      incomeAnnual: ok(
+        {
+          rows: [{
+            date: "2025-09-27",
+            period: "FY",
+            fiscalYear: "2025",
+            revenue: 100,
+            netIncome: 20,
+            reportedCurrency: "TWD",
+          }],
+        },
+        "2025-09-27",
+      ),
+      companyFacts: ok(
+        makeFacts({
+          RevenueFromContractWithCustomerExcludingAssessedTax: [xp({ start: "2024-09-29", end: "2025-09-27", val: 100 })],
+          NetIncomeLoss: [xp({ start: "2024-09-29", end: "2025-09-27", val: 20 })],
+        }, "USD"),
+        "2025-09-27",
+      ),
+    });
+    const report = validateBundle(bundle, { now: NOW });
+    const revenue = report.checks.find((c) => c.id === "xbrlCrossCheck.revenue.FY.2025-09-27");
+    expect(revenue?.status).toBe("skipped");
+    expect(revenue?.detail).toMatch(/currency/i);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Calendar helpers (shared 13F quarter-resolution rule)
 // ---------------------------------------------------------------------------
@@ -244,6 +303,28 @@ describe("resolve13FQuarter", () => {
       quarter: 3,
       quarterEnd: "2025-09-30",
     });
+  });
+});
+
+describe("derive13FCoverage", () => {
+  it("uses the latest valid returned row date instead of the requested quarter", () => {
+    expect(
+      derive13FCoverage(
+        [{ date: "2025-12-31" }, { date: "not-a-date" }, { date: "2026-03-31" }],
+        { year: 2026, quarter: 2, quarterEnd: "2026-06-30" },
+        new Date("2026-07-06T00:00:00Z"),
+      ),
+    ).toEqual({ year: 2026, quarter: 1, quarterEnd: "2026-03-31" });
+  });
+
+  it("falls back to the requested quarter when returned dates are invalid or future-dated", () => {
+    expect(
+      derive13FCoverage(
+        [{ date: "2026-12-31" }, { date: "bad" }],
+        { year: 2026, quarter: 2, quarterEnd: "2026-06-30" },
+        new Date("2026-07-06T00:00:00Z"),
+      ),
+    ).toEqual({ year: 2026, quarter: 2, quarterEnd: "2026-06-30" });
   });
 });
 

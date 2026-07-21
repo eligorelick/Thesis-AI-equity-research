@@ -100,8 +100,15 @@ export type CacheParams = Record<string, CacheParamValue>;
 
 /** JSON.stringify with recursively sorted object keys (order-insensitive). */
 export function stableStringify(value: CacheParamValue): string {
-  if (value === undefined) return "null"; // only reachable inside arrays
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (value === undefined) {
+    throw new TypeError("Undefined cache-key values are not allowed inside arrays");
+  }
+  if (value === null) return "null";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("Cache-key numbers must be finite");
+    return JSON.stringify(value);
+  }
+  if (typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) {
     return `[${value.map(stableStringify).join(",")}]`;
   }

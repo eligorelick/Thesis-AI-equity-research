@@ -20,6 +20,7 @@ import "server-only";
 
 import { z } from "zod";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
+import { fetchWithRedirectPolicy } from "@/providers/http";
 
 /** Cache TTL for FINRA responses (partitions + rows), seconds. */
 export const FINRA_TTL_SECONDS = 86400;
@@ -176,9 +177,13 @@ const finraRowSchema = z.object({
 export function parseShortInterestRows(payload: unknown): ShortInterestPoint[] | null {
   if (!Array.isArray(payload)) return null;
   const out: ShortInterestPoint[] = [];
+  let malformedRows = 0;
   for (const raw of payload) {
     const parsed = finraRowSchema.safeParse(raw);
-    if (!parsed.success) return null;
+    if (!parsed.success) {
+      malformedRows += 1;
+      continue;
+    }
     const r = parsed.data;
     const dtc = normalizeDaysToCover(r.daysToCoverQuantity);
     const notes: string[] = [];
@@ -201,6 +206,11 @@ export function parseShortInterestRows(payload: unknown): ShortInterestPoint[] |
       marketClassCode: r.marketClassCode ?? null,
       notes,
     });
+  }
+  if (out.length === 0) return null;
+  if (malformedRows > 0) {
+    const note = `${malformedRows} malformed FINRA row${malformedRows === 1 ? " was" : "s were"} discarded; valid rows retained`;
+    for (const row of out) row.notes.push(note);
   }
   // Ascending by settlement date; on duplicates (revisions) the later row wins downstream.
   out.sort((a, b) => a.settlementDate.localeCompare(b.settlementDate));
@@ -265,7 +275,7 @@ async function finraRequest(
     const controller = timeoutMs > 0 ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
     try {
-      res = await fetchImpl(url, {
+      res = await fetchWithRedirectPolicy(url, {
         method: init.method,
         headers,
         body: init.method === "POST" ? JSON.stringify(init.body) : undefined,
@@ -273,7 +283,7 @@ async function finraRequest(
           controller && config.signal
             ? AbortSignal.any([controller.signal, config.signal])
             : controller?.signal ?? config.signal,
-      });
+      }, fetchImpl);
       if (res.ok) {
         try {
           return { ok: true, status: res.status, body: (await res.json()) as unknown };

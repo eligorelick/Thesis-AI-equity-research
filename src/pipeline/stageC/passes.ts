@@ -83,7 +83,7 @@ import {
   serializeCitationRef,
 } from "@/pipeline/stageC/citations";
 import {
-  LLY_ENTITY_REGISTRY,
+  getEntityRegistry,
   collectEntityConflicts,
   validateEntityText,
   validateJudgeEntityResolution,
@@ -956,11 +956,12 @@ function entityConflictsForCases(
   bull: AnalystCase,
   bear: AnalystCase,
 ): EntityIssue[] {
-  if (payload.symbol.toUpperCase() !== LLY_ENTITY_REGISTRY.symbol) return [];
+  const registry = getEntityRegistry(payload.symbol);
+  if (registry === null) return [];
   return collectEntityConflicts(
     analystClaimTexts(bull),
     analystClaimTexts(bear),
-    LLY_ENTITY_REGISTRY,
+    registry,
   );
 }
 
@@ -970,16 +971,17 @@ function unresolvedJudgeEntityConflicts(
   bear: AnalystCase,
   output: JudgeOutput,
 ): EntityIssue[] {
+  const registry = getEntityRegistry(payload.symbol);
+  if (registry === null) return [];
   const unresolved = validateJudgeEntityResolution(
     entityConflictsForCases(payload, bull, bear),
     output.disagreements,
   );
-  if (payload.symbol.toUpperCase() !== LLY_ENTITY_REGISTRY.symbol) return unresolved;
   const reportIssues: EntityIssue[] = [];
   const walk = (node: unknown, structuredSource: string | null = null): void => {
     if (typeof node === "string") {
       reportIssues.push(
-        ...validateEntityText(node, LLY_ENTITY_REGISTRY, structuredSource).issues.filter(
+        ...validateEntityText(node, registry, structuredSource).issues.filter(
           (issue) => structuredSource !== null || issue.code !== "primary-source-required",
         ),
       );
@@ -994,7 +996,7 @@ function unresolvedJudgeEntityConflicts(
     if (typeof record.text === "string" && typeof record.label === "string") {
       const rawSource = citationSourceId(record);
       const primarySource = rawSource?.startsWith("web:") ? rawSource.slice(4) : rawSource;
-      reportIssues.push(...validateEntityText(record.text, LLY_ENTITY_REGISTRY, primarySource).issues);
+      reportIssues.push(...validateEntityText(record.text, registry, primarySource).issues);
       for (const [key, value] of Object.entries(record)) {
         if (key !== "text") walk(value);
       }
@@ -1315,7 +1317,9 @@ function appendUnverifiedNote(number: TracedNumber, reason: ProvenanceFailureRea
  * FACT/ESTIMATE) or a URL actually observed in provider web-search results.
  * Untraceable evidence is never deleted: numbers are marked
  * false with an explicit reason, and claims receive an unverified log entry.
- * Rates are null when their denominator is zero, never synthetic perfection.
+ * Numeric prose embedded in claim text is intentionally not regex-extracted;
+ * numeric provenance requires a structured TracedNumber. Rates are null when
+ * their denominator is zero, never synthetic perfection.
  *
  * Deterministic-only: an earlier model-side pass (VERIFY_MODEL) was removed
  * because it discarded its output and merely burned tokens — the trace here has

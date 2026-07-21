@@ -1206,6 +1206,16 @@ describe("report schema — 1.1.0 additions", () => {
     ).toBe(true);
   });
 
+  it("rejects projection scenario arrays with mismatched horizons", () => {
+    const bad = projectionSeries();
+    bad.bull = bad.bull.slice(0, 1);
+    expect(ProjectionSeriesSchema.safeParse(bad).success).toBe(false);
+
+    const misaligned = projectionSeries();
+    misaligned.bear[0]!.period = "FY2099";
+    expect(ProjectionSeriesSchema.safeParse(misaligned).success).toBe(false);
+  });
+
   it("rating-safe guard applies to the new free-text fields", () => {
     // AspectScore.note is rating-safe.
     expect(AspectScoreSchema.safeParse({ ...aspectScore(), note: "Strong Buy on valuation." }).success).toBe(false);

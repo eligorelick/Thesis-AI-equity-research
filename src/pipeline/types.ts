@@ -273,6 +273,34 @@ export interface ThirteenFQuarter {
   quarterEnd: string;
 }
 
+interface DateBearingRow {
+  date?: unknown;
+}
+
+/** Resolve 13F coverage from returned rows, falling back to the request cycle. */
+export function derive13FCoverage(
+  rows: readonly DateBearingRow[],
+  fallback: ThirteenFQuarter,
+  now: Date,
+): ThirteenFQuarter {
+  const nowMs = now.getTime();
+  const dates = rows
+    .map((row) => (typeof row.date === "string" ? row.date.slice(0, 10) : ""))
+    .filter((date) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+      const ms = Date.parse(`${date}T00:00:00Z`);
+      return Number.isFinite(ms) && ms <= nowMs;
+    })
+    .sort()
+    .reverse();
+  const date = dates[0];
+  if (date === undefined) return fallback;
+  const year = Number(date.slice(0, 4));
+  const month = Number(date.slice(5, 7));
+  const quarter = (month <= 3 ? 1 : month <= 6 ? 2 : month <= 9 ? 3 : 4) as 1 | 2 | 3 | 4;
+  return { year, quarter, quarterEnd: date };
+}
+
 /**
  * 13F quarter-resolution rule (DATA_MAP §2.8): the latest calendar quarter
  * whose end is >= 45 days ago — i.e. whose 13F filing deadline has passed, so

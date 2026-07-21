@@ -151,6 +151,17 @@ describe("computeGrowth — CAGR exactness and windows", () => {
     expect(res.margins.operating.slopePctPtsPerYear).toBeCloseTo(0, 10);
   });
 
+  it("caps the annual margin series at the documented ten observations", () => {
+    const income = annualIncomeRows(
+      Array.from({ length: 12 }, (_, i) => ({
+        revenue: 100,
+        grossProfit: 40 + i,
+      })),
+    );
+    const res = computeGrowth(income, [], { period: "annual" });
+    expect(res.margins.gross.series).toHaveLength(10);
+  });
+
   it("uses elapsed fiscal years rather than array index for margin slopes", () => {
     const income: GrowthIncomeRow[] = [
       { date: "2024-12-31", revenue: 100, grossProfit: 30 },

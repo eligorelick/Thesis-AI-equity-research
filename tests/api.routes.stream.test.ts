@@ -19,6 +19,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { eq } from "drizzle-orm";
 
 // jobRunner can transitively pull the `server-only` shim (absent under the
@@ -46,6 +48,7 @@ import { createDatabase, setDbForTests, type DatabaseHandle } from "@/db";
 import { jobs } from "@/db/schema";
 import {
   publishJobEvent,
+  reportJsonIsDataOnly,
   subscriberCount,
   _clearJobSubscribers,
   type JobEvent,
@@ -148,6 +151,33 @@ describe("GET /api/report/[jobId]/stream — unknown job", () => {
  * ------------------------------------------------------------------------ */
 
 describe("already-terminal job at connect", () => {
+  it("recognizes data-only reports saved with legacy as-of formats", () => {
+    const raw = JSON.parse(
+      readFileSync(path.join(process.cwd(), "fixtures", "report", "DEMO-sample.json"), "utf8"),
+    ) as Record<string, unknown> & {
+      appendix: { missingData: unknown[] };
+    };
+    raw.appendix.missingData = [
+      ...raw.appendix.missingData,
+      { field: "analysis.llm", reason: "legacy data-only", severity: "warn" },
+    ];
+    const findAsOf = (node: unknown): boolean => {
+      if (!node || typeof node !== "object") return false;
+      if (Array.isArray(node)) return node.some(findAsOf);
+      const record = node as Record<string, unknown>;
+      for (const [key, value] of Object.entries(record)) {
+        if (key === "asOf" && typeof value === "string") {
+          record[key] = "2026-06";
+          return true;
+        }
+        if (findAsOf(value)) return true;
+      }
+      return false;
+    };
+    expect(findAsOf(raw)).toBe(true);
+    expect(reportJsonIsDataOnly(JSON.stringify(raw))).toBe(true);
+  });
+
   it("replays the snapshot, emits a synthesized `done` frame, and closes", async () => {
     const { jobId } = createJob("AAPL");
     markTerminal(jobId, "done");

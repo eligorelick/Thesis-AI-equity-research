@@ -3,6 +3,8 @@
  * cache-key stability. No network: live-path tests inject a fake fetch.
  */
 import { describe, expect, it } from "vitest";
+import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   FmpClient,
@@ -75,6 +77,46 @@ describe("FMP entity identity", () => {
       expect(result.gap.reason).toContain("MSFT");
     }
     expect(cacheWrites).toBe(0);
+  });
+
+  it("rejects a wrong-symbol object before cachedFetch can store it", async () => {
+    let cacheWrites = 0;
+    const cachedFetch: CachedFetchFn = async (_key, _ttl, loader) => {
+      const value = await loader();
+      cacheWrites++;
+      return { value };
+    };
+    const { fetch } = fakeFetch({ symbol: "MSFT", price: 999 });
+
+    const result = await liveClient(fetch, cachedFetch).quote("AAPL");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.gap.severity).toBe("critical");
+      expect(result.gap.reason).toContain("AAPL");
+      expect(result.gap.reason).toContain("MSFT");
+    }
+    expect(cacheWrites).toBe(0);
+  });
+
+  it("rejects a wrong-symbol object identically in fixture mode", async () => {
+    const fixturesDir = await fs.mkdtemp(path.join(os.tmpdir(), "fmp-identity-"));
+    try {
+      const profileDir = path.join(fixturesDir, "profile");
+      await fs.mkdir(profileDir, { recursive: true });
+      await fs.writeFile(path.join(profileDir, "AAPL.json"), JSON.stringify({ symbol: "MSFT", price: 999 }));
+
+      const result = await createFmpClient({ apiKey: "", fixturesDir }).profile("AAPL");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.gap.severity).toBe("critical");
+        expect(result.gap.reason).toContain("AAPL");
+        expect(result.gap.reason).toContain("MSFT");
+      }
+    } finally {
+      await fs.rm(fixturesDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects a mixed-entity batch instead of filtering it", async () => {

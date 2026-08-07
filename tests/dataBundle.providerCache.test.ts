@@ -39,11 +39,12 @@ function cacheRows() {
 }
 
 describe("dataBundle provider cache wrappers", () => {
-  it("does not overwrite last-good FMP cache data with a wrong-symbol refresh", async () => {
+  it("does not overwrite last-good FMP cache data with a wrong-symbol object refresh", async () => {
     let calls = 0;
     const fetchImpl = vi.fn(async () => {
       calls++;
-      return jsonResponse([{ symbol: calls === 1 ? "AAPL" : "MSFT", price: calls === 1 ? 200 : 999 }]);
+      if (calls === 1) return jsonResponse([{ symbol: "AAPL", price: 200 }]);
+      return jsonResponse({ symbol: "MSFT", price: 999 });
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const client = createFmpClient({

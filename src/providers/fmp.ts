@@ -1044,17 +1044,19 @@ function validateEntityBody(
   scope: FmpEntityScope,
   hasValidatedRequestScope: boolean,
 ): string | null {
-  // Stable entity endpoints are array-shaped. Unknown object envelopes are
-  // rejected by the response-shape boundary below, not misclassified as a
-  // missing-symbol identity failure.
-  const rows = Array.isArray(body) ? body : [];
+  // Scan a record body as one identity row before the endpoint's independent
+  // array-shape boundary rejects it. Otherwise a wrong-issuer object can pass
+  // through the cache loader and overwrite last-good entity data.
+  const recordBody = isRecord(body);
+  const rows = Array.isArray(body) ? body : recordBody ? [body] : [];
+  const rowLocation = recordBody ? "object body" : "row";
   const expected = scope.expectedSymbols.join(", ");
   for (const [index, row] of rows.entries()) {
     if (!isRecord(row)) continue;
     const actual = row.symbol;
     if (actual === undefined || actual === null) {
       if (scope.returnedSymbol === "required") {
-        return `FMP entity identity missing in row ${index}; requested ${expected}`;
+        return `FMP entity identity missing in ${rowLocation} ${index}; requested ${expected}`;
       }
       if (!hasValidatedRequestScope) {
         return `FMP cached row ${index} omitted its symbol without validated request scope for ${expected}`;
@@ -1062,10 +1064,10 @@ function validateEntityBody(
       continue;
     }
     if (typeof actual !== "string" || actual.trim().length === 0) {
-      return `FMP entity identity invalid in row ${index}; requested ${expected}, returned ${String(actual)}`;
+      return `FMP entity identity invalid in ${rowLocation} ${index}; requested ${expected}, returned ${String(actual)}`;
     }
     if (!scope.expectedSymbols.some((symbol) => sameEntitySymbol(symbol, actual))) {
-      return `FMP entity identity mismatch in row ${index}; requested ${expected}, returned ${actual}`;
+      return `FMP entity identity mismatch in ${rowLocation} ${index}; requested ${expected}, returned ${actual}`;
     }
   }
   return null;
@@ -1258,13 +1260,13 @@ export class FmpClient {
           attempted,
         );
       }
-      const normalizedRows = normalizeRows<TRow>(body, spec.allowObjectBody === true);
-      if (normalizedRows.length === 0) {
-        return gap(spec.gapField, FMP_EMPTY_ARRAY_REASON, "info", attempted);
-      }
       if (spec.entityScope !== undefined) {
         const identityError = validateEntityBody(body, canonicalEntityScope(spec.entityScope), true);
         if (identityError !== null) return gap(spec.gapField, identityError, "critical", attempted);
+      }
+      const normalizedRows = normalizeRows<TRow>(body, spec.allowObjectBody === true);
+      if (normalizedRows.length === 0) {
+        return gap(spec.gapField, FMP_EMPTY_ARRAY_REASON, "info", attempted);
       }
       const validation = validateCriticalRows<TRow>(spec.method, normalizedRows);
       if (!validation.ok) return gap(spec.gapField, validation.reason, "warn", attempted);

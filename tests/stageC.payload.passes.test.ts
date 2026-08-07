@@ -581,10 +581,11 @@ describe("payload determinism + provenance", () => {
 
   it("suppresses a provider record with invalid observation time instead of using builtAt", () => {
     const { bundle, computed } = buildInputs();
-    if (!bundle.analystEstimates.ok) {
-      throw new Error("fixture requires analyst estimates");
+    if (!bundle.analystEstimates.ok || !bundle.priceTargetConsensus.ok) {
+      throw new Error("fixture requires analyst estimates and price targets");
     }
     bundle.analystEstimates.value.asOf = "2026-02-30";
+    bundle.priceTargetConsensus.value.asOf = "";
     const validation = validateBundle(bundle, { now: new Date("2026-07-06T00:00:00Z") });
     const payload = assembleContextPayload(bundle, computed, validation);
 
@@ -600,6 +601,55 @@ describe("payload determinism + provenance", () => {
           entry.asOf === bundle.builtAt.slice(0, 10),
       ),
     ).toBe(false);
+    expect(
+      payload.provenanceRegistry!.some((entry) =>
+        entry.id.startsWith("payload.estimates.price-target-"),
+      ),
+    ).toBe(false);
+  });
+
+  it("retains timeless computed figures with deterministic computation snapshot identity", () => {
+    const { payload } = buildInputs();
+
+    expect(payload.provenanceRegistry).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "computed.returns.erp-used",
+          kind: "computed",
+          currency: null,
+          asOf: "2026-07-06",
+          origin: "computed.returns.wacc.erp",
+          formulaVersion: "stage-b-v1",
+        }),
+        expect.objectContaining({
+          id: "computed.returns.beta-final",
+          kind: "computed",
+          currency: null,
+          asOf: "2026-07-06",
+          origin: "computed.returns.wacc.beta",
+          formulaVersion: "stage-b-v1",
+        }),
+        expect.objectContaining({
+          id: "computed.valuation.dcf-per-share",
+          kind: "computed",
+          currency: "USD",
+          asOf: "2026-07-06",
+          origin: "computed.valuation.dcf",
+          formulaVersion: "stage-b-v1",
+        }),
+        expect.objectContaining({
+          id: "computed.deterministic-aspect-scores.composite-score",
+          kind: "computed",
+          currency: null,
+          asOf: "2026-07-06",
+          origin: "computed.scores.composite",
+          formulaVersion: "stage-b-v1",
+        }),
+      ]),
+    );
+    expect(serializePayloadForPrompt(payload)).toContain(
+      "[computed.returns.erp-used · 2026-07-06]",
+    );
   });
 
   it("has no wall-clock timestamps in the serialized payload (cache-safe)", () => {

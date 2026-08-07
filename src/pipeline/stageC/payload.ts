@@ -1010,6 +1010,7 @@ function attachProvenanceRegistry(
   payload: PayloadWithoutRegistry,
   computed: ComputedMetrics,
   currency: string | null,
+  computationAsOf: string | null,
 ): ContextPayload {
   const registry: NumericProvenanceRecord[] = [];
   const citationRegistry: CitationProvenanceRecord[] = [];
@@ -1029,7 +1030,11 @@ function attachProvenanceRegistry(
     return count === 1 ? base : `${base}.${count}`;
   };
 
-  const registerFigure = (prefix: string, figure: PayloadFigure): void => {
+  const registerFigure = (
+    prefix: string,
+    figure: PayloadFigure,
+    kind: NumericProvenanceRecord["kind"],
+  ): void => {
     if (typeof figure.value !== "number" || !Number.isFinite(figure.value)) {
       if (figure.value !== null) {
         registerCitation(
@@ -1045,28 +1050,38 @@ function attachProvenanceRegistry(
     const monetary = unit === "currency" || unit === "currency-per-share";
     const resolvedCurrency = monetary ? (canonical.currency ?? currency) : null;
     if (monetary && resolvedCurrency === null) return;
-    if (!isFullIsoDate(figure.asOf)) return;
+    const asOf = isFullIsoDate(figure.asOf)
+      ? figure.asOf
+      : kind === "computed" && isFullIsoDate(computationAsOf)
+        ? computationAsOf
+        : null;
+    if (asOf === null) return;
 
     const id = uniqueId(`${prefix}.${semanticSlug(figure.label)}`);
     figure.provenanceId = id;
     figure.currency = resolvedCurrency;
     figure.period ??= periodFromLabel(figure.label);
+    figure.asOf = asOf;
     registry.push({
       id,
-      kind: figure.source.startsWith("computed.") ? "computed" : "provider",
+      kind,
       value: figure.value,
       unit,
       currency: resolvedCurrency,
       period: figure.period,
-      asOf: figure.asOf,
+      asOf,
       origin: figure.source,
-      formulaVersion: figure.source.startsWith("computed.") ? "stage-b-v1" : null,
+      formulaVersion: kind === "computed" ? "stage-b-v1" : null,
       displayPrecision: 4,
     });
   };
 
-  const registerSection = (prefix: string, section: PayloadSection): void => {
-    for (const figure of section.figures) registerFigure(prefix, figure);
+  const registerSection = (
+    prefix: string,
+    section: PayloadSection,
+    kind: NumericProvenanceRecord["kind"],
+  ): void => {
+    for (const figure of section.figures) registerFigure(prefix, figure, kind);
   };
 
   const registerStageBNumber = (
@@ -1097,10 +1112,10 @@ function attachProvenanceRegistry(
     });
   };
 
-  registerSection("payload.quote", payload.quote);
+  registerSection("payload.quote", payload.quote, "provider");
   for (const section of payload.computed) {
     const sectionName = semanticSlug(section.title.split("(", 1)[0] ?? section.title);
-    registerSection(`computed.${sectionName}`, section);
+    registerSection(`computed.${sectionName}`, section, "computed");
   }
   for (const block of payload.statements) {
     const blockName = semanticSlug(block.title);
@@ -1153,7 +1168,9 @@ function attachProvenanceRegistry(
     ["payload.macro", payload.macro],
     ["payload.news", payload.news],
   ];
-  for (const [prefix, section] of remainingSections) registerSection(prefix, section);
+  for (const [prefix, section] of remainingSections) {
+    registerSection(prefix, section, "provider");
+  }
 
   for (const excerpt of [payload.transcript, ...payload.filings]) {
     if (excerpt !== null) registerCitation(excerpt.source, excerpt.asOf, excerpt.source);
@@ -1320,7 +1337,7 @@ export function assembleContextPayload(
     asOfMap: sortRecord(bundle.asOf),
   };
   const currency = isoCurrency(profile?.currency);
-  return attachProvenanceRegistry(payload, computed, currency);
+  return attachProvenanceRegistry(payload, computed, currency, isoDay(bundle.builtAt));
 }
 
 /**

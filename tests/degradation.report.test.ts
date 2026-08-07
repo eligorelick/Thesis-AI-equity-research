@@ -37,6 +37,7 @@ import { buildDataOnlyReport } from "@/pipeline/jobRunner";
 import { ReportSchema, DISCLAIMER_TEXT, type Report, type TracedNumber } from "@/report/schema";
 import type { DataBundle } from "@/pipeline/types";
 import type { ValidationReport } from "@/pipeline/stageA/validate";
+import type { DataSource } from "@/types/core";
 
 /* ------------------------------------------------------------------------ *
  * Fixtures — a realistic AAPL bundle whose statements let Stage B compute
@@ -48,10 +49,10 @@ const BUILT_AT = "2026-07-06T00:00:00.000Z";
 const GENERATED_AT = "2026-07-06T12:00:00.000Z";
 const NOW = new Date("2026-07-06T00:00:00Z");
 
-function ok<T>(data: T, asOf: string, endpoint = "fmp") {
+function ok<T>(data: T, asOf: string, endpoint = "fmp", source: DataSource = "fmp") {
   return {
     ok: true as const,
-    value: { data, asOf, source: "fmp" as const, endpoint, fetchedAt: BUILT_AT },
+    value: { data, asOf, source, endpoint, fetchedAt: BUILT_AT, stale: false },
   };
 }
 const gap = { ok: false as const, gap: { field: "x", reason: "fixture gap", severity: "info" as const } };
@@ -95,12 +96,22 @@ function fixtureBundle(symbol = "AAPL"): DataBundle {
     "cash-flow",
   );
 
-  const asOf: Record<string, string> = {
-    profile: "2026-07-01",
-    quote: "2026-07-05",
-    "statements.incomeAnnual": "2025-09-27",
-    "macro.core.DGS10": "2026-07-04",
+  const sourceManifest = {
+    profile: { provider: "fmp" as const, endpoint: "profile", asOf: "2026-07-01", fetchedAt: BUILT_AT, stale: false },
+    quote: { provider: "fmp" as const, endpoint: "quote", asOf: "2026-07-05", fetchedAt: BUILT_AT, stale: false },
+    "statements.incomeAnnual": { provider: "fmp" as const, endpoint: "income-statement", asOf: "2025-09-27", fetchedAt: BUILT_AT, stale: false },
+    "statements.balanceAnnual": { provider: "fmp" as const, endpoint: "balance-sheet", asOf: "2025-09-27", fetchedAt: BUILT_AT, stale: false },
+    "statements.cashflowAnnual": { provider: "fmp" as const, endpoint: "cash-flow", asOf: "2025-09-27", fetchedAt: BUILT_AT, stale: false },
+    keyMetricsTtm: { provider: "fmp" as const, endpoint: "key-metrics-ttm", asOf: "2026-03-28", fetchedAt: BUILT_AT, stale: false },
+    ratiosTtm: { provider: "fmp" as const, endpoint: "ratios-ttm", asOf: "2026-03-28", fetchedAt: BUILT_AT, stale: false },
+    enterpriseValues: { provider: "fmp" as const, endpoint: "enterprise-values", asOf: "2025-09-27", fetchedAt: BUILT_AT, stale: false },
+    "macro.core.DGS10": { provider: "fred" as const, endpoint: "/fred/series/observations?series_id=DGS10", asOf: "2026-07-04", fetchedAt: BUILT_AT, stale: false },
+    treasury: { provider: "fmp" as const, endpoint: "treasury", asOf: "2026-07-04", fetchedAt: BUILT_AT, stale: false },
+    marketRiskPremium: { provider: "fmp" as const, endpoint: "market-risk-premium", asOf: "2026-07-01", fetchedAt: BUILT_AT, stale: false },
   };
+  const asOf = Object.fromEntries(
+    Object.entries(sourceManifest).map(([field, entry]) => [field, entry.asOf]),
+  );
 
   const bundle = {
     symbol,
@@ -154,7 +165,7 @@ function fixtureBundle(symbol = "AAPL"): DataBundle {
     shortInterestTrend: gap,
     insiderSentiment: gap,
     macro: {
-      core: { DGS10: ok([{ date: "2026-07-04", value: 4.4 }], "2026-07-04", "fred") },
+      core: { DGS10: ok([{ date: "2026-07-04", value: 4.4 }], "2026-07-04", "/fred/series/observations?series_id=DGS10", "fred") },
       sector: {},
       gicsSector: "Technology",
       attribution: "This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
@@ -173,6 +184,7 @@ function fixtureBundle(symbol = "AAPL"): DataBundle {
       companyFacts: gap,
       xbrlSummary: null,
     },
+    sourceManifest,
     asOf,
     gaps: [{ field: "sharesFloat", reason: "float unavailable", severity: "warn" as const }],
   } as unknown as DataBundle;

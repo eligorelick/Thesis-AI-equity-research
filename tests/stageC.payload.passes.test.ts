@@ -14,7 +14,7 @@ import { runStageB, type ComputedMetrics } from "@/pipeline/compute";
 import { computeDcfDisplay } from "@/pipeline/stageB/fairValue";
 import { validateBundle } from "@/pipeline/stageA/validate";
 import type { DataBundle } from "@/pipeline/types";
-import type { ManifestEntry } from "@/types/core";
+import type { DataSource, ManifestEntry } from "@/types/core";
 import type { AnalystCase, JudgeOutput, Report, ScenarioTargets, FairValue } from "@/report/schema";
 import { FRED_ATTRIBUTION_TEXT, ReportSchema } from "@/report/schema";
 import { pipelinePasses } from "@/pipeline/stageC/index";
@@ -49,6 +49,7 @@ import {
   runVerifyPass,
   runJudgeVerifyAssemble,
   assembleReport,
+  buildSources,
   normalizeJudgeOutput,
   collectTracedNumbers,
   totalCost,
@@ -70,10 +71,17 @@ import type { CostBreakdownEntry as _CBE } from "@/report/schema";
 const BUILT_AT = "2026-07-06T00:00:00.000Z";
 const GENERATED_AT = "2026-07-06T12:00:00.000Z";
 
-function ok<T>(data: T, asOf: string, endpoint = "fmp") {
+function ok<T>(
+  data: T,
+  asOf: string,
+  endpoint = "fmp",
+  source: DataSource = "fmp",
+  fetchedAt = BUILT_AT,
+  stale = false,
+) {
   return {
     ok: true as const,
-    value: { data, asOf, source: "fmp" as const, endpoint, fetchedAt: BUILT_AT },
+    value: { data, asOf, source, endpoint, fetchedAt, stale },
   };
 }
 const gap = { ok: false as const, gap: { field: "x", reason: "fixture gap", severity: "info" as const } };
@@ -147,13 +155,67 @@ function fixtureBundle(symbol = "AAPL"): DataBundle {
     "cash-flow",
   );
 
-  const asOf: Record<string, string> = {
-    profile: "2026-07-01",
-    quote: "2026-07-05",
-    "statements.incomeAnnual": "2025-09-27",
-    "edgar.item1a": "2025-09-27",
-    "macro.core.DGS10": "2026-07-04",
+  const sourceManifest = {
+    profile: {
+      provider: "fmp" as const,
+      endpoint: "profile",
+      asOf: "2026-07-01",
+      fetchedAt: BUILT_AT,
+      stale: false,
+    },
+    quote: {
+      provider: "fmp" as const,
+      endpoint: "quote",
+      asOf: "2026-07-05",
+      fetchedAt: BUILT_AT,
+      stale: false,
+    },
+    "statements.incomeAnnual": {
+      provider: "fmp" as const,
+      endpoint: "income-statement",
+      asOf: "2025-09-27",
+      fetchedAt: BUILT_AT,
+      stale: false,
+    },
+    "edgar.item1a": {
+      provider: "edgar" as const,
+      endpoint: "edgar-item1a",
+      asOf: "2025-09-27",
+      fetchedAt: BUILT_AT,
+      stale: false,
+    },
+    "macro.core.DGS10": {
+      provider: "fred" as const,
+      endpoint: "/fred/series/observations?series_id=DGS10",
+      asOf: "2026-07-04",
+      fetchedAt: BUILT_AT,
+      stale: false,
+    },
+    treasury: {
+      provider: "fmp" as const,
+      endpoint: "/stable/treasury-rates",
+      asOf: "2026-07-04",
+      fetchedAt: "2026-07-05T18:30:00.000Z",
+      stale: true,
+    },
+    "treasury.identicalAlias": {
+      provider: "fmp" as const,
+      endpoint: "/stable/treasury-rates",
+      asOf: "2026-07-04",
+      fetchedAt: "2026-07-05T18:30:00.000Z",
+      stale: true,
+    },
+    "treasury.freshObservation": {
+      provider: "fmp" as const,
+      endpoint: "/stable/treasury-rates",
+      asOf: "2026-07-04",
+      fetchedAt: "2026-07-05T18:30:00.000Z",
+      stale: false,
+    },
   };
+  const asOf = Object.fromEntries(
+    Object.entries(sourceManifest).map(([field, entry]) => [field, entry.asOf]),
+  );
 
   const bundle = {
     symbol,
@@ -216,32 +278,40 @@ function fixtureBundle(symbol = "AAPL"): DataBundle {
     pressReleases: gap,
     eodPrices: gap,
     benchmarkPrices: { spy: gap, sectorEtf: gap, sectorEtfSymbol: null },
-    shortInterest: ok({ symbol, issueName: "APPLE INC", settlementDate: "2026-06-30", currentShortPositionQuantity: 100000000, previousShortPositionQuantity: 95000000, changePreviousNumber: 5000000, changePercent: 5.3, averageDailyVolumeQuantity: 50000000, daysToCoverQuantity: 2, daysToCoverSentinel: false, marketClassCode: "NNM", notes: [] }, "2026-06-30", "finra"),
+    shortInterest: ok({ symbol, issueName: "APPLE INC", settlementDate: "2026-06-30", currentShortPositionQuantity: 100000000, previousShortPositionQuantity: 95000000, changePreviousNumber: 5000000, changePercent: 5.3, averageDailyVolumeQuantity: 50000000, daysToCoverQuantity: 2, daysToCoverSentinel: false, marketClassCode: "NNM", notes: [] }, "2026-06-30", "/equity/short-interest", "finra"),
     shortInterestTrend: gap,
-    insiderSentiment: ok([{ year: 2026, month: 6, change: -50000, mspr: -12.5 }], "2026-06-30", "finnhub"),
+    insiderSentiment: ok([{ year: 2026, month: 6, change: -50000, mspr: -12.5 }], "2026-06-30", "/stock/insider-sentiment", "finnhub"),
     macro: {
       core: {
-        DGS10: ok([{ date: "2026-07-04", value: 4.4 }], "2026-07-04", "fred"),
-        CPIAUCSL: ok([{ date: "2026-06-01", value: 320 }], "2026-06-01", "fred"),
+        DGS10: ok([{ date: "2026-07-04", value: 4.4 }], "2026-07-04", "/fred/series/observations?series_id=DGS10", "fred"),
+        CPIAUCSL: ok([{ date: "2026-06-01", value: 320 }], "2026-06-01", "/fred/series/observations?series_id=CPIAUCSL", "fred"),
       },
       sector: {},
       gicsSector: "Technology",
       attribution: "This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     },
-    treasury: fmpPayload([{ date: "2026-07-04", year10: 4.4 }], "2026-07-04", "treasury"),
+    treasury: ok(
+      { rows: [{ date: "2026-07-04", year10: 4.4 }], raw: {} },
+      "2026-07-04",
+      "/stable/treasury-rates",
+      "fmp",
+      "2026-07-05T18:30:00.000Z",
+      true,
+    ),
     marketRiskPremium: fmpPayload([{ totalEquityRiskPremium: 4.5 }], "2026-07-01", "market-risk-premium"),
     edgar: {
       cik: gap,
       latestTenK: gap,
       latestTenQ: gap,
-      item1a: ok({ sectionName: "item1A", text: "Risk factor text. ".repeat(3000), method: "toc", chars: 54000, accession: "0000320193-25-000079", form: "10-K", filingDate: "2025-10-31", reportDate: "2025-09-27", documentUrl: "https://sec.gov/x" }, "2025-09-27", "edgar-item1a"),
-      mdna: ok({ sectionName: "item7", text: "MD&A discussion text. ".repeat(1500), method: "toc", chars: 30000, accession: "0000320193-25-000079", form: "10-K", filingDate: "2025-10-31", reportDate: "2025-09-27", documentUrl: "https://sec.gov/y" }, "2025-09-27", "edgar-mdna"),
+      item1a: ok({ sectionName: "item1A", text: "Risk factor text. ".repeat(3000), method: "toc", chars: 54000, accession: "0000320193-25-000079", form: "10-K", filingDate: "2025-10-31", reportDate: "2025-09-27", documentUrl: "https://sec.gov/x" }, "2025-09-27", "edgar-item1a", "edgar"),
+      mdna: ok({ sectionName: "item7", text: "MD&A discussion text. ".repeat(1500), method: "toc", chars: 30000, accession: "0000320193-25-000079", form: "10-K", filingDate: "2025-10-31", reportDate: "2025-09-27", documentUrl: "https://sec.gov/y" }, "2025-09-27", "edgar-mdna", "edgar"),
       tenQMdna: gap,
       auditorChange8Ks: gap,
       nonReliance8Ks: gap,
       companyFacts: gap,
       xbrlSummary: null,
     },
+    sourceManifest,
     asOf,
     gaps: [{ field: "sharesFloat", reason: "float unavailable", severity: "warn" as const }],
   } as unknown as DataBundle;
@@ -1063,6 +1133,40 @@ describe("final assembled report verification", () => {
 });
 
 describe("assembleReport", () => {
+  it("preserves real source envelopes and deduplicates only identical tuples", () => {
+    const bundle = fixtureBundle();
+    const sources = buildSources(bundle);
+
+    expect(sources).toContainEqual({
+      provider: "fmp",
+      endpoint: "/stable/treasury-rates",
+      asOf: "2026-07-04",
+      fetchedAt: "2026-07-05T18:30:00.000Z",
+      stale: true,
+    });
+    expect(sources).not.toContainEqual(
+      expect.objectContaining({ provider: "fred", endpoint: "treasury" }),
+    );
+    expect(
+      sources.filter((source) => source.endpoint === "/stable/treasury-rates"),
+    ).toEqual([
+      {
+        provider: "fmp",
+        endpoint: "/stable/treasury-rates",
+        asOf: "2026-07-04",
+        fetchedAt: "2026-07-05T18:30:00.000Z",
+        stale: false,
+      },
+      {
+        provider: "fmp",
+        endpoint: "/stable/treasury-rates",
+        asOf: "2026-07-04",
+        fetchedAt: "2026-07-05T18:30:00.000Z",
+        stale: true,
+      },
+    ]);
+  });
+
   it("fills meta + appendix and passes ReportSchema", () => {
     const { bundle, computed } = buildInputs();
     const costEntries: _CBE[] = [

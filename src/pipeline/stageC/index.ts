@@ -509,6 +509,7 @@ const MINIMAL_BUNDLE = {
     ok: false as const,
     gap: { field: "profile", reason: "verify stand-in", severity: "info" as const },
   },
+  sourceManifest: {},
   asOf: {},
   gaps: [],
 } as unknown as DataBundle;

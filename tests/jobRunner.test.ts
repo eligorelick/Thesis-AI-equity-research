@@ -107,7 +107,6 @@ afterEach(() => {
 /** A minimal DataBundle stub sufficient for validate + compute + persistence. */
 function fakeBundle(symbol = "AAPL"): DataBundle {
   const builtAt = "2026-07-06T00:00:00.000Z";
-  const asOf: Record<string, string> = { quote: "2026-07-05", profile: "2026-07-01" };
   const gap = { ok: false as const, gap: { field: "x", reason: "fixture", severity: "info" as const } };
   const profile = {
     ok: true as const,
@@ -117,8 +116,39 @@ function fakeBundle(symbol = "AAPL"): DataBundle {
       source: "fmp" as const,
       endpoint: "profile",
       fetchedAt: builtAt,
+      stale: false,
     },
   };
+  const treasury = {
+    ok: true as const,
+    value: {
+      data: { rows: [{ date: "2026-07-04", year10: 4.4 }], raw: {} },
+      asOf: "2026-07-04",
+      source: "fmp" as const,
+      endpoint: "/stable/treasury-rates",
+      fetchedAt: "2026-07-05T18:30:00.000Z",
+      stale: true,
+    },
+  };
+  const sourceManifest = {
+    profile: {
+      provider: profile.value.source,
+      endpoint: profile.value.endpoint,
+      asOf: profile.value.asOf,
+      fetchedAt: profile.value.fetchedAt,
+      stale: profile.value.stale,
+    },
+    treasury: {
+      provider: treasury.value.source,
+      endpoint: treasury.value.endpoint,
+      asOf: treasury.value.asOf,
+      fetchedAt: treasury.value.fetchedAt,
+      stale: treasury.value.stale,
+    },
+  };
+  const asOf = Object.fromEntries(
+    Object.entries(sourceManifest).map(([field, entry]) => [field, entry.asOf]),
+  );
   // Everything else can be a gap — runStageB/validateBundle degrade gracefully.
   const bundle = {
     symbol,
@@ -172,7 +202,7 @@ function fakeBundle(symbol = "AAPL"): DataBundle {
     shortInterestTrend: gap,
     insiderSentiment: gap,
     macro: { core: {}, sector: {}, gicsSector: null, attribution: "attr" },
-    treasury: gap,
+    treasury,
     marketRiskPremium: gap,
     edgar: {
       cik: gap,
@@ -186,6 +216,7 @@ function fakeBundle(symbol = "AAPL"): DataBundle {
       companyFacts: gap,
       xbrlSummary: null,
     },
+    sourceManifest,
     asOf,
     gaps: [],
   } as unknown as DataBundle;
@@ -812,7 +843,7 @@ describe("runJob — full pipeline with mock passes", () => {
  * ------------------------------------------------------------------------ */
 
 describe("runJob — no-key degraded path", () => {
-  it("runs fetch/validate/compute, skips LLM steps, persists a data-only report", async () => {
+  it("persists a data-only report with real source envelopes", async () => {
     const { jobId } = createJob("AAPL");
     const { passes, calls } = mockPasses();
     const events: JobEvent[] = [];
@@ -860,8 +891,16 @@ describe("runJob — no-key degraded path", () => {
       const llmGap = parsed.data.appendix.missingData.find((m) => m.field === "analysis.llm");
       expect(llmGap?.severity).toBe("critical");
       expect(llmGap?.reason).toBe(NO_KEY_SKIP_REASON);
-      // Sources were carried from the bundle asOf map.
-      expect(parsed.data.appendix.sources.length).toBeGreaterThan(0);
+      expect(parsed.data.appendix.sources).toContainEqual({
+        provider: "fmp",
+        endpoint: "/stable/treasury-rates",
+        asOf: "2026-07-04",
+        fetchedAt: "2026-07-05T18:30:00.000Z",
+        stale: true,
+      });
+      expect(parsed.data.appendix.sources).not.toContainEqual(
+        expect.objectContaining({ provider: "fred", endpoint: "treasury" }),
+      );
     }
 
     // Terminal "done" event with dataOnly true.

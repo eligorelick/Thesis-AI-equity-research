@@ -1643,6 +1643,16 @@ export function AppendixSection({
         </span>
       ),
     },
+    {
+      key: "stale",
+      header: "stale",
+      align: "right",
+      render: (s) => (
+        <span className="mono text-[10px] text-faint">
+          {s.stale === undefined ? "unknown" : s.stale ? "yes" : "no"}
+        </span>
+      ),
+    },
   ];
 
   const costCols: Column<Appendix["costBreakdown"][number]>[] = [

@@ -88,6 +88,7 @@ import {
   type EdgarBundle,
   type ExtractedSection,
   type MacroBundle,
+  type SourceManifestEntry,
   type StatementSet,
   type TranscriptBundle,
   type XbrlSummary,
@@ -1365,12 +1366,19 @@ export async function buildDataBundle(
   };
   const edgarBundle = await pEdgar;
 
-  progress("assemble: asOf map + missing-data manifest");
+  progress("assemble: source + missing-data manifests");
 
-  // ---- asOf map ---------------------------------------------------------------
-  const asOf: Record<string, string> = {};
+  // ---- source manifest + legacy asOf view --------------------------------------
+  const sourceManifest: Record<string, SourceManifestEntry> = {};
   const put = (name: string, r: FetchResult<unknown>): void => {
-    if (r.ok) asOf[name] = r.value.asOf;
+    if (!r.ok) return;
+    sourceManifest[name] = {
+      provider: r.value.source,
+      endpoint: r.value.endpoint,
+      asOf: r.value.asOf,
+      fetchedAt: r.value.fetchedAt,
+      stale: r.value.stale === true,
+    };
   };
   put("profile", profile);
   put("quote", quote);
@@ -1428,6 +1436,9 @@ export async function buildDataBundle(
   put("edgar.companyFacts", edgarBundle.companyFacts);
   for (const [id, res] of Object.entries(macro.core)) put(`macro.core.${id}`, res);
   for (const [id, res] of Object.entries(macro.sector)) put(`macro.sector.${id}`, res);
+  const asOf = Object.fromEntries(
+    Object.entries(sourceManifest).map(([field, entry]) => [field, entry.asOf]),
+  );
 
   // ---- gaps ---------------------------------------------------------------------
   const allResults: FetchResult<unknown>[] = [
@@ -1556,6 +1567,7 @@ export async function buildDataBundle(
     treasury,
     marketRiskPremium,
     edgar: edgarBundle,
+    sourceManifest,
     asOf,
     gaps,
   };

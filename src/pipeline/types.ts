@@ -10,7 +10,7 @@
  * missing inputs NEVER throw (the application contract §3, non-negotiable rule #4).
  */
 
-import type { FetchResult, ManifestEntry } from "@/types/core";
+import type { DataSource, FetchResult, ManifestEntry } from "@/types/core";
 import type {
   FmpAnalystEstimatesRow,
   FmpBalanceSheetRow,
@@ -169,6 +169,43 @@ export interface TranscriptBundle {
 // DataBundle
 // ---------------------------------------------------------------------------
 
+/** Immutable provider envelope captured when a successful value enters a bundle. */
+export interface SourceManifestEntry {
+  provider: DataSource;
+  endpoint: string;
+  asOf: string;
+  fetchedAt: string;
+  stale: boolean;
+}
+
+function compareSourceManifestEntries(
+  a: SourceManifestEntry,
+  b: SourceManifestEntry,
+): number {
+  const aTuple = [a.provider, a.endpoint, a.asOf, a.fetchedAt, a.stale ? "1" : "0"];
+  const bTuple = [b.provider, b.endpoint, b.asOf, b.fetchedAt, b.stale ? "1" : "0"];
+  for (let index = 0; index < aTuple.length; index += 1) {
+    const av = aTuple[index] ?? "";
+    const bv = bTuple[index] ?? "";
+    if (av < bv) return -1;
+    if (av > bv) return 1;
+  }
+  return 0;
+}
+
+/** Sorted unique envelopes; only equal five-field tuples collapse. */
+export function sourceManifestEntries(
+  manifest: Readonly<Record<string, SourceManifestEntry>>,
+): SourceManifestEntry[] {
+  const sorted = Object.values(manifest)
+    .map((entry) => ({ ...entry }))
+    .sort(compareSourceManifestEntries);
+  return sorted.filter(
+    (entry, index) =>
+      index === 0 || compareSourceManifestEntries(sorted[index - 1]!, entry) !== 0,
+  );
+}
+
 /**
  * Everything a report run needs, fetched once by buildDataBundle().
  *
@@ -241,7 +278,9 @@ export interface DataBundle {
 
   edgar: EdgarBundle;
 
-  /** Bundle member (dot-path) -> asOf ISO date, for the report appendix. */
+  /** Bundle member (dot-path) -> exact successful provider envelope. */
+  sourceManifest: Record<string, SourceManifestEntry>;
+  /** Legacy bundle member (dot-path) -> asOf compatibility view of sourceManifest. */
   asOf: Record<string, string>;
   /** Merged missing-data manifest (deduped, severity-ordered). */
   gaps: ManifestEntry[];

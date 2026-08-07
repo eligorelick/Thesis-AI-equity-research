@@ -160,6 +160,26 @@ describe("reportToPrintHtml — full schema-valid report", () => {
     expect(body).toContain(FRED_ATTRIBUTION_TEXT);
   });
 
+  it("renders the complete source envelope including staleness", () => {
+    const sourceReport = JSON.parse(JSON.stringify(report)) as Report;
+    sourceReport.appendix.sources = [
+      {
+        provider: "fmp",
+        endpoint: "/stable/treasury-rates",
+        asOf: "2026-07-04",
+        fetchedAt: "2026-07-05T18:30:00.000Z",
+        stale: true,
+      },
+    ];
+
+    const rendered = reportToPrintBody(sourceReport);
+    expect(rendered).toContain("<th>Stale</th>");
+    expect(rendered).toContain("/stable/treasury-rates");
+    expect(rendered).toContain("2026-07-04");
+    expect(rendered).toContain("2026-07-05T18:30:00.000Z");
+    expect(rendered).toContain(">yes</td>");
+  });
+
   it("renders the missing-data manifest entries verbatim", () => {
     expect(report.appendix.missingData.length).toBeGreaterThan(0);
     for (const gap of report.appendix.missingData) {

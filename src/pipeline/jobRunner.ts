@@ -63,7 +63,7 @@ import { buildExecutionMetadataEntry } from "@/report/execution";
 import { buildDataBundle, type BuildDataBundleOptions } from "@/pipeline/dataBundle";
 import { runStageB, type ComputedMetrics } from "@/pipeline/compute";
 import { validateBundle, type ValidationReport } from "@/pipeline/stageA/validate";
-import type { DataBundle } from "@/pipeline/types";
+import { sourceManifestEntries, type DataBundle } from "@/pipeline/types";
 import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
 import { parseStepsJson, publishJobEvent, type JobEvent } from "@/pipeline/events";
 
@@ -2253,18 +2253,9 @@ function collectMissingData(
     .sort((a, b) => order[a.severity] - order[b.severity]);
 }
 
-/** Source-entry appendix rows from the bundle's asOf map (provider/endpoint best-effort). */
+/** Source-entry appendix rows copied from exact bundle provider envelopes. */
 function collectSources(bundle: DataBundle): Report["appendix"]["sources"] {
-  const out: Report["appendix"]["sources"] = [];
-  for (const [field, asOf] of Object.entries(bundle.asOf)) {
-    out.push({
-      provider: field.split(".")[0] ?? field,
-      endpoint: field,
-      asOf,
-      fetchedAt: bundle.builtAt,
-    });
-  }
-  return out.sort((a, b) => (a.endpoint < b.endpoint ? -1 : a.endpoint > b.endpoint ? 1 : 0));
+  return sourceManifestEntries(bundle.sourceManifest).map((entry) => ({ ...entry }));
 }
 
 interface DataOnlyInput {

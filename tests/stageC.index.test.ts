@@ -54,6 +54,7 @@ function fakeBundle(symbol = "AAPL"): DataBundle {
       source: "fmp" as const,
       endpoint: "profile",
       fetchedAt: BUILT_AT,
+      stale: false,
     },
   };
   return {
@@ -122,7 +123,16 @@ function fakeBundle(symbol = "AAPL"): DataBundle {
       companyFacts: gap,
       xbrlSummary: null,
     },
-    asOf: { quote: "2026-07-05", profile: "2026-07-01" },
+    sourceManifest: {
+      profile: {
+        provider: profile.value.source,
+        endpoint: profile.value.endpoint,
+        asOf: profile.value.asOf,
+        fetchedAt: profile.value.fetchedAt,
+        stale: profile.value.stale,
+      },
+    },
+    asOf: { profile: profile.value.asOf },
     gaps: [],
   } as unknown as DataBundle;
 }

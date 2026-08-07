@@ -696,12 +696,13 @@ function disagreementsBlock(disagreements: readonly Disagreement[]): string {
 
 function sectionAppendix(a: Appendix, disagreements: readonly Disagreement[]): string {
   const sources = table(
-    ["Provider", "Endpoint", "As of", "Fetched at"],
+    ["Provider", "Endpoint", "As of", "Fetched at", "Stale"],
     a.sources.map((s) => [
       esc(s.provider),
       esc(s.endpoint),
       esc(s.asOf),
       esc(s.fetchedAt),
+      s.stale === undefined ? "unknown" : s.stale ? "yes" : "no",
     ]),
   );
   const missing =

@@ -32,7 +32,7 @@
  */
 
 import type { ManifestEntry } from "@/types/core";
-import type { DataBundle } from "@/pipeline/types";
+import { sourceManifestEntries, type DataBundle } from "@/pipeline/types";
 import type { ComputedMetrics } from "@/pipeline/compute";
 import { computeDcfDisplay } from "@/pipeline/stageB/fairValue";
 import type { MultipleKey } from "@/pipeline/stageB/valuation";
@@ -1531,27 +1531,13 @@ export function totalCost(entries: CostBreakdownEntry[]): number {
 }
 
 /**
- * Build the appendix source list from the bundle's asOf map — one entry per
- * provider dot-path with its as-of. Deterministically ordered (by field).
+ * Build the appendix source list from the bundle's source manifest — one
+ * exact provider envelope, deterministically sorted and deduplicated.
  */
 export function buildSources(bundle: DataBundle): SourceEntry[] {
-  const out: SourceEntry[] = [];
-  for (const field of Object.keys(bundle.asOf).sort()) {
-    const asOf = bundle.asOf[field];
-    // provider = first dot-path segment mapped to a coarse provider label.
-    const provider = providerOf(field);
-    out.push({ provider, endpoint: field, asOf, fetchedAt: asOf });
-  }
-  return out;
-}
-
-/** Map a bundle dot-path to a coarse provider label for the appendix. */
-function providerOf(field: string): string {
-  if (field.startsWith("edgar") || field.includes("edgar")) return "edgar";
-  if (field.startsWith("macro") || field.includes("fred") || field.includes("treasury")) return "fred";
-  if (field.startsWith("shortInterest")) return "finra";
-  if (field.startsWith("insiderSentiment")) return "finnhub";
-  return "fmp";
+  return sourceManifestEntries(bundle.sourceManifest).map(
+    (entry): SourceEntry => ({ ...entry }),
+  );
 }
 
 /**

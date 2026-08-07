@@ -956,6 +956,8 @@ export const SourceEntrySchema = z
     endpoint: z.string(),
     asOf: z.string(),
     fetchedAt: z.string(),
+    /** Optional only so reports persisted before source-envelope capture still parse. */
+    stale: z.boolean().optional(),
   })
   .strict();
 export type SourceEntry = z.infer<typeof SourceEntrySchema>;

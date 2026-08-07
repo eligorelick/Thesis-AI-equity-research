@@ -18,6 +18,8 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -58,6 +60,7 @@ import {
   GRADE_STRIP_KEYS,
 } from "@/report/history";
 import { diffReports } from "@/report/diff";
+import { AppendixSection } from "@/components/report/sections";
 
 /* ------------------------------------------------------------------------ *
  * Fixture loading + small mutation helpers
@@ -171,6 +174,35 @@ describe("reportToMarkdown", () => {
     // And the schema literals match the exported constants.
     expect(report.meta.disclaimer).toBe(DISCLAIMER_TEXT);
     expect(report.macro.fredAttribution).toBe(FRED_ATTRIBUTION_TEXT);
+  });
+
+  it("renders source envelopes in Markdown and React appendices", () => {
+    const r = clone(report);
+    r.appendix.sources = [
+      {
+        provider: "fmp",
+        endpoint: "/stable/treasury-rates",
+        asOf: "2026-07-04",
+        fetchedAt: "2026-07-05T18:30:00.000Z",
+        stale: true,
+      },
+    ];
+
+    const renderedMarkdown = reportToMarkdown(r);
+    expect(renderedMarkdown).toContain(
+      "| fmp | /stable/treasury-rates | 2026-07-04 | 2026-07-05T18:30:00.000Z | yes |",
+    );
+
+    const renderedReact = renderToStaticMarkup(
+      createElement(AppendixSection, {
+        appendix: r.appendix,
+        disagreements: [],
+        index: 13,
+      }),
+    );
+    expect(renderedReact).toContain("/stable/treasury-rates");
+    expect(renderedReact).toContain(">stale<");
+    expect(renderedReact).toContain(">yes<");
   });
 
   it("renders every SPEC §7 section header", () => {

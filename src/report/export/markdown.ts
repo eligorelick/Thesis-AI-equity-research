@@ -773,8 +773,14 @@ function renderAppendix(a: Appendix): string {
     "### Sources",
     "",
     table(
-      ["Provider", "Endpoint", "As of", "Fetched at"],
-      a.sources.map((s) => [s.provider, s.endpoint, s.asOf, s.fetchedAt]),
+      ["Provider", "Endpoint", "As of", "Fetched at", "Stale"],
+      a.sources.map((s) => [
+        s.provider,
+        s.endpoint,
+        s.asOf,
+        s.fetchedAt,
+        s.stale === undefined ? "unknown" : s.stale ? "yes" : "no",
+      ]),
     ),
     "",
   );

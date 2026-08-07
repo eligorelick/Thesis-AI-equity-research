@@ -18,6 +18,7 @@ import {
   type FmpEodBarRow,
 } from "@/providers/fmp";
 import { makeLimiter } from "@/providers/http";
+import { sameEntitySymbol } from "@/symbol";
 
 const FIXTURES_DIR = path.join(__dirname, "..", "fixtures", "fmp");
 
@@ -49,6 +50,87 @@ function liveClient(fetchImpl: typeof fetch, cachedFetch?: CachedFetchFn): FmpCl
     ...(cachedFetch ? { cachedFetch } : {}),
   });
 }
+
+describe("FMP entity identity", () => {
+  it("normalizes only dot-hyphen provider aliases", () => {
+    expect(sameEntitySymbol("BRK.B", "brk-b")).toBe(true);
+    expect(sameEntitySymbol("BRK.B", "BRKB")).toBe(false);
+  });
+
+  it("rejects a wrong-symbol quote before cachedFetch can store it", async () => {
+    let cacheWrites = 0;
+    const cachedFetch: CachedFetchFn = async (_key, _ttl, loader) => {
+      const value = await loader();
+      cacheWrites++;
+      return { value };
+    };
+    const { fetch } = fakeFetch([{ symbol: "MSFT", price: 999 }]);
+
+    const result = await liveClient(fetch, cachedFetch).quote("AAPL");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.gap.severity).toBe("critical");
+      expect(result.gap.reason).toContain("AAPL");
+      expect(result.gap.reason).toContain("MSFT");
+    }
+    expect(cacheWrites).toBe(0);
+  });
+
+  it("rejects a mixed-entity batch instead of filtering it", async () => {
+    const { fetch } = fakeFetch([
+      { symbol: "AAPL", price: 200 },
+      { symbol: "GOOG", price: 190 },
+    ]);
+
+    const result = await liveClient(fetch).batchQuote(["AAPL", "MSFT"]);
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a poisoned cache hit", async () => {
+    const cachedFetch: CachedFetchFn = async <T>() => ({
+      value: {
+        body: [{ symbol: "MSFT", price: 999 }],
+        status: 200,
+        fetchedAt: "2026-08-01T00:00:00.000Z",
+        entityScope: { expectedSymbols: ["AAPL"], returnedSymbol: "required" },
+      } as T,
+    });
+
+    const result = await liveClient(fakeFetch([]).fetch, cachedFetch).quote("AAPL");
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("accepts a symbol-less statement row only with a matching validated request scope", async () => {
+    let storedEnvelope: unknown;
+    const matchingCache: CachedFetchFn = async <T>(_key: string, _ttl: number, loader: () => Promise<T>) => {
+      const value = await loader();
+      storedEnvelope = value;
+      return { value };
+    };
+    const statementBody = [{ date: "2026-06-30", revenue: 100 }];
+    const matching = await liveClient(fakeFetch(statementBody).fetch, matchingCache).incomeStatement("AAPL");
+
+    expect(matching.ok).toBe(true);
+    expect(storedEnvelope).toMatchObject({
+      entityScope: { expectedSymbols: ["AAPL"], returnedSymbol: "optional" },
+    });
+
+    const mismatchedCache: CachedFetchFn = async <T>() => ({
+      value: {
+        body: statementBody,
+        status: 200,
+        fetchedAt: "2026-08-01T00:00:00.000Z",
+        entityScope: { expectedSymbols: ["MSFT"], returnedSymbol: "optional" },
+      } as T,
+    });
+    const mismatched = await liveClient(fakeFetch([]).fetch, mismatchedCache).incomeStatement("AAPL");
+
+    expect(mismatched.ok).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Error-shape detection (object with "Error Message" — space included)

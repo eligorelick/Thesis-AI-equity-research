@@ -835,13 +835,16 @@ describe("degradation: weekend/holiday EOD run (H1 no-new-bar recovery)", () => 
       if (ep === "historical-price-eod/full") {
         // The newest chunk asks for to === RUN_TODAY and has no bar yet → [].
         // Every older chunk (to < RUN_TODAY) returns real bars through the
-        // prior close. Symbol-agnostic, so AAPL + SPY + XLK all behave alike.
+        // prior close. Echo the requested entity so AAPL + SPY + XLK all use
+        // the same price fixture without weakening provider identity checks.
         const to = url.searchParams.get("to");
         if (to === RUN_TODAY) return jsonResponse([]);
+        const requestedSymbol = url.searchParams.get("symbol");
+        if (requestedSymbol === null) throw new Error("EOD fixture request omitted symbol");
         return jsonResponse([
-          { symbol: "SYM", date: "2026-01-02", close: 100 },
-          { symbol: "SYM", date: "2025-12-31", close: 99 },
-          { symbol: "SYM", date: "2025-12-30", close: 98 },
+          { symbol: requestedSymbol, date: "2026-01-02", close: 100 },
+          { symbol: requestedSymbol, date: "2025-12-31", close: 99 },
+          { symbol: requestedSymbol, date: "2025-12-30", close: 98 },
         ]);
       }
       return jsonResponse([]);

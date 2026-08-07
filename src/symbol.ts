@@ -8,3 +8,12 @@ export function isValidSymbol(value: string): boolean {
   const symbol = value.trim();
   return symbol.length <= SYMBOL_MAX_LENGTH && SYMBOL_PATTERN.test(symbol);
 }
+
+/** Canonical provider identity: case-insensitive with dot/hyphen share-class aliases. */
+export function canonicalEntitySymbol(value: string): string {
+  return value.trim().toUpperCase().replaceAll("-", ".");
+}
+
+export function sameEntitySymbol(expected: string, actual: string): boolean {
+  return canonicalEntitySymbol(expected) === canonicalEntitySymbol(actual);
+}

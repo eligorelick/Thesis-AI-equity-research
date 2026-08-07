@@ -2,10 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   dedupeFredSeriesSpecs,
+  makeFmpCachedFetch,
   makeCachedFredSeries,
   makeCachedFinraShortInterestTrend,
   makeCachedFinnhubInsiderSentiment,
 } from "@/pipeline/dataBundle";
+import { createFmpClient } from "@/providers/fmp";
+import { makeLimiter } from "@/providers/http";
 import { flushPendingRefreshes } from "@/cache/apiCache";
 import { createDatabase, setDbForTests, type DatabaseHandle } from "@/db";
 import { apiCache } from "@/db/schema";
@@ -36,6 +39,37 @@ function cacheRows() {
 }
 
 describe("dataBundle provider cache wrappers", () => {
+  it("does not overwrite last-good FMP cache data with a wrong-symbol refresh", async () => {
+    let calls = 0;
+    const fetchImpl = vi.fn(async () => {
+      calls++;
+      return jsonResponse([{ symbol: calls === 1 ? "AAPL" : "MSFT", price: calls === 1 ? 200 : 999 }]);
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const client = createFmpClient({
+      apiKey: "FMP-KEY",
+      fetchImpl,
+      limiter: makeLimiter(1000, 1000),
+      cachedFetch: makeFmpCachedFetch(),
+    });
+
+    const first = await client.quote("AAPL");
+    expect(first.ok).toBe(true);
+    handle.db.update(apiCache).set({ fetchedAt: new Date(Date.now() - 16 * 60_000).toISOString() }).run();
+
+    const stale = await client.quote("AAPL");
+    expect(stale.ok).toBe(true);
+    if (stale.ok) expect(stale.value.data.rows[0]?.symbol).toBe("AAPL");
+    await flushPendingRefreshes();
+
+    const rows = cacheRows();
+    expect(rows).toHaveLength(1);
+    const cachedEnvelope = JSON.parse(rows[0]?.bodyJson ?? "null") as { body?: Array<{ symbol?: string }> };
+    expect(cachedEnvelope.body?.[0]?.symbol).toBe("AAPL");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("background refresh failed"), expect.any(String));
+  });
+
   it("dedupes FRED specs by id and units before cold-cache bundle fetches", () => {
     expect(
       dedupeFredSeriesSpecs([

@@ -31,6 +31,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
 import { fetchWithPolicy, HttpTransportError, type FetchPolicy, type TokenBucketLimiter } from "@/providers/http";
+import { canonicalEntitySymbol, sameEntitySymbol } from "@/symbol";
 
 // ---------------------------------------------------------------------------
 // Cache contract (implemented by @/cache/apiCache — injected to keep this
@@ -988,6 +989,11 @@ export interface FmpClientConfig {
   signal?: AbortSignal;
 }
 
+export interface FmpEntityScope {
+  expectedSymbols: readonly string[];
+  returnedSymbol: "required" | "optional";
+}
+
 interface CallSpec {
   method: FmpMethodName;
   /** path under /stable/, e.g. "income-statement" or "insider-trading/search" */
@@ -999,12 +1005,70 @@ interface CallSpec {
   fixtureKeys?: string[];
   /** manifest field for gaps, e.g. "fmp.profile(AAPL)" */
   gapField: string;
+  /** Requested issuer(s) that every returned row must remain bound to. */
+  entityScope?: FmpEntityScope;
 }
 
 interface LiveExchange {
   body: unknown;
   status: number;
   fetchedAt: string;
+  /** Scope validated before this live body became eligible for caching. */
+  entityScope?: FmpEntityScope;
+}
+
+function canonicalEntityScope(scope: FmpEntityScope): FmpEntityScope {
+  return {
+    expectedSymbols: [...new Set(scope.expectedSymbols.map(canonicalEntitySymbol))].sort(),
+    returnedSymbol: scope.returnedSymbol,
+  };
+}
+
+function matchingEntityScope(expected: FmpEntityScope, actual: unknown): boolean {
+  if (!isRecord(actual) || actual.returnedSymbol !== expected.returnedSymbol || !Array.isArray(actual.expectedSymbols)) {
+    return false;
+  }
+  if (actual.expectedSymbols.some((symbol) => typeof symbol !== "string")) return false;
+  const canonicalActual = canonicalEntityScope({
+    expectedSymbols: actual.expectedSymbols as string[],
+    returnedSymbol: expected.returnedSymbol,
+  });
+  return (
+    canonicalActual.expectedSymbols.length === expected.expectedSymbols.length &&
+    canonicalActual.expectedSymbols.every((symbol, index) => symbol === expected.expectedSymbols[index])
+  );
+}
+
+function validateEntityBody(
+  body: unknown,
+  scope: FmpEntityScope,
+  hasValidatedRequestScope: boolean,
+): string | null {
+  // Stable entity endpoints are array-shaped. Unknown object envelopes are
+  // rejected by the response-shape boundary below, not misclassified as a
+  // missing-symbol identity failure.
+  const rows = Array.isArray(body) ? body : [];
+  const expected = scope.expectedSymbols.join(", ");
+  for (const [index, row] of rows.entries()) {
+    if (!isRecord(row)) continue;
+    const actual = row.symbol;
+    if (actual === undefined || actual === null) {
+      if (scope.returnedSymbol === "required") {
+        return `FMP entity identity missing in row ${index}; requested ${expected}`;
+      }
+      if (!hasValidatedRequestScope) {
+        return `FMP cached row ${index} omitted its symbol without validated request scope for ${expected}`;
+      }
+      continue;
+    }
+    if (typeof actual !== "string" || actual.trim().length === 0) {
+      return `FMP entity identity invalid in row ${index}; requested ${expected}, returned ${String(actual)}`;
+    }
+    if (!scope.expectedSymbols.some((symbol) => sameEntitySymbol(symbol, actual))) {
+      return `FMP entity identity mismatch in row ${index}; requested ${expected}, returned ${actual}`;
+    }
+  }
+  return null;
 }
 
 const DEFAULT_BASE_URL = "https://financialmodelingprep.com/stable";
@@ -1056,6 +1120,7 @@ export class FmpClient {
     const url = `${this.baseUrl}/${spec.endpoint}${qs ? `?${qs}` : ""}`;
     const cacheKey = fmpCacheKey(spec.endpoint, spec.params);
     const ttlMs = FMP_TTLS[spec.method];
+    const expectedEntityScope = spec.entityScope === undefined ? undefined : canonicalEntityScope(spec.entityScope);
 
     let exchange: CachedFetchResult<LiveExchange>;
     try {
@@ -1087,9 +1152,21 @@ export class FmpClient {
         if (!res.ok) {
           throw new FmpApiError(`HTTP ${res.status}: ${res.bodyText.slice(0, 200)}`, res.status);
         }
-        return { body, status: res.status, fetchedAt: this.now().toISOString() };
+        if (expectedEntityScope !== undefined) {
+          const identityError = validateEntityBody(body, expectedEntityScope, true);
+          if (identityError !== null) throw new FmpEntityIdentityError(identityError);
+        }
+        return {
+          body,
+          status: res.status,
+          fetchedAt: this.now().toISOString(),
+          ...(expectedEntityScope === undefined ? {} : { entityScope: expectedEntityScope }),
+        };
       });
     } catch (err) {
+      if (err instanceof FmpEntityIdentityError) {
+        return gap(spec.gapField, err.message, "critical", [endpointPath]);
+      }
       if (err instanceof FmpApiError) {
         return gap(spec.gapField, `FMP error (HTTP ${err.status}): ${err.message}`, "warn", [endpointPath]);
       }
@@ -1101,6 +1178,22 @@ export class FmpClient {
     }
 
     const body = exchange.value.body;
+    if (expectedEntityScope !== undefined) {
+      const cachedScope = exchange.value.entityScope;
+      if (cachedScope !== undefined && !matchingEntityScope(expectedEntityScope, cachedScope)) {
+        const returned = isRecord(cachedScope) && Array.isArray(cachedScope.expectedSymbols)
+          ? cachedScope.expectedSymbols.join(", ")
+          : "invalid or unknown scope";
+        return gap(
+          spec.gapField,
+          `FMP cached request scope mismatch; requested ${expectedEntityScope.expectedSymbols.join(", ")}, cached ${returned}`,
+          "critical",
+          [endpointPath],
+        );
+      }
+      const identityError = validateEntityBody(body, expectedEntityScope, cachedScope !== undefined);
+      if (identityError !== null) return gap(spec.gapField, identityError, "critical", [endpointPath]);
+    }
     // Prefer the cache envelope's fetchedAt (original fetch time when served
     // from cache) over the loader's timestamp.
     const fetchedAt = exchange.fetchedAt ?? exchange.value.fetchedAt;
@@ -1169,6 +1262,10 @@ export class FmpClient {
       if (normalizedRows.length === 0) {
         return gap(spec.gapField, FMP_EMPTY_ARRAY_REASON, "info", attempted);
       }
+      if (spec.entityScope !== undefined) {
+        const identityError = validateEntityBody(body, canonicalEntityScope(spec.entityScope), true);
+        if (identityError !== null) return gap(spec.gapField, identityError, "critical", attempted);
+      }
       const validation = validateCriticalRows<TRow>(spec.method, normalizedRows);
       if (!validation.ok) return gap(spec.gapField, validation.reason, "warn", attempted);
       const rows = validation.rows;
@@ -1194,6 +1291,7 @@ export class FmpClient {
       method: "profile",
       endpoint: "profile",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "required" },
       fixtureKeys: [symbol],
       gapField: `fmp.profile(${symbol})`,
     });
@@ -1204,6 +1302,7 @@ export class FmpClient {
       method: "quote",
       endpoint: "quote",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "required" },
       fixtureKeys: [symbol],
       gapField: `fmp.quote(${symbol})`,
     });
@@ -1215,6 +1314,7 @@ export class FmpClient {
       method: "batchQuote",
       endpoint: "batch-quote",
       params: { symbols: joined },
+      entityScope: { expectedSymbols: symbols, returnedSymbol: "required" },
       fixtureKeys: [symbols.join("_"), symbols[0] ?? ""],
       gapField: `fmp.batchQuote(${joined})`,
     });
@@ -1227,6 +1327,7 @@ export class FmpClient {
       method: "incomeStatement",
       endpoint: "income-statement",
       params: { symbol, period, limit },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${period}`, symbol],
       gapField: `fmp.incomeStatement(${symbol},${period})`,
     });
@@ -1237,6 +1338,7 @@ export class FmpClient {
       method: "balanceSheet",
       endpoint: "balance-sheet-statement",
       params: { symbol, period, limit },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${period}`, symbol],
       gapField: `fmp.balanceSheet(${symbol},${period})`,
     });
@@ -1247,6 +1349,7 @@ export class FmpClient {
       method: "cashFlow",
       endpoint: "cash-flow-statement",
       params: { symbol, period, limit },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${period}`, symbol],
       gapField: `fmp.cashFlow(${symbol},${period})`,
     });
@@ -1259,6 +1362,7 @@ export class FmpClient {
       method: "keyMetrics",
       endpoint: "key-metrics",
       params: { symbol, period, limit },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${period}`, symbol],
       gapField: `fmp.keyMetrics(${symbol},${period})`,
     });
@@ -1270,6 +1374,7 @@ export class FmpClient {
       method: "keyMetricsTtm",
       endpoint: "key-metrics-ttm",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.keyMetricsTtm(${symbol})`,
     });
@@ -1280,6 +1385,7 @@ export class FmpClient {
       method: "ratios",
       endpoint: "ratios",
       params: { symbol, period, limit },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${period}`, symbol],
       gapField: `fmp.ratios(${symbol},${period})`,
     });
@@ -1291,6 +1397,7 @@ export class FmpClient {
       method: "ratiosTtm",
       endpoint: "ratios-ttm",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.ratiosTtm(${symbol})`,
     });
@@ -1301,6 +1408,7 @@ export class FmpClient {
       method: "financialGrowth",
       endpoint: "financial-growth",
       params: { symbol, period, limit },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${period}`, symbol],
       gapField: `fmp.financialGrowth(${symbol},${period})`,
     });
@@ -1312,6 +1420,7 @@ export class FmpClient {
       method: "financialScores",
       endpoint: "financial-scores",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.financialScores(${symbol})`,
     });
@@ -1322,6 +1431,7 @@ export class FmpClient {
       method: "enterpriseValues",
       endpoint: "enterprise-values",
       params: { symbol, period, limit },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${period}`, symbol],
       gapField: `fmp.enterpriseValues(${symbol},${period})`,
     });
@@ -1339,6 +1449,7 @@ export class FmpClient {
       method: "analystEstimates",
       endpoint: "analyst-estimates",
       params: { symbol, period, page, limit },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${period}`, symbol],
       gapField: `fmp.analystEstimates(${symbol},${period})`,
     });
@@ -1350,6 +1461,7 @@ export class FmpClient {
       method: "priceTargetSummary",
       endpoint: "price-target-summary",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.priceTargetSummary(${symbol})`,
     });
@@ -1360,6 +1472,7 @@ export class FmpClient {
       method: "priceTargetConsensus",
       endpoint: "price-target-consensus",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.priceTargetConsensus(${symbol})`,
     });
@@ -1370,6 +1483,7 @@ export class FmpClient {
       method: "gradesConsensus",
       endpoint: "grades-consensus",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.gradesConsensus(${symbol})`,
     });
@@ -1383,6 +1497,7 @@ export class FmpClient {
       method: "earnings",
       endpoint: "earnings",
       params: { symbol, limit },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.earnings(${symbol})`,
     });
@@ -1403,6 +1518,7 @@ export class FmpClient {
       method: "transcriptDates",
       endpoint: "earning-call-transcript-dates",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.transcriptDates(${symbol})`,
     });
@@ -1414,6 +1530,7 @@ export class FmpClient {
       method: "transcript",
       endpoint: "earning-call-transcript",
       params: { symbol, year, quarter },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${year}_Q${quarter}`, symbol],
       gapField: `fmp.transcript(${symbol},${year}Q${quarter})`,
     });
@@ -1426,6 +1543,7 @@ export class FmpClient {
       method: "insiderTradingSearch",
       endpoint: "insider-trading/search",
       params: { symbol, page, limit },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.insiderTradingSearch(${symbol})`,
     });
@@ -1436,6 +1554,7 @@ export class FmpClient {
       method: "insiderTradeStatistics",
       endpoint: "insider-trading/statistics",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.insiderTradeStatistics(${symbol})`,
     });
@@ -1453,6 +1572,7 @@ export class FmpClient {
       method: "institutionalHolderAnalytics",
       endpoint: "institutional-ownership/extract-analytics/holder",
       params: { symbol, year: String(year), quarter: String(quarter), page, limit },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${year}_Q${quarter}`, symbol],
       gapField: `fmp.institutionalHolderAnalytics(${symbol},${year}Q${quarter})`,
     });
@@ -1464,6 +1584,7 @@ export class FmpClient {
       method: "symbolPositionsSummary",
       endpoint: "institutional-ownership/symbol-positions-summary",
       params: { symbol, year: String(year), quarter: String(quarter) },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${year}_Q${quarter}`, symbol],
       gapField: `fmp.symbolPositionsSummary(${symbol},${year}Q${quarter})`,
     });
@@ -1498,6 +1619,7 @@ export class FmpClient {
       method: "revenueProductSegmentation",
       endpoint: "revenue-product-segmentation",
       params: { symbol, period, structure: "flat" },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${period}`, symbol],
       gapField: `fmp.revenueProductSegmentation(${symbol},${period})`,
     });
@@ -1511,6 +1633,7 @@ export class FmpClient {
       method: "revenueGeographicSegmentation",
       endpoint: "revenue-geographic-segmentation",
       params: { symbol, period, structure: "flat" },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${period}`, symbol],
       gapField: `fmp.revenueGeographicSegmentation(${symbol},${period})`,
     });
@@ -1521,6 +1644,7 @@ export class FmpClient {
       method: "keyExecutives",
       endpoint: "key-executives",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.keyExecutives(${symbol})`,
     });
@@ -1532,6 +1656,7 @@ export class FmpClient {
       method: "executiveCompensation",
       endpoint: "governance-executive-compensation",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.executiveCompensation(${symbol})`,
     });
@@ -1544,6 +1669,7 @@ export class FmpClient {
       method: "marketCap",
       endpoint: "market-capitalization",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.marketCap(${symbol})`,
     });
@@ -1554,6 +1680,7 @@ export class FmpClient {
       method: "historicalMarketCap",
       endpoint: "historical-market-capitalization",
       params: { symbol, from, to, limit: 5000 },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${from}_${to}`, symbol],
       gapField: `fmp.historicalMarketCap(${symbol})`,
     });
@@ -1565,6 +1692,7 @@ export class FmpClient {
       method: "sharesFloat",
       endpoint: "shares-float",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.sharesFloat(${symbol})`,
     });
@@ -1578,6 +1706,7 @@ export class FmpClient {
       method: "secFilingsSearch",
       endpoint: "sec-filings-search/symbol",
       params: { symbol, from, to, page, limit },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [`${symbol}_${from}_${to}`, symbol],
       gapField: `fmp.secFilingsSearch(${symbol})`,
     });
@@ -1590,6 +1719,7 @@ export class FmpClient {
       method: "stockNews",
       endpoint: "news/stock",
       params: { symbols: joined, from, to, page, limit },
+      entityScope: { expectedSymbols: symbols, returnedSymbol: "optional" },
       fixtureKeys: [symbols.join("_"), symbols[0] ?? ""],
       gapField: `fmp.stockNews(${joined})`,
     });
@@ -1602,6 +1732,7 @@ export class FmpClient {
       method: "pressReleases",
       endpoint: "news/press-releases",
       params: { symbols: joined, from, to, page, limit },
+      entityScope: { expectedSymbols: symbols, returnedSymbol: "optional" },
       fixtureKeys: [symbols.join("_"), symbols[0] ?? ""],
       gapField: `fmp.pressReleases(${joined})`,
     });
@@ -1620,6 +1751,7 @@ export class FmpClient {
         method: "historicalPriceEodFull",
         endpoint: "historical-price-eod/full",
         params: { symbol, from, to },
+        entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
         fixtureKeys: [`${symbol}_${from}_${to}`, symbol],
         gapField: `fmp.historicalPriceEodFull(${symbol})`,
       });
@@ -1785,6 +1917,7 @@ export class FmpClient {
       method: "historicalPriceEodFull",
       endpoint: "historical-price-eod/full",
       params: { symbol, from: chunk.from, to: chunk.to },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       gapField: `fmp.historicalPriceEodFull(${symbol},${chunk.from}..${chunk.to})`,
     });
   }
@@ -1862,6 +1995,7 @@ export class FmpClient {
       method: "dcf",
       endpoint: "discounted-cash-flow",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.dcf(${symbol})`,
     });
@@ -1872,6 +2006,7 @@ export class FmpClient {
       method: "leveredDcf",
       endpoint: "levered-discounted-cash-flow",
       params: { symbol },
+      entityScope: { expectedSymbols: [symbol], returnedSymbol: "optional" },
       fixtureKeys: [symbol],
       gapField: `fmp.leveredDcf(${symbol})`,
     });
@@ -1921,6 +2056,13 @@ class FmpBodyParseError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "FmpBodyParseError";
+  }
+}
+
+class FmpEntityIdentityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FmpEntityIdentityError";
   }
 }
 

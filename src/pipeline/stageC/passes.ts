@@ -1308,6 +1308,13 @@ function appendUnverifiedNote(number: TracedNumber, reason: ProvenanceFailureRea
     : note;
 }
 
+function resolveOmittedIdentity(
+  supplied: string | null | undefined,
+  registered: string | null,
+): string | null {
+  return supplied ?? registered;
+}
+
 /**
  * Deterministic CITATION-COVERAGE pass (the authority for the `verified` flag).
  * This measures PROVENANCE, not correctness. A TracedNumber is supported only
@@ -1372,8 +1379,8 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
         // drops one, adopt the record's value — the registry id already pins the
         // exact record (and hence its period/currency). A SUPPLIED-but-wrong
         // period or currency still mismatches, so a genuine error is not masked.
-        const period = number.period ?? record.period;
-        const currency = normalized.currency ?? record.currency;
+        const period = resolveOmittedIdentity(number.period, record.period);
+        const currency = resolveOmittedIdentity(normalized.currency, record.currency);
         const match = matchProvenanceRecord(
           {
             value: number.value,

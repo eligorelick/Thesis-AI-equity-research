@@ -312,7 +312,7 @@ describe("pipelinePasses construction", () => {
     const { bundle, computed, validation } = buildInputs();
     const payload = pipelinePasses.assembleContextPayload(bundle, computed, validation);
     const fp = pipelinePasses.fingerprintPayload?.(payload);
-    expect(fp).toMatch(/^1\.2\.0:[0-9a-f]{8}$/);
+    expect(fp).toMatch(/^1\.3\.0:[0-9a-f]{8}$/);
   });
 });
 

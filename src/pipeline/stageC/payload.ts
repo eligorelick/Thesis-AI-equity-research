@@ -94,6 +94,8 @@ export interface PayloadFigure {
   label: string;
   value: number | string | null;
   unit: string;
+  currency: string | null;
+  period: string | null;
   source: string;
   asOf: string | null;
 }
@@ -113,7 +115,15 @@ export interface StatementLineExtract {
   unit: string;
   source: string;
   /** period label (fiscal period end ISO) -> value; null when undisclosed. */
-  byPeriod: { period: string; value: number | null; provenanceId?: string }[];
+  byPeriod: StatementCell[];
+}
+
+export interface StatementCell {
+  period: string;
+  value: number | null;
+  currency: string | null;
+  asOf: string;
+  provenanceId?: string;
 }
 
 export interface StatementExtractBlock {
@@ -194,7 +204,7 @@ export interface ContextPayload {
 }
 
 /** Current payload format version. */
-export const PAYLOAD_VERSION = "1.2.0" as const;
+export const PAYLOAD_VERSION = "1.3.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Small pure helpers
@@ -215,6 +225,27 @@ function strOrNull(v: unknown): string | null {
 function isoDay(v: unknown): string | null {
   const s = strOrNull(v);
   return s ? s.slice(0, 10) : null;
+}
+
+function isoCurrency(v: unknown): string | null {
+  const currency = typeof v === "string" ? v.trim().toUpperCase() : null;
+  return currency !== null && /^[A-Z]{3}$/.test(currency) ? currency : null;
+}
+
+type PayloadFigureInput = Omit<PayloadFigure, "currency" | "period"> &
+  Partial<Pick<PayloadFigure, "currency" | "period">>;
+
+function payloadSection(
+  input: Omit<PayloadSection, "figures"> & { figures: PayloadFigureInput[] },
+): PayloadSection {
+  return {
+    ...input,
+    figures: input.figures.map((figure) => ({
+      ...figure,
+      currency: figure.currency ?? null,
+      period: figure.period ?? null,
+    })),
+  };
 }
 
 /** Round a number to at most `dp` decimals without trailing-zero noise. */
@@ -288,7 +319,7 @@ function firstRow<TRow extends FmpRawRow>(f: {
 function quoteSection(bundle: DataBundle): PayloadSection {
   const q = firstRow(bundle.quote);
   const asOf = bundle.quote.ok ? bundle.quote.value.asOf : null;
-  const figures: PayloadFigure[] = [
+  const figures: PayloadFigureInput[] = [
     { label: "price", value: numOrNull(q?.price), unit: "currency/share", source: "fmp:quote", asOf },
     { label: "marketCap", value: numOrNull(q?.marketCap), unit: "currency", source: "fmp:quote", asOf },
     { label: "dayLow", value: numOrNull(q?.dayLow), unit: "currency/share", source: "fmp:quote", asOf },
@@ -297,7 +328,7 @@ function quoteSection(bundle: DataBundle): PayloadSection {
     { label: "yearHigh", value: numOrNull(q?.yearHigh), unit: "currency/share", source: "fmp:quote", asOf },
     { label: "volume", value: numOrNull(q?.volume), unit: "shares", source: "fmp:quote", asOf },
   ];
-  return { title: "Quote", figures, notes: [] };
+  return payloadSection({ title: "Quote", figures, notes: [] });
 }
 
 /** Stage B computed-metrics sections — the analytical spine of the payload. */
@@ -307,7 +338,7 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
   const gAsOf = g.asOf;
 
   // --- Growth --------------------------------------------------------------
-  const growthFigures: PayloadFigure[] = [];
+  const growthFigures: PayloadFigureInput[] = [];
   for (const c of g.revenueCagrs) {
     growthFigures.push({
       label: `revenue CAGR ${c.windowYears}y`,
@@ -349,11 +380,11 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
   if (lastGross) growthFigures.push({ label: "gross margin (latest)", value: lastGross.pct, unit: "%", source: "computed.growth.margins.gross", asOf: lastGross.date });
   if (lastOper) growthFigures.push({ label: "operating margin (latest)", value: lastOper.pct, unit: "%", source: "computed.growth.margins.operating", asOf: lastOper.date });
   if (lastNet) growthFigures.push({ label: "net margin (latest)", value: lastNet.pct, unit: "%", source: "computed.growth.margins.net", asOf: lastNet.date });
-  sections.push({ title: "Growth & margins (computed)", figures: growthFigures, notes: g.notes });
+  sections.push(payloadSection({ title: "Growth & margins (computed)", figures: growthFigures, notes: g.notes }));
 
   // --- Returns (WACC / ROIC / DuPont) --------------------------------------
   const r = computed.returns;
-  const returnsFigures: PayloadFigure[] = [
+  const returnsFigures: PayloadFigureInput[] = [
     { label: "WACC", value: r.wacc.waccPct, unit: "%", source: "computed.returns.wacc", asOf: r.wacc.asOf?.statements ?? null },
     { label: "cost of equity", value: r.wacc.costOfEquityPct, unit: "%", source: "computed.returns.wacc.costOfEquity", asOf: r.wacc.asOf?.riskFreeRate ?? null },
     { label: "cost of debt (pre-tax)", value: r.wacc.costOfDebtPct, unit: "%", source: `computed.returns.wacc.costOfDebt(${r.wacc.costOfDebtMethod})`, asOf: r.wacc.asOf?.statements ?? null },
@@ -368,15 +399,15 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
   // visible to the model (audit 2026-07-11 #5); material clamps ALSO surface as
   // manifest gaps (returns.ts), but immaterial ones would otherwise have no
   // consumer at all.
-  sections.push({
+  sections.push(payloadSection({
     title: "Returns (computed)",
     figures: returnsFigures,
     notes: [...r.wacc.notes, ...r.wacc.clampsApplied, ...r.notes],
-  });
+  }));
 
   // --- Capital -------------------------------------------------------------
   const cap = computed.capital;
-  const capFigures: PayloadFigure[] = [
+  const capFigures: PayloadFigureInput[] = [
     { label: "latest FCF", value: cap.fcf.latestFcf, unit: "currency", source: "computed.capital.fcf", asOf: cap.asOf },
     { label: "FCF conversion (latest)", value: cap.fcf.latestConversion, unit: "x", source: "computed.capital.fcf.conversion", asOf: cap.asOf },
     { label: "capex/revenue (latest)", value: cap.capexIntensity.latestPct, unit: "%", source: "computed.capital.capexIntensity", asOf: cap.asOf },
@@ -389,11 +420,11 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
     { label: "diluted share count trend (5y)", value: cap.shareCount.trendPct, unit: "%", source: "computed.capital.shareCount", asOf: cap.shareCount.endDate },
     { label: "buyback price vs current", value: cap.buybackPriceAnalysis.premiumDiscountPct, unit: "%", source: "computed.capital.buybackPriceAnalysis", asOf: cap.asOf },
   ];
-  sections.push({ title: "Capital & cash (computed)", figures: capFigures, notes: cap.notes });
+  sections.push(payloadSection({ title: "Capital & cash (computed)", figures: capFigures, notes: cap.notes }));
 
   // --- Forensics -----------------------------------------------------------
   const fx = computed.forensics;
-  const forensicFigures: PayloadFigure[] = [
+  const forensicFigures: PayloadFigureInput[] = [
     { label: `Altman ${fx.altman?.variant ?? "Z"}`, value: fx.altman?.score ?? null, unit: "score", source: "computed.forensics.altman", asOf: fx.altman?.asOf.balanceSheet ?? null },
     { label: "Altman zone", value: fx.altman?.zone ?? null, unit: "", source: "computed.forensics.altman.zone", asOf: fx.altman?.asOf.balanceSheet ?? null },
     { label: "Beneish M", value: fx.beneish?.score ?? null, unit: "score", source: "computed.forensics.beneish", asOf: fx.beneish?.asOf.current ?? null },
@@ -406,11 +437,11 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
   for (const flag of fx.flags) {
     forensicNotes.push(`FLAG [${flag.severity}] ${flag.message} (rule: ${flag.rule})`);
   }
-  sections.push({ title: "Forensics (computed)", figures: forensicFigures, notes: forensicNotes });
+  sections.push(payloadSection({ title: "Forensics (computed)", figures: forensicFigures, notes: forensicNotes }));
 
   // --- Technicals ----------------------------------------------------------
   const t = computed.technicals;
-  const techFigures: PayloadFigure[] = [
+  const techFigures: PayloadFigureInput[] = [
     { label: "last close", value: t.lastClose, unit: "currency/share", source: "computed.technicals", asOf: t.asOf },
     { label: "SMA50", value: t.smaCross.sma50, unit: "currency/share", source: "computed.technicals.smaCross", asOf: t.asOf },
     { label: "SMA200", value: t.smaCross.sma200, unit: "currency/share", source: "computed.technicals.smaCross", asOf: t.asOf },
@@ -422,11 +453,11 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
     { label: "trend read", value: t.read.trend, unit: "", source: "computed.technicals.read", asOf: t.asOf },
     { label: "momentum read", value: t.read.momentum, unit: "", source: "computed.technicals.read", asOf: t.asOf },
   ];
-  sections.push({ title: "Technicals (computed)", figures: techFigures, notes: t.notes });
+  sections.push(payloadSection({ title: "Technicals (computed)", figures: techFigures, notes: t.notes }));
 
   // --- Valuation -----------------------------------------------------------
   const val = computed.valuation;
-  const valFigures: PayloadFigure[] = [{ label: "valuation model", value: val.kind, unit: "", source: "computed.valuation.kind", asOf: null }];
+  const valFigures: PayloadFigureInput[] = [{ label: "valuation model", value: val.kind, unit: "", source: "computed.valuation.kind", asOf: null }];
   if (val.kind === "dcf") {
     valFigures.push(
       { label: "DCF per share", value: val.dcf?.perShare ?? null, unit: "currency/share", source: "computed.valuation.dcf", asOf: null },
@@ -460,12 +491,12 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
       });
     }
   }
-  sections.push({ title: "Valuation (computed)", figures: valFigures, notes: val.notes });
+  sections.push(payloadSection({ title: "Valuation (computed)", figures: valFigures, notes: val.notes }));
 
   // --- Deterministic aspect scores (feature 1.1.0) -------------------------
   if (computed.scores) {
     const sc = computed.scores;
-    const scoreFigures: PayloadFigure[] = [
+    const scoreFigures: PayloadFigureInput[] = [
       { label: "COMPOSITE score", value: sc.composite.score, unit: "0-100", source: "computed.scores.composite", asOf: null },
       { label: "COMPOSITE grade", value: sc.composite.band, unit: "", source: "computed.scores.composite", asOf: null },
     ];
@@ -479,17 +510,17 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
         asOf: null,
       });
     }
-    sections.push({
+    sections.push(payloadSection({
       title: "Deterministic aspect scores (computed — ANCHOR your A–F letter grades to these bands; justify any deviation)",
       figures: scoreFigures,
       notes: [sc.composite.methodology, `band table: ${sc.bandsVersion}`],
-    });
+    }));
   }
 
   // --- Weighted projections (feature 1.1.0) --------------------------------
   if (computed.projections && computed.projections.series.length > 0) {
     const pr = computed.projections;
-    const projFigures: PayloadFigure[] = [];
+    const projFigures: PayloadFigureInput[] = [];
     for (const s of pr.series) {
       const w = s.weighted;
       const bull = s.bull;
@@ -499,30 +530,30 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
       const idxs = [0, Math.min(2, y5), y5];
       for (const i of idxs) {
         const pt = at(w, i);
-        if (pt) projFigures.push({ label: `${s.metric} weighted ${pt.period}`, value: pt.value.value, unit: s.unit, source: `computed.projections.${s.metric}.weighted`, asOf: null });
+        if (pt) projFigures.push({ label: `${s.metric} weighted ${pt.period}`, value: pt.value.value, unit: s.unit, currency: pt.value.currency, period: pt.period, source: `computed.projections.${s.metric}.weighted`, asOf: pt.value.asOf });
       }
       const b5 = at(bull, y5);
       const be5 = at(bear, y5);
-      if (b5) projFigures.push({ label: `${s.metric} bull ${b5.period}`, value: b5.value.value, unit: s.unit, source: `computed.projections.${s.metric}.bull`, asOf: null });
-      if (be5) projFigures.push({ label: `${s.metric} bear ${be5.period}`, value: be5.value.value, unit: s.unit, source: `computed.projections.${s.metric}.bear`, asOf: null });
+      if (b5) projFigures.push({ label: `${s.metric} bull ${b5.period}`, value: b5.value.value, unit: s.unit, currency: b5.value.currency, period: b5.period, source: `computed.projections.${s.metric}.bull`, asOf: b5.value.asOf });
+      if (be5) projFigures.push({ label: `${s.metric} bear ${be5.period}`, value: be5.value.value, unit: s.unit, currency: be5.value.currency, period: be5.period, source: `computed.projections.${s.metric}.bear`, asOf: be5.value.asOf });
     }
-    sections.push({
+    sections.push(payloadSection({
       title: `Weighted projections (computed — ${pr.horizonYears}y forward, prob-weighted ${pr.scenarioWeights.bull}/${pr.scenarioWeights.base}/${pr.scenarioWeights.bear} bull/base/bear; ESTIMATE, interpret — never restate as fact)`,
       figures: projFigures,
       notes: pr.series[0]?.assumptions ?? [],
-    });
+    }));
   } else if (computed.projections && computed.projections.notApplicableReason) {
-    sections.push({
+    sections.push(payloadSection({
       title: "Weighted projections (computed)",
       figures: [],
       notes: [`not applicable: ${computed.projections.notApplicableReason}`],
-    });
+    }));
   }
 
   // --- Runway (overlay-gated) ----------------------------------------------
   if (computed.runway) {
     const rw = computed.runway;
-    sections.push({
+    sections.push(payloadSection({
       title: "Runway (computed — pre-revenue/unprofitable overlay)",
       figures: [
         { label: "avg quarterly burn", value: rw.avgQuarterlyBurn, unit: "currency", source: "computed.runway", asOf: rw.liquidAssetsAsOf },
@@ -531,12 +562,12 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
         { label: "estimated exhaustion date", value: rw.estimatedExhaustionDate, unit: "", source: "computed.runway", asOf: rw.liquidAssetsAsOf },
       ],
       notes: rw.notes,
-    });
+    }));
   }
 
   // --- Suppressed metrics (disclose why a figure is absent) ----------------
   if (computed.suppressed.length > 0) {
-    sections.push({
+    sections.push(payloadSection({
       title: "Suppressed metrics (sector policy)",
       figures: computed.suppressed.map((s) => ({
         label: s.key,
@@ -546,7 +577,7 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
         asOf: null,
       })),
       notes: computed.suppressed.map((s) => `${s.key}: ${s.reason}`),
-    });
+    }));
   }
 
   return sections;
@@ -589,6 +620,7 @@ function extractStatement<TRow extends FmpRawRow>(
   title: string,
   rows: TRow[],
   periods: number,
+  asOf: string,
   lineItems: { key: keyof TRow; label: string; unit: string }[],
   source: string,
 ): StatementExtractBlock | null {
@@ -602,6 +634,8 @@ function extractStatement<TRow extends FmpRawRow>(
     byPeriod: kept.map((r, i) => ({
       period: periodLabels[i],
       value: numOrNull(r[li.key]),
+      currency: isoCurrency(r.reportedCurrency),
+      asOf,
     })),
   }));
   return { title, periods: periodLabels, lineItems: lines, notes: [] };
@@ -614,12 +648,14 @@ function statementExtracts(bundle: DataBundle): StatementExtractBlock[] {
   const push = (b: StatementExtractBlock | null): void => {
     if (b) blocks.push(b);
   };
-  push(extractStatement("Income statement — annual", rowsOf(bundle.statements.incomeAnnual), A, INCOME_LINE_ITEMS, "fmp:income-statement(annual)"));
-  push(extractStatement("Income statement — quarterly", rowsOf(bundle.statements.incomeQuarterly), Q, INCOME_LINE_ITEMS, "fmp:income-statement(quarter)"));
-  push(extractStatement("Balance sheet — annual", rowsOf(bundle.statements.balanceAnnual), A, BALANCE_LINE_ITEMS, "fmp:balance-sheet(annual)"));
-  push(extractStatement("Balance sheet — quarterly", rowsOf(bundle.statements.balanceQuarterly), Q, BALANCE_LINE_ITEMS, "fmp:balance-sheet(quarter)"));
-  push(extractStatement("Cash flow — annual", rowsOf(bundle.statements.cashflowAnnual), A, CASHFLOW_LINE_ITEMS, "fmp:cash-flow(annual)"));
-  push(extractStatement("Cash flow — quarterly", rowsOf(bundle.statements.cashflowQuarterly), Q, CASHFLOW_LINE_ITEMS, "fmp:cash-flow(quarter)"));
+  const statementAsOf = (statement: DataBundle["statements"]["incomeAnnual"]): string =>
+    statement.ok ? statement.value.asOf : "";
+  push(extractStatement("Income statement — annual", rowsOf(bundle.statements.incomeAnnual), A, statementAsOf(bundle.statements.incomeAnnual), INCOME_LINE_ITEMS, "fmp:income-statement(annual)"));
+  push(extractStatement("Income statement — quarterly", rowsOf(bundle.statements.incomeQuarterly), Q, statementAsOf(bundle.statements.incomeQuarterly), INCOME_LINE_ITEMS, "fmp:income-statement(quarter)"));
+  push(extractStatement("Balance sheet — annual", rowsOf(bundle.statements.balanceAnnual), A, statementAsOf(bundle.statements.balanceAnnual), BALANCE_LINE_ITEMS, "fmp:balance-sheet(annual)"));
+  push(extractStatement("Balance sheet — quarterly", rowsOf(bundle.statements.balanceQuarterly), Q, statementAsOf(bundle.statements.balanceQuarterly), BALANCE_LINE_ITEMS, "fmp:balance-sheet(quarter)"));
+  push(extractStatement("Cash flow — annual", rowsOf(bundle.statements.cashflowAnnual), A, statementAsOf(bundle.statements.cashflowAnnual), CASHFLOW_LINE_ITEMS, "fmp:cash-flow(annual)"));
+  push(extractStatement("Cash flow — quarterly", rowsOf(bundle.statements.cashflowQuarterly), Q, statementAsOf(bundle.statements.cashflowQuarterly), CASHFLOW_LINE_ITEMS, "fmp:cash-flow(quarter)"));
   return blocks;
 }
 
@@ -628,15 +664,17 @@ function statementExtracts(bundle: DataBundle): StatementExtractBlock[] {
  * ------------------------------------------------------------------------ */
 
 function estimatesSection(bundle: DataBundle): PayloadSection {
-  const figures: PayloadFigure[] = [];
+  const figures: PayloadFigureInput[] = [];
   const notes: string[] = [];
   const estAsOf = bundle.analystEstimates.ok ? bundle.analystEstimates.value.asOf : null;
   const est = rowsOf(bundle.analystEstimates).slice(0, PAYLOAD_BUDGETS.listRows);
   for (const e of est) {
-    const period = isoDay(e.date) ?? "unknown";
+    const candidatePeriod = isoDay(e.date);
+    const period = isFullIsoDate(candidatePeriod) ? candidatePeriod : null;
+    const periodLabel = period ?? "unknown";
     figures.push(
-      { label: `est revenue ${period}`, value: numOrNull(e.revenueAvg), unit: "currency", source: "fmp:analyst-estimates", asOf: period },
-      { label: `est EPS ${period}`, value: numOrNull(e.epsAvg), unit: "currency/share", source: "fmp:analyst-estimates", asOf: period },
+      { label: `est revenue ${periodLabel}`, value: numOrNull(e.revenueAvg), unit: "currency", period, source: "fmp:analyst-estimates", asOf: estAsOf },
+      { label: `est EPS ${periodLabel}`, value: numOrNull(e.epsAvg), unit: "currency/share", period, source: "fmp:analyst-estimates", asOf: estAsOf },
     );
   }
   const ptc = firstRow(bundle.priceTargetConsensus);
@@ -655,25 +693,24 @@ function estimatesSection(bundle: DataBundle): PayloadSection {
         `(strongBuy ${numOrNull(grades.strongBuy) ?? "n/a"}, buy ${numOrNull(grades.buy) ?? "n/a"}, hold ${numOrNull(grades.hold) ?? "n/a"}, sell ${numOrNull(grades.sell) ?? "n/a"}, strongSell ${numOrNull(grades.strongSell) ?? "n/a"})`,
     );
   }
-  void estAsOf;
-  return { title: "Analyst estimates & targets", figures, notes };
+  return payloadSection({ title: "Analyst estimates & targets", figures, notes });
 }
 
 function peersSection(bundle: DataBundle): PayloadSection {
   const peers = rowsOf(bundle.peers).slice(0, PAYLOAD_BUDGETS.listRows);
   const asOf = bundle.peers.ok ? bundle.peers.value.asOf : null;
-  const figures: PayloadFigure[] = peers.map((p) => ({
+  const figures: PayloadFigureInput[] = peers.map((p) => ({
     label: `${strOrNull(p.symbol) ?? "?"} — ${strOrNull(p.companyName) ?? "?"}`,
     value: numOrNull(p.mktCap),
     unit: "currency mkt cap",
     source: "fmp:stock-peers",
     asOf,
   }));
-  return { title: "Peers", figures, notes: [] };
+  return payloadSection({ title: "Peers", figures, notes: [] });
 }
 
 function insidersSection(bundle: DataBundle): PayloadSection {
-  const figures: PayloadFigure[] = [];
+  const figures: PayloadFigureInput[] = [];
   const notes: string[] = [];
   const stats = firstRow(bundle.insiderStats);
   const statsAsOf = bundle.insiderStats.ok ? bundle.insiderStats.value.asOf : null;
@@ -701,16 +738,16 @@ function insidersSection(bundle: DataBundle): PayloadSection {
         value: m.mspr,
         unit: "",
         source: "finnhub:insider-sentiment",
-        asOf: `${m.year}-${String(m.month).padStart(2, "0")}`,
+        asOf: `${m.year}-${String(m.month).padStart(2, "0")}-01`,
       });
     }
   }
-  return { title: "Insider activity & sentiment", figures, notes };
+  return payloadSection({ title: "Insider activity & sentiment", figures, notes });
 }
 
 function institutionalSection(bundle: DataBundle): PayloadSection {
   const inst = bundle.institutional;
-  const figures: PayloadFigure[] = [];
+  const figures: PayloadFigureInput[] = [];
   const summary = firstRow(inst.positionsSummary);
   if (summary) {
     figures.push(
@@ -731,15 +768,15 @@ function institutionalSection(bundle: DataBundle): PayloadSection {
       asOf: inst.quarterEnd,
     });
   }
-  return {
+  return payloadSection({
     title: `Institutional (13F ${inst.year} Q${inst.quarter}, quarter end ${inst.quarterEnd})`,
     figures,
     notes: [`13F data inherently lags the covered quarter by up to 45 days — label with the reporting quarter end ${inst.quarterEnd}, not the fetch date.`],
-  };
+  });
 }
 
 function leadershipSection(bundle: DataBundle): PayloadSection {
-  const figures: PayloadFigure[] = [];
+  const figures: PayloadFigureInput[] = [];
   const notes: string[] = [];
   const execAsOf = bundle.executives.ok ? bundle.executives.value.asOf : null;
   const execs = rowsOf(bundle.executives).slice(0, PAYLOAD_BUDGETS.listRows);
@@ -761,11 +798,11 @@ function leadershipSection(bundle: DataBundle): PayloadSection {
     });
   }
   void execAsOf;
-  return { title: "Leadership & compensation", figures, notes };
+  return payloadSection({ title: "Leadership & compensation", figures, notes });
 }
 
 function shortInterestSection(bundle: DataBundle): PayloadSection {
-  const figures: PayloadFigure[] = [];
+  const figures: PayloadFigureInput[] = [];
   const notes: string[] = [];
   if (bundle.shortInterest.ok) {
     const si = bundle.shortInterest.value.data;
@@ -776,11 +813,11 @@ function shortInterestSection(bundle: DataBundle): PayloadSection {
     );
     notes.push(...si.notes);
   }
-  return { title: "Short interest", figures, notes };
+  return payloadSection({ title: "Short interest", figures, notes });
 }
 
 function segmentsSection(bundle: DataBundle): PayloadSection {
-  const figures: PayloadFigure[] = [];
+  const figures: PayloadFigureInput[] = [];
   const build = (
     res: DataBundle["segmentation"]["product"],
     kind: string,
@@ -803,15 +840,15 @@ function segmentsSection(bundle: DataBundle): PayloadSection {
   };
   build(bundle.segmentation.product, "product");
   build(bundle.segmentation.geographic, "geographic");
-  return {
+  return payloadSection({
     title: "Revenue segmentation (as-reported keys — never hard-coded)",
     figures,
     notes: [],
-  };
+  });
 }
 
 function macroSection(bundle: DataBundle): PayloadSection {
-  const figures: PayloadFigure[] = [];
+  const figures: PayloadFigureInput[] = [];
   const emit = (record: Record<string, { ok: boolean; value?: { data: unknown } }>, tag: string): void => {
     // Deterministic ordering: sort series ids.
     for (const seriesId of Object.keys(record).sort()) {
@@ -833,15 +870,15 @@ function macroSection(bundle: DataBundle): PayloadSection {
   };
   emit(bundle.macro.core as Record<string, { ok: boolean; value?: { data: unknown } }>, " (core)");
   emit(bundle.macro.sector as Record<string, { ok: boolean; value?: { data: unknown } }>, " (sector)");
-  return {
+  return payloadSection({
     title: "Macro (FRED latest values)",
     figures,
     notes: [bundle.macro.attribution],
-  };
+  });
 }
 
 function newsSection(bundle: DataBundle): PayloadSection {
-  const figures: PayloadFigure[] = [];
+  const figures: PayloadFigureInput[] = [];
   const notes: string[] = [];
   let used = 0;
   const budget = PAYLOAD_BUDGETS.newsChars;
@@ -859,7 +896,7 @@ function newsSection(bundle: DataBundle): PayloadSection {
   };
   addRows(rowsOf(bundle.news).slice(0, PAYLOAD_BUDGETS.listRows), "news");
   addRows(rowsOf(bundle.pressReleases).slice(0, PAYLOAD_BUDGETS.listRows), "press-release");
-  return { title: "Recent news & press releases (snippets)", figures, notes };
+  return payloadSection({ title: "Recent news & press releases (snippets)", figures, notes });
 }
 
 /* ------------------------------------------------------------------------ *
@@ -957,14 +994,22 @@ function periodFromLabel(label: string): string | null {
 }
 
 function isFullIsoDate(value: string | null): value is string {
-  return value !== null && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  if (value === null) return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const [, year, month, day] = match;
+  const parsed = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  return (
+    parsed.getUTCFullYear() === Number(year) &&
+    parsed.getUTCMonth() === Number(month) - 1 &&
+    parsed.getUTCDate() === Number(day)
+  );
 }
 
 function attachProvenanceRegistry(
   payload: PayloadWithoutRegistry,
   computed: ComputedMetrics,
   currency: string | null,
-  fallbackAsOf: string,
 ): ContextPayload {
   const registry: NumericProvenanceRecord[] = [];
   const citationRegistry: CitationProvenanceRecord[] = [];
@@ -994,24 +1039,26 @@ function attachProvenanceRegistry(
       }
       return;
     }
-    const canonical = canonicalizeTracedUnit(figure.unit, currency);
+    const canonical = canonicalizeTracedUnit(figure.unit, figure.currency ?? currency);
     if (canonical === null) return;
     const { unit } = canonical;
     const monetary = unit === "currency" || unit === "currency-per-share";
-    if (monetary && currency === null) return;
+    const resolvedCurrency = monetary ? (canonical.currency ?? currency) : null;
+    if (monetary && resolvedCurrency === null) return;
+    if (!isFullIsoDate(figure.asOf)) return;
 
-    const asOf = isFullIsoDate(figure.asOf) ? figure.asOf : fallbackAsOf;
     const id = uniqueId(`${prefix}.${semanticSlug(figure.label)}`);
     figure.provenanceId = id;
-    figure.asOf = asOf;
+    figure.currency = resolvedCurrency;
+    figure.period ??= periodFromLabel(figure.label);
     registry.push({
       id,
       kind: figure.source.startsWith("computed.") ? "computed" : "provider",
       value: figure.value,
       unit,
-      currency: monetary ? (canonical.currency ?? currency) : null,
-      period: periodFromLabel(figure.label),
-      asOf,
+      currency: resolvedCurrency,
+      period: figure.period,
+      asOf: figure.asOf,
       origin: figure.source,
       formulaVersion: figure.source.startsWith("computed.") ? "stage-b-v1" : null,
       displayPrecision: 4,
@@ -1059,12 +1106,22 @@ function attachProvenanceRegistry(
     const blockName = semanticSlug(block.title);
     for (const line of block.lineItems) {
       for (const cell of line.byPeriod) {
-        if (cell.value === null || !Number.isFinite(cell.value) || !isFullIsoDate(cell.period)) continue;
-        const canonical = canonicalizeTracedUnit(line.unit, currency);
+        if (
+          cell.value === null ||
+          !Number.isFinite(cell.value) ||
+          !isFullIsoDate(cell.period) ||
+          !isFullIsoDate(cell.asOf)
+        ) continue;
+        const unitOnly = canonicalizeTracedUnit(line.unit, null);
+        if (unitOnly === null) continue;
+        const monetary = unitOnly.unit === "currency" || unitOnly.unit === "currency-per-share";
+        const canonical = canonicalizeTracedUnit(
+          line.unit,
+          monetary ? cell.currency : null,
+        );
         if (canonical === null) continue;
         const { unit } = canonical;
-        const monetary = unit === "currency" || unit === "currency-per-share";
-        if (monetary && currency === null) continue;
+        if (monetary && canonical.currency === null) continue;
         const id = uniqueId(
           `payload.statements.${blockName}.${cell.period}.${semanticSlug(line.lineItem)}`,
         );
@@ -1074,9 +1131,9 @@ function attachProvenanceRegistry(
           kind: "provider",
           value: cell.value,
           unit,
-          currency: monetary ? (canonical.currency ?? currency) : null,
+          currency: monetary ? canonical.currency : null,
           period: cell.period,
-          asOf: cell.period,
+          asOf: cell.asOf,
           origin: line.source,
           formulaVersion: null,
           displayPrecision: 4,
@@ -1262,13 +1319,8 @@ export function assembleContextPayload(
     // asOf map: bundle's own dot-path -> as-of, with stable key ordering.
     asOfMap: sortRecord(bundle.asOf),
   };
-  const currency = strOrNull(profile?.currency)?.toUpperCase() ?? null;
-  return attachProvenanceRegistry(
-    payload,
-    computed,
-    currency,
-    bundle.builtAt.slice(0, 10),
-  );
+  const currency = isoCurrency(profile?.currency);
+  return attachProvenanceRegistry(payload, computed, currency);
 }
 
 /**
@@ -1350,7 +1402,7 @@ function renderStatement(block: StatementExtractBlock): string {
     const cells = li.byPeriod
       .map((c) => {
         if (c.value === null) return `${c.period}=n/a`;
-        return `${c.period}=${round(c.value)} ${provenanceTag(c.provenanceId ?? li.source, c.period)}`;
+        return `${c.period}=${round(c.value)} ${provenanceTag(c.provenanceId ?? li.source, c.asOf)}`;
       })
       .join(" | ");
     lines.push(`- ${li.lineItem} (${li.unit}): ${cells}`);

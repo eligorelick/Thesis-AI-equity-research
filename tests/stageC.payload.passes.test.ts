@@ -450,7 +450,7 @@ describe("payload determinism + provenance", () => {
     const second = buildInputs().payload;
     const ids = first.provenanceRegistry!.map((entry) => entry.id);
 
-    expect(first.payloadVersion).toBe("1.2.0");
+    expect(first.payloadVersion).toBe("1.3.0");
     expect(first.provenanceRegistry).toEqual(second.provenanceRegistry);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toContain("payload.quote.price");
@@ -493,6 +493,113 @@ describe("payload determinism + provenance", () => {
     expect(repeated).toBeDefined();
     const sameValue = provenanceRegistry.filter((entry) => entry.value === repeated?.value);
     expect(new Set(sameValue.map((entry) => entry.id)).size).toBe(sameValue.length);
+  });
+
+  it("preserves an ADR statement row's reported currency and verifies only the matching identity", async () => {
+    const { bundle, computed } = buildInputs("TSM");
+    if (!bundle.profile.ok || !bundle.statements.incomeAnnual.ok) {
+      throw new Error("fixture requires profile and annual income statements");
+    }
+    bundle.profile.value.data.rows[0]!.currency = "USD";
+    bundle.profile.value.data.rows[0]!.isAdr = true;
+    bundle.statements.incomeAnnual.value.data.rows[0]!.reportedCurrency = "TWD";
+    const validation = validateBundle(bundle, { now: new Date("2026-07-06T00:00:00Z") });
+    const payload = assembleContextPayload(bundle, computed, validation);
+    const revenueRecord = payload.provenanceRegistry!.find(
+      (entry) =>
+        entry.id ===
+        "payload.statements.income-statement-annual.2025-09-27.revenue",
+    )!;
+
+    expect(revenueRecord.currency).toBe("TWD");
+
+    const omittedCurrencyCitation = {
+      value: revenueRecord.value,
+      unit: "currency",
+      source: revenueRecord.id,
+      asOf: revenueRecord.asOf,
+      verified: null,
+    };
+    const explicitUsdCitation = {
+      ...omittedCurrencyCitation,
+      currency: "USD",
+    };
+    const result = await runVerifyPass(
+      makeDeps(new MockRunPass()),
+      payload,
+      { numbers: [omittedCurrencyCitation, explicitUsdCitation] } as unknown as JudgeOutput,
+      { fetchedUrls: [] },
+    );
+    const verified = collectTracedNumbers(result.verifiedReport);
+
+    expect(verified[0]?.verified).toBe(true);
+    expect(verified[1]?.verified).toBe(false);
+    expect(result.coverage.numeric).toEqual({ supported: 1, total: 2, rate: 0.5 });
+  });
+
+  it("omits unknown currency statement money while retaining nonmonetary share records", () => {
+    const { bundle, computed } = buildInputs();
+    if (!bundle.statements.incomeAnnual.ok) {
+      throw new Error("fixture requires annual income statements");
+    }
+    bundle.statements.incomeAnnual.value.data.rows[0]!.reportedCurrency = null;
+    const validation = validateBundle(bundle, { now: new Date("2026-07-06T00:00:00Z") });
+    const payload = assembleContextPayload(bundle, computed, validation);
+    const annual2025 = "payload.statements.income-statement-annual.2025-09-27";
+
+    expect(payload.provenanceRegistry).not.toContainEqual(
+      expect.objectContaining({ id: `${annual2025}.revenue` }),
+    );
+    expect(payload.provenanceRegistry).toContainEqual(
+      expect.objectContaining({
+        id: `${annual2025}.diluted-shares`,
+        unit: "shares",
+        currency: null,
+      }),
+    );
+  });
+
+  it("keeps an analyst forecast period separate from its provider observation time", () => {
+    const { payload } = buildInputs();
+    const fy2027 = payload.provenanceRegistry!.find(
+      (entry) => entry.id === "payload.estimates.est-revenue-2027-09-30",
+    )!;
+
+    expect(fy2027.period).toBe("2027-09-30");
+    expect(fy2027.asOf).toBe("2026-07-01");
+  });
+
+  it("uses the first day of a Finnhub observation month instead of builtAt", () => {
+    const { bundle, payload } = buildInputs();
+    const finnhubJune = payload.provenanceRegistry!.find(
+      (entry) => entry.id === "payload.insiders.mspr-2026-06",
+    )!;
+
+    expect(finnhubJune.asOf).toBe("2026-06-01");
+    expect(finnhubJune.asOf).not.toBe(bundle.builtAt.slice(0, 10));
+  });
+
+  it("suppresses a provider record with invalid observation time instead of using builtAt", () => {
+    const { bundle, computed } = buildInputs();
+    if (!bundle.analystEstimates.ok) {
+      throw new Error("fixture requires analyst estimates");
+    }
+    bundle.analystEstimates.value.asOf = "2026-02-30";
+    const validation = validateBundle(bundle, { now: new Date("2026-07-06T00:00:00Z") });
+    const payload = assembleContextPayload(bundle, computed, validation);
+
+    expect(
+      payload.provenanceRegistry!.some((entry) =>
+        entry.id.startsWith("payload.estimates.est-revenue-"),
+      ),
+    ).toBe(false);
+    expect(
+      payload.provenanceRegistry!.some(
+        (entry) =>
+          entry.id.startsWith("payload.estimates.") &&
+          entry.asOf === bundle.builtAt.slice(0, 10),
+      ),
+    ).toBe(false);
   });
 
   it("has no wall-clock timestamps in the serialized payload (cache-safe)", () => {

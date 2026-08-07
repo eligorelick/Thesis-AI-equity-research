@@ -586,6 +586,39 @@ describe("FMP↔XBRL cross-check", () => {
     expect(report.flags.some((f) => f.includes("Bank-style XBRL tagging"))).toBe(true);
   });
 
+  it("treats an incompatible mixed-unit bank sum as not-checkable", () => {
+    const mixedUnitFacts = makeFacts({
+      InterestIncomeExpenseNet: [
+        xp({ start: "2025-01-01", end: "2025-12-31", val: 100, accn: "bank-2025-10k" }),
+      ],
+      NetIncomeLoss: [xp({ start: "2025-01-01", end: "2025-12-31", val: 25, accn: "bank-2025-10k" })],
+    });
+    mixedUnitFacts.facts["us-gaap"]["NoninterestIncome"] = {
+      label: "NoninterestIncome",
+      units: {
+        EUR: [xp({ start: "2025-01-01", end: "2025-12-31", val: 50, accn: "bank-2025-10k" })],
+      },
+    };
+    const report = validateBundle(
+      makeBundle({
+        companyFacts: ok(mixedUnitFacts, "2026-07-05"),
+        incomeAnnual: ok(
+          { rows: [{ date: "2025-12-31", period: "FY", revenue: 150, netIncome: 25 }] },
+          "2025-12-31",
+        ),
+        incomeQuarterly: gap("fmp.incomeStatement(BANK,quarter)"),
+      }),
+      { now: NOW },
+    );
+
+    const rev = report.checks.find((c) => c.id === "xbrlCrossCheck.revenue.FY.2025-12-31");
+    expect(rev?.status).toBe("skipped");
+    expect(rev?.detail).toContain("not checkable");
+    const revenueGap = report.gaps.find((g) => g.field.includes("xbrlCrossCheck.revenue.FY"));
+    expect(revenueGap?.severity).toBe("info");
+    expect(report.gaps.some((g) => /disagree/i.test(g.reason))).toBe(false);
+  });
+
   it("skips with a gap when companyfacts is unavailable", () => {
     const report = validateBundle(
       makeBundle({ companyFacts: gap("edgar.companyFacts(AAPL)") }),

@@ -323,7 +323,7 @@ export interface ConceptValue {
   fy: number | null;
   fp: string | null;
   /** For computed sums: the underlying component points. */
-  components?: { tag: string; value: number; point: FactPoint }[];
+  components?: { tag: string; value: number; unit: string; point: FactPoint }[];
   /** Set when period matching was ambiguous — treat with care. */
   note?: string;
 }
@@ -403,25 +403,33 @@ export function getConcept(
       });
     } else {
       attempted.push(`sum(${step.tags.join("+")})`);
-      const parts: { tag: string; value: number; point: FactPoint }[] = [];
-      let unit = step.unit ?? "USD";
+      const parts: { tag: string; value: number; unit: string; point: FactPoint }[] = [];
       let failed = false;
       for (const tag of step.tags) {
         const r = resolveTagStep(facts, tag, step.unit, q);
         if (r === null) {
           failed = true;
-          break;
+          continue;
         }
-        unit = r.unit;
-        parts.push({ tag, value: r.point.val, point: r.point });
+        parts.push({ tag, value: r.point.val, unit: r.unit, point: r.point });
       }
-      if (failed || parts.length === 0) continue;
+      if (failed || parts.length !== step.tags.length || parts.length === 0) continue;
       const first = parts[0].point;
+      const firstUnit = parts[0].unit;
+      const compatible = parts.every(
+        (part) =>
+          part.unit === firstUnit &&
+          part.point.start === first.start &&
+          part.point.end === first.end &&
+          part.point.accn === first.accn &&
+          part.point.form === first.form,
+      );
+      if (!compatible) continue;
       return ok(conceptLabel, {
         value: parts.reduce((s, p) => s + p.value, 0),
         tag: step.tags.join("+"),
         computed: true,
-        unit,
+        unit: firstUnit,
         period: { start: first.start, end: first.end },
         accn: first.accn,
         form: first.form,

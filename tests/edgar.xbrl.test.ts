@@ -187,6 +187,96 @@ describe("revenue chain on JPM companyfacts", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Computed fallback compatibility
+// ---------------------------------------------------------------------------
+
+describe("computed fallback compatibility", () => {
+  const sumChain = [{ kind: "sum" as const, tags: ["PartA", "PartB"], label: "A+B" }];
+
+  it("rejects a computed fallback with USD and EUR components", () => {
+    const f = facts(
+      {
+        PartA: [pt({ ...FY2025, val: 100 })],
+        PartB: [pt({ ...FY2025, val: 50 })],
+      },
+      { PartA: "USD", PartB: "EUR" },
+    );
+
+    const result = getConcept(f, sumChain, { period: FY2025 });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects exact period start or end mismatches within query tolerance", () => {
+    const startMismatch = facts({
+      PartA: [pt({ ...FY2025, val: 100 })],
+      PartB: [pt({ start: "2025-01-02", end: "2025-12-31", val: 50 })],
+    });
+    const endMismatch = facts({
+      PartA: [pt({ ...FY2025, val: 100 })],
+      PartB: [pt({ start: "2025-01-01", end: "2025-12-30", val: 50 })],
+    });
+
+    expect(getConcept(startMismatch, sumChain, { period: FY2025 }).ok).toBe(false);
+    expect(getConcept(endMismatch, sumChain, { period: FY2025 }).ok).toBe(false);
+  });
+
+  it("rejects an accession lineage mismatch", () => {
+    const f = facts({
+      PartA: [pt({ ...FY2025, val: 100, accn: "issuer-2025-10k" })],
+      PartB: [pt({ ...FY2025, val: 50, accn: "issuer-2025-10k-amended" })],
+    });
+
+    expect(getConcept(f, sumChain, { period: FY2025 }).ok).toBe(false);
+  });
+
+  it("rejects a form mismatch", () => {
+    const f = facts({
+      PartA: [pt({ ...FY2025, val: 100, form: "10-K" })],
+      PartB: [pt({ ...FY2025, val: 50, form: "10-K/A" })],
+    });
+
+    expect(getConcept(f, sumChain, { period: FY2025 }).ok).toBe(false);
+  });
+
+  it("continues the fallback chain after rejecting incompatible computed components", () => {
+    const f = facts(
+      {
+        PartA: [pt({ ...FY2025, val: 100 })],
+        PartB: [pt({ ...FY2025, val: 50 })],
+        DirectRevenue: [pt({ ...FY2025, val: 900 })],
+      },
+      { PartA: "USD", PartB: "EUR", DirectRevenue: "USD" },
+    );
+    const chain = [...sumChain, { kind: "tag" as const, tag: "DirectRevenue" }];
+
+    const result = getConcept(f, chain, { period: FY2025 });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.data).toMatchObject({ value: 900, tag: "DirectRevenue", computed: false, unit: "USD" });
+  });
+
+  it("preserves a compatible bank fallback and exposes component provenance", () => {
+    const f = facts({
+      InterestIncomeExpenseNet: [pt({ ...FY2025, val: 100, accn: "bank-2025-10k" })],
+      NoninterestIncome: [pt({ ...FY2025, val: 50, accn: "bank-2025-10k" })],
+    });
+
+    const result = getConcept(f, "revenue", { period: FY2025, bankRevenue: true });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.data).toMatchObject({ value: 150, unit: "USD", computed: true });
+    expect(result.value.data.components).toHaveLength(2);
+    expect(result.value.data.components).toEqual([
+      expect.objectContaining({ tag: "InterestIncomeExpenseNet", value: 100, unit: "USD" }),
+      expect.objectContaining({ tag: "NoninterestIncome", value: 50, unit: "USD" }),
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Other JPM concepts: instants, EPS units, deposits
 // ---------------------------------------------------------------------------
 

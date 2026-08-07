@@ -111,6 +111,15 @@ export function padCik(cik: number | string): string {
   return s.padStart(10, "0");
 }
 
+/** Compare SEC entity identities in their canonical ten-digit form. */
+export function sameCik(expected: number | string, actual: number | string): boolean {
+  try {
+    return padCik(expected) === padCik(actual);
+  } catch {
+    return false;
+  }
+}
+
 /** Unpadded integer form used by Archives URLs. */
 export function unpadCik(cik: number | string): string {
   const s = String(cik).replace(/^CIK/i, "").trim();
@@ -729,6 +738,13 @@ export class EdgarClient {
     if (!parsed.success) {
       return this.gap(`edgar.submissions(${cik})`, `submissions shape unexpected: ${parsed.error.issues[0]?.message ?? "?"}`, [url]);
     }
+    if (!sameCik(cik, parsed.data.cik)) {
+      return this.gap(
+        `edgar.submissions(${cik})`,
+        `submissions CIK ${parsed.data.cik} did not match requested CIK ${padCik(cik)}`,
+        [url],
+      );
+    }
     const d = parsed.data;
     const r = d.filings.recent;
     const n = r.accessionNumber.length;
@@ -847,6 +863,13 @@ export class EdgarClient {
     const parsed = companyFactsSchema.safeParse(parsedJson);
     if (!parsed.success) {
       return this.gap(`edgar.companyFacts(${cik})`, `companyfacts shape unexpected: ${parsed.error.issues[0]?.message ?? "?"}`, [url]);
+    }
+    if (!sameCik(cik, parsed.data.cik)) {
+      return this.gap(
+        `edgar.companyFacts(${cik})`,
+        `companyfacts CIK ${parsed.data.cik} did not match requested CIK ${padCik(cik)}`,
+        [url],
+      );
     }
     const facts: CompanyFacts = {
       cik: parsed.data.cik,

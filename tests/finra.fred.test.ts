@@ -13,6 +13,8 @@ import {
   normalizeDaysToCover,
   parseShortInterestRows,
   pickLatestPartitions,
+  shortInterest,
+  shortInterestTrend,
 } from "@/providers/finra";
 import {
   CORE_SERIES,
@@ -273,6 +275,83 @@ describe("finra daysToCover sentinel handling", () => {
       "2026-05-29",
       "2026-06-15",
     ]);
+  });
+});
+
+describe("finra response scope", () => {
+  const row = (
+    symbolCode: string,
+    settlementDate: string,
+    currentShortPositionQuantity: number,
+  ) => ({
+    symbolCode,
+    settlementDate,
+    currentShortPositionQuantity,
+  });
+
+  const fetchImpl = (partitionDates: string[], rows: unknown[]) =>
+    async (input: string | URL): Promise<Response> => {
+      const url = String(input);
+      const body = url.includes("/partitions/")
+        ? { availablePartitions: partitionDates.map((date) => ({ partitions: [date] })) }
+        : rows;
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+  const config = (partitionDates: string[], rows: unknown[]) => ({
+    fetchImpl: fetchImpl(partitionDates, rows),
+    retryDelaysMs: [],
+    minRequestIntervalMs: 0,
+    timeoutMs: 1000,
+  });
+
+  it("short interest rejects mixed symbols before deduplication", async () => {
+    const result = await shortInterest(
+      "AAPL",
+      config(
+        ["2026-06-15"],
+        [row("AAPL", "2026-06-15", 100), row("MSFT", "2026-06-15", 200)],
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("short interest trend rejects dates outside requested partitions", async () => {
+    const result = await shortInterestTrend(
+      "AAPL",
+      2,
+      config(
+        ["2026-06-15", "2026-05-29"],
+        [row("AAPL", "2026-06-15", 100), row("AAPL", "2026-04-30", 50)],
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("short interest trend keeps the later same-symbol revision", async () => {
+    const result = await shortInterestTrend(
+      "AAPL",
+      2,
+      config(
+        ["2026-06-15", "2026-05-29"],
+        [
+          row("AAPL", "2026-05-29", 75),
+          row("AAPL", "2026-06-15", 100),
+          row("aapl", "2026-06-15", 125),
+        ],
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.data).toHaveLength(2);
+      expect(result.value.data.at(-1)?.currentShortPositionQuantity).toBe(125);
+    }
   });
 });
 

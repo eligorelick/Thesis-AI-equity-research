@@ -21,6 +21,7 @@ import "server-only";
 import { z } from "zod";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
 import { fetchWithRedirectPolicy } from "@/providers/http";
+import { sameEntitySymbol } from "@/symbol";
 
 /** Cache TTL for FINRA responses (partitions + rows), seconds. */
 export const FINRA_TTL_SECONDS = 86400;
@@ -217,6 +218,29 @@ export function parseShortInterestRows(payload: unknown): ShortInterestPoint[] |
   return out;
 }
 
+/** Reject a FINRA payload if any parsed row falls outside the requested scope. */
+export function validateShortInterestScope(
+  rows: readonly ShortInterestPoint[],
+  expectedSymbol: string,
+  expectedSettlementDates: ReadonlySet<string>,
+): { ok: true; rows: ShortInterestPoint[] } | { ok: false; reason: string } {
+  for (const row of rows) {
+    if (!sameEntitySymbol(expectedSymbol, row.symbol)) {
+      return {
+        ok: false,
+        reason: `FINRA row symbol ${row.symbol} did not match requested symbol ${expectedSymbol}`,
+      };
+    }
+    if (!expectedSettlementDates.has(row.settlementDate)) {
+      return {
+        ok: false,
+        reason: `FINRA row settlement date ${row.settlementDate} was outside the requested partitions`,
+      };
+    }
+  }
+  return { ok: true, rows: [...rows] };
+}
+
 // ---------------------------------------------------------------------------
 // Transport
 // ---------------------------------------------------------------------------
@@ -385,7 +409,9 @@ export async function shortInterest(
   if (rows === null) {
     return { ok: false, gap: accessGap(field, "data endpoint returned an unrecognized payload shape") };
   }
-  const row = rows[rows.length - 1];
+  const scoped = validateShortInterestScope(rows, sym, new Set([settlementDate]));
+  if (!scoped.ok) return { ok: false, gap: accessGap(field, scoped.reason) };
+  const row = scoped.rows[scoped.rows.length - 1];
   if (!row) {
     return {
       ok: false,
@@ -429,8 +455,10 @@ export async function shortInterestTrend(
     return { ok: false, gap: accessGap(field, "data endpoint returned an unrecognized payload shape") };
   }
   // Dedupe by settlementDate — later rows (revisions) win.
+  const scoped = validateShortInterestScope(rows, sym, new Set(partitions.dates));
+  if (!scoped.ok) return { ok: false, gap: accessGap(field, scoped.reason) };
   const bySettlement = new Map<string, ShortInterestPoint>();
-  for (const row of rows) bySettlement.set(row.settlementDate, row);
+  for (const row of scoped.rows) bySettlement.set(row.settlementDate, row);
   const deduped = [...bySettlement.values()];
   if (deduped.length === 0) {
     return {

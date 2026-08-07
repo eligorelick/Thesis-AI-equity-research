@@ -160,6 +160,32 @@ describe("EdgarClient (fake transport)", () => {
     expect(tenK.ok).toBe(false);
   });
 
+  it("submissions rejects a response for a different padded CIK", async () => {
+    const body = sample("aapl_submissions_truncated.json").replace(
+      '"cik": "0000320193"',
+      '"cik": "0000789019"',
+    );
+    const { transport } = fakeTransport({ "submissions/CIK0000320193.json": { body } });
+    const client = new EdgarClient({ transport });
+
+    const result = await client.submissions(320193);
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("companyFacts rejects a response for a different CIK", async () => {
+    const { transport } = fakeTransport({
+      "companyfacts/CIK0000320193.json": {
+        body: JSON.stringify({ cik: 789019, entityName: "MICROSOFT CORPORATION", facts: {} }),
+      },
+    });
+    const client = new EdgarClient({ transport });
+
+    const result = await client.companyFacts(320193);
+
+    expect(result.ok).toBe(false);
+  });
+
   it("filingIndexHeaders builds the TYPE map through the client", async () => {
     const { transport, calls } = fakeTransport({ "-index-headers.html": { body: sample("frd_10k_index_headers.html") } });
     const client = new EdgarClient({ transport });

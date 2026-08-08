@@ -40,6 +40,8 @@ export interface ReportSummary {
   grades: GradeStripCell[];
   /** True when this is a data-only report (LLM analysis did not run). */
   dataOnly: boolean;
+  /** Sanitized missing-data disclosures needed by compact consumers. */
+  missingData: Report["appendix"]["missingData"];
 }
 
 const GRADE_KEYS = [
@@ -96,5 +98,6 @@ export async function GET(
     synthesis: report?.verdict.synthesis ?? "Report content unavailable.",
     grades,
     dataOnly,
+    missingData: report?.appendix.missingData ?? [],
   });
 }

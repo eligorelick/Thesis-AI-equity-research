@@ -44,6 +44,7 @@ import {
   DISCLAIMER_TEXT,
   FRED_ATTRIBUTION_TEXT,
 } from "@/report/export/markdown";
+import { reportToPrintHtml } from "@/report/export/printHtml";
 import {
   listReportsForSymbol,
   listRunRefsForSymbol,
@@ -963,5 +964,55 @@ describe("parseStoredReport — legacy-read leniency", () => {
     });
     const rec = getReportRecordById(id);
     expect(rec.kind).toBe("ok");
+  });
+});
+
+describe("immutable legacy entity safety across stored-report reads", () => {
+  const entityConflict = "TRIUMPH evaluates Foundayo";
+
+  it("sanitizes direct, ID, diff-pair, Markdown, and print reads without changing stored bytes", () => {
+    const report = loadFixtureReport();
+    report.meta.symbol = "LLY";
+    report.meta.companyName = "Eli Lilly and Company";
+    report.verdict.synthesis = entityConflict;
+    expect(ReportSchema.safeParse(report).success).toBe(true);
+    const insertedJsonByteForByte = JSON.stringify(report);
+    const olderId = seedReport({
+      symbol: "LLY",
+      createdAt: "2026-07-01T00:00:00.000Z",
+      reportJson: insertedJsonByteForByte,
+    });
+    const newerId = seedReport({
+      symbol: "LLY",
+      createdAt: "2026-07-02T00:00:00.000Z",
+      reportJson: insertedJsonByteForByte,
+    });
+
+    const direct = parseStoredReport(insertedJsonByteForByte);
+    const byId = getReportById(olderId);
+    const pair = loadReportPair(olderId, newerId);
+    expect(direct).not.toBeNull();
+    expect(byId).not.toBeNull();
+    expect(pair).not.toBeNull();
+
+    for (const candidate of [direct!, byId!.report, pair!.a.report, pair!.b.report]) {
+      expect(JSON.stringify(candidate)).not.toContain(entityConflict);
+      expect(candidate.appendix.missingData).toContainEqual(
+        expect.objectContaining({ field: "legacy.entityValidation", severity: "critical" }),
+      );
+    }
+
+    const markdown = reportToMarkdown(byId!.report);
+    const printHtml = reportToPrintHtml(byId!.report);
+    for (const rendered of [markdown, printHtml]) {
+      expect(rendered).not.toContain(entityConflict);
+      expect(rendered).toContain("legacy.entityValidation");
+      expect(rendered).toContain("critical");
+    }
+
+    const stored = handle.sqlite
+      .prepare('SELECT "reportJson" FROM "reports" WHERE "id" = ?')
+      .get(olderId) as { reportJson: string };
+    expect(stored.reportJson).toBe(insertedJsonByteForByte);
   });
 });

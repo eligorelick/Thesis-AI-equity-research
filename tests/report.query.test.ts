@@ -325,6 +325,28 @@ describe("getLatestDoneReport", () => {
     expect(parsed.success).toBe(true);
   });
 
+  it("latest query applies legacy entity safety without mutating reportJson", () => {
+    const entityConflict = "TRIUMPH evaluates Foundayo";
+    const report = makeReport();
+    report.meta.symbol = "LLY";
+    report.meta.companyName = "Eli Lilly and Company";
+    report.verdict.synthesis = entityConflict;
+    const insertedJsonByteForByte = JSON.stringify(ReportSchema.parse(report));
+    const id = seedReport({ symbol: "LLY", reportJson: insertedJsonByteForByte });
+
+    const latest = getLatestDoneReport("LLY");
+
+    expect(latest?.reportId).toBe(id);
+    expect(JSON.stringify(latest?.report)).not.toContain(entityConflict);
+    expect(latest?.report?.appendix.missingData).toContainEqual(
+      expect.objectContaining({ field: "legacy.entityValidation", severity: "critical" }),
+    );
+    const stored = handle.sqlite
+      .prepare('SELECT "reportJson" FROM "reports" WHERE "id" = ?')
+      .get(id) as { reportJson: string };
+    expect(stored.reportJson).toBe(insertedJsonByteForByte);
+  });
+
   it("returns null when no report exists for the symbol", () => {
     expect(getLatestDoneReport("AAPL")).toBeNull();
     seedReport({ symbol: "MSFT" });

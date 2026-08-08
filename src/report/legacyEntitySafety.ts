@@ -1,5 +1,5 @@
 import {
-  LLY_ENTITY_REGISTRY,
+  getEntityRegistry,
   validateEntityText,
   type EntityIssue,
   type EntityRegistry,
@@ -10,12 +10,65 @@ import {
   citationSourceId,
   type CitationCarrier,
 } from "@/pipeline/stageC/citations";
-import type { Report } from "@/report/schema";
+import {
+  ReportSchema,
+  withLenientLegacyRead,
+  type Report,
+} from "@/report/schema";
 
 export interface LegacyEntitySafetyResult {
   report: Report;
   withheldCount: number;
   issues: EntityIssue[];
+}
+
+export interface SafeStoredReport extends LegacyEntitySafetyResult {
+  readMode: "strict" | "legacy";
+}
+
+/** Validate a report with exactly the mode selected by its original stored read. */
+export function validateStoredReportInReadMode(
+  value: unknown,
+  readMode: SafeStoredReport["readMode"],
+): Report | null {
+  const parsed = readMode === "strict"
+    ? ReportSchema.safeParse(value)
+    : withLenientLegacyRead(() => ReportSchema.safeParse(value));
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Parse one immutable stored-report view, sanitize it against the issuer's
+ * canonical entity registry, then revalidate it under the original read mode.
+ */
+export function parseStoredReportWithSafety(
+  reportJson: string | null,
+): SafeStoredReport | null {
+  if (reportJson === null) return null;
+  try {
+    const raw: unknown = JSON.parse(reportJson);
+    const strict = ReportSchema.safeParse(raw);
+    const readMode: SafeStoredReport["readMode"] = strict.success ? "strict" : "legacy";
+    const parsed = strict.success
+      ? strict.data
+      : validateStoredReportInReadMode(raw, "legacy");
+    if (parsed === null) return null;
+
+    const safety = sanitizeLegacyEntityConflicts(
+      parsed,
+      getEntityRegistry(parsed.meta.symbol),
+    );
+    const revalidated = validateStoredReportInReadMode(safety.report, readMode);
+    if (revalidated === null) return null;
+    return {
+      report: revalidated,
+      readMode,
+      withheldCount: safety.withheldCount,
+      issues: safety.issues,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -25,9 +78,12 @@ export interface LegacyEntitySafetyResult {
  */
 export function sanitizeLegacyEntityConflicts(
   report: Report,
-  registry: EntityRegistry = LLY_ENTITY_REGISTRY,
+  registry: EntityRegistry | null = getEntityRegistry(report.meta.symbol),
 ): LegacyEntitySafetyResult {
   const cloned = structuredClone(report);
+  if (registry === null) {
+    return { report: cloned, withheldCount: 0, issues: [] };
+  }
   if (cloned.meta.symbol.toUpperCase() !== registry.symbol.toUpperCase()) {
     return { report: cloned, withheldCount: 0, issues: [] };
   }
@@ -57,9 +113,15 @@ export function sanitizeLegacyEntityConflicts(
     for (const [key, nested] of Object.entries(value)) output[key] = walk(nested);
     if (hasCitationShape) {
       if (normalizedSource !== null) {
-        output.sourceId = normalizedSource;
-        output.source = normalizedSource;
-        output.asOf = normalizedAsOf;
+        const sourceNeedsNormalization =
+          normalizedSource !== carrier.source ||
+          (typeof carrier.sourceId === "string" && carrier.sourceId !== normalizedSource) ||
+          (carrier.asOf === null && normalizedAsOf !== null);
+        if (sourceNeedsNormalization) {
+          output.sourceId = normalizedSource;
+          output.source = normalizedSource;
+          output.asOf = normalizedAsOf ?? output.asOf;
+        }
       } else {
         invalidCitationCount += 1;
         delete output.sourceId;
@@ -99,7 +161,7 @@ export function sanitizeLegacyEntityConflicts(
         bearView: "The persisted analyst cases contained conflicting entity names and relationships.",
         kind: "entity",
         judgeResolution:
-          `Canonical registry entities: ${registry.records.map((record) => record.canonicalName).join("; ")}. Unsafe legacy statements are withheld, not rewritten.`,
+          "The canonical primary-source entity registry was applied. Unsafe legacy statements are withheld, not rewritten.",
       });
     }
   }

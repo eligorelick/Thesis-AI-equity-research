@@ -3,8 +3,22 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { EntityRegistry } from "@/pipeline/stageC/entityValidation";
-import { sanitizeLegacyEntityConflicts } from "@/report/legacyEntitySafety";
-import { ReportSchema } from "@/report/schema";
+import {
+  parseStoredReportWithSafety,
+  sanitizeLegacyEntityConflicts,
+  validateStoredReportInReadMode,
+} from "@/report/legacyEntitySafety";
+import { ReportSchema, type Report } from "@/report/schema";
+
+const ENTITY_CONFLICT = "TRIUMPH evaluates Foundayo";
+
+function fixtureReport(symbol: string): Report {
+  const parsed = ReportSchema.parse(
+    JSON.parse(readFileSync(path.join(process.cwd(), "fixtures", "report", "DEMO-sample.json"), "utf8")),
+  );
+  parsed.meta.symbol = symbol;
+  return parsed;
+}
 
 const SYNTHETIC_ENTITY_REGISTRY: EntityRegistry = {
   symbol: "DEMO",
@@ -60,5 +74,96 @@ describe("read-only legacy export safety", () => {
     expect(result.report.verdict.gradeStrip.fundamentals.reasoning[0].sourceId).toBe(originalSource);
     expect(result.report.verdict.gradeStrip.fundamentals.reasoning[0].source).toBe(originalSource);
     expect(ReportSchema.safeParse(result.report).success).toBe(true);
+  });
+
+  it("legacy entity safety preserves rendered citation correction and marks ambiguity unsupported", () => {
+    const report = fixtureReport("DEMO");
+    const rendered = report.verdict.gradeStrip.fundamentals.reasoning[0];
+    const originalSource = rendered.source;
+    delete rendered.sourceId;
+    rendered.source = `[${originalSource} · ${rendered.asOf}]`;
+    const ambiguous = report.verdict.gradeStrip.valuation.reasoning[0];
+    delete ambiguous.sourceId;
+    ambiguous.source = "[ambiguous";
+
+    const result = sanitizeLegacyEntityConflicts(report, SYNTHETIC_ENTITY_REGISTRY);
+
+    expect(result.report.verdict.gradeStrip.fundamentals.reasoning[0]).toMatchObject({
+      source: originalSource,
+      sourceId: originalSource,
+    });
+    expect(result.report.verdict.gradeStrip.valuation.reasoning[0].source).toBe(
+      "unsupported:legacy-citation",
+    );
+    expect(result.report.appendix.missingData).toContainEqual(
+      expect.objectContaining({ field: "legacy.citationValidation", severity: "warn" }),
+    );
+    expect(ReportSchema.safeParse(result.report).success).toBe(true);
+  });
+
+  it("parseStoredReportWithSafety reports strict mode and withholds legacy entity conflicts", () => {
+    const report = fixtureReport("LLY");
+    report.verdict.synthesis = ENTITY_CONFLICT;
+    const insertedJson = JSON.stringify(ReportSchema.parse(report));
+
+    const result = parseStoredReportWithSafety(insertedJson);
+
+    expect(result).not.toBeNull();
+    expect(result?.readMode).toBe("strict");
+    expect(result?.withheldCount).toBeGreaterThan(0);
+    expect(result?.issues).not.toHaveLength(0);
+    expect(JSON.stringify(result?.report)).not.toContain(ENTITY_CONFLICT);
+    expect(result?.report.appendix.missingData).toContainEqual(
+      expect.objectContaining({ field: "legacy.entityValidation", severity: "critical" }),
+    );
+    expect(insertedJson).toContain(ENTITY_CONFLICT);
+
+    const reread = parseStoredReportWithSafety(JSON.stringify(result?.report));
+    expect(reread?.report).toEqual(result?.report);
+    expect(reread?.withheldCount).toBe(0);
+    expect(reread?.issues).toEqual([]);
+  });
+
+  it("legacy entity safety preserves lenient read mode and keeps the legacy report readable", () => {
+    const report = fixtureReport("LLY");
+    report.fundamentals.commentary[0]!.asOf = "2026-06";
+    report.verdict.synthesis = ENTITY_CONFLICT;
+    const legacyJson = JSON.stringify(report);
+    expect(ReportSchema.safeParse(JSON.parse(legacyJson)).success).toBe(false);
+
+    const result = parseStoredReportWithSafety(legacyJson);
+
+    expect(result).not.toBeNull();
+    expect(result?.readMode).toBe("legacy");
+    expect(result?.report.fundamentals.commentary[0]?.asOf).toBe("2026-06");
+    expect(JSON.stringify(result?.report)).not.toContain(ENTITY_CONFLICT);
+    expect(result?.report.appendix.missingData).toContainEqual(
+      expect.objectContaining({ field: "legacy.entityValidation", severity: "critical" }),
+    );
+    expect(validateStoredReportInReadMode(result?.report, result!.readMode)).not.toBeNull();
+    expect(validateStoredReportInReadMode(result?.report, "strict")).toBeNull();
+  });
+
+  it("leaves a clean LLY report idempotent and an uncovered AAPL report unchanged", () => {
+    for (const symbol of ["LLY", "AAPL"]) {
+      const report = fixtureReport(symbol);
+      const insertedJson = JSON.stringify(ReportSchema.parse(report));
+
+      const first = parseStoredReportWithSafety(insertedJson);
+      const second = parseStoredReportWithSafety(JSON.stringify(first?.report));
+
+      expect(first?.readMode).toBe("strict");
+      expect(first?.withheldCount).toBe(0);
+      expect(first?.issues).toEqual([]);
+      expect(first?.report).toEqual(ReportSchema.parse(JSON.parse(insertedJson)));
+      expect(second?.report).toEqual(first?.report);
+      expect(second?.withheldCount).toBe(0);
+    }
+  });
+
+  it("legacy entity safety keeps null, malformed, and schema-invalid rows unreadable", () => {
+    expect(parseStoredReportWithSafety(null)).toBeNull();
+    expect(parseStoredReportWithSafety("{ not json")).toBeNull();
+    expect(parseStoredReportWithSafety(JSON.stringify({ meta: { symbol: "LLY" } }))).toBeNull();
   });
 });

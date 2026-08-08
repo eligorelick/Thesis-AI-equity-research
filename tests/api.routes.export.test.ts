@@ -142,6 +142,51 @@ function viewReq(reportId: string): [Request, { params: Promise<{ reportId: stri
  * ------------------------------------------------------------------------ */
 
 describe("GET /api/export/[reportId]", () => {
+  function unsafeLegacyReportJson(): string {
+    const entityConflict = "TRIUMPH evaluates Foundayo";
+    const report = clone(loadFixtureReport());
+    report.meta.symbol = "LLY";
+    report.meta.companyName = "Eli Lilly and Company";
+    report.verdict.synthesis = entityConflict;
+    return JSON.stringify(ReportSchema.parse(report));
+  }
+
+  it("applies immutable legacy entity safety to the Markdown API read", async () => {
+    const entityConflict = "TRIUMPH evaluates Foundayo";
+    const insertedJsonByteForByte = unsafeLegacyReportJson();
+    const id = seedRawRow(insertedJsonByteForByte);
+
+    const markdownResponse = await exportGET(...exportReq(String(id), "md"));
+    expect(markdownResponse.status).toBe(200);
+    const markdown = await markdownResponse.text();
+    expect(markdown).not.toContain(entityConflict);
+    expect(markdown).toContain("legacy.entityValidation");
+    expect(markdown).toContain("critical");
+
+    const stored = handle.sqlite
+      .prepare('SELECT "reportJson" FROM "reports" WHERE "id" = ?')
+      .get(id) as { reportJson: string };
+    expect(stored.reportJson).toBe(insertedJsonByteForByte);
+  });
+
+  it("applies immutable legacy entity safety to the print API read", async () => {
+    const entityConflict = "TRIUMPH evaluates Foundayo";
+    const insertedJsonByteForByte = unsafeLegacyReportJson();
+    const id = seedRawRow(insertedJsonByteForByte);
+
+    const printResponse = await exportGET(...exportReq(String(id), "pdf"));
+    expect(printResponse.status).toBe(200);
+    const printHtml = await printResponse.text();
+    expect(printHtml).not.toContain(entityConflict);
+    expect(printHtml).toContain("legacy.entityValidation");
+    expect(printHtml).toContain("critical");
+
+    const stored = handle.sqlite
+      .prepare('SELECT "reportJson" FROM "reports" WHERE "id" = ?')
+      .get(id) as { reportJson: string };
+    expect(stored.reportJson).toBe(insertedJsonByteForByte);
+  });
+
   it("returns 400 for a non-numeric (garbage) id", async () => {
     const res = await exportGET(...exportReq("abc"));
     expect(res.status).toBe(400);
@@ -259,6 +304,32 @@ describe("GET /api/export/[reportId]", () => {
  * ------------------------------------------------------------------------ */
 
 describe("GET /api/report/view/[reportId]", () => {
+  it("applies immutable legacy entity safety and exposes its critical disclosure", async () => {
+    const entityConflict = "TRIUMPH evaluates Foundayo";
+    const report = clone(loadFixtureReport());
+    report.meta.symbol = "LLY";
+    report.meta.companyName = "Eli Lilly and Company";
+    report.verdict.synthesis = entityConflict;
+    const insertedJsonByteForByte = JSON.stringify(ReportSchema.parse(report));
+    const id = seedRawRow(insertedJsonByteForByte);
+
+    const response = await viewGET(...viewReq(String(id)));
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      synthesis: string;
+      missingData: Array<{ field: string; severity: string }>;
+    };
+    expect(JSON.stringify(body)).not.toContain(entityConflict);
+    expect(body.missingData).toContainEqual(
+      expect.objectContaining({ field: "legacy.entityValidation", severity: "critical" }),
+    );
+    const stored = handle.sqlite
+      .prepare('SELECT "reportJson" FROM "reports" WHERE "id" = ?')
+      .get(id) as { reportJson: string };
+    expect(stored.reportJson).toBe(insertedJsonByteForByte);
+  });
+
   it("returns 400 for a non-numeric id", async () => {
     const res = await viewGET(...viewReq("garbage"));
     expect(res.status).toBe(400);

@@ -6,8 +6,11 @@ import Database from "better-sqlite3";
 import { buildDataCompleteness } from "@/report/completeness";
 import { buildExecutionMetadataEntry } from "@/report/execution";
 import { reportToPrintHtml } from "@/report/export/printHtml";
-import { sanitizeLegacyEntityConflicts } from "@/report/legacyEntitySafety";
-import { ReportSchema, withLenientLegacyRead, type Report } from "@/report/schema";
+import {
+  parseStoredReportWithSafety,
+  validateStoredReportInReadMode,
+} from "@/report/legacyEntitySafety";
+import type { Report } from "@/report/schema";
 
 function argument(name: string): string {
   const index = process.argv.indexOf(name);
@@ -39,14 +42,8 @@ try {
   } | undefined;
   if (!row?.reportJson) throw new Error(`Report ${reportId} has no report JSON`);
 
-  const raw = JSON.parse(row.reportJson);
-  const strict = ReportSchema.safeParse(raw);
-  const parsed = strict.success
-    ? strict
-    : withLenientLegacyRead(() => ReportSchema.safeParse(raw));
-  if (!parsed.success) throw new Error(`Report ${reportId} does not match a supported report schema`);
-
-  const safety = sanitizeLegacyEntityConflicts(parsed.data);
+  const safety = parseStoredReportWithSafety(row.reportJson);
+  if (safety === null) throw new Error(`Report ${reportId} does not match a supported report schema`);
   const report: Report = safety.report;
   const costs = row.runId
     ? sqlite.prepare(
@@ -116,7 +113,10 @@ try {
     });
   }
   report.meta.dataCompleteness = buildDataCompleteness(report.appendix.missingData);
-  const validated = ReportSchema.parse(report);
+  const validated = validateStoredReportInReadMode(report, safety.readMode);
+  if (validated === null) {
+    throw new Error(`Corrected report ${reportId} no longer matches its supported read schema`);
+  }
 
   fs.mkdirSync(path.dirname(outputHtml), { recursive: true });
   fs.writeFileSync(outputHtml, reportToPrintHtml(validated), "utf8");

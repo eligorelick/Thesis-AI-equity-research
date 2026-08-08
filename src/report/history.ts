@@ -21,7 +21,8 @@ import { desc, eq } from "drizzle-orm";
 
 import { getDb } from "@/db";
 import { reports, type ReportRow } from "@/db/schema";
-import { ReportSchema, withLenientLegacyRead, type Report } from "@/report/schema";
+import { parseStoredReportWithSafety } from "@/report/legacyEntitySafety";
+import type { Report } from "@/report/schema";
 import type { Grade } from "@/types/core";
 
 /* ------------------------------------------------------------------------ *
@@ -92,22 +93,7 @@ export interface ReportSummary {
 
 /** Defensively parse + validate a stored reportJson; null on any failure. */
 export function parseStoredReport(reportJson: string | null): Report | null {
-  if (reportJson === null) return null;
-  try {
-    const raw = JSON.parse(reportJson);
-    const parsed = ReportSchema.safeParse(raw);
-    if (parsed.success) return parsed.data;
-    // Reports persisted under earlier spec versions can fail the two gates
-    // that were tightened later (strict asOf ISO dates, rating-language
-    // battery over prose). Those are SAVE-time contracts — a stored report
-    // must stay renderable — so retry with only those gates relaxed. Shape,
-    // strictness, and enums remain fully enforced; genuinely corrupt rows
-    // still return null.
-    const legacy = withLenientLegacyRead(() => ReportSchema.safeParse(raw));
-    return legacy.success ? legacy.data : null;
-  } catch {
-    return null;
-  }
+  return parseStoredReportWithSafety(reportJson)?.report ?? null;
 }
 
 /** Build a {@link ReportSummary} from a raw row, parsing its report content. */

@@ -162,6 +162,25 @@ export interface CachedFetchOptions<T> {
    * accepted versus silently erasing live data on a blip.
    */
   isEmptyBody?: (body: T) => boolean;
+  /**
+   * Optional semantic admission validator. It runs on every decoded cache hit
+   * before return and on every fetched body before storage. Returning a reason
+   * evicts only the exact invalid cache key and forces a synchronous refetch;
+   * a rejected refresh never overwrites an already-admitted row.
+   */
+  validateBody?: (body: T) => string | null;
+}
+
+class CachedBodyValidationError extends Error {
+  constructor(cacheKey: string, problem: string) {
+    super(`Cached response rejected for ${cacheKey}: ${problem}`);
+    this.name = "CachedBodyValidationError";
+  }
+}
+
+function assertValidBody<T>(cacheKey: string, body: T, opts: CachedFetchOptions<T>): void {
+  const problem = opts.validateBody?.(body) ?? null;
+  if (problem !== null) throw new CachedBodyValidationError(cacheKey, problem);
 }
 
 /** Clamp TTLs into the INTEGER column ([0 .. ten years], Infinity → ten years). */
@@ -233,6 +252,7 @@ function startBackgroundRefresh<T>(cacheKey: string, opts: CachedFetchOptions<T>
   if (inFlightRefreshes.has(cacheKey)) return; // one refresh per key at a time
   const refresh = (async () => {
     const fetched = await opts.fetcher();
+    assertValidBody(cacheKey, fetched.body, opts);
     const db = getDb();
     // Never let a transient empty refresh clobber a previously-good body (M6).
     if (existingRowToPreserve(db, cacheKey, fetched.body, opts) !== null) {
@@ -291,6 +311,7 @@ export async function cachedFetch<T>(opts: CachedFetchOptions<T>): Promise<Sourc
 
   async function fetchStoreReturn(): Promise<Sourced<T>> {
     const fetched = await fetcher();
+    assertValidBody(cacheKey, fetched.body, opts);
     const fetchedAt = new Date().toISOString();
     // This path is used for misses, corrupt-row self-healing, and synchronous
     // refreshes beyond the hard stale ceiling. At the ceiling the fetched body
@@ -328,6 +349,14 @@ export async function cachedFetch<T>(opts: CachedFetchOptions<T>): Promise<Sourc
       // drop the poisoned row and self-heal via a fresh fetch instead of
       // throwing synchronously and crash-looping the job until TTL expiry
       // (L6). Nothing sensitive is logged (the body could hold provider data).
+      db.delete(apiCache).where(eq(apiCache.cacheKey, cacheKey)).run();
+      return fetchStoreReturn();
+    }
+    const cachedBodyProblem = opts.validateBody?.(data) ?? null;
+    if (cachedBodyProblem !== null) {
+      // This can be a row written by an older release before semantic cache
+      // admission existed. Delete only the selected key, then self-heal now;
+      // never return the poison once, even if the row was otherwise fresh.
       db.delete(apiCache).where(eq(apiCache.cacheKey, cacheKey)).run();
       return fetchStoreReturn();
     }

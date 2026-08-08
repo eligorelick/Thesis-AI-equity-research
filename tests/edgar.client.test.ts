@@ -303,7 +303,7 @@ describe("EdgarClient (fake transport)", () => {
     const { transport, calls } = fakeTransport({
       "submissions/CIK0000320193.json": { body: sample("aapl_submissions_truncated.json") },
       "ef20071035_8k.htm": { body: "<html><body>Agent-filed AAPL 8-K</body></html>" },
-      "agent-exhibit.htm": { body: "<html><body>Exhibit under admitted accession</body></html>" },
+      "agent-exhibit.htm": { body: "<html><body>Exhibit 99.1 under admitted accession</body></html>" },
     });
     const client = new EdgarClient({ transport });
     const submissions = await client.submissions(320193);
@@ -469,11 +469,29 @@ describe("EdgarClient (fake transport)", () => {
     expect(url.searchParams.get("dateRange")).toBe("custom");
   });
 
-  it("fetchFilingDoc refuses non-SEC hosts (programming error -> throw)", async () => {
-    const { transport } = fakeTransport({});
+  it.each([
+    "https://notsec.gov/doc.htm",
+    "https://sec.gov.evil.example/doc.htm",
+    "http://www.sec.gov/doc.htm",
+  ])("fetchFilingDoc refuses a non-HTTPS or non-SEC URL before transport: %s", async (url) => {
+    const { transport, calls } = fakeTransport({});
     const client = new EdgarClient({ transport });
-    await expect(client.fetchFilingDoc("https://evil.example.com/doc.htm")).rejects.toThrow(/non-SEC host/);
+    await expect(client.fetchFilingDoc(url)).rejects.toThrow(/HTTPS|SEC host/i);
+    expect(calls).toHaveLength(0);
   });
+
+  it.each(["https://sec.gov/doc.htm", "https://www.sec.gov/doc.htm", "https://data.sec.gov/doc.htm"])(
+    "fetchFilingDoc accepts a legitimate HTTPS SEC host: %s",
+    async (url) => {
+      const { transport, calls } = fakeTransport({ "doc.htm": { body: "Annual report filing disclosure" } });
+      const client = new EdgarClient({ transport });
+
+      const result = await client.fetchFilingDoc(url);
+
+      expect(result.ok).toBe(true);
+      expect(calls).toHaveLength(1);
+    },
+  );
 });
 
 describe("default transport (injected fetchFn — no network)", () => {
@@ -528,16 +546,37 @@ describe("default transport (injected fetchFn — no network)", () => {
     expect(hits).toBe(2);
   });
 
-  it("accepts plausible SEC markup and plain text while rejecting implausible placeholders", () => {
+  it("accepts filing structures and meaningful untagged plain text", () => {
     expect(filingDocumentBodyProblem("<?xml version=\"1.0\"?><xbrli:xbrl></xbrli:xbrl>")).toBeNull();
     expect(
       filingDocumentBodyProblem(
         "UNITED STATES SECURITIES AND EXCHANGE COMMISSION annual report filing disclosure.",
       ),
     ).toBeNull();
+    expect(
+      filingDocumentBodyProblem(
+        "Management described durable customer demand, improving operating margins, and the principal uncertainties affecting next year's results.",
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects minimal arbitrary markup and branded SEC maintenance or XML error envelopes", () => {
     expect(filingDocumentBodyProblem("OK")).toMatch(/error|placeholder/i);
+    expect(filingDocumentBodyProblem("<html><body>Hello world</body></html>")).toMatch(/implausible/i);
+    expect(filingDocumentBodyProblem("<html><header>General highlights</header></html>"))
+      .toMatch(/implausible/i);
     expect(filingDocumentBodyProblem("<html><title>Page Not Found</title><body>File not found</body></html>"))
       .toMatch(/error|placeholder/i);
+    expect(
+      filingDocumentBodyProblem(
+        "<html><head><title>SEC.gov | EDGAR Maintenance</title></head><body>EDGAR is currently unavailable. Please try again later.</body></html>",
+      ),
+    ).toMatch(/error|maintenance|placeholder/i);
+    expect(
+      filingDocumentBodyProblem(
+        '<?xml version="1.0"?><Error><Code>AccessDenied</Code><Message>Request denied</Message></Error>',
+      ),
+    ).toMatch(/error|implausible/i);
   });
 
   it("rejects an implausible index body before caching and falls back to the valid HTML index", async () => {
@@ -556,7 +595,8 @@ describe("default transport (injected fetchFn — no network)", () => {
       fallbackHits++;
       return Promise.resolve(
         new Response(
-          '<html><table><tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>' +
+          '<html><head><title>SEC.gov | EDGAR Filing Documents for Example Issuer</title></head>' +
+            '<table><tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>' +
             '<tr><td>1</td><td>Annual report</td><td><a href="annual.htm">annual.htm</a></td><td>10-K</td><td>100</td></tr></table></html>',
           { status: 200 },
         ),

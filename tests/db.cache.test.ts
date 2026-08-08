@@ -473,6 +473,100 @@ describe("EDGAR durable-cache semantic admission", () => {
       body: "<html><body>GOOD durable filing disclosure</body></html>",
     });
   });
+
+  it.each([
+    ["fresh", 0],
+    ["stale within the allowed ceiling", 120],
+  ])("never returns a pre-upgrade %s poisoned durable filing and self-heals", async (_label, ageSeconds) => {
+    const url = `https://www.sec.gov/Archives/edgar/data/320193/pre-upgrade-${ageSeconds}.htm`;
+    const key = buildCacheKey("edgar", url, {});
+    await cachedFetch({
+      provider: "edgar",
+      endpoint: url,
+      params: {},
+      ttlSeconds: 60,
+      fetcher: async () => ({
+        body: { status: 200, body: "<html><body>Hello world</body></html>" },
+        asOf: "2026-07-01",
+      }),
+    });
+    if (ageSeconds > 0) backdate(key, ageSeconds);
+    const poisoned = readRow(key);
+    let liveHits = 0;
+    const transport = createDbCachedEdgarTransport({
+      fetchFn: () => {
+        liveHits++;
+        return Promise.resolve(
+          new Response("<html><body>Annual filing with valid registrant disclosure</body></html>", {
+            status: 200,
+          }),
+        );
+      },
+    });
+
+    const result = await transport.fetchText(url, {
+      ttlMs: 60_000,
+      validateBody: filingDocumentBodyProblem,
+    });
+
+    expect(result.body).toContain("valid registrant disclosure");
+    expect(result.body).not.toContain("Hello world");
+    expect(liveHits).toBe(1);
+    const healed = readRow(key);
+    expect(healed).toBeDefined();
+    expect(healed!.fetchedAt).not.toBe(poisoned!.fetchedAt);
+    expect(JSON.parse(healed!.bodyJson)).toEqual({
+      status: 200,
+      body: "<html><body>Annual filing with valid registrant disclosure</body></html>",
+    });
+  });
+
+  it("evicts pre-upgrade poison and rejects an invalid live self-heal without restoring it", async () => {
+    const url = "https://www.sec.gov/Archives/edgar/data/320193/pre-upgrade-invalid-live.htm";
+    const key = buildCacheKey("edgar", url, {});
+    await cachedFetch({
+      provider: "edgar",
+      endpoint: url,
+      params: {},
+      ttlSeconds: 60,
+      fetcher: async () => ({ body: { status: 200, body: "OK" }, asOf: "2026-07-01" }),
+    });
+    const transport = createDbCachedEdgarTransport({
+      fetchFn: () => Promise.resolve(new Response("OK", { status: 200 })),
+    });
+
+    await expect(
+      transport.fetchText(url, { ttlMs: 60_000, validateBody: filingDocumentBodyProblem }),
+    ).rejects.toThrow(/error|placeholder/i);
+
+    expect(readRow(key)).toBeUndefined();
+  });
+});
+
+describe("cachedFetch semantic validation", () => {
+  it("preserves last-good on rejected background refresh and permits the next valid retry", async () => {
+    const opts = {
+      provider: "edgar" as const,
+      endpoint: "semantic-validator",
+      params: {},
+      ttlSeconds: 60,
+      validateBody: (body: string): string | null => body === "BAD" ? "bad semantic body" : null,
+    };
+    const key = buildCacheKey(opts.provider, opts.endpoint, opts.params);
+    await cachedFetch({ ...opts, fetcher: async () => ({ body: "GOOD", asOf: "2026-07-01" }) });
+    backdate(key, 120);
+
+    const rejected = vi.fn(async () => ({ body: "BAD", asOf: "2026-07-02" }));
+    expect((await cachedFetch({ ...opts, fetcher: rejected })).data).toBe("GOOD");
+    await flushPendingRefreshes();
+    expect(readRow(key)?.bodyJson).toBe(JSON.stringify("GOOD"));
+
+    const accepted = vi.fn(async () => ({ body: "NEW", asOf: "2026-07-03" }));
+    expect((await cachedFetch({ ...opts, fetcher: accepted })).data).toBe("GOOD");
+    await flushPendingRefreshes();
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(readRow(key)?.bodyJson).toBe(JSON.stringify("NEW"));
+  });
 });
 
 describe("cachedFetch — corrupt row self-heals instead of crash-looping (L6)", () => {

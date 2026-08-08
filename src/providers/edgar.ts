@@ -491,6 +491,14 @@ export function createDbCachedEdgarTransport(opts?: {
           params: {},
           ttlSeconds: Math.floor(ttlMs / 1000),
           maxStaleSeconds: 7 * 86_400,
+          ...(validateBody !== undefined
+            ? {
+                validateBody: (cached: { status: number; body: string }): string | null =>
+                  cached.status === 200
+                    ? validateBody(cached.body)
+                    : `cached EDGAR response had non-success status ${cached.status}`,
+              }
+            : {}),
           fetcher: async () => {
             const res = await inner.fetchText(url, { ttlMs: 0, validateBody });
             if (res.status !== 200) throw new NonOkStatus(res);
@@ -588,15 +596,53 @@ function filingMetadataProblem(
 }
 
 const EDGAR_ERROR_BODY_PATTERNS: readonly RegExp[] = [
-  /<title>\s*(?:page|file) not found\s*<\/title>/i,
-  /<title>\s*(?:access denied|request rate threshold exceeded|service unavailable)\s*<\/title>/i,
   /your request originates from an undeclared automated tool/i,
   /request rate threshold exceeded/i,
+  /\bedgar is (?:currently )?(?:unavailable|undergoing (?:scheduled )?maintenance)\b/i,
+  /\b(?:the )?(?:page|file) you requested (?:could not|cannot) be found\b/i,
+  /\btemporarily unavailable[.;, ]+(?:please )?try again later\b/i,
   /^\s*(?:ok|not found|file not found|access denied|service unavailable|temporarily unavailable)\s*[.!]?\s*$/i,
 ];
 
 function knownEdgarErrorBody(body: string): boolean {
-  return EDGAR_ERROR_BODY_PATTERNS.some((pattern) => pattern.test(body));
+  if (EDGAR_ERROR_BODY_PATTERNS.some((pattern) => pattern.test(body))) return true;
+  const title = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(body)?.[1]
+    ?.replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (
+    title !== undefined &&
+    /(?:page|file) not found\b|access denied\b|request rate threshold exceeded\b|service unavailable\b|temporarily unavailable\b|edgar (?:maintenance|unavailable)\b/i.test(
+      title,
+    )
+  ) {
+    return true;
+  }
+  return /<(?:[a-z][\w.-]*:)?(?:error|errorresponse|exceptionreport)\b/i.test(body) ||
+    /<(?:[a-z][\w.-]*:)?code\b[^>]*>\s*(?:accessdenied|nosuchkey|requesttimeout|serviceunavailable)\s*</i.test(
+      body,
+    );
+}
+
+function textContent(body: string): string {
+  return unescapeHtml(body)
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(?:script|style)\b[^>]*>[\s\S]*?<\/(?:script|style)>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasMeaningfulHumanContent(body: string): boolean {
+  const text = textContent(body);
+  const words = text.match(/[A-Za-z][A-Za-z'’-]{2,}/g) ?? [];
+  const uniqueWords = new Set(words.map((word) => word.toLowerCase()));
+  // Lexical diversity plus sentence/connective structure admits substantive
+  // plain text and ordinary HTML disclosures without treating a two-word page
+  // or arbitrary tag as a filing. This is intentionally not a byte threshold.
+  return words.length >= 12 &&
+    uniqueWords.size >= 8 &&
+    (/[.!?;:]/.test(text) || /\b(?:and|but|because|while|which|that)\b/i.test(text));
 }
 
 /** Return a semantic problem for a successful filing-document body, if any. */
@@ -606,23 +652,23 @@ export function filingDocumentBodyProblem(body: string): string | null {
   if (knownEdgarErrorBody(trimmed)) return "filing document response was an SEC error or placeholder page";
 
   // SEC filing artifacts legitimately arrive as HTML/iXBRL, XML/XBRL, SGML,
-  // or plain text. Use narrow structural/filing signals rather than a length
-  // cutoff: short exhibits can be valid, while a large branded error page is
-  // still not filing content.
+  // or plain text. Recognize filing structures/terms first, then fall back to
+  // meaningful human prose. Markup or an XML declaration alone proves nothing.
   if (
-    /<!doctype\s+html\b|<html\b|<\?xml\b|<(?:body|table|div|section|p|h[1-6])\b|<(?:[a-z][\w.-]*:)?(?:xbrl|html)\b|<SEC-DOCUMENT\b|<DOCUMENT\b|<TEXT\b/i.test(
+    /<(?:xbrli:)?xbrl\b|<ix:(?:nonfraction|nonnumeric|header|resources)\b|<xbrli:(?:context|unit)\b|<SEC-DOCUMENT\b|<DOCUMENT\b[\s\S]*?<TYPE>[\s\S]*?<TEXT\b/i.test(
       trimmed,
     )
   ) {
     return null;
   }
   if (
-    /\b(?:united states securities and exchange commission|annual report|quarterly report|current report|registrant|form\s+(?:10-[KQ]|20-F|6-K|8-K)|accession number)\b/i.test(
+    /\b(?:united states securities and exchange commission|annual (?:report|filing)|quarterly (?:report|filing)|current report|filing disclosure|registrant|exhibit\s+(?:\d+(?:\.\d+)?|[A-Z]\b)|(?:form\s+)?(?:10-[KQ]|20-F|6-K|8-K)|accession number)\b/i.test(
       trimmed,
     )
   ) {
     return null;
   }
+  if (hasMeaningfulHumanContent(trimmed)) return null;
   return "filing document response was implausible SEC filing content";
 }
 
@@ -995,13 +1041,20 @@ export class EdgarClient {
    * filing date when the caller knows it; defaults to fetch date.
    */
   async fetchFilingDoc(url: string, opts?: { asOf?: string }): Promise<FetchResult<string>> {
+    let parsedUrl: URL;
     let host = "";
     try {
-      host = new URL(url).hostname;
+      parsedUrl = new URL(url);
+      host = parsedUrl.hostname.toLowerCase();
     } catch {
       throw new Error(`fetchFilingDoc: invalid URL "${url}"`);
     }
-    if (!host.endsWith("sec.gov")) throw new Error(`fetchFilingDoc: refusing non-SEC host "${host}"`);
+    if (parsedUrl.protocol !== "https:") {
+      throw new Error(`fetchFilingDoc: refusing non-HTTPS URL "${url}"`);
+    }
+    if (host !== "sec.gov" && !host.endsWith(".sec.gov")) {
+      throw new Error(`fetchFilingDoc: refusing non-SEC host "${host}"`);
+    }
     const res = await this.request(url, EDGAR_TTL.filing, filingDocumentBodyProblem);
     if (!res.ok) {
       return this.gap(

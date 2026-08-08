@@ -18,16 +18,49 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import Database from "better-sqlite3";
 
+const providerBoundaryMocks = vi.hoisted(() => ({
+  runPass: vi.fn(async () => {
+    throw new Error("provider runPass must not run during durable verify recovery");
+  }),
+  runPassStreaming: vi.fn(() => {
+    throw new Error("provider runPassStreaming must not run during durable verify recovery");
+  }),
+  webSearchTool: vi.fn(() => {
+    throw new Error("provider webSearchTool must not run during durable verify recovery");
+  }),
+}));
+const configMocks = vi.hoisted(() => ({
+  getConfig: vi.fn(() => ({
+    fmpApiKey: undefined,
+    finnhubApiKey: undefined,
+    fredApiKey: undefined,
+    anthropicApiKey: undefined,
+    analysisModel: "auto",
+    hasFmpKey: false,
+    hasFinnhubKey: false,
+    hasFredKey: false,
+    hasAnthropicKey: false,
+    fixtureMode: true,
+  })),
+}));
+
+vi.mock("@/config/env", () => ({
+  getConfig: configMocks.getConfig,
+}));
+
 // Mock the Anthropic provider so the runner's model-resolution step is driven
 // by the test (no live network). By default resolveModel succeeds with a fixed
 // model (the happy-path tests need it to resolve); individual tests override it
-// (e.g. to throw for the model-resolution-failure case). Other provider exports
-// are irrelevant to the runner and left undefined.
+// (e.g. to throw for the model-resolution-failure case). Provider pass boundaries
+// fail loudly so the real Stage C facade remains network-free in recovery tests.
 vi.mock("@/providers/anthropic", () => ({
   resolveModel: vi.fn(async (setting: string) => ({
     model: setting === "auto" || setting === "" ? "claude-opus-4-8" : setting,
     resolvedFrom: setting === "auto" ? ("auto" as const) : ("explicit" as const),
   })),
+  runPass: providerBoundaryMocks.runPass,
+  runPassStreaming: providerBoundaryMocks.runPassStreaming,
+  webSearchTool: providerBoundaryMocks.webSearchTool,
 }));
 
 import { resolveModel } from "@/providers/anthropic";
@@ -82,6 +115,9 @@ import {
   type Report,
 } from "@/report/schema";
 import type { DataBundle } from "@/pipeline/types";
+import { runStageB } from "@/pipeline/compute";
+import { validateBundle } from "@/pipeline/stageA/validate";
+import { pipelinePasses } from "@/pipeline/stageC";
 import { PIPELINE_STEPS, type StepProgress } from "@/types/core";
 
 /* ------------------------------------------------------------------------ *
@@ -109,6 +145,10 @@ beforeEach(() => {
   // implementations persist across tests; restoreAllMocks does not reset them).
   resolveModelMock.mockReset();
   resolveModelMock.mockImplementation(defaultResolveModel);
+  providerBoundaryMocks.runPass.mockClear();
+  providerBoundaryMocks.runPassStreaming.mockClear();
+  providerBoundaryMocks.webSearchTool.mockClear();
+  configMocks.getConfig.mockClear();
 });
 
 afterEach(() => {
@@ -479,6 +519,14 @@ function testTelemetry<T>(pass: PassResultLike<T>, billable = true): TestTelemet
 
 function testSuccessSettlement<T>(pass: PassResultLike<T>, billable = true): TestSettlement<T> {
   return { outcome: "success", data: pass.data, telemetry: testTelemetry(pass, billable) };
+}
+
+function testFailureSettlement<T>(pass: PassResultLike<T>, message: string): TestSettlement<T> {
+  return {
+    outcome: "failure",
+    failure: { name: "ProviderError", message, kind: "provider" },
+    telemetry: testTelemetry(pass),
+  };
 }
 
 function testAnalystPass(side: "bull" | "bear", costUsd = side === "bull" ? 0.9 : 0.47): PassResultLike<AnalystCase> {
@@ -1715,7 +1763,6 @@ describe("runJob - durable paid-pass settlements", () => {
       throw new Error("fetch prerequisite must not run for durable verify");
     });
     const options: RunJobOptions = {
-      hasAnthropicKey: false,
       now: NOW,
       resume: true,
     };
@@ -1748,9 +1795,296 @@ describe("runJob - durable paid-pass settlements", () => {
       .where(eq(reports.id, result.reportId!))
       .get()?.reportJson;
     expect(persistedJson).not.toBeNull();
-    expect(JSON.parse(persistedJson!)).toMatchObject(verifiedReport);
+    const persisted = ReportSchema.parse(JSON.parse(persistedJson!));
+    const { meta: persistedMeta, appendix: persistedAppendix, ...persistedAnalysis } = persisted;
+    const { meta: expectedMeta, appendix: expectedAppendix, ...expectedAnalysis } = verifiedReport;
+    expect(persistedAnalysis).toEqual(expectedAnalysis);
+    expect(persistedAppendix.sources).toEqual(expectedAppendix.sources);
+    expect(persistedAppendix.missingData).toEqual(expectedAppendix.missingData);
+    expect(persistedMeta).toMatchObject({
+      symbol: expectedMeta.symbol,
+      companyName: expectedMeta.companyName,
+      generatedAt: expectedMeta.generatedAt,
+      model: expectedMeta.model,
+      asOfMap: expectedMeta.asOfMap,
+    });
     },
   );
+
+  it("reconciles real-facade verify recovery from the local ledger before early persistence", async () => {
+    const { jobId } = createJob("AAPL");
+    const bundle = fakeBundle();
+    const validation = validateBundle(bundle, { now: NOW() });
+    const computed = runStageB(bundle);
+    const payload = pipelinePasses.assembleContextPayload(bundle, computed, validation);
+    const payloadFingerprint = pipelinePasses.fingerprintPayload!(payload);
+
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "real-facade-bull",
+      pass: "bull",
+      settlement: testSuccessSettlement(testAnalystPass("bull")),
+      payloadFingerprint,
+      settledAt: NOW().toISOString(),
+    });
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "real-facade-bear",
+      pass: "bear",
+      settlement: testSuccessSettlement(testAnalystPass("bear")),
+      payloadFingerprint,
+      settledAt: NOW().toISOString(),
+    });
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "real-facade-synthesize",
+      pass: "synthesize",
+      settlement: testSuccessSettlement({
+        data: fakeJudgeOutput(),
+        model: "claude-opus-4-8",
+        costUsd: 0.4,
+        fallbackUsed: false,
+      }),
+      payloadFingerprint,
+      settledAt: NOW().toISOString(),
+    });
+
+    const verified = await pipelinePasses.runVerifyPass(
+      { analysisModel: "claude-opus-4-8", payload },
+      fakeJudgeOutput(),
+      { fetchedUrls: [] },
+      async (settlement) => {
+        persistPassSettlement({
+          jobId,
+          runGeneration: 0,
+          attemptId: "real-facade-verify",
+          pass: "verify",
+          settlement,
+          payloadFingerprint,
+          settledAt: NOW().toISOString(),
+        });
+      },
+    );
+    expect(providerBoundaryMocks.runPass).not.toHaveBeenCalled();
+    expect(providerBoundaryMocks.runPassStreaming).not.toHaveBeenCalled();
+    expect(providerBoundaryMocks.webSearchTool).not.toHaveBeenCalled();
+
+    const verifyArtifact = readCurrentGenerationPassArtifacts(jobId).find(
+      (artifact) => artifact.pass === "verify",
+    );
+    expect(verifyArtifact?.envelope.outcome).toBe("success");
+    if (verifyArtifact?.envelope.outcome !== "success") {
+      throw new Error("expected a durable real-facade verify success artifact");
+    }
+    const storedBeforeRecovery = ReportSchema.parse(verifyArtifact.envelope.data);
+    expect(storedBeforeRecovery.meta.costUsd).toBe(0);
+    expect(storedBeforeRecovery.meta.execution).toEqual([]);
+    expect(storedBeforeRecovery.appendix.costBreakdown).toEqual([]);
+    expect(verified.verifiedReport.meta.generatedAt).toBe(storedBeforeRecovery.meta.generatedAt);
+
+    handle.db
+      .update(jobs)
+      .set({ status: "error", error: "report link interrupted", reportId: null })
+      .where(eq(jobs.id, jobId))
+      .run();
+    clearPreparedResumeProcessCache();
+    providerBoundaryMocks.runPass.mockClear();
+    providerBoundaryMocks.runPassStreaming.mockClear();
+    providerBoundaryMocks.webSearchTool.mockClear();
+
+    const fetchPrerequisite = vi.fn(() => {
+      throw new Error("fetch prerequisite must not run for durable verify recovery");
+    });
+    const options: RunJobOptions = {
+      now: NOW,
+      resume: true,
+    };
+    Object.defineProperty(options, "bundle", { get: fetchPrerequisite });
+
+    const result = await runJob(jobId, pipelinePasses, options);
+
+    expect(result).toMatchObject({ status: "done", dataOnly: false });
+    expect(fetchPrerequisite).not.toHaveBeenCalled();
+    expect(configMocks.getConfig).not.toHaveBeenCalled();
+    expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(providerBoundaryMocks.runPass).not.toHaveBeenCalled();
+    expect(providerBoundaryMocks.runPassStreaming).not.toHaveBeenCalled();
+    expect(providerBoundaryMocks.webSearchTool).not.toHaveBeenCalled();
+
+    const persistedRow = handle.db
+      .select()
+      .from(reports)
+      .where(eq(reports.id, result.reportId!))
+      .get();
+    expect(persistedRow?.costUsd).toBeCloseTo(1.77, 10);
+    const persisted = ReportSchema.parse(JSON.parse(persistedRow!.reportJson!));
+    expect(persisted.meta.costUsd).toBeCloseTo(1.77, 10);
+    expect(persisted.meta.execution?.map((entry) => ({
+      step: entry.step,
+      requestedModel: entry.requestedModel,
+      effectiveModel: entry.effectiveModel,
+    }))).toEqual([
+      { step: "bull", requestedModel: "claude-opus-4-8", effectiveModel: "claude-opus-4-8" },
+      { step: "bear", requestedModel: "claude-opus-4-8", effectiveModel: "claude-opus-4-8" },
+      { step: "synthesize", requestedModel: "claude-opus-4-8", effectiveModel: "claude-opus-4-8" },
+      { step: "verify", requestedModel: "deterministic", effectiveModel: "deterministic" },
+    ]);
+    expect(persisted.appendix.costBreakdown.map(({ step, model, costUsd }) => ({
+      step,
+      model,
+      costUsd,
+    }))).toEqual([
+      { step: "bull", model: "claude-opus-4-8", costUsd: 0.9 },
+      { step: "bear", model: "claude-opus-4-8", costUsd: 0.47 },
+      { step: "synthesize", model: "claude-opus-4-8", costUsd: 0.4 },
+    ]);
+    expect(persisted.meta.symbol).toBe("AAPL");
+    expect(persisted.meta.companyName).toBe("Apple Inc.");
+    expect(persisted.meta.asOfMap).toEqual({ profile: "2026-07-01", treasury: "2026-07-04" });
+    expect(persisted.meta.generatedAt).toBe(storedBeforeRecovery.meta.generatedAt);
+    expect(persisted.verdict.synthesis).toBe(
+      "A three-sentence synthesis with scenarios and probabilities. It avoids ratings. It is grounded.",
+    );
+  });
+
+  it("keeps repeated prior-generation ledger attempts distinct from effective pass execution", async () => {
+    const { jobId } = createJob("AAPL");
+    const persistAttempt = (
+      runGeneration: number,
+      attemptId: string,
+      pass: "bull" | "bear" | "synthesize" | "verify",
+      settlement: TestSettlement<unknown>,
+      payloadFingerprint: string,
+    ): void => {
+      persistPassSettlement({
+        jobId,
+        runGeneration,
+        attemptId,
+        pass,
+        settlement,
+        payloadFingerprint,
+        settledAt: NOW().toISOString(),
+      });
+    };
+    const oldBullAttempt = {
+      ...testAnalystPass("bull", 0.11),
+      model: "claude-haiku-3-5",
+      fallbackUsed: false,
+    };
+    const oldSynthesizeAttempt: PassResultLike<JudgeOutput> = {
+      data: fakeJudgeOutput(),
+      model: "claude-sonnet-4-5",
+      costUsd: 0.2,
+      fallbackUsed: false,
+    };
+    const oldVerifyAttempt: PassResultLike<Report> = {
+      data: fakeReport(fakeJudgeOutput()),
+      model: "claude-sonnet-4-5",
+      costUsd: 0.05,
+      fallbackUsed: true,
+    };
+    for (const [attemptId, pass, settlement] of [
+      ["generation-0-bull-failure", "bull", testFailureSettlement(oldBullAttempt, "old bull failed")],
+      ["generation-0-synthesize-failure", "synthesize", testFailureSettlement(oldSynthesizeAttempt, "old synthesize failed")],
+      ["generation-0-verify-failure", "verify", testFailureSettlement(oldVerifyAttempt, "old paid verify failed")],
+    ] as const) {
+      persistAttempt(0, attemptId, pass, settlement, "1.3.0:prior-generation");
+    }
+
+    handle.db
+      .update(jobs)
+      .set({ runGeneration: 1, revision: 1 })
+      .where(eq(jobs.id, jobId))
+      .run();
+    const currentBull = { ...testAnalystPass("bull"), fallbackUsed: true };
+    const currentBear = testAnalystPass("bear");
+    const currentSynthesize: PassResultLike<JudgeOutput> = {
+      data: fakeJudgeOutput(),
+      model: "claude-opus-4-8",
+      costUsd: 0.4,
+      fallbackUsed: true,
+    };
+    for (const [attemptId, pass, settlement] of [
+      ["generation-1-bull-success", "bull", testSuccessSettlement(currentBull)],
+      ["generation-1-bear-success", "bear", testSuccessSettlement(currentBear)],
+      ["generation-1-synthesize-success", "synthesize", testSuccessSettlement(currentSynthesize)],
+    ] as const) {
+      persistAttempt(1, attemptId, pass, settlement, "1.3.0:current-generation");
+    }
+    persistPassSettlement({
+      jobId,
+      runGeneration: 1,
+      attemptId: "generation-1-verify-success",
+      pass: "verify",
+      settlement: testSuccessSettlement({
+        data: fakeReport(fakeJudgeOutput()),
+        model: "deterministic",
+        costUsd: 0,
+        fallbackUsed: false,
+      }, false),
+      payloadFingerprint: "1.3.0:current-generation",
+      settledAt: NOW().toISOString(),
+    });
+    handle.db
+      .update(jobs)
+      .set({ status: "error", error: "generation 1 report link interrupted", reportId: null })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    const base = mockPasses();
+    const result = await runJob(jobId, base.passes, {
+      hasAnthropicKey: false,
+      now: NOW,
+      resume: true,
+    });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: false, totalCostUsd: 2.13 });
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(2);
+    expect(handle.db
+      .select({ runGeneration: costLog.runGeneration })
+      .from(costLog)
+      .where(eq(costLog.jobId, jobId))
+      .orderBy(costLog.id)
+      .all()
+      .map((row) => row.runGeneration)).toEqual([0, 0, 0, 1, 1, 1]);
+    expect(base.calls).toEqual([]);
+
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get();
+    expect(row?.costUsd).toBeCloseTo(2.13, 10);
+    const persisted = ReportSchema.parse(JSON.parse(row!.reportJson!));
+    expect(persisted.meta.costUsd).toBeCloseTo(2.13, 10);
+    expect(persisted.meta.execution?.map((entry) => ({
+      step: entry.step,
+      effectiveModel: entry.effectiveModel,
+      fallbackUsed: entry.fallbackUsed,
+      adjustments: entry.adjustments,
+    }))).toEqual([
+      { step: "bull", effectiveModel: "claude-opus-4-8", fallbackUsed: true, adjustments: ["fallback"] },
+      { step: "bear", effectiveModel: "claude-opus-4-8", fallbackUsed: false, adjustments: [] },
+      { step: "synthesize", effectiveModel: "claude-opus-4-8", fallbackUsed: true, adjustments: ["fallback"] },
+      { step: "verify", effectiveModel: "deterministic", fallbackUsed: false, adjustments: [] },
+    ]);
+    expect(persisted.appendix.costBreakdown.map((entry) => ({
+      step: entry.step,
+      model: entry.model,
+      costUsd: entry.costUsd,
+      fallbackUsed: entry.fallbackUsed,
+      hasAdjustments: Object.hasOwn(entry, "adjustments"),
+      hasRequestedModel: Object.hasOwn(entry, "requestedModel"),
+      hasRequestedEffort: Object.hasOwn(entry, "requestedEffort"),
+      hasEffectiveEffort: Object.hasOwn(entry, "effectiveEffort"),
+    }))).toEqual([
+      { step: "bull", model: "claude-haiku-3-5", costUsd: 0.11, fallbackUsed: false, hasAdjustments: false, hasRequestedModel: false, hasRequestedEffort: false, hasEffectiveEffort: false },
+      { step: "synthesize", model: "claude-sonnet-4-5", costUsd: 0.2, fallbackUsed: false, hasAdjustments: false, hasRequestedModel: false, hasRequestedEffort: false, hasEffectiveEffort: false },
+      { step: "verify", model: "claude-sonnet-4-5", costUsd: 0.05, fallbackUsed: true, hasAdjustments: false, hasRequestedModel: false, hasRequestedEffort: false, hasEffectiveEffort: false },
+      { step: "bull", model: "claude-opus-4-8", costUsd: 0.9, fallbackUsed: true, hasAdjustments: false, hasRequestedModel: false, hasRequestedEffort: false, hasEffectiveEffort: false },
+      { step: "bear", model: "claude-opus-4-8", costUsd: 0.47, fallbackUsed: false, hasAdjustments: false, hasRequestedModel: false, hasRequestedEffort: false, hasEffectiveEffort: false },
+      { step: "synthesize", model: "claude-opus-4-8", costUsd: 0.4, fallbackUsed: true, hasAdjustments: false, hasRequestedModel: false, hasRequestedEffort: false, hasEffectiveEffort: false },
+    ]);
+  });
 
   it("queued resume includes a late source analyst settlement before worker dispatch", async () => {
     const { jobId } = createJob("AAPL");

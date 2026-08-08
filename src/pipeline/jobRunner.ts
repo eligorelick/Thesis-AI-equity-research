@@ -2037,7 +2037,6 @@ export async function runJob<TPayload = unknown>(
   heartbeat.unref?.();
 
   const now = opts.now ?? ((): Date => new Date());
-  const hasKey = opts.hasAnthropicKey ?? getConfig().hasAnthropicKey;
   const maxJudgeRetries =
     opts.maxJudgeRetries !== undefined && Number.isFinite(opts.maxJudgeRetries)
       ? Math.max(0, Math.trunc(opts.maxJudgeRetries))
@@ -2061,16 +2060,18 @@ export async function runJob<TPayload = unknown>(
         `reused durable verify artifact from generation ${preparedResume.sourceGeneration}`,
         preparedResume.verify.costUsd,
       );
-      const verificationRate = preparedResume.verify.data.meta.verificationRate;
+      const recoveredReport = reconcileRecoveredVerifyReport(state, preparedResume.verify);
+      const verificationRate = recoveredReport.meta.verificationRate;
       const reportId = persistReport(
         state,
-        preparedResume.verify.data,
-        preparedResume.verify.data.meta.model,
+        recoveredReport,
+        recoveredReport.meta.model,
         verificationRate,
         "done",
       );
       return finishRun(state, { reportId, verificationRate, dataOnly: false });
     }
+    const hasKey = opts.hasAnthropicKey ?? getConfig().hasAnthropicKey;
 
     // -- fetch ----------------------------------------------------------------
     startStep(state, "fetch");
@@ -3125,12 +3126,33 @@ function persistReport(
  * ------------------------------------------------------------------------ */
 
 function buildCostBreakdown(state: RunState): { step: string; model: string; costUsd: number }[] {
-  const rows = getDb()
-    .select({ step: costLog.step, model: costLog.model, costUsd: costLog.costUsd })
+  return readCostLedger(state.jobId).map((row) => ({
+    step: row.step,
+    model: row.model,
+    costUsd: row.costUsd,
+  }));
+}
+
+interface CostLedgerRow {
+  step: string;
+  model: string;
+  costUsd: number;
+  fallbackUsed: boolean;
+}
+
+/** Ordered immutable accounting rows used to rebuild persisted report metadata. */
+function readCostLedger(jobId: string): CostLedgerRow[] {
+  return getDb()
+    .select({
+      step: costLog.step,
+      model: costLog.model,
+      costUsd: costLog.costUsd,
+      fallbackUsed: costLog.fallbackUsed,
+    })
     .from(costLog)
-    .where(eq(costLog.jobId, state.jobId))
+    .where(eq(costLog.jobId, jobId))
+    .orderBy(costLog.id)
     .all();
-  return rows.map((r) => ({ step: r.step, model: r.model, costUsd: r.costUsd }));
 }
 
 /** Sum of every cost_log row already recorded for a job (resume rehydration). */
@@ -3199,6 +3221,95 @@ function reconcileMeta(
     next.appendix.verificationLog = verifyLog as Report["appendix"]["verificationLog"];
   }
   return next;
+}
+
+/**
+ * Repair runner-owned metadata on a recovered final verify artifact before it
+ * is linked. Stage C settles verification before the runner knows the complete
+ * ledger, so its durable report intentionally contains provisional zero/empty
+ * accounting fields. Recovery has no live pipeline context; the local ledger
+ * and durable verify telemetry are the complete authority available here.
+ */
+function reconcileRecoveredVerifyReport(
+  state: RunState,
+  verify: PassResultLike<Report>,
+): Report {
+  const ledger = readCostLedger(state.jobId);
+  state.totalCostUsd = ledger.reduce((total, row) => total + row.costUsd, 0);
+  const requestedModel = verify.data.meta.model;
+  const effectiveByStep = new Map<string, CostLedgerRow>();
+  for (const row of ledger) {
+    if (row.step === "bull" || row.step === "bear" || row.step === "synthesize") {
+      // Ordered by cost_log.id: the last result attempt is the effective pass,
+      // while every earlier billed attempt remains visible in the appendix.
+      effectiveByStep.set(row.step, row);
+    }
+  }
+  const execution: ExecutionMetadataEntry[] = [];
+  for (const step of ["bull", "bear", "synthesize"] as const) {
+    const row = effectiveByStep.get(step);
+    if (row === undefined) continue;
+    execution.push(buildExecutionMetadataEntry({
+      step,
+      requestedModel,
+      effectiveModel: row.model,
+      // Requested effort is not persisted in cost_log; never infer historical
+      // execution from the current process setting.
+      requestedEffort: null,
+      fallbackUsed: row.fallbackUsed,
+    }));
+  }
+  // A recovered schema-valid report is finalized by this durable verify
+  // artifact. Historical paid verify attempts remain costs, not the effective
+  // final verification execution.
+  execution.push(buildExecutionMetadataEntry({
+    step: "verify",
+    requestedModel: "deterministic",
+    effectiveModel: verify.model,
+    requestedEffort: null,
+    fallbackUsed: verify.fallbackUsed,
+  }));
+  const costBreakdown = ledger.map((row) => ({
+    step: row.step,
+    model: row.model,
+    costUsd: row.costUsd,
+    // This is the only execution option cost_log persists per attempt. Do not
+    // infer requested model/effort or derived adjustments for appendix rows.
+    fallbackUsed: row.fallbackUsed,
+  }));
+  const report = costBreakdown.length === 0
+    ? {
+        ...verify.data,
+        appendix: { ...verify.data.appendix, costBreakdown: [] },
+      }
+    : verify.data;
+  const reconciled = reconcileMeta(
+    report,
+    {
+      symbol: state.symbol,
+      companyName: report.meta.companyName,
+      generatedAt: report.meta.generatedAt,
+      model: report.meta.model,
+      costUsd: state.totalCostUsd,
+      verificationRate: report.meta.verificationRate,
+      asOfMap: { ...report.meta.asOfMap },
+      execution,
+      runId: state.jobId,
+      startedAt: state.startedAt,
+      completedAt: findStep(state, "verify").completedAt ?? findStep(state, "verify").finishedAt,
+    },
+    costBreakdown,
+    report.appendix.verificationLog,
+  );
+  return ReportSchema.parse({
+    ...reconciled,
+    appendix: {
+      ...reconciled.appendix,
+      // reconcileMeta's normal path enriches one row per pass. Recovery instead
+      // has an attempt ledger, so preserve every row and its own persisted flag.
+      costBreakdown,
+    },
+  });
 }
 
 /** Best-effort company name from the profile row; falls back to the symbol. */

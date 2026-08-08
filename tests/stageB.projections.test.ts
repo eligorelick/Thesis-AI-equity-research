@@ -232,6 +232,31 @@ describe("projections — EPS derivation", () => {
     // The other three series still project.
     expect(p.series.length).toBe(3);
   });
+
+  it("suppresses EPS when the share-count trend is missing but preserves a finite zero trend", () => {
+    const p = computeProjections(makeInputs({ shareCountAnnualizedPct: null }));
+    const disclosures = p.series.flatMap((series) => series.disclosures);
+    const revenue = byMetric(p, "revenue");
+
+    expect(p.series.some((series) => series.metric === "epsDiluted")).toBe(false);
+    expect(revenue.disclosures).toContainEqual(
+      expect.objectContaining({
+        field: "projections.eps.shareCountTrend",
+        severity: "warn",
+      }),
+    );
+    for (const series of p.series.filter((candidate) => candidate.metric !== "revenue")) {
+      expect(series.disclosures.some((entry) => entry.field === "projections.eps.shareCountTrend")).toBe(false);
+    }
+    expect(
+      disclosures.filter((entry) => entry.field === "projections.eps.shareCountTrend"),
+    ).toHaveLength(1);
+    expect(JSON.stringify(p)).not.toContain("0%/yr (buyback/dilution history)");
+
+    const flatShares = computeProjections(makeInputs({ shareCountAnnualizedPct: 0 }));
+    expect(flatShares.series.some((series) => series.metric === "epsDiluted")).toBe(true);
+    expect(JSON.stringify(flatShares)).toContain("0%/yr (buyback/dilution history)");
+  });
 });
 
 describe("projections — not applicable", () => {

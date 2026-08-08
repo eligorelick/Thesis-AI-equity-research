@@ -427,6 +427,14 @@ export function computeProjections(inputs: ProjectionsInputs): Projections {
     ),
   );
 
+  if (!isNum(inputs.shareCountAnnualizedPct)) {
+    series.find((candidate) => candidate.metric === "revenue")?.disclosures.push({
+      field: "projections.eps.shareCountTrend",
+      reason: "Annualized diluted-share trend unavailable; EPS projection suppressed rather than assuming a flat share count.",
+      severity: "warn",
+    });
+  }
+
   // Diluted EPS (derived; disclosed + skipped when inputs missing)
   const epsSeries = buildEpsSeries(inputs, { bullRows, baseRows, bearRows }, H, incomeAsc, fwdPeriod, assumptionLines, asOf);
   if (epsSeries) series.push(epsSeries);
@@ -487,11 +495,13 @@ function buildEpsSeries(
       .filter((r) => isNum(r.netIncome) && isNum(r.ebit) && (r.ebit as number) > 0)
       .map((r) => (r.netIncome as number) / (r.ebit as number)),
   );
+  // EPS requires both a positive share anchor and a historical profitability conversion.
   if (!isNum(shares0) || shares0 <= 0 || niToEbit === null) {
-    // Disclosed elsewhere by the caller's revenue series; simply skip EPS.
     return null;
   }
-  const g = isNum(inputs.shareCountAnnualizedPct) ? inputs.shareCountAnnualizedPct / 100 : 0;
+  // The caller records a missing share trend once on the surviving revenue series.
+  if (!isNum(inputs.shareCountAnnualizedPct)) return null;
+  const g = inputs.shareCountAnnualizedPct / 100;
   const sharesAt = (t: number): number => shares0 * Math.pow(1 + g, t); // t = 1..H
 
   const epsPath = (dcfRows: DcfYearRow[]): number[] =>

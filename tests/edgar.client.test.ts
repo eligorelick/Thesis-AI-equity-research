@@ -798,6 +798,42 @@ describe("default transport (injected fetchFn — no network)", () => {
   });
 
   it.each([
+    ["script", "ScRiPt"],
+    ["style", "StYlE"],
+    ["title", "TiTlE"],
+    ["textarea", "TeXtArEa"],
+  ])("keeps Unicode-stable raw-text offsets for U+0130 content in %s", (element, closing) => {
+    const body = `<html><${element}>Hidden \u0130 sample</${closing}><body>Annual filing disclosure</body></html>`;
+    expect(filingDocumentBodyProblem(body)).toBeNull();
+  });
+
+  it.each([
+    ["script", "ScRiPt"],
+    ["style", "StYlE"],
+    ["title", "TiTlE"],
+    ["textarea", "TeXtArEa"],
+  ])("keeps Unicode-stable raw-text offsets for a U+0130-prefixed %s", (element, closing) => {
+    const body = `<html><\u0130:${element}>Hidden sample</\u0130:${closing}><body>Annual filing disclosure</body></html>`;
+    expect(filingDocumentBodyProblem(body)).toBeNull();
+  });
+
+  it.each([
+    ["script", "ScRiPt"],
+    ["style", "StYlE"],
+    ["title", "TiTlE"],
+    ["textarea", "TeXtArEa"],
+  ])("preserves ASCII mixed-case raw-text closing tags for %s", (element, closing) => {
+    const body = `<html><${element}>Hidden sample</${closing}><body>Annual filing disclosure</body></html>`;
+    expect(filingDocumentBodyProblem(body)).toBeNull();
+  });
+
+  it("ignores invalid-boundary raw-text closing lookalikes before a real close", () => {
+    const body =
+      "<html><script>Hidden </script$sample> and </script/> examples</ScRiPt><body>Annual filing disclosure</body></html>";
+    expect(filingDocumentBodyProblem(body)).toBeNull();
+  });
+
+  it.each([
     ["U+200C", "\u200Csample"],
     ["U+2163", "\u2163sample"],
   ])("accepts XML 1.0 NameStart prefixes beginning with %s", (_label, prefix) => {

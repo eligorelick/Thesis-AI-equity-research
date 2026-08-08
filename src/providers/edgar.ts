@@ -848,19 +848,26 @@ interface RawTextElementEnd {
 }
 
 function rawTextElementEnd(body: string, start: number, qName: string): RawTextElementEnd | null {
-  const lowerBody = body.toLowerCase();
-  const needle = `</${qName.toLowerCase()}`;
+  const foldedQName = qName.toLowerCase();
   let cursor = start;
   while (cursor < body.length) {
-    const candidate = lowerBody.indexOf(needle, cursor);
+    const candidate = body.indexOf("</", cursor);
     if (candidate < 0) return null;
-    const afterName = candidate + needle.length;
-    const boundary = body[afterName];
-    if (boundary !== ">" && !isMarkupWhitespace(boundary)) {
-      cursor = afterName;
+    const closingName = readMarkupName(body, candidate + 2);
+    if (closingName === null) {
+      cursor = candidate + 2;
       continue;
     }
-    const close = skipWhitespace(body, afterName);
+    if (closingName.name.toLowerCase() !== foldedQName) {
+      cursor = closingName.end;
+      continue;
+    }
+    const boundary = body[closingName.end];
+    if (boundary !== ">" && !isMarkupWhitespace(boundary)) {
+      cursor = closingName.end;
+      continue;
+    }
+    const close = skipWhitespace(body, closingName.end);
     return body[close] === ">" ? { contentEnd: candidate, end: close + 1 } : null;
   }
   return null;

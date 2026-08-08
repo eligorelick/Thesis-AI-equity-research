@@ -1014,6 +1014,7 @@ export function computeRunway(
 ): RunwayResult {
   const notes: string[] = [];
   const gaps: ManifestEntry[] = [];
+  const balanceMs = parseIsoDateUtc(balance.date);
 
   notes.push(
     "burn = -(operatingCashFlow + capitalExpenditure) per quarter; FMP capitalExpenditure is negative, " +
@@ -1023,6 +1024,11 @@ export function computeRunway(
   notes.push(
     "strict liquidity variant: cashAndShortTermInvestments only — longTermInvestments deliberately excluded (house rule).",
   );
+  if (balanceMs === null) {
+    notes.push(
+      `balance date "${balance.date}" unparseable — liquidity as-of and exhaustion date unavailable.`,
+    );
+  }
 
   // ---- liquid assets
   let liquidAssets: number | null = null;
@@ -1156,13 +1162,40 @@ export function computeRunway(
       );
     }
     const fcfScale = window.reduce((scale, w) => Math.max(scale, Math.abs(w.fcf)), 0);
-    const normalizedMean =
-      fcfScale === 0
-        ? 0
-        : window.reduce((sum, w) => sum + w.fcf / fcfScale, 0) / window.length;
+    let normalizedMean = 0;
+    let normalizationLostNonzeroTerm = false;
+    let normalizedSum = 0;
+    if (fcfScale !== 0) {
+      let normalizedSumRaw = 0;
+      let normalizedSumCorrection = 0;
+      for (const { fcf } of window) {
+        const normalizedFcf = fcf / fcfScale;
+        if (fcf !== 0 && normalizedFcf === 0) {
+          normalizationLostNonzeroTerm = true;
+        }
+        const nextSum = normalizedSumRaw + normalizedFcf;
+        normalizedSumCorrection +=
+          Math.abs(normalizedSumRaw) >= Math.abs(normalizedFcf)
+            ? normalizedSumRaw - nextSum + normalizedFcf
+            : normalizedFcf - nextSum + normalizedSumRaw;
+        normalizedSumRaw = nextSum;
+      }
+      normalizedSum = normalizedSumRaw + normalizedSumCorrection;
+      normalizedMean = normalizedSum / window.length;
+    }
+    const normalizationLostPrecision =
+      normalizationLostNonzeroTerm || (normalizedSum !== 0 && normalizedMean === 0);
     const avgFcf =
       normalizedMean === 0 ? 0 : normalizedMean * fcfScale;
-    if (normalizedMean >= 0) {
+    if (normalizedMean === 0 && normalizationLostPrecision) {
+      gaps.push({
+        field: "runway.avgQuarterlyBurn",
+        reason:
+          "FCF normalization or averaging lost a nonzero contribution, leaving the average sign indeterminate — " +
+          "burning, numeric burn, runway and exhaustion date suppressed due to precision loss",
+        severity: "warn",
+      });
+    } else if (normalizedMean >= 0) {
       burning = false;
       notes.push(
         `not burning: average (operatingCashFlow + capitalExpenditure) over the last ${window.length} ` +
@@ -1193,10 +1226,7 @@ export function computeRunway(
           });
         } else {
           runwayQuarters = computedRunwayQuarters;
-          const balanceMs = parseIsoDateUtc(balance.date);
-          if (balanceMs === null) {
-            notes.push(`balance date "${balance.date}" unparseable — exhaustion date not estimated.`);
-          } else {
+          if (balanceMs !== null) {
             estimatedExhaustionDate = isoDateFromMs(
               balanceMs + runwayQuarters * DAYS_PER_QUARTER * MS_PER_DAY,
             );
@@ -1283,7 +1313,7 @@ export function computeRunway(
     burnWindowDates: window.map((w) => w.date),
     liquidAssets,
     liquidAssetsBasis,
-    liquidAssetsAsOf: liquidAssets !== null ? balance.date : null,
+    liquidAssetsAsOf: liquidAssets !== null && balanceMs !== null ? balance.date : null,
     runwayQuarters,
     estimatedExhaustionDate,
     dilution,

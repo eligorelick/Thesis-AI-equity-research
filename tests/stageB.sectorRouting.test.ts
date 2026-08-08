@@ -739,6 +739,84 @@ describe("computeRunway", () => {
     expect(r.notes.some((n) => n.includes("self-funding"))).toBe(false);
   });
 
+  it.each([
+    {
+      label: "positive, negative, vanished negative",
+      values: [Number.MAX_VALUE, -Number.MAX_VALUE, -Number.MIN_VALUE],
+    },
+    {
+      label: "negative, vanished negative, positive",
+      values: [-Number.MAX_VALUE, -Number.MIN_VALUE, Number.MAX_VALUE],
+    },
+  ])("fails closed when mixed-scale normalization loses a nonzero FCF term: $label", ({ values }) => {
+    const r = computeRunway(
+      goldenBalance,
+      values.map((operatingCashFlow, index) => ({
+        date: ["2026-03-31", "2025-12-31", "2025-09-30"][index],
+        operatingCashFlow,
+        capitalExpenditure: 0,
+      })),
+      [],
+    );
+    expect(r.burning).toBeNull();
+    expect(r.avgQuarterlyBurn).toBeNull();
+    expect(r.runwayQuarters).toBeNull();
+    expect(r.estimatedExhaustionDate).toBeNull();
+    const precisionGaps = r.gaps.filter((g) => g.field === "runway.avgQuarterlyBurn");
+    expect(precisionGaps).toHaveLength(1);
+    expect(precisionGaps[0].reason).toContain("precision loss");
+    expect(r.notes.some((n) => n.includes("self-funding"))).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "residual survives summation but vanishes in the mean",
+      values: [Number.MAX_VALUE, -Number.MAX_VALUE, -1e-15],
+    },
+    {
+      label: "residual would be erased by naive summation order",
+      values: [Number.MAX_VALUE, -1e-15, -Number.MAX_VALUE],
+    },
+    {
+      label: "positive residual vanishes in the mean",
+      values: [Number.MAX_VALUE, -Number.MAX_VALUE, 1e-15],
+    },
+  ])("fails closed when a normalized residual loses precision: $label", ({ values }) => {
+    const r = computeRunway(
+      goldenBalance,
+      values.map((operatingCashFlow, index) => ({
+        date: ["2026-03-31", "2025-12-31", "2025-09-30"][index],
+        operatingCashFlow,
+        capitalExpenditure: 0,
+      })),
+      [],
+    );
+    expect(r.burning).toBeNull();
+    expect(r.avgQuarterlyBurn).toBeNull();
+    expect(r.runwayQuarters).toBeNull();
+    expect(r.estimatedExhaustionDate).toBeNull();
+    const precisionGaps = r.gaps.filter((g) => g.field === "runway.avgQuarterlyBurn");
+    expect(precisionGaps).toHaveLength(1);
+    expect(precisionGaps[0].reason).toContain("precision loss");
+    expect(r.notes.some((n) => n.includes("self-funding"))).toBe(false);
+  });
+
+  it("keeps an exact nonzero cancellation self-funding when normalization loses no term", () => {
+    const r = computeRunway(
+      goldenBalance,
+      [
+        { date: "2026-03-31", operatingCashFlow: Number.MAX_VALUE, capitalExpenditure: 0 },
+        { date: "2025-12-31", operatingCashFlow: -Number.MAX_VALUE, capitalExpenditure: 0 },
+      ],
+      [],
+    );
+    expect(r.burning).toBe(false);
+    expect(r.avgQuarterlyBurn).toBeNull();
+    expect(r.runwayQuarters).toBeNull();
+    expect(r.gaps.some((g) => g.field === "runway.avgQuarterlyBurn")).toBe(false);
+    expect(r.notes.some((n) => n.includes("self-funding"))).toBe(true);
+  });
+
   it("suppresses a non-finite runway result with one precise gap", () => {
     const r = computeRunway(
       {
@@ -801,9 +879,24 @@ describe("computeRunway", () => {
       [],
     );
     expect(r.runwayQuarters).toBe(10);
+    expect(r.liquidAssetsAsOf).toBeNull();
     expect(r.estimatedExhaustionDate).toBeNull();
-    expect(r.notes.some((n) => n.includes("unparseable"))).toBe(true);
+    expect(r.notes.filter((n) => n.includes('balance date "2026-02-31" unparseable'))).toHaveLength(1);
   });
+
+  it.each(["2024-02-29", "2026-03-31T15:00:00Z"])(
+    "retains valid balance date provenance for %s",
+    (date) => {
+      const r = computeRunway(
+        { ...goldenBalance, date },
+        [{ date: "2026-03-31", operatingCashFlow: -40_000_000, capitalExpenditure: -10_000_000 }],
+        [],
+      );
+      expect(r.liquidAssetsAsOf).toBe(date);
+      expect(r.estimatedExhaustionDate).not.toBeNull();
+      expect(r.notes.some((n) => n.includes("balance date") && n.includes("unparseable"))).toBe(false);
+    },
+  );
 
   it("dilution gap paths: empty history and single point", () => {
     const none = computeRunway(goldenBalance, goldenQuarters, []);

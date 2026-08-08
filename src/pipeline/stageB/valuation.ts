@@ -180,9 +180,10 @@ export interface DcfIncomeRow {
   incomeTaxExpense?: number | null;
 }
 
-/** Balance-sheet slice used by the DCF builder (FMP field names). */
+/** Selected whole balance-sheet slice used by the DCF builder (FMP field names). */
 export interface DcfBalanceRow {
   date: string;
+  basis: "quarter" | "annual";
   totalDebt: number | null;
   totalStockholdersEquity: number | null;
   cashAndShortTermInvestments: number | null;
@@ -210,7 +211,7 @@ export interface DcfAssumptionInputs {
   incomeTtm: DcfIncomeRow | null;
   /** Annual income history (any order; used for 5y median margin + trend). */
   incomeHistory: DcfIncomeRow[];
-  /** Latest balance sheet (FMP names) for sales-to-capital. */
+  /** Selected newest whole balance row; required invested-capital fields fail closed. */
   balance: DcfBalanceRow | null;
   marketCap: number | null;
 }
@@ -480,7 +481,7 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
     bal && isNum(bal.totalDebt) && isNum(bal.totalStockholdersEquity) && isNum(bal.cashAndShortTermInvestments)
       ? bal.totalDebt + bal.totalStockholdersEquity - bal.cashAndShortTermInvestments
       : null;
-  if (ic === null || ic <= 0) {
+  if (bal === null || ic === null || ic <= 0) {
     gaps.push(
       gapEntry(
         "valuation.dcf.salesToCapital",
@@ -491,7 +492,7 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
     return { assumptions: null, notes, gaps };
   }
   const s2c = clampWithNote(startRev / ic, S2C_CLAMP[0], S2C_CLAMP[1], "sales-to-capital", notes);
-  const s2cBasis = `${periodBasis} revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, as of ${bal?.date ?? "?"})`;
+  const s2cBasis = `${periodBasis} revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, ${bal.basis} balance as of ${bal.date})`;
 
   // --- Terminal economics ----------------------------------------------------
   const roicTerm = inputs.waccPct;

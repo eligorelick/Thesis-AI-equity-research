@@ -64,7 +64,7 @@ function buildDcf(): { assumptions: DcfAssumptions; dcf: DcfResult } {
     riskFreePct: 4,
     incomeTtm: { date: "2025-12-31", revenue: 1000, operatingIncome: 300, incomeBeforeTax: 280, incomeTaxExpense: 60 },
     incomeHistory: INCOME_HISTORY.map((r) => ({ date: r.date, revenue: r.revenue, operatingIncome: r.ebit, incomeBeforeTax: (r.ebit ?? 0) - 20, incomeTaxExpense: ((r.ebit ?? 0) - 20) * 0.21 })),
-    balance: { date: "2025-12-31", totalDebt: 200, totalStockholdersEquity: 800, cashAndShortTermInvestments: 300 },
+    balance: { date: "2025-12-31", basis: "annual", totalDebt: 200, totalStockholdersEquity: 800, cashAndShortTermInvestments: 300 },
     marketCap: 5000,
   });
   expect(built.assumptions).not.toBeNull();
@@ -230,7 +230,7 @@ function buildDcfWithNetDebt(netDebt: number): { assumptions: DcfAssumptions; dc
     riskFreePct: 4,
     incomeTtm: { date: "2025-12-31", revenue: 1000, operatingIncome: 300, incomeBeforeTax: 280, incomeTaxExpense: 60 },
     incomeHistory: INCOME_HISTORY.map((r) => ({ date: r.date, revenue: r.revenue, operatingIncome: r.ebit, incomeBeforeTax: (r.ebit ?? 0) - 20, incomeTaxExpense: ((r.ebit ?? 0) - 20) * 0.21 })),
-    balance: { date: "2025-12-31", totalDebt: 200, totalStockholdersEquity: 800, cashAndShortTermInvestments: 300 },
+    balance: { date: "2025-12-31", basis: "annual", totalDebt: 200, totalStockholdersEquity: 800, cashAndShortTermInvestments: 300 },
     marketCap: 5000,
   });
   const assumptions = built.assumptions as DcfAssumptions;

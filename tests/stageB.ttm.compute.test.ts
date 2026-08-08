@@ -436,6 +436,21 @@ function wiringBundle(opts: WiringOpts = {}): DataBundle {
 }
 
 describe("runStageB wiring — net debt convention + point-in-time anchors (audit H2/M3/M4)", () => {
+  it("sales-to-capital uses the newest complete whole balance point with quarterly provenance (audit H4)", () => {
+    const computed = runStageB(wiringBundle());
+    if (computed.valuation.kind !== "dcf") throw new Error("expected dcf kind");
+    const assumptions = computed.valuation.assumptions;
+    expect(assumptions).not.toBeNull();
+    if (assumptions === null) return;
+
+    // TTM revenue = 1000. New quarterly invested capital is the hand-derived
+    // whole-row value: 280 debt + 520 equity - 120 cash = 680.
+    expect(assumptions.salesToCapital.value).toBeCloseTo(1000 / 680, 12);
+    expect(assumptions.salesToCapital.value).toBeCloseTo(1.4705882352941178, 12);
+    expect(assumptions.salesToCapital.basis).toContain("2026-03-31");
+    expect(assumptions.salesToCapital.basis).toContain("quarter");
+  });
+
   it("DCF equity bridge nets cash & short-term investments from the LATEST QUARTERLY balance row, not the vendor netDebt field", () => {
     const computed = runStageB(wiringBundle());
     expect(computed.valuation.kind).toBe("dcf");
@@ -497,9 +512,7 @@ describe("runStageB wiring — net debt convention + point-in-time anchors (audi
       }),
     );
     if (computed.valuation.kind !== "dcf") throw new Error("expected dcf kind");
-    const dcf = computed.valuation.dcf!;
-    expect(dcf.equityValue).toBeNull();
-    expect(dcf.perShare).toBeNull();
+    expect(computed.valuation.dcf).toBeNull();
     expect(computed.valuation.notes.some((n) => /net debt unavailable/i.test(n))).toBe(true);
     expect(computed.gaps.some((g) => g.field === "valuation.netDebt")).toBe(true);
   });
@@ -515,9 +528,11 @@ describe("runStageB wiring — net debt convention + point-in-time anchors (audi
       }),
     );
     if (computed.valuation.kind !== "dcf") throw new Error("expected dcf kind");
-    const dcf = computed.valuation.dcf!;
-    expect(dcf.equityValue).toBeNull();
-    expect(dcf.perShare).toBeNull();
+    expect(computed.valuation.assumptions).toBeNull();
+    expect(
+      computed.valuation.gaps.some((g) => g.field === "valuation.dcf.salesToCapital"),
+    ).toBe(true);
+    expect(computed.valuation.dcf).toBeNull();
     expect(computed.valuation.notes.some((n) => /vendor.*rejected|net debt unavailable/i.test(n))).toBe(true);
   });
 
@@ -540,8 +555,14 @@ describe("runStageB wiring — net debt convention + point-in-time anchors (audi
     );
     if (computed.valuation.kind !== "dcf") throw new Error("expected dcf kind");
     const dcf = computed.valuation.dcf!;
+    const assumptions = computed.valuation.assumptions!;
     // Annual (2025-12-31) derived net debt: 300 − 100 = 200 — not the stale quarterly 160.
     expect((dcf.enterpriseValue - (dcf.equityValue as number)) / M).toBeCloseTo(200, 6);
+    // The same selected annual whole row anchors invested capital:
+    // 300 debt + 500 equity - 100 cash = 700; TTM revenue = 1000.
+    expect(assumptions.salesToCapital.value).toBeCloseTo(1000 / 700, 12);
+    expect(assumptions.salesToCapital.basis).toContain("2025-12-31");
+    expect(assumptions.salesToCapital.basis).toContain("annual");
     const pb = computed.valuation.multiples.multiples.find((m) => m.key === "priceToBook");
     expect(pb?.basis).toMatch(/annual/i);
     expect(pb?.current).toBeCloseTo(10000 / 500, 9);

@@ -479,6 +479,7 @@ describe("buildDcfAssumptions", () => {
     incomeHistory: history,
     balance: {
       date: "2025-12-31",
+      basis: "annual",
       totalDebt: 300,
       totalStockholdersEquity: 500,
       cashAndShortTermInvestments: 100,
@@ -497,6 +498,28 @@ describe("buildDcfAssumptions", () => {
     expect(a.growthPath.value[0]).toBeCloseTo(12, 9);
     expect(a.growthPath.value[9]).toBeCloseTo(2.5, 9);
     expect(a.growthPath.value).toHaveLength(10);
+  });
+
+  it("builds from a complete quarterly-only balance input and preserves its date and frequency", () => {
+    const a = buildDcfAssumptions({
+      ...baseInputs,
+      balance: {
+        date: "2026-03-31",
+        basis: "quarter",
+        totalDebt: 280,
+        totalStockholdersEquity: 520,
+        cashAndShortTermInvestments: 120,
+      },
+    }).assumptions as DcfAssumptions;
+    expect(a.salesToCapital.value).toBeCloseTo(1000 / 680, 12);
+    expect(a.salesToCapital.basis).toContain("2026-03-31");
+    expect(a.salesToCapital.basis).toContain("quarter");
+  });
+
+  it("labels sales-to-capital with the selected annual balance date and frequency", () => {
+    const a = buildDcfAssumptions(baseInputs).assumptions as DcfAssumptions;
+    expect(a.salesToCapital.basis).toContain("2025-12-31");
+    expect(a.salesToCapital.basis).toContain("annual");
   });
 
   it("clamps gTerm to rf when rf < 2.5%", () => {
@@ -641,6 +664,7 @@ describe("buildDcfAssumptions", () => {
       ...baseInputs,
       balance: {
         date: "2025-12-31",
+        basis: "annual",
         totalDebt: 50,
         totalStockholdersEquity: 10,
         cashAndShortTermInvestments: 200, // IC = 50 + 10 - 200 < 0
@@ -1147,6 +1171,7 @@ describe("valueCompany dispatch", () => {
     ],
     balance: {
       date: "2025-12-31",
+      basis: "annual",
       totalDebt: 300,
       totalStockholdersEquity: 500,
       cashAndShortTermInvestments: 100,

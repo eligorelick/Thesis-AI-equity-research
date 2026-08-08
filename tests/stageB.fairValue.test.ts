@@ -41,7 +41,7 @@ function buildDcf(): { assumptions: DcfAssumptions; dcf: DcfResult } {
       { date: "2024-12-31", revenue: 920, operatingIncome: 276, incomeBeforeTax: 256, incomeTaxExpense: 54 },
       { date: "2025-12-31", revenue: 1000, operatingIncome: 300, incomeBeforeTax: 280, incomeTaxExpense: 60 },
     ],
-    balance: { date: "2025-12-31", totalDebt: 200, totalStockholdersEquity: 800, cashAndShortTermInvestments: 300 },
+    balance: { date: "2025-12-31", basis: "annual", totalDebt: 200, totalStockholdersEquity: 800, cashAndShortTermInvestments: 300 },
     marketCap: 5000,
   });
   const assumptions = built.assumptions as DcfAssumptions;

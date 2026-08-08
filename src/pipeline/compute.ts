@@ -1154,12 +1154,13 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
     incomeTaxExpense: num(r.incomeTaxExpense),
   }));
 
-  const dcfBalance: DcfBalanceRow | null = bal0
+  const dcfBalance: DcfBalanceRow | null = balPoint && balPointBasis
     ? {
-        date: String(bal0.date ?? ""),
-        totalDebt: num(bal0.totalDebt),
-        totalStockholdersEquity: num(bal0.totalStockholdersEquity),
-        cashAndShortTermInvestments: num(bal0.cashAndShortTermInvestments),
+        date: String(balPoint.date ?? ""),
+        basis: balPointBasis,
+        totalDebt: num(balPoint.totalDebt),
+        totalStockholdersEquity: num(balPoint.totalStockholdersEquity),
+        cashAndShortTermInvestments: num(balPoint.cashAndShortTermInvestments),
       }
     : null;
 

@@ -954,6 +954,7 @@ export function claimJobForResume(
   jobId: string,
   expectedTerminalStatus: "done" | "error",
 ): boolean {
+  if (expectedTerminalStatus !== "done" && expectedTerminalStatus !== "error") return false;
   const result = getDb()
     .update(jobs)
     .set({

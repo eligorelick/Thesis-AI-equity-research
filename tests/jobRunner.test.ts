@@ -553,6 +553,35 @@ describe("runJob — unsupported instruments", () => {
     });
   });
 
+  it("rejects runtime unsupported resume claims without mutating terminal metadata", () => {
+    const { jobId } = createJob("SPY");
+    handle.db
+      .update(jobs)
+      .set({
+        status: "unsupported",
+        error: null,
+        reportId: null,
+        unsupportedKind: "etf",
+        unsupportedMessage: "ETF analysis is not supported; companies only.",
+        updatedAt: "2026-08-07T00:00:00.000Z",
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+    const before = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
+
+    expect(claimJobForResume(jobId, "unsupported" as never)).toBe(false);
+
+    const after = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    expect(after).toMatchObject({
+      status: "unsupported",
+      error: null,
+      reportId: null,
+      unsupportedKind: "etf",
+      unsupportedMessage: "ETF analysis is not supported; companies only.",
+    });
+  });
+
   it("clears stale unsupported metadata when a queued job terminalizes as canceled error", () => {
     const { jobId } = createJob("AAPL");
     handle.db

@@ -17,7 +17,17 @@
 
 import "server-only";
 
-import { blob, index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+import {
+  blob,
+  index,
+  integer,
+  primaryKey,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 /** Watchlist — one row per tracked ticker. */
 export const watchlist = sqliteTable("watchlist", {
@@ -113,8 +123,88 @@ export const jobs = sqliteTable(
     bearJson: text("bearJson"),
     /** payloadFingerprint at analyst-pass time — resume drift detection. */
     payloadFingerprint: text("payloadFingerprint"),
+    /** Monotonic identity of the current execution generation. */
+    runGeneration: integer("runGeneration").notNull().default(0),
+    /** Monotonic durable-state revision used to fence writers and SSE replay. */
+    revision: integer("revision").notNull().default(0),
+    /** Queue ordering timestamp; legacy queued rows are backfilled from createdAt. */
+    queuedAt: text("queuedAt"),
+    /** Worker currently holding the durable job lease. */
+    leaseOwner: text("leaseOwner"),
+    leaseExpiresAt: text("leaseExpiresAt"),
+    heartbeatAt: text("heartbeatAt"),
+    /** Earliest time at which a queued job may be claimed. */
+    notBefore: text("notBefore"),
+    /** Optional per-job paid-pass budget in USD. */
+    maxCostUsd: real("maxCostUsd"),
   },
-  (t) => [index("idx_jobs_symbol").on(t.symbol), index("idx_jobs_status").on(t.status)],
+  (t) => [
+    index("idx_jobs_symbol").on(t.symbol),
+    index("idx_jobs_status").on(t.status),
+    uniqueIndex("idx_jobs_active_symbol")
+      .on(t.symbol)
+      .where(sql`${t.status} IN ('queued', 'running')`),
+    index("idx_jobs_queue_claim").on(t.status, t.notBefore, t.queuedAt),
+    index("idx_jobs_lease_expiry").on(t.status, t.leaseExpiresAt),
+  ],
+);
+
+/** Immutable settlement checkpoint for one paid pass attempt. */
+export const jobPassArtifacts = sqliteTable(
+  "job_pass_artifacts",
+  {
+    jobId: text("jobId")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    runGeneration: integer("runGeneration").notNull(),
+    attemptId: text("attemptId").notNull(),
+    pass: text("pass").notNull(),
+    /** Serialized success or failure settlement, including validated output when present. */
+    outcomeJson: text("outcomeJson").notNull(),
+    /** Full provider usage/telemetry for the attempt. */
+    telemetryJson: text("telemetryJson").notNull(),
+    /** Exact settled cost details for audit and exact-once accounting. */
+    costJson: text("costJson").notNull(),
+    settledAt: text("settledAt").notNull(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.jobId, t.runGeneration, t.attemptId, t.pass],
+      name: "job_pass_artifacts_pk",
+    }),
+    index("idx_job_pass_artifacts_job_generation").on(
+      t.jobId,
+      t.runGeneration,
+      t.settledAt,
+    ),
+  ],
+);
+
+/** Cross-process paid-pass permit and its durable maximum-cost reservation. */
+export const jobLlmLeases = sqliteTable(
+  "job_llm_leases",
+  {
+    permitId: text("permitId").primaryKey(),
+    jobId: text("jobId")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    runGeneration: integer("runGeneration").notNull(),
+    attemptId: text("attemptId").notNull(),
+    pass: text("pass").notNull(),
+    leaseOwner: text("leaseOwner").notNull(),
+    reservedCostUsd: real("reservedCostUsd").notNull(),
+    acquiredAt: text("acquiredAt").notNull(),
+    leaseExpiresAt: text("leaseExpiresAt").notNull(),
+  },
+  (t) => [
+    uniqueIndex("idx_job_llm_leases_attempt_pass").on(
+      t.jobId,
+      t.runGeneration,
+      t.attemptId,
+      t.pass,
+    ),
+    index("idx_job_llm_leases_expiry").on(t.leaseExpiresAt),
+  ],
 );
 
 /** Per-LLM-call cost ledger (the application contract §2/§5; fallback events logged here too). */
@@ -123,6 +213,10 @@ export const costLog = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     jobId: text("jobId").notNull(),
+    /** Job generation billed by this row; legacy rows belong to generation zero. */
+    runGeneration: integer("runGeneration").notNull().default(0),
+    /** Durable paid-attempt identity. Nullable until Task-19-era writers are upgraded. */
+    attemptId: text("attemptId"),
     /** Pipeline step attribution (e.g. "bull" | "bear" | "synthesize" | "verify"). */
     step: text("step").notNull(),
     model: text("model").notNull(),
@@ -136,7 +230,13 @@ export const costLog = sqliteTable(
     fallbackUsed: integer("fallbackUsed", { mode: "boolean" }).notNull().default(false),
     createdAt: text("createdAt").notNull(),
   },
-  (t) => [index("idx_cost_log_jobId").on(t.jobId)],
+  (t) => [
+    index("idx_cost_log_jobId").on(t.jobId),
+    index("idx_cost_log_createdAt").on(t.createdAt),
+    uniqueIndex("idx_cost_log_billed_attempt_pass")
+      .on(t.jobId, t.runGeneration, t.attemptId, t.step)
+      .where(sql`${t.attemptId} IS NOT NULL`),
+  ],
 );
 
 /** Key-value settings; values here override .env at read time (src/settings). */
@@ -157,6 +257,10 @@ export type ApiCacheRow = typeof apiCache.$inferSelect;
 export type NewApiCacheRow = typeof apiCache.$inferInsert;
 export type JobRow = typeof jobs.$inferSelect;
 export type NewJobRow = typeof jobs.$inferInsert;
+export type JobPassArtifactRow = typeof jobPassArtifacts.$inferSelect;
+export type NewJobPassArtifactRow = typeof jobPassArtifacts.$inferInsert;
+export type JobLlmLeaseRow = typeof jobLlmLeases.$inferSelect;
+export type NewJobLlmLeaseRow = typeof jobLlmLeases.$inferInsert;
 export type CostLogRow = typeof costLog.$inferSelect;
 export type NewCostLogRow = typeof costLog.$inferInsert;
 export type SettingRow = typeof settings.$inferSelect;

@@ -9,6 +9,8 @@ const ROOT = path.resolve(__dirname, "..");
 const REQUIRED_TABLES = [
   "api_cache",
   "cost_log",
+  "job_llm_leases",
+  "job_pass_artifacts",
   "jobs",
   "reports",
   "settings",

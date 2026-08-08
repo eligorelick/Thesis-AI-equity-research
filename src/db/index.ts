@@ -38,7 +38,7 @@ export interface DatabaseHandle {
 // Idempotent DDL — kept exactly in sync with src/db/schema.ts.
 // ---------------------------------------------------------------------------
 
-const DDL = `
+const BASE_TABLE_DDL = `
 CREATE TABLE IF NOT EXISTS "watchlist" (
   "symbol" TEXT PRIMARY KEY NOT NULL,
   "addedAt" TEXT NOT NULL
@@ -55,7 +55,6 @@ CREATE TABLE IF NOT EXISTS "reports" (
   "costUsd" REAL,
   "specVersion" TEXT
 );
-CREATE INDEX IF NOT EXISTS "idx_reports_symbol_createdAt" ON "reports" ("symbol", "createdAt");
 
 CREATE TABLE IF NOT EXISTS "api_cache" (
   "cacheKey" TEXT PRIMARY KEY NOT NULL,
@@ -68,8 +67,6 @@ CREATE TABLE IF NOT EXISTS "api_cache" (
   "ttlSeconds" INTEGER NOT NULL,
   "asOf" TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS "idx_api_cache_provider_endpoint" ON "api_cache" ("provider", "endpoint");
-CREATE INDEX IF NOT EXISTS "idx_api_cache_fetchedAt" ON "api_cache" ("fetchedAt");
 
 CREATE TABLE IF NOT EXISTS "jobs" (
   "id" TEXT PRIMARY KEY NOT NULL,
@@ -84,14 +81,22 @@ CREATE TABLE IF NOT EXISTS "jobs" (
   "unsupportedMessage" TEXT,
   "bullJson" TEXT,
   "bearJson" TEXT,
-  "payloadFingerprint" TEXT
+  "payloadFingerprint" TEXT,
+  "runGeneration" INTEGER NOT NULL DEFAULT 0,
+  "revision" INTEGER NOT NULL DEFAULT 0,
+  "queuedAt" TEXT,
+  "leaseOwner" TEXT,
+  "leaseExpiresAt" TEXT,
+  "heartbeatAt" TEXT,
+  "notBefore" TEXT,
+  "maxCostUsd" REAL
 );
-CREATE INDEX IF NOT EXISTS "idx_jobs_symbol" ON "jobs" ("symbol");
-CREATE INDEX IF NOT EXISTS "idx_jobs_status" ON "jobs" ("status");
 
 CREATE TABLE IF NOT EXISTS "cost_log" (
   "id" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
   "jobId" TEXT NOT NULL,
+  "runGeneration" INTEGER NOT NULL DEFAULT 0,
+  "attemptId" TEXT,
   "step" TEXT NOT NULL,
   "model" TEXT NOT NULL,
   "inputTokens" INTEGER NOT NULL DEFAULT 0,
@@ -103,12 +108,58 @@ CREATE TABLE IF NOT EXISTS "cost_log" (
   "fallbackUsed" INTEGER NOT NULL DEFAULT 0,
   "createdAt" TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS "idx_cost_log_jobId" ON "cost_log" ("jobId");
 
 CREATE TABLE IF NOT EXISTS "settings" (
   "key" TEXT PRIMARY KEY NOT NULL,
   "value" TEXT NOT NULL
 );
+`;
+
+const DURABLE_JOB_TABLE_DDL = `
+CREATE TABLE IF NOT EXISTS "job_pass_artifacts" (
+  "jobId" TEXT NOT NULL REFERENCES "jobs"("id") ON DELETE CASCADE,
+  "runGeneration" INTEGER NOT NULL,
+  "attemptId" TEXT NOT NULL,
+  "pass" TEXT NOT NULL,
+  "outcomeJson" TEXT NOT NULL,
+  "telemetryJson" TEXT NOT NULL,
+  "costJson" TEXT NOT NULL,
+  "settledAt" TEXT NOT NULL,
+  CONSTRAINT "job_pass_artifacts_pk" PRIMARY KEY ("jobId", "runGeneration", "attemptId", "pass")
+);
+
+CREATE TABLE IF NOT EXISTS "job_llm_leases" (
+  "permitId" TEXT PRIMARY KEY NOT NULL,
+  "jobId" TEXT NOT NULL REFERENCES "jobs"("id") ON DELETE CASCADE,
+  "runGeneration" INTEGER NOT NULL,
+  "attemptId" TEXT NOT NULL,
+  "pass" TEXT NOT NULL,
+  "leaseOwner" TEXT NOT NULL,
+  "reservedCostUsd" REAL NOT NULL,
+  "acquiredAt" TEXT NOT NULL,
+  "leaseExpiresAt" TEXT NOT NULL
+);
+`;
+
+const INDEX_DDL = `
+CREATE INDEX IF NOT EXISTS "idx_reports_symbol_createdAt" ON "reports" ("symbol", "createdAt");
+CREATE INDEX IF NOT EXISTS "idx_api_cache_provider_endpoint" ON "api_cache" ("provider", "endpoint");
+CREATE INDEX IF NOT EXISTS "idx_api_cache_fetchedAt" ON "api_cache" ("fetchedAt");
+CREATE INDEX IF NOT EXISTS "idx_jobs_symbol" ON "jobs" ("symbol");
+CREATE INDEX IF NOT EXISTS "idx_jobs_status" ON "jobs" ("status");
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_jobs_active_symbol" ON "jobs" ("symbol") WHERE "status" IN ('queued', 'running');
+CREATE INDEX IF NOT EXISTS "idx_jobs_queue_claim" ON "jobs" ("status", "notBefore", "queuedAt");
+CREATE INDEX IF NOT EXISTS "idx_jobs_lease_expiry" ON "jobs" ("status", "leaseExpiresAt");
+CREATE INDEX IF NOT EXISTS "idx_cost_log_jobId" ON "cost_log" ("jobId");
+CREATE INDEX IF NOT EXISTS "idx_cost_log_createdAt" ON "cost_log" ("createdAt");
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_cost_log_billed_attempt_pass"
+  ON "cost_log" ("jobId", "runGeneration", "attemptId", "step")
+  WHERE "attemptId" IS NOT NULL;
+CREATE INDEX IF NOT EXISTS "idx_job_pass_artifacts_job_generation"
+  ON "job_pass_artifacts" ("jobId", "runGeneration", "settledAt");
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_job_llm_leases_attempt_pass"
+  ON "job_llm_leases" ("jobId", "runGeneration", "attemptId", "pass");
+CREATE INDEX IF NOT EXISTS "idx_job_llm_leases_expiry" ON "job_llm_leases" ("leaseExpiresAt");
 `;
 
 /**
@@ -134,34 +185,59 @@ function ensureColumn(
  * times; called automatically by createDatabase()/getDb().
  */
 export function bootstrapSchema(sqlite: Database.Database): void {
-  sqlite.exec(DDL);
-  ensureColumn(sqlite, "api_cache", "bodyGz", "BLOB");
-  ensureColumn(sqlite, "jobs", "bullJson", "TEXT");
-  ensureColumn(sqlite, "jobs", "bearJson", "TEXT");
-  ensureColumn(sqlite, "jobs", "payloadFingerprint", "TEXT");
-  ensureColumn(sqlite, "jobs", "unsupportedKind", "TEXT");
-  ensureColumn(sqlite, "jobs", "unsupportedMessage", "TEXT");
-  // A pre-index database may contain duplicate active rows from the old
-  // check-then-insert route. Retain the newest row and terminalize older
-  // duplicates before installing the cross-process uniqueness constraint.
-  sqlite.exec(`
-    UPDATE "jobs" AS old
-       SET "status" = 'error',
-           "error" = 'duplicate active job superseded during database migration',
-           "unsupportedKind" = NULL,
-           "unsupportedMessage" = NULL
-     WHERE "status" IN ('queued', 'running')
-       AND EXISTS (
-         SELECT 1 FROM "jobs" AS newer
-          WHERE newer."symbol" = old."symbol"
-            AND newer."status" IN ('queued', 'running')
-            AND (newer."updatedAt" > old."updatedAt"
-              OR (newer."updatedAt" = old."updatedAt" AND newer."id" > old."id"))
-       )
-  `);
-  sqlite.exec(
-    `CREATE UNIQUE INDEX IF NOT EXISTS "idx_jobs_active_symbol" ON "jobs" ("symbol") WHERE "status" IN ('queued', 'running')`,
-  );
+  sqlite.transaction(() => {
+    // Keep this order: existing tables first, then legacy column upgrades and
+    // backfills, then new tables, and only then indexes that reference the new
+    // columns. BEGIN IMMEDIATE serializes concurrent application bootstraps.
+    sqlite.exec(BASE_TABLE_DDL);
+
+    ensureColumn(sqlite, "api_cache", "bodyGz", "BLOB");
+    ensureColumn(sqlite, "jobs", "bullJson", "TEXT");
+    ensureColumn(sqlite, "jobs", "bearJson", "TEXT");
+    ensureColumn(sqlite, "jobs", "payloadFingerprint", "TEXT");
+    ensureColumn(sqlite, "jobs", "unsupportedKind", "TEXT");
+    ensureColumn(sqlite, "jobs", "unsupportedMessage", "TEXT");
+    ensureColumn(sqlite, "jobs", "runGeneration", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn(sqlite, "jobs", "revision", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn(sqlite, "jobs", "queuedAt", "TEXT");
+    ensureColumn(sqlite, "jobs", "leaseOwner", "TEXT");
+    ensureColumn(sqlite, "jobs", "leaseExpiresAt", "TEXT");
+    ensureColumn(sqlite, "jobs", "heartbeatAt", "TEXT");
+    ensureColumn(sqlite, "jobs", "notBefore", "TEXT");
+    ensureColumn(sqlite, "jobs", "maxCostUsd", "REAL");
+    ensureColumn(sqlite, "cost_log", "runGeneration", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn(sqlite, "cost_log", "attemptId", "TEXT");
+
+    sqlite.exec(`
+      UPDATE "jobs" SET "runGeneration" = 0 WHERE "runGeneration" IS NULL;
+      UPDATE "jobs" SET "revision" = 0 WHERE "revision" IS NULL;
+      UPDATE "jobs" SET "queuedAt" = "createdAt"
+       WHERE "status" = 'queued' AND "queuedAt" IS NULL;
+      UPDATE "cost_log" SET "runGeneration" = 0 WHERE "runGeneration" IS NULL;
+    `);
+
+    // A pre-index database may contain duplicate active rows from the old
+    // check-then-insert route. Retain the newest row and terminalize older
+    // duplicates before installing the cross-process uniqueness constraint.
+    sqlite.exec(`
+      UPDATE "jobs" AS old
+         SET "status" = 'error',
+             "error" = 'duplicate active job superseded during database migration',
+             "unsupportedKind" = NULL,
+             "unsupportedMessage" = NULL
+       WHERE "status" IN ('queued', 'running')
+         AND EXISTS (
+           SELECT 1 FROM "jobs" AS newer
+            WHERE newer."symbol" = old."symbol"
+              AND newer."status" IN ('queued', 'running')
+              AND (newer."updatedAt" > old."updatedAt"
+                OR (newer."updatedAt" = old."updatedAt" AND newer."id" > old."id"))
+         );
+    `);
+
+    sqlite.exec(DURABLE_JOB_TABLE_DDL);
+    sqlite.exec(INDEX_DDL);
+  }).immediate();
 }
 
 // ---------------------------------------------------------------------------

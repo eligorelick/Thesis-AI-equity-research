@@ -592,7 +592,10 @@ describe("computeRunway", () => {
     );
     expect(r.liquidAssets).toBeNull();
     expect(r.runwayQuarters).toBeNull();
-    expect(r.gaps.filter((g) => g.field === "runway.liquidAssets")).toHaveLength(1);
+    const liquidityGaps = r.gaps.filter((g) => g.field === "runway.liquidAssets");
+    expect(liquidityGaps).toHaveLength(1);
+    expect(liquidityGaps[0].reason).toContain("sum was non-finite");
+    expect(liquidityGaps[0].reason).not.toContain("were not finite non-negative values");
   });
 
   it("missing liquidity entirely -> gap, no throw, burn still computed", () => {
@@ -713,6 +716,29 @@ describe("computeRunway", () => {
     expect(r.runwayQuarters).toBe(0);
   });
 
+  it("preserves a negative normalized mean when its burn magnitude underflows", () => {
+    const r = computeRunway(
+      {
+        date: "2026-03-31",
+        cashAndCashEquivalents: null,
+        shortTermInvestments: null,
+        cashAndShortTermInvestments: 500_000_000,
+      },
+      [
+        { date: "2026-03-31", operatingCashFlow: -Number.MIN_VALUE, capitalExpenditure: 0 },
+        { date: "2025-12-31", operatingCashFlow: -Number.MIN_VALUE, capitalExpenditure: 0 },
+        { date: "2025-09-30", operatingCashFlow: Number.MIN_VALUE, capitalExpenditure: 0 },
+      ],
+      [],
+    );
+    expect(r.burning).toBe(true);
+    expect(r.avgQuarterlyBurn).toBeNull();
+    expect(r.runwayQuarters).toBeNull();
+    expect(r.estimatedExhaustionDate).toBeNull();
+    expect(r.gaps.filter((g) => g.field === "runway.avgQuarterlyBurn")).toHaveLength(1);
+    expect(r.notes.some((n) => n.includes("self-funding"))).toBe(false);
+  });
+
   it("suppresses a non-finite runway result with one precise gap", () => {
     const r = computeRunway(
       {
@@ -752,6 +778,31 @@ describe("computeRunway", () => {
     expect(r.burning).toBeNull();
     expect(r.burnWindowQuarters).toBe(0);
     expect(r.gaps.filter((g) => g.field === "runway.avgQuarterlyBurn")).toHaveLength(1);
+  });
+
+  it("drops an impossible calendar date from the cash-flow burn window", () => {
+    const r = computeRunway(
+      goldenBalance,
+      [
+        { date: "2026-02-31", operatingCashFlow: -900_000_000, capitalExpenditure: 0 },
+        { date: "2026-03-31", operatingCashFlow: -40_000_000, capitalExpenditure: -10_000_000 },
+      ],
+      [],
+    );
+    expect(r.burnWindowQuarters).toBe(1);
+    expect(r.burnWindowDates).toEqual(["2026-03-31"]);
+    expect(r.avgQuarterlyBurn).toBe(50_000_000);
+  });
+
+  it("does not estimate exhaustion from an impossible balance-sheet date", () => {
+    const r = computeRunway(
+      { ...goldenBalance, date: "2026-02-31" },
+      [{ date: "2026-03-31", operatingCashFlow: -40_000_000, capitalExpenditure: -10_000_000 }],
+      [],
+    );
+    expect(r.runwayQuarters).toBe(10);
+    expect(r.estimatedExhaustionDate).toBeNull();
+    expect(r.notes.some((n) => n.includes("unparseable"))).toBe(true);
   });
 
   it("dilution gap paths: empty history and single point", () => {

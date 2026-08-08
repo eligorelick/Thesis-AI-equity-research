@@ -133,8 +133,19 @@ function parseIsoDateUtc(iso: string | null | undefined): number | null {
   if (typeof iso !== "string") return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso.trim());
   if (!m) return null;
-  const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  return Number.isFinite(t) ? t : null;
+  const year = Number(m[1]);
+  const monthIndex = Number(m[2]) - 1;
+  const day = Number(m[3]);
+  const date = new Date(0);
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCFullYear(year, monthIndex, day);
+  const t = date.getTime();
+  return Number.isFinite(t) &&
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === monthIndex &&
+    date.getUTCDate() === day
+    ? t
+    : null;
 }
 
 function addMonthsUtc(ms: number, months: number): number {
@@ -1016,6 +1027,7 @@ export function computeRunway(
   // ---- liquid assets
   let liquidAssets: number | null = null;
   let liquidAssetsBasis: RunwayResult["liquidAssetsBasis"] = null;
+  let componentLiquiditySumWasNonFinite = false;
   if (
     isFiniteNumber(balance.cashAndShortTermInvestments) &&
     balance.cashAndShortTermInvestments >= 0
@@ -1032,14 +1044,18 @@ export function computeRunway(
     if (Number.isFinite(componentSum)) {
       liquidAssets = componentSum;
       liquidAssetsBasis = "cash+shortTermInvestments";
+    } else {
+      componentLiquiditySumWasNonFinite = true;
     }
   }
   if (liquidAssets === null) {
     gaps.push({
       field: "runway.liquidAssets",
-      reason:
-        "cashAndShortTermInvestments unavailable/invalid and both cashAndCashEquivalents and " +
-        "shortTermInvestments were not finite non-negative values — combined liquidity suppressed; partial cash not used",
+      reason: componentLiquiditySumWasNonFinite
+        ? "cashAndShortTermInvestments unavailable/invalid; cashAndCashEquivalents and shortTermInvestments " +
+          "were finite non-negative values, but their sum was non-finite — combined liquidity suppressed"
+        : "cashAndShortTermInvestments unavailable/invalid and cashAndCashEquivalents plus " +
+          "shortTermInvestments did not both provide finite non-negative values — combined liquidity suppressed; partial cash not used",
       severity: "warn",
       attemptedSources: ["fmp:/stable/balance-sheet-statement"],
     });
@@ -1140,11 +1156,13 @@ export function computeRunway(
       );
     }
     const fcfScale = window.reduce((scale, w) => Math.max(scale, Math.abs(w.fcf)), 0);
-    const avgFcf =
+    const normalizedMean =
       fcfScale === 0
         ? 0
-        : (window.reduce((sum, w) => sum + w.fcf / fcfScale, 0) / window.length) * fcfScale;
-    if (avgFcf >= 0) {
+        : window.reduce((sum, w) => sum + w.fcf / fcfScale, 0) / window.length;
+    const avgFcf =
+      normalizedMean === 0 ? 0 : normalizedMean * fcfScale;
+    if (normalizedMean >= 0) {
       burning = false;
       notes.push(
         `not burning: average (operatingCashFlow + capitalExpenditure) over the last ${window.length} ` +
@@ -1152,8 +1170,19 @@ export function computeRunway(
       );
     } else {
       burning = true;
-      avgQuarterlyBurn = -avgFcf;
-      if (liquidAssets !== null) {
+      const computedAvgQuarterlyBurn = -avgFcf;
+      if (!Number.isFinite(computedAvgQuarterlyBurn) || computedAvgQuarterlyBurn <= 0) {
+        gaps.push({
+          field: "runway.avgQuarterlyBurn",
+          reason:
+            "normalized average FCF was negative, but its positive burn magnitude was not representable — " +
+            "numeric burn, runway and exhaustion date suppressed",
+          severity: "warn",
+        });
+      } else {
+        avgQuarterlyBurn = computedAvgQuarterlyBurn;
+      }
+      if (liquidAssets !== null && avgQuarterlyBurn !== null) {
         const computedRunwayQuarters = liquidAssets / avgQuarterlyBurn;
         if (!Number.isFinite(computedRunwayQuarters)) {
           gaps.push({

@@ -19,6 +19,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { maintainApiCache } from "@/cache/maintenance";
+import { normalizeLinkedReportRecoverySteps } from "@/pipeline/jobSteps";
 import * as schema from "./schema";
 import { defaultDbPath, hasExplicitDbPath } from "./paths";
 
@@ -180,6 +181,39 @@ function ensureColumn(
   }
 }
 
+function normalizeBootstrapTerminalSteps(
+  raw: string,
+  message: string,
+  at: string,
+  linkedReportWins = false,
+): string {
+  if (linkedReportWins) {
+    return normalizeLinkedReportRecoverySteps(
+      raw,
+      at,
+      "covered by linked persisted report recovered during database migration",
+    );
+  }
+  try {
+    const steps = JSON.parse(raw) as Array<Record<string, unknown>>;
+    if (!Array.isArray(steps)) return raw;
+    for (const step of steps) {
+      if (step.status === "running") {
+        step.status = "error";
+        step.detail = message;
+        step.finishedAt = at;
+        step.completedAt = at;
+      } else if (step.status === "pending") {
+        step.status = "skipped";
+        step.detail = `not reached — ${message}`;
+      }
+    }
+    return JSON.stringify(steps);
+  } catch {
+    return raw;
+  }
+}
+
 /**
  * Runs the idempotent CREATE TABLE IF NOT EXISTS DDL plus column guards for
  * columns added after a table first shipped. Safe to call any number of
@@ -221,21 +255,81 @@ export function bootstrapSchema(sqlite: Database.Database): void {
     // A pre-index database may contain duplicate active rows from the old
     // check-then-insert route. Retain the newest row and terminalize older
     // duplicates before installing the cross-process uniqueness constraint.
-    sqlite.exec(`
-      UPDATE "jobs" AS old
-         SET "status" = 'error',
-             "error" = 'duplicate active job superseded during database migration',
-             "unsupportedKind" = NULL,
-             "unsupportedMessage" = NULL
-       WHERE "status" IN ('queued', 'running')
+    const duplicateMessage = "duplicate active job superseded during database migration";
+    const duplicateAtMs = Date.now();
+    const duplicates = sqlite.prepare(`
+      SELECT old."id" AS "id", old."revision" AS "revision",
+             old."stepsJson" AS "stepsJson", old."updatedAt" AS "updatedAt",
+             old."reportId" AS "reportId",
+             EXISTS (
+               SELECT 1 FROM "reports" AS linked WHERE linked."id" = old."reportId"
+             ) AS "reportExists"
+        FROM "jobs" AS old
+       WHERE old."status" IN ('queued', 'running')
          AND EXISTS (
            SELECT 1 FROM "jobs" AS newer
             WHERE newer."symbol" = old."symbol"
               AND newer."status" IN ('queued', 'running')
               AND (newer."updatedAt" > old."updatedAt"
                 OR (newer."updatedAt" = old."updatedAt" AND newer."id" > old."id"))
-         );
+         )
+    `).all() as Array<{
+      id: string;
+      revision: number;
+      stepsJson: string;
+      updatedAt: string;
+      reportId: number | null;
+      reportExists: number;
+    }>;
+    const terminalizeDuplicate = sqlite.prepare(`
+      UPDATE "jobs"
+         SET "status" = ?,
+             "error" = ?,
+             "unsupportedKind" = NULL,
+             "unsupportedMessage" = NULL,
+             "stepsJson" = ?,
+             "leaseOwner" = NULL,
+             "leaseExpiresAt" = NULL,
+             "heartbeatAt" = NULL,
+             "updatedAt" = ?,
+             "revision" = ?
+       WHERE "id" = ?
+         AND "revision" = ?
+         AND "status" IN ('queued', 'running')
     `);
+    for (const duplicate of duplicates) {
+      if (!Number.isSafeInteger(duplicate.revision) || duplicate.revision < 0) {
+        throw new Error("database migration: invalid or unsafe job revision");
+      }
+      if (duplicate.revision === Number.MAX_SAFE_INTEGER) {
+        throw new Error("database migration: safe job revision overflow");
+      }
+      const storedUpdatedAtMs = Date.parse(duplicate.updatedAt);
+      if (!Number.isFinite(storedUpdatedAtMs)) {
+        throw new Error("database migration: invalid stored job updatedAt");
+      }
+      const terminalAt = new Date(Math.max(storedUpdatedAtMs, duplicateAtMs)).toISOString();
+      const linkedReportWins = duplicate.reportId !== null && duplicate.reportExists === 1;
+      const status = linkedReportWins ? "done" : "error";
+      const error = linkedReportWins ? null : duplicateMessage;
+      const result = terminalizeDuplicate.run(
+        status,
+        error,
+        normalizeBootstrapTerminalSteps(
+          duplicate.stepsJson,
+          duplicateMessage,
+          terminalAt,
+          linkedReportWins,
+        ),
+        terminalAt,
+        duplicate.revision + 1,
+        duplicate.id,
+        duplicate.revision,
+      );
+      if (result.changes !== 1) {
+        throw new Error("database migration: duplicate job revision fence changed unexpectedly");
+      }
+    }
 
     sqlite.exec(DURABLE_JOB_TABLE_DDL);
     sqlite.exec(INDEX_DDL);

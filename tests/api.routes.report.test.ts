@@ -73,7 +73,7 @@ import {
   setDbForTests,
   type DatabaseHandle,
 } from "@/db";
-import { jobs, reports } from "@/db/schema";
+import { costLog, jobs, reports } from "@/db/schema";
 import { createJob as createJobReal, initialSteps } from "@/pipeline/jobRunner";
 import { persistPassSettlement } from "@/pipeline/jobArtifacts";
 import type { StepProgress } from "@/types/core";
@@ -310,6 +310,77 @@ describe("POST /api/report", () => {
  * ------------------------------------------------------------------------ */
 
 describe("GET /api/report/[jobId]", () => {
+  it("uses live all-generation ledger truth after a linked terminal report freezes its cost", async () => {
+    const { jobId } = createJobReal("AAPL");
+    const report = handle.db.insert(reports).values({
+      symbol: "AAPL",
+      createdAt: "2026-08-08T00:00:00.000Z",
+      model: "claude-opus-4-8",
+      status: "done",
+      reportJson: null,
+      verificationRate: 1,
+      costUsd: 0.4,
+      specVersion: "1.0.0",
+    }).returning({ id: reports.id }).get();
+    handle.db.insert(costLog).values([
+      {
+        jobId,
+        runGeneration: 0,
+        attemptId: "reported",
+        step: "bull",
+        model: "claude-opus-4-8",
+        costUsd: 0.4,
+        createdAt: "2026-08-08T00:00:00.000Z",
+      },
+      {
+        jobId,
+        runGeneration: 0,
+        attemptId: "late",
+        step: "bear",
+        model: "claude-opus-4-8",
+        costUsd: 0.2,
+        createdAt: "2026-08-08T00:01:00.000Z",
+      },
+    ]).run();
+    handle.db.update(jobs).set({
+      status: "done",
+      reportId: report.id,
+      revision: 3,
+    }).where(eq(jobs.id, jobId)).run();
+
+    const response = await reportGET(new Request(`http://localhost/api/report/${jobId}`), {
+      params: Promise.resolve({ jobId }),
+    });
+
+    const snapshot = await response.json() as { revision: number; totalCostUsd: number };
+    expect(snapshot.revision).toBe(3);
+    expect(snapshot.totalCostUsd).toBeCloseTo(0.6, 10);
+    expect(handle.db.select().from(reports).where(eq(reports.id, report.id)).get()?.costUsd)
+      .toBe(0.4);
+  });
+
+  it("uses linked report cost only as a legacy fallback when no durable ledger rows exist", async () => {
+    const { jobId } = createJobReal("AAPL");
+    const report = handle.db.insert(reports).values({
+      symbol: "AAPL",
+      createdAt: "2026-08-08T00:00:00.000Z",
+      model: "legacy-model",
+      status: "done",
+      reportJson: null,
+      verificationRate: null,
+      costUsd: 0.75,
+      specVersion: "0.9.0",
+    }).returning({ id: reports.id }).get();
+    handle.db.update(jobs).set({ status: "done", reportId: report.id, revision: 1 })
+      .where(eq(jobs.id, jobId)).run();
+
+    const response = await reportGET(new Request(`http://localhost/api/report/${jobId}`), {
+      params: Promise.resolve({ jobId }),
+    });
+
+    expect(await response.json()).toMatchObject({ totalCostUsd: 0.75 });
+  });
+
   it("returns 404 for an unknown job id", async () => {
     const res = await reportGET(new Request("http://localhost/api/report/nope"), {
       params: Promise.resolve({ jobId: "does-not-exist" }),
@@ -343,6 +414,33 @@ describe("GET /api/report/[jobId]", () => {
     expect(snap.reportId).toBeNull();
     expect(snap.totalCostUsd).toBe(0);
     expect(snap.resumable).toBe(false);
+  });
+
+  it.each([
+    ["duplicate", [
+      { step: "fetch", status: "error" },
+      { step: "fetch", status: "skipped" },
+    ]],
+    ["out-of-order", [
+      { step: "validate", status: "skipped" },
+      { step: "fetch", status: "error" },
+    ]],
+    ["invalid fields", [{ step: "fetch", status: "finished", costUsd: -1 }]],
+  ])("sanitizes a terminal %s stored step array to an empty safe snapshot", async (_label, value) => {
+    const { jobId } = createJobReal("AAPL");
+    handle.db.update(jobs).set({
+      status: "error",
+      error: "terminal legacy row",
+      stepsJson: JSON.stringify(value),
+      revision: 1,
+    }).where(eq(jobs.id, jobId)).run();
+
+    const response = await reportGET(new Request(`http://localhost/api/report/${jobId}`), {
+      params: Promise.resolve({ jobId }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: "error", revision: 1, steps: [] });
   });
 
   it("does not use updatedAt as write authority while polling a running job", async () => {

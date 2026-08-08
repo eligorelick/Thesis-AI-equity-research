@@ -1,72 +1,50 @@
-/**
- * GET /api/report/[jobId]/stream — Server-Sent Events progress stream.
- *
- * Behavior:
- *  1. Replays the current job snapshot first (a "snapshot" event) so a late or
- *     refreshing client immediately catches up to where the pipeline is.
- *  2. Streams live events (step-update / cost-update / done / error) until a
- *     terminal event, then closes the stream.
- *  3. If the job is ALREADY terminal at connect time (done/error/unsupported), it replays
- *     the snapshot, emits the terminal event, and closes — no hanging stream.
- *  4. Sends heartbeat comments so proxies don't idle-timeout the connection.
- *  5. Cleans up (unsubscribe + clear heartbeat) on client disconnect via the
- *     request AbortSignal and on normal termination.
- *
- * 404 when the job id is unknown. Server-only (nodejs runtime).
- */
-
+/** Revisioned, snapshot-only SSE transport for durable report jobs. */
 import {
   getJobSnapshot,
-  isTerminalEvent,
+  jobExists,
   subscribeJob,
-  type JobEvent,
+  type JobSnapshot,
 } from "@/pipeline/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Heartbeat interval (ms) — a comment line keeps intermediaries from timing out. */
+const POLL_MS = 1_000;
 const HEARTBEAT_MS = 15_000;
-
+const READ_RETRY_MS = [250, 500, 1_000] as const;
 const encoder = new TextEncoder();
 
-/** Serialize one SSE event frame: `event: <name>\ndata: <json>\n\n`. */
-function sseFrame(event: string, data: unknown): Uint8Array {
-  return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+function snapshotFrame(snapshot: JobSnapshot): Uint8Array {
+  return encoder.encode(
+    `id: ${snapshot.revision}\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
+  );
 }
 
-/** An SSE comment line (heartbeat / stream-open marker). */
-function sseComment(text: string): Uint8Array {
+function comment(text: string): Uint8Array {
   return encoder.encode(`: ${text}\n\n`);
 }
 
-function terminalEventFromSnapshot(snapshot: NonNullable<ReturnType<typeof getJobSnapshot>>): JobEvent {
-  if (snapshot.status === "error") {
-    return { type: "error", jobId: snapshot.jobId, message: snapshot.error ?? "job failed" };
-  }
-  if (snapshot.status === "unsupported") {
-    if (snapshot.unsupported === null) {
-      return {
-        type: "error",
-        jobId: snapshot.jobId,
-        message: "unsupported instrument classification is unavailable",
-      };
-    }
-    return {
-      type: "unsupported",
-      jobId: snapshot.jobId,
-      kind: snapshot.unsupported.kind,
-      message: snapshot.unsupported.message,
-      totalCostUsd: snapshot.totalCostUsd,
-    };
-  }
+function finalized(snapshot: JobSnapshot): boolean {
+  return !snapshot.settlementsPending && (snapshot.status === "done" ||
+    snapshot.status === "error" ||
+    snapshot.status === "unsupported" ||
+    snapshot.status === "canceled");
+}
+
+function closedStreamResponse(): Response {
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.close();
+    },
+  }), { status: 200, headers: streamHeaders() });
+}
+
+function streamHeaders(): Record<string, string> {
   return {
-    type: "done",
-    jobId: snapshot.jobId,
-    reportId: snapshot.reportId,
-    verificationRate: snapshot.verificationRate,
-    totalCostUsd: snapshot.totalCostUsd,
-    dataOnly: snapshot.dataOnly,
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+    "x-accel-buffering": "no",
   };
 }
 
@@ -75,102 +53,160 @@ export async function GET(
   { params }: { params: Promise<{ jobId: string }> },
 ): Promise<Response> {
   const { jobId } = await params;
-
-  // Read-only by design: scheduler/write surfaces reconcile expired owners;
-  // SSE only reflects the current durable snapshot and live event stream.
-  const snapshot = getJobSnapshot(jobId);
-  if (snapshot === null) {
+  if (!jobExists(jobId)) {
     return new Response(JSON.stringify({ error: `no job with id "${jobId}"` }), {
       status: 404,
       headers: { "content-type": "application/json" },
     });
   }
+  if (request.signal.aborted) return closedStreamResponse();
 
-  const alreadyTerminal =
-    snapshot.status === "done" || snapshot.status === "error" || snapshot.status === "unsupported";
-
+  let cancelStream = (): void => {};
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      // Mutable holder so the cleanup/enqueue closures can read handles that are
-      // assigned later (subscription/heartbeat), captured by reference.
       const refs: {
         closed: boolean;
-        heartbeat?: ReturnType<typeof setInterval>;
+        lastRevision: number | null;
         unsubscribe?: () => void;
-      } = { closed: false };
+        poll?: ReturnType<typeof setTimeout>;
+        heartbeat?: ReturnType<typeof setTimeout>;
+        retry?: ReturnType<typeof setTimeout>;
+        retryIndex: number;
+        refreshing: boolean;
+        refreshPending: boolean;
+      } = {
+        closed: false,
+        lastRevision: null,
+        retryIndex: 0,
+        refreshing: false,
+        refreshPending: false,
+      };
 
-      const safeEnqueue = (chunk: Uint8Array): void => {
-        if (refs.closed) return;
-        try {
-          controller.enqueue(chunk);
-        } catch {
-          // Controller already closed (client vanished mid-write) — stop.
-          cleanup();
-        }
+      const clearTimer = (key: "poll" | "heartbeat" | "retry"): void => {
+        const timer = refs[key];
+        if (timer === undefined) return;
+        refs[key] = undefined;
+        clearTimeout(timer);
       };
 
       const cleanup = (): void => {
         if (refs.closed) return;
         refs.closed = true;
-        if (refs.heartbeat !== undefined) clearInterval(refs.heartbeat);
-        if (refs.unsubscribe !== undefined) refs.unsubscribe();
+        clearTimer("poll");
+        clearTimer("heartbeat");
+        clearTimer("retry");
+        const unsubscribe = refs.unsubscribe;
+        refs.unsubscribe = undefined;
+        unsubscribe?.();
         request.signal.removeEventListener("abort", cleanup);
         try {
           controller.close();
         } catch {
-          // already closed
+          // Reader cancellation or a prior enqueue failure may already close it.
+        }
+      };
+      cancelStream = cleanup;
+
+      const enqueue = (chunk: Uint8Array): boolean => {
+        if (refs.closed) return false;
+        try {
+          controller.enqueue(chunk);
+          return true;
+        } catch {
+          cleanup();
+          return false;
         }
       };
 
-      // Client disconnect → tear everything down.
-      request.signal.addEventListener("abort", cleanup);
+      const scheduleHeartbeat = (): void => {
+        if (refs.closed || refs.heartbeat !== undefined) return;
+        refs.heartbeat = setTimeout(() => {
+          refs.heartbeat = undefined;
+          if (enqueue(comment("heartbeat"))) scheduleHeartbeat();
+        }, HEARTBEAT_MS);
+        refs.heartbeat.unref?.();
+      };
 
-      // 1. Open marker + snapshot replay (catch-up for late subscribers).
-      safeEnqueue(sseComment("stream open"));
-      safeEnqueue(sseFrame("snapshot", snapshot));
+      let refresh = (): void => {};
+      const schedulePoll = (): void => {
+        if (refs.closed || refs.poll !== undefined || refs.retry !== undefined) return;
+        refs.poll = setTimeout(() => {
+          refs.poll = undefined;
+          refresh();
+        }, POLL_MS);
+        refs.poll.unref?.();
+      };
 
-      // 3. Already-terminal job: emit the terminal event synthetically + close.
-      if (alreadyTerminal) {
-        const terminal = terminalEventFromSnapshot(snapshot);
-        safeEnqueue(sseFrame(terminal.type, terminal));
+      const scheduleReadRetry = (): void => {
+        if (refs.closed || refs.retry !== undefined) return;
+        const delay = READ_RETRY_MS[refs.retryIndex];
+        if (delay === undefined) {
+          cleanup();
+          return;
+        }
+        refs.retryIndex += 1;
+        refs.retry = setTimeout(() => {
+          refs.retry = undefined;
+          refresh();
+        }, delay);
+        refs.retry.unref?.();
+      };
+
+      refresh = (): void => {
+        if (refs.closed) return;
+        if (refs.refreshing) {
+          refs.refreshPending = true;
+          return;
+        }
+        refs.refreshing = true;
+        let succeeded = false;
+        try {
+          const snapshot = getJobSnapshot(jobId);
+          if (snapshot === null) {
+            cleanup();
+            return;
+          }
+          refs.retryIndex = 0;
+          succeeded = true;
+          if (refs.lastRevision === null || snapshot.revision > refs.lastRevision) {
+            if (!enqueue(snapshotFrame(snapshot))) return;
+            refs.lastRevision = snapshot.revision;
+            if (finalized(snapshot)) {
+              cleanup();
+              return;
+            }
+          }
+        } catch {
+          scheduleReadRetry();
+        } finally {
+          refs.refreshing = false;
+        }
+        if (refs.closed) return;
+        if (refs.refreshPending && refs.retry === undefined) {
+          refs.refreshPending = false;
+          refresh();
+          return;
+        }
+        if (succeeded) schedulePoll();
+      };
+
+      request.signal.addEventListener("abort", cleanup, { once: true });
+      if (request.signal.aborted) {
         cleanup();
         return;
       }
 
-      // 2. Subscribe to live events; close on the terminal one.
-      refs.unsubscribe = subscribeJob(jobId, (event) => {
-        safeEnqueue(sseFrame(event.type, event));
-        if (isTerminalEvent(event)) cleanup();
-      });
-
-      // Guard against a race: the job may have finished between the snapshot
-      // read and the subscription. Re-check and synthesize a terminal event.
-      const recheck = getJobSnapshot(jobId);
-      if (
-        recheck !== null &&
-        (recheck.status === "done" ||
-          recheck.status === "error" ||
-          recheck.status === "unsupported")
-      ) {
-        const terminal = terminalEventFromSnapshot(recheck);
-        safeEnqueue(sseFrame(terminal.type, terminal));
-        cleanup();
-        return;
-      }
-
-      // 4. Heartbeat.
-      refs.heartbeat = setInterval(() => safeEnqueue(sseComment("heartbeat")), HEARTBEAT_MS);
+      // Local events are post-commit invalidation hints only. Subscribing before
+      // the authoritative read closes the handshake race; payloads never go on wire.
+      refs.unsubscribe = subscribeJob(jobId, () => refresh());
+      if (!enqueue(comment("stream open"))) return;
+      refresh();
+      if (!refs.closed) scheduleHeartbeat();
+    },
+    cancel() {
+      cancelStream();
     },
   });
 
-  return new Response(stream, {
-    status: 200,
-    headers: {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive",
-      // Disable proxy buffering (nginx) so events flush immediately.
-      "x-accel-buffering": "no",
-    },
-  });
+  return new Response(stream, { status: 200, headers: streamHeaders() });
 }

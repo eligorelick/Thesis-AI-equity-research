@@ -149,6 +149,154 @@ afterEach(() => {
 });
 
 describe("durable job schema migration", () => {
+  it("terminalizes duplicate active jobs as one revisioned snapshot and preserves paid settlement leases", () => {
+    const dbPath = tempDbPath();
+    createAuditedLegacyDatabase(dbPath, "duplicate-old");
+    const sqlite = openSqlite(dbPath);
+    try {
+      sqlite.exec(`
+        INSERT INTO "jobs" (
+          "id", "symbol", "status", "stepsJson", "createdAt", "updatedAt"
+        ) VALUES (
+          'duplicate-new', 'AAPL', 'running',
+          '[{"step":"fetch","status":"running","startedAt":"2026-08-01T00:00:00.000Z"}]',
+          '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'
+        );
+        CREATE TABLE "job_llm_leases" (
+          "permitId" TEXT PRIMARY KEY NOT NULL,
+          "jobId" TEXT NOT NULL REFERENCES "jobs"("id") ON DELETE CASCADE,
+          "runGeneration" INTEGER NOT NULL,
+          "attemptId" TEXT NOT NULL,
+          "pass" TEXT NOT NULL,
+          "leaseOwner" TEXT NOT NULL,
+          "reservedCostUsd" REAL NOT NULL,
+          "acquiredAt" TEXT NOT NULL,
+          "leaseExpiresAt" TEXT NOT NULL
+        );
+        INSERT INTO "job_llm_leases" VALUES (
+          'duplicate-permit', 'duplicate-old', 0, 'duplicate-attempt', 'bull',
+          'obsolete-worker', 0.5, '2026-08-01T00:00:00.000Z', '2999-01-01T00:00:00.000Z'
+        );
+      `);
+
+      bootstrapSchema(sqlite);
+
+      const terminalized = sqlite.prepare(`
+        SELECT "status", "stepsJson", "updatedAt", "error", "revision",
+               "leaseOwner", "leaseExpiresAt", "heartbeatAt"
+          FROM "jobs" WHERE "id" = 'duplicate-old'
+      `).get() as Record<string, unknown>;
+      expect(terminalized).toMatchObject({
+        status: "error",
+        error: "duplicate active job superseded during database migration",
+        revision: 1,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+      });
+      expect(terminalized.updatedAt).not.toBe("2026-07-01T00:00:00.000Z");
+      expect(JSON.parse(terminalized.stepsJson as string)).toEqual([
+        expect.objectContaining({
+          step: "fetch",
+          status: "skipped",
+        }),
+      ]);
+      expect(sqlite.prepare(`SELECT * FROM "job_llm_leases" WHERE "jobId" = 'duplicate-old'`).all())
+        .toEqual([expect.objectContaining({ permitId: "duplicate-permit" })]);
+
+      bootstrapSchema(sqlite);
+      expect(sqlite.prepare(`SELECT "status", "revision" FROM "jobs" WHERE "id" = 'duplicate-old'`).get())
+        .toEqual({ status: "error", revision: 1 });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("preserves a real linked report as done while terminalizing an older duplicate once", () => {
+    const dbPath = tempDbPath();
+    createAuditedLegacyDatabase(dbPath, "reported-old");
+    const sqlite = openSqlite(dbPath);
+    try {
+      sqlite.exec(`
+        INSERT INTO "reports" (
+          "id", "symbol", "createdAt", "model", "status", "reportJson", "costUsd"
+        ) VALUES (
+          77, 'AAPL', '2999-01-01T00:00:00.000Z', 'legacy-model', 'done', '{}', 0.25
+        );
+        UPDATE "jobs"
+           SET "reportId" = 77,
+               "updatedAt" = '2999-01-01T00:00:00.000Z',
+               "stepsJson" = '[{"step":"fetch","status":"running"},{"step":"validate","status":"pending"},{"step":"compute","status":"done","detail":"preserved done"},{"step":"bull","status":"error","detail":"preserved error"}]'
+         WHERE "id" = 'reported-old';
+        INSERT INTO "jobs" (
+          "id", "symbol", "status", "stepsJson", "createdAt", "updatedAt"
+        ) VALUES (
+          'reported-new', 'AAPL', 'running',
+          '[{"step":"fetch","status":"running"}]',
+          '2999-01-01T00:00:01.000Z', '2999-01-01T00:00:01.000Z'
+        );
+      `);
+
+      bootstrapSchema(sqlite);
+      const once = sqlite.prepare(`
+        SELECT "status", "error", "reportId", "revision", "updatedAt", "stepsJson"
+          FROM "jobs" WHERE "id" = 'reported-old'
+      `).get() as Record<string, unknown>;
+      expect(once).toMatchObject({
+        status: "done",
+        error: null,
+        reportId: 77,
+        revision: 1,
+        updatedAt: "2999-01-01T00:00:00.000Z",
+      });
+      expect(JSON.parse(once.stepsJson as string)).toEqual([
+        expect.objectContaining({
+          step: "fetch",
+          status: "skipped",
+          detail: "covered by linked persisted report recovered during database migration",
+        }),
+        expect.objectContaining({
+          step: "validate",
+          status: "skipped",
+          detail: "covered by linked persisted report recovered during database migration",
+        }),
+        { step: "compute", status: "done", detail: "preserved done" },
+        { step: "bull", status: "error", detail: "preserved error" },
+      ]);
+
+      bootstrapSchema(sqlite);
+      expect(sqlite.prepare(`SELECT "status", "revision" FROM "jobs" WHERE "id" = 'reported-old'`).get())
+        .toEqual({ status: "done", revision: 1 });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("rolls duplicate cleanup back rather than overflowing a maximum safe revision", () => {
+    const dbPath = tempDbPath();
+    createAuditedLegacyDatabase(dbPath, "max-revision-old");
+    const sqlite = openSqlite(dbPath);
+    try {
+      sqlite.exec(`
+        ALTER TABLE "jobs" ADD COLUMN "revision" INTEGER NOT NULL DEFAULT 0;
+        UPDATE "jobs" SET "revision" = ${Number.MAX_SAFE_INTEGER}
+         WHERE "id" = 'max-revision-old';
+        INSERT INTO "jobs" (
+          "id", "symbol", "status", "stepsJson", "createdAt", "updatedAt", "revision"
+        ) VALUES (
+          'max-revision-new', 'AAPL', 'running', '[]',
+          '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z', 0
+        );
+      `);
+
+      expect(() => bootstrapSchema(sqlite)).toThrow(/safe|overflow|revision/i);
+      expect(sqlite.prepare(`SELECT "status", "revision" FROM "jobs" WHERE "id" = 'max-revision-old'`).get())
+        .toEqual({ status: "queued", revision: Number.MAX_SAFE_INTEGER });
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("idempotently upgrades the audited legacy schema with safe defaults and preserves rows", () => {
     const dbPath = tempDbPath();
     createAuditedLegacyDatabase(dbPath);

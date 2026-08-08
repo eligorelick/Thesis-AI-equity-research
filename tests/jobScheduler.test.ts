@@ -22,9 +22,17 @@ import {
   preparePassSettlement,
   type PassSettlement,
 } from "@/pipeline/jobArtifacts";
-import { cancelJob, claimJobForResume, initialSteps } from "@/pipeline/jobRunner";
+import {
+  cancelJob,
+  claimJobForResume,
+  claimPreparedJobResume,
+  initialSteps,
+  prepareJobResume,
+} from "@/pipeline/jobRunner";
+import { getJobSnapshot } from "@/pipeline/events";
 import type { SchedulerKickOptions, SchedulerLimits } from "@/pipeline/jobScheduler";
 import type { AnalystCase } from "@/report/schema";
+import type { StepProgress } from "@/types/core";
 import { resetConfigCache } from "@/config/env";
 
 const NOW = new Date("2026-08-08T12:00:00.000Z");
@@ -109,6 +117,31 @@ function analystSettlement(costUsd = 0.1): PassSettlement<AnalystCase> {
       fetchedUrls: [],
     },
   };
+}
+
+function invalidStepSnapshots(): Array<[string, string]> {
+  const missingTarget = initialSteps().filter((step) => step.step !== "bull");
+  const missingNonTarget = initialSteps().filter((step) => step.step !== "verify");
+  const duplicate = initialSteps();
+  duplicate[4] = { ...duplicate[4]!, step: "bull" };
+  const reordered = initialSteps();
+  [reordered[3], reordered[4]] = [reordered[4]!, reordered[3]!];
+  const unknown: Array<Record<string, unknown>> = initialSteps().map((step) => ({ ...step }));
+  unknown[3] = { ...unknown[3], step: "unknown" };
+  const invalidStatus: Array<Record<string, unknown>> = initialSteps().map((step) => ({ ...step }));
+  invalidStatus[3] = { ...invalidStatus[3], status: "finished" };
+  const invalidOptional: Array<Record<string, unknown>> = initialSteps().map((step) => ({ ...step }));
+  invalidOptional[3] = { ...invalidOptional[3], costUsd: -1, finishedAt: "not-a-date" };
+  return [
+    ["malformed JSON", "{not-json"],
+    ["missing durable target", JSON.stringify(missingTarget)],
+    ["missing non-target step", JSON.stringify(missingNonTarget)],
+    ["duplicate step", JSON.stringify(duplicate)],
+    ["reordered steps", JSON.stringify(reordered)],
+    ["unknown step", JSON.stringify(unknown)],
+    ["invalid status", JSON.stringify(invalidStatus)],
+    ["invalid optional fields", JSON.stringify(invalidOptional)],
+  ];
 }
 
 function seedAnalystArtifact(
@@ -277,6 +310,23 @@ async function runBarrierRace(
 }
 
 describe("durable job claims", () => {
+  it("rolls a queued claim back at the maximum safe revision", async () => {
+    const { claimNextQueuedJob } = await scheduler();
+    seedJob(first.db, "max-revision-claim", "AAPL", {
+      revision: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(() => claimNextQueuedJob("worker", NOW, LIMITS, first.db))
+      .toThrow(/safe|overflow|revision/i);
+    expect(first.db.select().from(jobs).where(eq(jobs.id, "max-revision-claim")).get())
+      .toMatchObject({
+        status: "queued",
+        revision: Number.MAX_SAFE_INTEGER,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      });
+  });
+
   it.each([
     {
       name: "falls back from null queuedAt to createdAt",
@@ -523,6 +573,31 @@ describe("durable job claims", () => {
 
   it("treats a linked report visible in the locked claim snapshot as done before any retry work", async () => {
     const { claimNextQueuedJob } = await scheduler();
+    seedJob(first.db, "retry", "AAPL", {
+      status: "error",
+      error: "source synthesize failed",
+      revision: 4,
+      stepsJson: JSON.stringify([
+        { step: "bull", status: "done" },
+        { step: "bear", status: "done" },
+        { step: "synthesize", status: "error" },
+      ] satisfies StepProgress[]),
+    });
+    seedAnalystArtifact(first.db, "retry", "bull", "source-bull");
+    seedAnalystArtifact(first.db, "retry", "bear", "source-bear");
+    first.sqlite.pragma("foreign_keys = OFF");
+    first.sqlite.prepare("UPDATE jobs SET reportId = 41 WHERE id = 'retry'").run();
+    first.sqlite.pragma("foreign_keys = ON");
+    const prepared = prepareJobResume("retry", "error");
+    expect(prepared).not.toBeNull();
+    expect(claimPreparedJobResume(prepared!)).toBe(true);
+    expect(first.db.select().from(jobs).where(eq(jobs.id, "retry")).get()).toMatchObject({
+      status: "queued",
+      runGeneration: 1,
+      revision: 5,
+      stepsJson: JSON.stringify(initialSteps()),
+    });
+
     first.db.insert(reports).values({
       id: 41,
       symbol: "AAPL",
@@ -534,11 +609,6 @@ describe("durable job claims", () => {
       costUsd: 1.25,
       specVersion: "1.0.0",
     }).run();
-    seedJob(first.db, "retry", "AAPL", {
-      runGeneration: 1,
-      revision: 4,
-      reportId: 41,
-    });
     // A source lease cannot delay a report that already won the durable race.
     first.db.insert(jobLlmLeases).values({
       permitId: "source-live",
@@ -553,13 +623,27 @@ describe("durable job claims", () => {
     }).run();
 
     expect(claimNextQueuedJob("target", NOW, LIMITS, second.db)).toBeNull();
-    expect(second.db.select().from(jobs).where(eq(jobs.id, "retry")).get()).toMatchObject({
+    const recovered = second.db.select().from(jobs).where(eq(jobs.id, "retry")).get()!;
+    expect(recovered).toMatchObject({
       status: "done",
       runGeneration: 1,
-      revision: 5,
+      revision: 6,
       reportId: 41,
       leaseOwner: null,
       leaseExpiresAt: null,
+    });
+    const recoveredSteps = JSON.parse(recovered.stepsJson) as StepProgress[];
+    expect(recoveredSteps).toHaveLength(7);
+    expect(recoveredSteps.every((step) => step.status === "skipped")).toBe(true);
+    expect(recoveredSteps.every((step) =>
+      step.detail === "covered by linked persisted report recovered before dispatch"
+    )).toBe(true);
+    expect(recoveredSteps.some((step) => /error|fail|duplicate/i.test(step.detail ?? "")))
+      .toBe(false);
+    expect(getJobSnapshot("retry")).toMatchObject({
+      status: "done",
+      revision: 6,
+      steps: recoveredSteps,
     });
     expect(second.db.select().from(jobLlmLeases).all()).toHaveLength(1);
   });
@@ -1103,6 +1187,27 @@ describe("durable scheduler pump", () => {
 });
 
 describe("paid-pass leases and exact spend gates", () => {
+  it("refuses a paid permit near revision exhaustion while preserving a terminal slot", async () => {
+    const { acquirePaidPassLease, claimNextQueuedJob } = await scheduler();
+    seedJob(first.db, "revision-headroom-acquire", "AAPL");
+    const claim = claimNextQueuedJob("jobs", NOW, LIMITS, first.db)!;
+    first.db.update(jobs).set({ revision: Number.MAX_SAFE_INTEGER - 1 })
+      .where(eq(jobs.id, claim.jobId)).run();
+
+    expect(acquirePaidPassLease(
+      claim,
+      "bull",
+      "near-max-acquire",
+      0.5,
+      NOW,
+      LIMITS,
+      first.db,
+    )).toEqual({ acquired: false, reason: "revision-headroom" });
+    expect(first.db.select().from(jobLlmLeases).all()).toEqual([]);
+    expect(first.db.select().from(jobPassArtifacts).all()).toEqual([]);
+    expect(first.db.select().from(costLog).all()).toEqual([]);
+  });
+
   it("enforces global LLM capacity across two database connections and binds the attempt id", async () => {
     const { acquirePaidPassLease, claimNextQueuedJob } = await scheduler();
     seedJob(first.db, "job-a", "AAPL");
@@ -1392,6 +1497,150 @@ describe("paid-pass leases and exact spend gates", () => {
     ]);
   });
 
+  it("finalizes a terminal snapshot only when its last prelaunch lease is released", async () => {
+    const {
+      acquirePaidPassLease,
+      claimNextQueuedJob,
+      releaseUnbilledPaidPassLease,
+    } = await scheduler();
+    const limits = { ...LIMITS, maxActiveLlmCalls: 2 };
+    seedJob(first.db, "terminal-release", "AAPL");
+    const claim = claimNextQueuedJob("jobs", NOW, limits, first.db)!;
+    const bull = acquirePaidPassLease(
+      claim,
+      "bull",
+      "terminal-release-bull",
+      0.5,
+      NOW,
+      limits,
+      first.db,
+    );
+    const bear = acquirePaidPassLease(
+      claim,
+      "bear",
+      "terminal-release-bear",
+      0.5,
+      NOW,
+      limits,
+      first.db,
+    );
+    if (!bull.acquired || !bear.acquired) throw new Error("fixture leases were not acquired");
+    expect(cancelJob(claim.jobId)).toBe(true);
+    const canceled = getJobSnapshot(claim.jobId)!;
+    expect(canceled.settlementsPending).toBe(true);
+
+    expect(releaseUnbilledPaidPassLease(bull.lease, first.db, NOW)).toBe(true);
+    expect(getJobSnapshot(claim.jobId)).toMatchObject({
+      revision: canceled.revision,
+      settlementsPending: true,
+    });
+
+    expect(releaseUnbilledPaidPassLease(bear.lease, second.db, NOW)).toBe(true);
+    expect(getJobSnapshot(claim.jobId)).toMatchObject({
+      revision: canceled.revision + 1,
+      settlementsPending: false,
+    });
+  });
+
+  it("arms a durable wake that finalizes a terminal retained lease at expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const {
+      acquirePaidPassLease,
+      claimNextQueuedJob,
+      kickJobScheduler,
+    } = await scheduler();
+    const limits = {
+      ...LIMITS,
+      paidPassLeaseTtlMs: 100,
+      jobLeaseTtlMs: 1_000,
+    };
+    seedJob(first.db, "terminal-expiry-wake", "AAPL");
+    const claim = claimNextQueuedJob("jobs", NOW, limits, first.db)!;
+    const acquired = acquirePaidPassLease(
+      claim,
+      "bull",
+      "terminal-expiry-wake",
+      0.5,
+      NOW,
+      limits,
+      first.db,
+    );
+    if (!acquired.acquired) throw new Error("fixture lease was not acquired");
+    expect(cancelJob(claim.jobId)).toBe(true);
+    const canceled = getJobSnapshot(claim.jobId)!;
+    expect(canceled.settlementsPending).toBe(true);
+
+    kickJobScheduler(async () => ({} as never), {
+      limits,
+      now: () => new Date(),
+      runClaim: async () => {},
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(101);
+
+    expect(first.db.select().from(jobLlmLeases).where(eq(jobLlmLeases.jobId, claim.jobId)).all())
+      .toEqual([]);
+    expect(getJobSnapshot(claim.jobId)).toMatchObject({
+      revision: canceled.revision + 1,
+      settlementsPending: false,
+    });
+  });
+
+  it("finalizes an already-expired terminal lease on one startup scheduler kick", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const {
+      acquirePaidPassLease,
+      claimNextQueuedJob,
+      kickJobScheduler,
+    } = await scheduler();
+    const limits = {
+      ...LIMITS,
+      paidPassLeaseTtlMs: 100,
+      jobLeaseTtlMs: 1_000,
+    };
+    seedJob(first.db, "terminal-expired-startup", "AAPL");
+    const claim = claimNextQueuedJob("jobs", NOW, limits, first.db)!;
+    const acquired = acquirePaidPassLease(
+      claim,
+      "bull",
+      "terminal-expired-startup",
+      0.5,
+      NOW,
+      limits,
+      first.db,
+    );
+    if (!acquired.acquired) throw new Error("fixture lease was not acquired");
+    expect(cancelJob(claim.jobId)).toBe(true);
+    const canceled = getJobSnapshot(claim.jobId)!;
+    expect(canceled.settlementsPending).toBe(true);
+
+    first.db.update(jobLlmLeases)
+      .set({ leaseExpiresAt: new Date(NOW.getTime() - 1).toISOString() })
+      .where(eq(jobLlmLeases.permitId, acquired.lease.permitId))
+      .run();
+    expect(getJobSnapshot(claim.jobId)).toMatchObject({
+      revision: canceled.revision,
+      settlementsPending: true,
+    });
+
+    kickJobScheduler(async () => ({} as never), {
+      limits,
+      now: () => new Date(),
+      runClaim: async () => {},
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(first.db.select().from(jobLlmLeases).where(eq(jobLlmLeases.jobId, claim.jobId)).all())
+      .toEqual([]);
+    expect(getJobSnapshot(claim.jobId)).toMatchObject({
+      revision: canceled.revision + 1,
+      settlementsPending: false,
+    });
+  });
+
   it("renews launch leases without a snapshot revision when the visible steps are unchanged", async () => {
     const {
       acquirePaidPassLease,
@@ -1446,6 +1695,50 @@ describe("paid-pass leases and exact spend gates", () => {
       updatedAt: changedAt.toISOString(),
       stepsJson: JSON.stringify(changedSteps),
     });
+  });
+
+  it("rechecks revision headroom at authorization before any provider boundary", async () => {
+    const {
+      acquirePaidPassLease,
+      authorizePaidPassLaunch,
+      claimNextQueuedJob,
+    } = await scheduler();
+    seedJob(first.db, "revision-headroom-launch", "AAPL");
+    const claim = claimNextQueuedJob("jobs", NOW, LIMITS, first.db)!;
+    const acquired = acquirePaidPassLease(
+      claim,
+      "bull",
+      "near-max-launch",
+      0.5,
+      NOW,
+      LIMITS,
+      first.db,
+    );
+    if (!acquired.acquired) throw new Error("fixture lease was not acquired");
+    first.db.update(jobs).set({ revision: Number.MAX_SAFE_INTEGER - 2 })
+      .where(eq(jobs.id, claim.jobId)).run();
+    const candidate = initialSteps();
+    candidate[3] = {
+      ...candidate[3]!,
+      status: "running",
+      startedAt: NOW.toISOString(),
+    };
+
+    expect(() => authorizePaidPassLaunch(
+      acquired.lease,
+      claim.revision,
+      JSON.stringify(candidate),
+      NOW,
+      LIMITS,
+      second.db,
+    )).toThrow(/revision.*headroom/i);
+    expect(second.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()).toMatchObject({
+      revision: Number.MAX_SAFE_INTEGER - 2,
+      stepsJson: JSON.stringify(initialSteps()),
+    });
+    expect(second.db.select().from(jobLlmLeases).all()).toHaveLength(1);
+    expect(second.db.select().from(jobPassArtifacts).all()).toEqual([]);
+    expect(second.db.select().from(costLog).all()).toEqual([]);
   });
 
   it("captures renewal authority only after a blocking writer lock is acquired", async () => {
@@ -1551,6 +1844,72 @@ describe("paid-pass leases and exact spend gates", () => {
 });
 
 describe("atomic paid settlement", () => {
+  it.each(invalidStepSnapshots())(
+    "fails prelaunch authorization before provider work when stored steps have %s",
+    async (_label, corruptStepsJson) => {
+      const { acquirePaidPassLease, authorizePaidPassLaunch, claimNextQueuedJob } = await scheduler();
+      seedJob(first.db, "job-invalid-prelaunch", "AAPL");
+      const claim = claimNextQueuedJob("jobs", NOW, LIMITS, first.db)!;
+      const acquired = acquirePaidPassLease(
+        claim,
+        "bull",
+        "invalid-prelaunch",
+        0.5,
+        NOW,
+        LIMITS,
+        first.db,
+      );
+      if (!acquired.acquired) throw new Error("fixture lease was not acquired");
+      first.db.update(jobs).set({ stepsJson: corruptStepsJson })
+        .where(eq(jobs.id, claim.jobId)).run();
+      const candidate = initialSteps();
+      candidate.find((step) => step.step === "bull")!.status = "running";
+
+      expect(() => authorizePaidPassLaunch(
+        acquired.lease,
+        claim.revision,
+        JSON.stringify(candidate),
+        NOW,
+        LIMITS,
+        second.db,
+      )).toThrow(/invalid persisted step snapshot/i);
+      expect(second.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get())
+        .toMatchObject({ revision: claim.revision, stepsJson: corruptStepsJson });
+      expect(second.db.select().from(jobLlmLeases).all()).toHaveLength(1);
+      expect(second.db.select().from(jobPassArtifacts).all()).toEqual([]);
+      expect(second.db.select().from(costLog).all()).toEqual([]);
+    },
+  );
+
+  it("fails prelaunch authorization on a noncanonical candidate without mutating authority", async () => {
+    const { acquirePaidPassLease, authorizePaidPassLaunch, claimNextQueuedJob } = await scheduler();
+    seedJob(first.db, "job-invalid-candidate", "AAPL");
+    const claim = claimNextQueuedJob("jobs", NOW, LIMITS, first.db)!;
+    const acquired = acquirePaidPassLease(
+      claim,
+      "bull",
+      "invalid-candidate",
+      0.5,
+      NOW,
+      LIMITS,
+      first.db,
+    );
+    if (!acquired.acquired) throw new Error("fixture lease was not acquired");
+    const candidate = initialSteps().filter((step) => step.step !== "verify");
+
+    expect(() => authorizePaidPassLaunch(
+      acquired.lease,
+      claim.revision,
+      JSON.stringify(candidate),
+      NOW,
+      LIMITS,
+      second.db,
+    )).toThrow(/invalid persisted step snapshot/i);
+    expect(second.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()?.revision)
+      .toBe(claim.revision);
+    expect(second.db.select().from(jobLlmLeases).all()).toHaveLength(1);
+  });
+
   it("bumps revision with a new exact-current settlement but not an exact replay", async () => {
     const { acquirePaidPassLease, claimNextQueuedJob, settlePaidPassLease } = await scheduler();
     seedJob(first.db, "job-a", "AAPL");
@@ -1561,6 +1920,10 @@ describe("atomic paid settlement", () => {
       settlement: analystSettlement(0.4),
       payloadFingerprint: "1.3.0:revision",
       settledAt: new Date(NOW.getTime() - 60_000).toISOString(),
+      step: {
+        finishedAt: new Date(NOW.getTime() - 30_000).toISOString(),
+        detail: "bull settlement committed",
+      },
     };
 
     const settled = settlePaidPassLease(acquired.lease, input, first.db, NOW);
@@ -1569,17 +1932,81 @@ describe("atomic paid settlement", () => {
       currentGeneration: true,
       currentRevision: claim.revision + 1,
     });
-    expect(first.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()).toMatchObject({
+    const after = first.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()!;
+    expect(after).toMatchObject({
       revision: claim.revision + 1,
       updatedAt: NOW.toISOString(),
       bullJson: expect.any(String),
     });
+    expect(JSON.parse(after.stepsJson)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        step: "bull",
+        status: "done",
+        detail: "bull settlement committed",
+        costUsd: 0.4,
+      }),
+    ]));
 
     const replay = settlePaidPassLease(acquired.lease, input, second.db, NOW);
     expect(replay).toMatchObject({ inserted: false, currentRevision: null });
     expect(second.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()?.revision)
       .toBe(claim.revision + 1);
   });
+
+  it.each(invalidStepSnapshots())(
+    "commits a known charge once when exact-current steps are %s, then reports projection failure",
+    async (_label, corruptStepsJson) => {
+      const { acquirePaidPassLease, claimNextQueuedJob, settlePaidPassLease } = await scheduler();
+      seedJob(first.db, "job-corrupt-settlement", "AAPL");
+      const claim = claimNextQueuedJob("jobs", NOW, LIMITS, first.db)!;
+      const acquired = acquirePaidPassLease(
+        claim,
+        "bull",
+        "corrupt-settlement",
+        0.5,
+        NOW,
+        LIMITS,
+        first.db,
+      );
+      if (!acquired.acquired) throw new Error("fixture lease was not acquired");
+      first.db.update(jobs).set({ stepsJson: corruptStepsJson })
+        .where(eq(jobs.id, claim.jobId)).run();
+      const input = {
+        settlement: analystSettlement(0.4),
+        payloadFingerprint: "1.3.0:corrupt-settlement",
+        settledAt: NOW.toISOString(),
+      };
+
+      const settled = settlePaidPassLease(acquired.lease, input, second.db, NOW);
+
+      expect(settled).toMatchObject({
+        inserted: true,
+        currentGeneration: true,
+        currentRevision: claim.revision + 1,
+        currentSteps: null,
+        currentTotalCostUsd: 0.4,
+        projectionError: expect.stringMatching(/step snapshot|missing durable step/i),
+      });
+      expect(second.db.select().from(jobPassArtifacts).all()).toHaveLength(1);
+      expect(second.db.select().from(costLog).all()).toEqual([
+        expect.objectContaining({ costUsd: 0.4 }),
+      ]);
+      expect(second.db.select().from(jobLlmLeases).all()).toEqual([]);
+      expect(second.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()).toMatchObject({
+        revision: claim.revision + 1,
+        stepsJson: corruptStepsJson,
+        bullJson: null,
+        payloadFingerprint: null,
+      });
+
+      expect(settlePaidPassLease(acquired.lease, input, first.db, NOW)).toMatchObject({
+        inserted: false,
+        currentRevision: null,
+      });
+      expect(first.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()?.revision)
+        .toBe(claim.revision + 1);
+    },
+  );
 
   it("settles immutable truth with revision-only invalidation after the parent job lease expires", async () => {
     const { acquirePaidPassLease, claimNextQueuedJob, settlePaidPassLease } = await scheduler();
@@ -1766,8 +2193,14 @@ describe("atomic paid settlement", () => {
     expect(first.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()?.revision).toBe(8);
   });
 
-  it("does not invalidate or project through a different valid running generation owner", async () => {
-    const { acquirePaidPassLease, claimNextQueuedJob, settlePaidPassLease } = await scheduler();
+  it("invalidates cost truth once without projecting through a different valid running generation owner", async () => {
+    const {
+      acquirePaidPassLease,
+      authorizePaidPassLaunch,
+      claimNextQueuedJob,
+      settlePaidPassLease,
+      terminalizeClaim,
+    } = await scheduler();
     seedJob(first.db, "different-owner", "AAPL");
     const claim = claimNextQueuedJob("jobs", NOW, LIMITS, first.db)!;
     const acquired = acquirePaidPassLease(claim, "bull", "old-owner", 0.5, NOW, LIMITS, first.db);
@@ -1775,11 +2208,31 @@ describe("atomic paid settlement", () => {
     first.db.update(jobs).set({
       status: "running",
       runGeneration: 1,
-      revision: 9,
+      revision: 10,
       leaseOwner: "new-owner:nonce",
       heartbeatAt: NOW.toISOString(),
       leaseExpiresAt: new Date(NOW.getTime() + 60_000).toISOString(),
     }).where(eq(jobs.id, claim.jobId)).run();
+    const newClaim = {
+      jobId: claim.jobId,
+      symbol: claim.symbol,
+      runGeneration: 1,
+      revision: 10,
+      leaseOwner: "new-owner:nonce",
+      heartbeatAt: NOW.toISOString(),
+      leaseExpiresAt: new Date(NOW.getTime() + 60_000).toISOString(),
+      preparedResume: null,
+    };
+    const newOwnerPermit = acquirePaidPassLease(
+      newClaim,
+      "bear",
+      "new-owner-bear",
+      0.5,
+      NOW,
+      { ...LIMITS, maxActiveLlmCalls: 2 },
+      first.db,
+    );
+    if (!newOwnerPermit.acquired) throw new Error("new owner permit was not acquired");
 
     settlePaidPassLease(acquired.lease, {
       settlement: analystSettlement(0.4),
@@ -1789,13 +2242,114 @@ describe("atomic paid settlement", () => {
     expect(second.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()).toMatchObject({
       status: "running",
       runGeneration: 1,
-      revision: 9,
+      revision: 11,
       leaseOwner: "new-owner:nonce",
       bullJson: null,
       payloadFingerprint: null,
     });
     expect(second.db.select().from(jobPassArtifacts).all()).toHaveLength(1);
     expect(second.db.select().from(costLog).all()).toHaveLength(1);
+    const replay = settlePaidPassLease(acquired.lease, {
+      settlement: analystSettlement(0.4),
+      payloadFingerprint: "1.3.0:old-owner",
+      settledAt: NOW.toISOString(),
+    }, first.db, NOW);
+    expect(replay).toMatchObject({ inserted: false, currentRevision: null });
+    expect(first.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()).toMatchObject({
+      status: "running",
+      runGeneration: 1,
+      revision: 11,
+      leaseOwner: "new-owner:nonce",
+      bullJson: null,
+      payloadFingerprint: null,
+    });
+
+    const nextSteps = initialSteps();
+    nextSteps.find((step) => step.step === "bear")!.status = "running";
+    const continued = authorizePaidPassLaunch(
+      newOwnerPermit.lease,
+      newClaim.revision,
+      JSON.stringify(nextSteps),
+      new Date(NOW.getTime() + 1),
+      { ...LIMITS, maxActiveLlmCalls: 2 },
+      second.db,
+    );
+    expect(continued).toMatchObject({ revision: 12 });
+    expect(terminalizeClaim(
+      { ...newClaim, revision: continued!.revision },
+      "error",
+      "new owner completed its fenced cleanup",
+      new Date(NOW.getTime() + 2),
+      second.db,
+    )).toBe(true);
+    expect(second.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()).toMatchObject({
+      status: "error",
+      revision: 13,
+      leaseOwner: null,
+      error: "new owner completed its fenced cleanup",
+    });
+  });
+
+  it("rebases paid launch on a revision-only cost invalidation without losing newer steps", async () => {
+    const {
+      acquirePaidPassLease,
+      authorizePaidPassLaunch,
+      claimNextQueuedJob,
+    } = await scheduler();
+    seedJob(first.db, "launch-rebase", "AAPL");
+    const claim = claimNextQueuedJob("jobs", NOW, LIMITS, first.db)!;
+    const acquired = acquirePaidPassLease(
+      claim,
+      "bull",
+      "launch-rebase-attempt",
+      0.5,
+      NOW,
+      LIMITS,
+      first.db,
+    );
+    if (!acquired.acquired) throw new Error("fixture lease was not acquired");
+
+    const concurrent = initialSteps();
+    concurrent[0] = {
+      ...concurrent[0],
+      status: "done",
+      finishedAt: NOW.toISOString(),
+      completedAt: NOW.toISOString(),
+      detail: "concurrent durable fetch",
+    };
+    const concurrentBull = concurrent.find((step) => step.step === "bull")!;
+    concurrentBull.status = "error";
+    concurrentBull.finishedAt = NOW.toISOString();
+    concurrentBull.completedAt = NOW.toISOString();
+    concurrentBull.detail = "stale terminal metadata";
+    first.db.update(jobs).set({
+      stepsJson: JSON.stringify(concurrent),
+      revision: claim.revision + 1,
+      updatedAt: new Date(NOW.getTime() + 1).toISOString(),
+    }).where(eq(jobs.id, claim.jobId)).run();
+
+    const staleCandidate = initialSteps();
+    staleCandidate.find((step) => step.step === "bull")!.status = "running";
+    const authorized = authorizePaidPassLaunch(
+      acquired.lease,
+      claim.revision,
+      JSON.stringify(staleCandidate),
+      new Date(NOW.getTime() + 2),
+      LIMITS,
+      second.db,
+    );
+
+    expect(authorized).toMatchObject({ revision: claim.revision + 2 });
+    const stored = second.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()!;
+    expect(JSON.parse(stored.stepsJson)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ step: "fetch", detail: "concurrent durable fetch" }),
+      expect.objectContaining({ step: "bull", status: "running" }),
+    ]));
+    const storedBull = (JSON.parse(stored.stepsJson) as StepProgress[])
+      .find((step) => step.step === "bull")!;
+    expect(storedBull).not.toHaveProperty("finishedAt");
+    expect(storedBull).not.toHaveProperty("completedAt");
+    expect(storedBull).not.toHaveProperty("detail");
   });
 
   it("commits known cost and artifact before throwing when actual cost exceeds the reservation", async () => {

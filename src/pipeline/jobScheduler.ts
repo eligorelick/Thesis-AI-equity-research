@@ -26,10 +26,21 @@ import {
 import {
   persistPassSettlementInTransaction,
   preparePassSettlement,
+  serializeLegacyAnalystProjection,
   type DurablePass,
   type PassSettlement,
   type PersistPassSettlementResult,
 } from "@/pipeline/jobArtifacts";
+import {
+  assertSafeJobRevision,
+  mutateJobSnapshotInTransaction,
+  renewInvisibleJobLease,
+  renewInvisibleJobLeaseInTransaction,
+} from "@/pipeline/jobState";
+import {
+  normalizeLinkedReportRecoverySteps,
+  parseCanonicalJobSteps,
+} from "@/pipeline/jobSteps";
 import {
   prepareQueuedJobResumeInTransaction,
   queuedResumeSourceMatchesInTransaction,
@@ -43,6 +54,14 @@ const MAX_SAFE_MICRO_USD = BigInt(Number.MAX_SAFE_INTEGER);
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_ROLLING_WINDOW_MS = 52_560_000 * 60_000;
 const SCHEDULER_RETRY_DELAY_MS = 1_000;
+/**
+ * Worst-case postlaunch runner bookkeeping is deliberately over-reserved:
+ * judge/report validation can retry twice, with visible finish/detail/restart
+ * writes, followed by verify degradation and one report/error terminal write.
+ * Revision space is enormous, so 32 is a safer fail-early bound than coupling
+ * paid admission to the exact current control-flow write count.
+ */
+const PAID_PIPELINE_BOOKKEEPING_HEADROOM = 32;
 
 export interface SchedulerLimits {
   maxActiveJobs: number;
@@ -99,6 +118,7 @@ export type PaidPassAcquireResult =
         | "capacity"
         | "job-budget"
         | "job-budget-pending"
+        | "revision-headroom"
         | "rolling-budget"
         | "rolling-budget-pending";
     };
@@ -217,12 +237,65 @@ function normalizeTerminalSteps(raw: string, message: string, at: string): strin
   }
 }
 
-function sameNullable(column: typeof jobs.leaseOwner | typeof jobs.leaseExpiresAt, value: string | null) {
-  return value === null ? isNull(column) : eq(column, value);
+function parseSteps(raw: string): StepProgress[] {
+  const steps = parseCanonicalJobSteps(raw);
+  if (steps === null) throw new Error("jobScheduler: invalid persisted step snapshot");
+  return steps;
+}
+
+function isTerminalJobStatus(status: string): boolean {
+  return status === "done" || status === "error" ||
+    status === "unsupported" || status === "canceled";
+}
+
+/**
+ * A retained paid lease keeps a terminal snapshot financially open. After a
+ * non-settlement deletion, version the transition to finalized iff that was
+ * the last retained row. Settlement already versions cost + deletion once and
+ * deliberately does not call this helper.
+ */
+function finalizeTerminalPaidLeasesInTransaction(
+  db: ThesisDb,
+  jobId: string,
+  nowIso: string,
+): boolean {
+  const remaining = db.select({ permitId: jobLlmLeases.permitId })
+    .from(jobLlmLeases)
+    .where(eq(jobLlmLeases.jobId, jobId))
+    .limit(1)
+    .get();
+  if (remaining !== undefined) return false;
+  const parent = db.select({ status: jobs.status, revision: jobs.revision })
+    .from(jobs)
+    .where(eq(jobs.id, jobId))
+    .get();
+  if (parent === undefined || !isTerminalJobStatus(parent.status)) return false;
+  const mutation = mutateJobSnapshotInTransaction(db, {
+    jobId,
+    now: new Date(nowIso),
+    forceRevision: true,
+    fence: { expectedRevision: parent.revision, status: parent.status },
+    mutate: () => ({}),
+  });
+  if (mutation === null) {
+    throw new Error("jobScheduler: terminal paid-lease finalization fence changed");
+  }
+  return true;
 }
 
 function pruneExpiredPaidLeases(db: ThesisDb, nowIso: string): number {
-  return db.delete(jobLlmLeases).where(lte(jobLlmLeases.leaseExpiresAt, nowIso)).run().changes;
+  const expired = db.select({ jobId: jobLlmLeases.jobId })
+    .from(jobLlmLeases)
+    .where(lte(jobLlmLeases.leaseExpiresAt, nowIso))
+    .all();
+  if (expired.length === 0) return 0;
+  const deleted = db.delete(jobLlmLeases)
+    .where(lte(jobLlmLeases.leaseExpiresAt, nowIso))
+    .run().changes;
+  for (const jobId of new Set(expired.map((row) => row.jobId))) {
+    finalizeTerminalPaidLeasesInTransaction(db, jobId, nowIso);
+  }
+  return deleted;
 }
 
 function reconcileExpiredJobClaimsInTransaction(db: ThesisDb, nowIso: string): number {
@@ -243,8 +316,17 @@ function reconcileExpiredJobClaimsInTransaction(db: ThesisDb, nowIso: string): n
     const message = row.leaseOwner === null || row.leaseExpiresAt === null
       ? "abandoned: running job has no durable lease"
       : "abandoned: durable job lease expired";
-    changed += db.update(jobs)
-      .set({
+    const mutation = mutateJobSnapshotInTransaction(db, {
+      jobId: row.id,
+      now: new Date(nowIso),
+      fence: {
+        expectedRevision: row.revision,
+        runGeneration: row.runGeneration,
+        status: "running",
+        leaseOwner: row.leaseOwner,
+      },
+      mutate: (current) => current.leaseExpiresAt === row.leaseExpiresAt
+        ? ({
         status: "error",
         error: message,
         stepsJson: normalizeTerminalSteps(row.stepsJson, message, nowIso),
@@ -253,18 +335,9 @@ function reconcileExpiredJobClaimsInTransaction(db: ThesisDb, nowIso: string): n
         leaseOwner: null,
         leaseExpiresAt: null,
         heartbeatAt: null,
-        updatedAt: nowIso,
-        revision: row.revision + 1,
-      })
-      .where(and(
-        eq(jobs.id, row.id),
-        eq(jobs.status, "running"),
-        eq(jobs.runGeneration, row.runGeneration),
-        eq(jobs.revision, row.revision),
-        sameNullable(jobs.leaseOwner, row.leaseOwner),
-        sameNullable(jobs.leaseExpiresAt, row.leaseExpiresAt),
-      ))
-      .run().changes;
+      }) : null,
+    });
+    if (mutation !== null) changed += 1;
   }
   return changed;
 }
@@ -339,46 +412,50 @@ function claimQueuedJobInternal(
           ? undefined
           : tx.select({ id: reports.id }).from(reports).where(eq(reports.id, row.reportId)).get();
         if (linked !== undefined) {
-          tx.update(jobs)
-            .set({
+          const stepsJson = normalizeLinkedReportRecoverySteps(
+            row.stepsJson,
+            nowIso,
+            "covered by linked persisted report recovered before dispatch",
+          );
+          mutateJobSnapshotInTransaction(tx as ThesisDb, {
+            jobId: row.id,
+            now: authority,
+            fence: {
+              expectedRevision: row.revision,
+              status: "queued",
+              runGeneration: row.runGeneration,
+            },
+            mutate: (current) => current.reportId === linked.id ? ({
               status: "done",
               error: null,
+              stepsJson,
               leaseOwner: null,
               leaseExpiresAt: null,
               heartbeatAt: null,
-              updatedAt: nowIso,
-              revision: row.revision + 1,
-            })
-            .where(and(
-              eq(jobs.id, row.id),
-              eq(jobs.status, "queued"),
-              eq(jobs.runGeneration, row.runGeneration),
-              eq(jobs.revision, row.revision),
-            ))
-            .run();
+            }) : null,
+          });
           continue;
         }
         preparedResume = prepareQueuedJobResumeInTransaction(tx, row.id);
         if (preparedResume === null) {
           const message = "queued retry has no coherent durable source plan";
-          tx.update(jobs)
-            .set({
+          mutateJobSnapshotInTransaction(tx as ThesisDb, {
+            jobId: row.id,
+            now: authority,
+            fence: {
+              expectedRevision: row.revision,
+              status: "queued",
+              runGeneration: row.runGeneration,
+            },
+            mutate: () => ({
               status: "error",
               error: message,
               stepsJson: normalizeTerminalSteps(row.stepsJson, message, nowIso),
               leaseOwner: null,
               leaseExpiresAt: null,
               heartbeatAt: null,
-              updatedAt: nowIso,
-              revision: row.revision + 1,
-            })
-            .where(and(
-              eq(jobs.id, row.id),
-              eq(jobs.status, "queued"),
-              eq(jobs.runGeneration, row.runGeneration),
-              eq(jobs.revision, row.revision),
-            ))
-            .run();
+            }),
+          });
           continue;
         }
         const sourceLease = tx
@@ -402,8 +479,15 @@ function claimQueuedJobInternal(
       // the post-claim digest differs, roll the claim and its side effects
       // back before terminalizing the still-queued target generation.
       tx.run(sql.raw("SAVEPOINT scheduler_job_claim"));
-      const claimed = tx.update(jobs)
-        .set({
+      const claimed = mutateJobSnapshotInTransaction(tx as ThesisDb, {
+        jobId: row.id,
+        now: authority,
+        fence: {
+          expectedRevision: row.revision,
+          status: "queued",
+          runGeneration: row.runGeneration,
+        },
+        mutate: () => ({
           status: "running",
           error: null,
           unsupportedKind: null,
@@ -411,17 +495,9 @@ function claimQueuedJobInternal(
           leaseOwner,
           heartbeatAt: nowIso,
           leaseExpiresAt,
-          updatedAt: nowIso,
-          revision: row.revision + 1,
-        })
-        .where(and(
-          eq(jobs.id, row.id),
-          eq(jobs.status, "queued"),
-          eq(jobs.runGeneration, row.runGeneration),
-          eq(jobs.revision, row.revision),
-        ))
-        .run();
-      if (claimed.changes !== 1) {
+        }),
+      });
+      if (claimed === null) {
         tx.run(sql.raw("ROLLBACK TO scheduler_job_claim"));
         tx.run(sql.raw("RELEASE scheduler_job_claim"));
         continue;
@@ -433,24 +509,23 @@ function claimQueuedJobInternal(
         tx.run(sql.raw("ROLLBACK TO scheduler_job_claim"));
         tx.run(sql.raw("RELEASE scheduler_job_claim"));
         const message = "queued retry source artifact digest changed before dispatch";
-        tx.update(jobs)
-          .set({
+        mutateJobSnapshotInTransaction(tx as ThesisDb, {
+          jobId: row.id,
+          now: authority,
+          fence: {
+            expectedRevision: row.revision,
+            status: "queued",
+            runGeneration: row.runGeneration,
+          },
+          mutate: () => ({
             status: "error",
             error: message,
             stepsJson: normalizeTerminalSteps(row.stepsJson, message, nowIso),
             leaseOwner: null,
             leaseExpiresAt: null,
             heartbeatAt: null,
-            updatedAt: nowIso,
-            revision: row.revision + 1,
-          })
-          .where(and(
-            eq(jobs.id, row.id),
-            eq(jobs.status, "queued"),
-            eq(jobs.runGeneration, row.runGeneration),
-            eq(jobs.revision, row.revision),
-          ))
-          .run();
+          }),
+        });
         continue;
       }
       tx.run(sql.raw("RELEASE scheduler_job_claim"));
@@ -458,7 +533,7 @@ function claimQueuedJobInternal(
         jobId: row.id,
         symbol: row.symbol,
         runGeneration: row.runGeneration,
-        revision: row.revision + 1,
+        revision: claimed.revision,
         leaseOwner,
         heartbeatAt: nowIso,
         leaseExpiresAt,
@@ -497,21 +572,13 @@ export function renewJobLease(
   db: ThesisDb = getDb(),
 ): boolean {
   assertLimits(limits);
-  return db.transaction((tx): boolean => {
-    const authority = authorityDate(now, "job-lease renewal");
-    const nowIso = authority.toISOString();
-    const leaseExpiresAt = new Date(authority.getTime() + limits.jobLeaseTtlMs).toISOString();
-    return tx.update(jobs)
-      .set({ heartbeatAt: nowIso, leaseExpiresAt })
-      .where(and(
-        eq(jobs.id, claim.jobId),
-        eq(jobs.runGeneration, claim.runGeneration),
-        eq(jobs.status, "running"),
-        eq(jobs.leaseOwner, claim.leaseOwner),
-        gt(jobs.leaseExpiresAt, nowIso),
-      ))
-      .run().changes === 1;
-  }, { behavior: "immediate" });
+  return renewInvisibleJobLease({
+    jobId: claim.jobId,
+    runGeneration: claim.runGeneration,
+    leaseOwner: claim.leaseOwner,
+    leaseTtlMs: limits.jobLeaseTtlMs,
+    ...(now === undefined ? {} : { now }),
+  }, db);
 }
 
 export function terminalizeClaim(
@@ -531,8 +598,16 @@ export function terminalizeClaim(
       gt(jobs.leaseExpiresAt, authorityAt),
     )).get();
     if (row === undefined) return false;
-    return tx.update(jobs)
-      .set({
+    return mutateJobSnapshotInTransaction(tx as ThesisDb, {
+      jobId: claim.jobId,
+      now: new Date(authorityAt),
+      fence: {
+        runGeneration: claim.runGeneration,
+        status: "running",
+        leaseOwner: claim.leaseOwner,
+        leaseValidAfter: authorityAt,
+      },
+      mutate: () => ({
         status,
         error: status === "error" ? (message ?? "job failed") : null,
         stepsJson: status === "error"
@@ -541,18 +616,8 @@ export function terminalizeClaim(
         leaseOwner: null,
         leaseExpiresAt: null,
         heartbeatAt: null,
-        updatedAt: authorityAt,
-        revision: row.revision + 1,
-      })
-      .where(and(
-        eq(jobs.id, claim.jobId),
-        eq(jobs.runGeneration, claim.runGeneration),
-        eq(jobs.revision, row.revision),
-        eq(jobs.status, "running"),
-        eq(jobs.leaseOwner, claim.leaseOwner),
-        gt(jobs.leaseExpiresAt, authorityAt),
-      ))
-      .run().changes === 1;
+      }),
+    }) !== null;
   }, { behavior: "immediate" });
 }
 
@@ -563,7 +628,11 @@ async function terminalizeSchedulerExecutionFailure(
 ): Promise<void> {
   if (!terminalizeClaim(claim, "error", message, now)) return;
   const { publishJobEvent } = await import("@/pipeline/events");
-  publishJobEvent({ type: "error", jobId: claim.jobId, message });
+  const revision = getDb().select({ revision: jobs.revision }).from(jobs)
+    .where(eq(jobs.id, claim.jobId)).get()?.revision;
+  if (revision !== undefined) {
+    publishJobEvent({ type: "error", jobId: claim.jobId, revision, message });
+  }
 }
 
 async function executeClaim(
@@ -836,6 +905,14 @@ function sumLeaseRowsMicro(rows: Array<{ reservedCostUsd: number }>): bigint {
   return rows.reduce((total, row) => total + BigInt(reservationMicroUsd(row.reservedCostUsd)), 0n);
 }
 
+function hasJobRevisionHeadroom(revision: number, requiredWrites: number): boolean {
+  assertSafeJobRevision(revision);
+  if (!Number.isSafeInteger(requiredWrites) || requiredWrites < 1) {
+    throw new Error("jobScheduler: invalid revision headroom requirement");
+  }
+  return Number.MAX_SAFE_INTEGER - revision >= requiredWrites;
+}
+
 export function acquirePaidPassLease(
   claim: JobClaim,
   pass: DurablePass,
@@ -855,6 +932,7 @@ export function acquirePaidPassLease(
     const parent = tx.select({
       status: jobs.status,
       runGeneration: jobs.runGeneration,
+      revision: jobs.revision,
       leaseOwner: jobs.leaseOwner,
       leaseExpiresAt: jobs.leaseExpiresAt,
       maxCostUsd: jobs.maxCostUsd,
@@ -871,6 +949,16 @@ export function acquirePaidPassLease(
     }
 
     const allLive = tx.select().from(jobLlmLeases).all();
+    const outstandingForJob = allLive.filter((lease) => lease.jobId === claim.jobId).length;
+    // Reserve one visible launch transition, every already-issued settlement,
+    // this permit's future settlement, and the conservative postlaunch runner
+    // bookkeeping/terminal budget.
+    if (!hasJobRevisionHeadroom(
+      parent.revision,
+      outstandingForJob + 2 + PAID_PIPELINE_BOOKKEEPING_HEADROOM,
+    )) {
+      return { acquired: false, reason: "revision-headroom" };
+    }
     if (allLive.length >= limits.maxActiveLlmCalls) {
       return { acquired: false, reason: "capacity" };
     }
@@ -996,7 +1084,7 @@ export interface PaidPassLaunchAuthority {
 
 /**
  * Atomically authorize the immediate provider boundary. The exact job owner,
- * revision, unexpired job lease, and exact unexpired paid permit are checked in
+ * generation, unexpired job lease, and exact unexpired paid permit are checked in
  * one BEGIN IMMEDIATE transaction that also persists the launch-visible step
  * snapshot and renews both leases.
  */
@@ -1015,6 +1103,7 @@ export function authorizePaidPassLaunch(
   return db.transaction((tx): PaidPassLaunchAuthority | null => {
     const authority = authorityDate(now, "paid-pass launch");
     const nowIso = authority.toISOString();
+    pruneExpiredPaidLeases(tx as ThesisDb, nowIso);
     const jobLeaseExpiresAt = new Date(authority.getTime() + limits.jobLeaseTtlMs).toISOString();
     const paidLeaseExpiresAt = new Date(authority.getTime() + limits.paidPassLeaseTtlMs).toISOString();
     const parent = tx.select({
@@ -1032,7 +1121,6 @@ export function authorizePaidPassLaunch(
     if (
       parent?.status !== "running" ||
       parent.runGeneration !== lease.runGeneration ||
-      parent.revision !== expectedRevision ||
       parent.leaseOwner !== lease.jobLeaseOwner ||
       parent.leaseExpiresAt === null ||
       parent.leaseExpiresAt <= nowIso ||
@@ -1040,25 +1128,60 @@ export function authorizePaidPassLaunch(
       permit.leaseExpiresAt <= nowIso
     ) return null;
 
-    const visibleStepTransition = parent.stepsJson !== stepsJson;
-    const nextRevision = visibleStepTransition ? expectedRevision + 1 : expectedRevision;
-    const jobUpdate = tx.update(jobs).set({
-      ...(visibleStepTransition ? { stepsJson, revision: nextRevision, updatedAt: nowIso } : {}),
-      heartbeatAt: nowIso,
-      leaseExpiresAt: jobLeaseExpiresAt,
-    }).where(and(
-      eq(jobs.id, lease.jobId),
-      eq(jobs.status, "running"),
-      eq(jobs.runGeneration, lease.runGeneration),
-      eq(jobs.revision, expectedRevision),
-      eq(jobs.leaseOwner, lease.jobLeaseOwner),
-      gt(jobs.leaseExpiresAt, nowIso),
-    )).run();
+    const latestSteps = parseSteps(parent.stepsJson);
+    const candidateSteps = parseSteps(stepsJson);
+    const candidate = candidateSteps.find((step) => step.step === lease.pass);
+    const currentIndex = latestSteps.findIndex((step) => step.step === lease.pass);
+    const current = latestSteps[currentIndex];
+    if (candidate === undefined || current === undefined || currentIndex < 0) {
+      throw new Error(`jobScheduler: missing launch step ${lease.pass}`);
+    }
+    const targetChanged = JSON.stringify(candidate) !== JSON.stringify(current);
+    if (targetChanged) latestSteps[currentIndex] = structuredClone(candidate);
+    const mergedStepsJson = JSON.stringify(latestSteps);
+    const visibleStepTransition = parent.stepsJson !== mergedStepsJson;
+    const outstandingForJob = tx.select({ permitId: jobLlmLeases.permitId })
+      .from(jobLlmLeases)
+      .where(eq(jobLlmLeases.jobId, lease.jobId))
+      .all().length;
+    // Every live permit can still settle immutable truth and bump the shared
+    // snapshot. Also reserve the conservative retry/degradation/terminal
+    // bookkeeping budget and this launch transition when it is visible.
+    const requiredWrites = outstandingForJob + PAID_PIPELINE_BOOKKEEPING_HEADROOM +
+      (visibleStepTransition ? 1 : 0);
+    if (!hasJobRevisionHeadroom(parent.revision, requiredWrites)) {
+      throw new Error("jobScheduler: insufficient safe revision headroom before paid pass launch");
+    }
+    let nextRevision = parent.revision;
+    if (visibleStepTransition) {
+      const mutation = mutateJobSnapshotInTransaction(tx as ThesisDb, {
+        jobId: lease.jobId,
+        now: authority,
+        fence: {
+          runGeneration: lease.runGeneration,
+          status: "running",
+          leaseOwner: lease.jobLeaseOwner,
+          leaseValidAfter: nowIso,
+        },
+        mutate: () => ({ stepsJson: mergedStepsJson }),
+      });
+      if (mutation === null) {
+        throw new Error("jobScheduler: launch step transition lost authority");
+      }
+      nextRevision = mutation.revision;
+    }
+    const jobRenewed = renewInvisibleJobLeaseInTransaction({
+      jobId: lease.jobId,
+      runGeneration: lease.runGeneration,
+      leaseOwner: lease.jobLeaseOwner,
+      leaseTtlMs: limits.jobLeaseTtlMs,
+      now: authority,
+    }, tx as ThesisDb);
     const permitUpdate = tx.update(jobLlmLeases)
       .set({ leaseExpiresAt: paidLeaseExpiresAt })
       .where(and(exactLeaseWhere(lease), gt(jobLlmLeases.leaseExpiresAt, nowIso)))
       .run();
-    if (jobUpdate.changes !== 1 || permitUpdate.changes !== 1) {
+    if (!jobRenewed || permitUpdate.changes !== 1) {
       throw new Error("jobScheduler: atomic launch authority changed inside locked transaction");
     }
     return {
@@ -1077,9 +1200,12 @@ export function releaseUnbilledPaidPassLease(
 ): boolean {
   const released = db.transaction((tx): boolean => {
     const authorityAt = authorityDate(now, "paid-pass release").toISOString();
-    return tx.delete(jobLlmLeases)
+    const deleted = tx.delete(jobLlmLeases)
       .where(and(exactLeaseWhere(lease), gt(jobLlmLeases.leaseExpiresAt, authorityAt)))
-      .run().changes === 1;
+      .run().changes;
+    if (deleted !== 1) return false;
+    finalizeTerminalPaidLeasesInTransaction(tx as ThesisDb, lease.jobId, authorityAt);
+    return true;
   }, { behavior: "immediate" });
   if (released) requestPump(schedulerPumpState());
   return released;
@@ -1089,12 +1215,18 @@ export interface SettlePaidPassInput<T> {
   settlement: PassSettlement<T>;
   payloadFingerprint: string | null;
   settledAt?: string;
+  /** Canonical terminal step metadata merged in the same exact-current transaction. */
+  step?: { finishedAt?: string; detail?: string };
 }
 
 export interface SettlePaidPassResult extends PersistPassSettlementResult {
   overReservation: boolean;
   /** Revision committed with a new exact-current settlement; null otherwise. */
   currentRevision: number | null;
+  currentSteps: StepProgress[] | null;
+  currentTotalCostUsd: number | null;
+  /** Immutable settlement committed, but its exact-current step projection was unsafe. */
+  projectionError: string | null;
 }
 
 export class PaidPassOverReservationError extends Error {
@@ -1156,7 +1288,14 @@ export function settlePaidPassLease<T>(
         jobLeaseOwner: lease.jobLeaseOwner,
         authorityAt,
       });
-      return { ...duplicate, overReservation: false, currentRevision: null };
+      return {
+        ...duplicate,
+        overReservation: false,
+        currentRevision: null,
+        currentSteps: null,
+        currentTotalCostUsd: null,
+        projectionError: null,
+      };
     }
 
     const exact = tx.select().from(jobLlmLeases).where(exactLeaseWhere(lease)).get();
@@ -1175,6 +1314,9 @@ export function settlePaidPassLease<T>(
       throw new Error("jobScheduler: exact paid-pass lease disappeared during settlement");
     }
     let currentRevision: number | null = null;
+    let currentSteps: StepProgress[] | null = null;
+    let currentTotalCostUsd: number | null = null;
+    let projectionError: string | null = null;
     if (persisted.inserted) {
       const parent = tx.select({
         status: jobs.status,
@@ -1182,6 +1324,8 @@ export function settlePaidPassLease<T>(
         revision: jobs.revision,
         leaseOwner: jobs.leaseOwner,
         leaseExpiresAt: jobs.leaseExpiresAt,
+        stepsJson: jobs.stepsJson,
+        payloadFingerprint: jobs.payloadFingerprint,
       }).from(jobs).where(eq(jobs.id, lease.jobId)).get();
       if (parent === undefined) {
         throw new Error("jobScheduler: paid settlement parent job disappeared");
@@ -1192,38 +1336,82 @@ export function settlePaidPassLease<T>(
         parent.leaseOwner === lease.jobLeaseOwner &&
         parent.leaseExpiresAt !== null &&
         parent.leaseExpiresAt > authorityAt;
-      const protectedDifferentLiveOwner =
-        parent.status === "running" &&
-        parent.leaseExpiresAt !== null &&
-        parent.leaseExpiresAt > authorityAt &&
-        !exactLiveCurrent;
-      if (!protectedDifferentLiveOwner) {
-        const revisionUpdate = tx.update(jobs).set({
-          revision: parent.revision + 1,
-          // Artifact/cost provenance keeps input.settledAt. The mutable job
-          // snapshot clock records commit authority and must never regress.
-          updatedAt: authorityAt,
-        }).where(and(
-          eq(jobs.id, lease.jobId),
-          eq(jobs.revision, parent.revision),
-          ...(exactLiveCurrent
-            ? [
-                eq(jobs.status, "running"),
-                eq(jobs.runGeneration, lease.runGeneration),
-                eq(jobs.leaseOwner, lease.jobLeaseOwner),
-                gt(jobs.leaseExpiresAt, authorityAt),
-              ]
-            : []),
-        )).run();
-        if (revisionUpdate.changes !== 1) {
-          throw new Error("jobScheduler: settlement revision fence changed unexpectedly");
+      const set: Record<string, unknown> = {};
+      if (exactLiveCurrent) {
+        try {
+          const latest = parseSteps(parent.stepsJson);
+          const step = latest.find((candidate) => candidate.step === lease.pass);
+          if (step === undefined) {
+            throw new Error(`jobScheduler: missing durable step ${lease.pass}`);
+          }
+          step.status = input.settlement.outcome === "success" ? "done" : "error";
+          step.startedAt ??= authorityAt;
+          step.finishedAt = input.step?.finishedAt ?? authorityAt;
+          step.completedAt = step.finishedAt;
+          step.detail = input.step?.detail ?? (
+            input.settlement.outcome === "success"
+              ? `${lease.pass} pass settled`
+              : input.settlement.failure.message
+          );
+          const stepCost = tx.select({ costUsd: costLog.costUsd }).from(costLog)
+            .where(and(eq(costLog.jobId, lease.jobId), eq(costLog.step, lease.pass))).all()
+            .reduce((total, row) => total + row.costUsd, 0);
+          if (prepared.telemetry.billable || stepCost > 0) step.costUsd = stepCost;
+          currentSteps = latest;
+          set.stepsJson = JSON.stringify(latest);
+          if (
+            input.settlement.outcome === "success" &&
+            (lease.pass === "bull" || lease.pass === "bear")
+          ) {
+            const own = lease.pass === "bull" ? "bullJson" : "bearJson";
+            const opposite = lease.pass === "bull" ? "bearJson" : "bullJson";
+            set[own] = serializeLegacyAnalystProjection(
+              input.settlement.data,
+              prepared.telemetry,
+            );
+            set.payloadFingerprint = input.payloadFingerprint;
+            if (parent.payloadFingerprint !== input.payloadFingerprint) set[opposite] = null;
+          }
+        } catch (error) {
+          projectionError = error instanceof Error ? error.message : String(error);
+          currentSteps = null;
+          for (const key of ["stepsJson", "bullJson", "bearJson", "payloadFingerprint"]) {
+            delete set[key];
+          }
         }
-        if (exactLiveCurrent) currentRevision = parent.revision + 1;
+      }
+      const revisionUpdate = mutateJobSnapshotInTransaction(tx as ThesisDb, {
+        jobId: lease.jobId,
+        now: authority,
+        forceRevision: true,
+        ...(exactLiveCurrent
+          ? {
+              fence: {
+                status: "running",
+                runGeneration: lease.runGeneration,
+                leaseOwner: lease.jobLeaseOwner,
+                leaseValidAfter: authorityAt,
+              },
+            }
+          : {}),
+        mutate: () => set,
+      });
+      if (revisionUpdate === null) {
+        throw new Error("jobScheduler: settlement revision fence changed unexpectedly");
+      }
+      if (exactLiveCurrent) {
+        currentRevision = revisionUpdate.revision;
+        currentTotalCostUsd = tx.select({ costUsd: costLog.costUsd }).from(costLog)
+          .where(eq(costLog.jobId, lease.jobId)).all()
+          .reduce((total, row) => total + row.costUsd, 0);
       }
     }
     return {
       ...persisted,
       currentRevision,
+      currentSteps,
+      currentTotalCostUsd,
+      projectionError,
       overReservation:
         settledMicroUsd(prepared.telemetry.costUsd) >
         BigInt(reservationMicroUsd(exact.reservedCostUsd)),

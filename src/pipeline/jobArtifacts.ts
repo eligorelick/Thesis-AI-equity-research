@@ -16,6 +16,7 @@ import {
   type Report,
 } from "@/report/schema";
 import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
+import { mutateJobSnapshotInTransaction } from "@/pipeline/jobState";
 
 export const PASS_ARTIFACT_ENVELOPE_VERSION = 1 as const;
 
@@ -717,7 +718,7 @@ export function preparePassSettlement<T>(
   };
 }
 
-type SettlementDb = Pick<ThesisDb, "select" | "insert" | "update" | "delete">;
+type SettlementDb = Pick<ThesisDb, "select" | "insert" | "delete">;
 
 export interface PassProjectionFence {
   /** Fresh durable job-claim nonce; worker labels alone are never authority. */
@@ -785,7 +786,7 @@ export function passCostMatchesTelemetry(
   return matchingCost(row, telemetry);
 }
 
-function legacySnapshot<T>(data: T, telemetry: PassTelemetry): string {
+export function serializeLegacyAnalystProjection<T>(data: T, telemetry: PassTelemetry): string {
   return JSON.stringify({
     data,
     model: telemetry.model,
@@ -896,7 +897,6 @@ export function persistPassSettlementInTransaction<T>(
     const current = tx
       .select({
         runGeneration: jobs.runGeneration,
-        payloadFingerprint: jobs.payloadFingerprint,
         status: jobs.status,
         leaseOwner: jobs.leaseOwner,
         leaseExpiresAt: jobs.leaseExpiresAt,
@@ -909,27 +909,6 @@ export function persistPassSettlementInTransaction<T>(
       input.runGeneration,
       projectionFence,
     );
-    // Mutable compatibility projections are allowed only for the exact live
-    // durable claim. Immutable artifact/cost truth above remains independent.
-    if (current !== undefined && currentGeneration && projectionFence !== undefined) {
-      const opposite = input.pass === "bull" ? "bearJson" : "bullJson";
-      const own = input.pass === "bull" ? "bullJson" : "bearJson";
-      const cohortChanged = current.payloadFingerprint !== input.payloadFingerprint;
-      const set: Record<string, string | null> = {
-        [own]: legacySnapshot(input.settlement.data, prepared.telemetry),
-        payloadFingerprint: input.payloadFingerprint,
-      };
-      if (cohortChanged) set[opposite] = null;
-      tx.update(jobs)
-        .set({ ...set, updatedAt: input.settledAt ?? new Date().toISOString() })
-        .where(and(
-          eq(jobs.id, input.jobId),
-          eq(jobs.runGeneration, input.runGeneration),
-          eq(jobs.status, "running"),
-          eq(jobs.leaseOwner, projectionFence.jobLeaseOwner),
-        ))
-        .run();
-    }
   } else {
     const current = tx
       .select({
@@ -958,7 +937,20 @@ export function persistPassSettlement<T>(
   // write transaction. The transaction contains only bounded local work.
   const prepared = preparePassSettlement(input);
   return getDb().transaction(
-    (tx) => persistPassSettlementInTransaction(tx, input, prepared),
+    (tx) => {
+      const result = persistPassSettlementInTransaction(tx, input, prepared);
+      if (result.inserted) {
+        const invalidation = mutateJobSnapshotInTransaction(tx as ThesisDb, {
+          jobId: input.jobId,
+          forceRevision: true,
+          mutate: () => ({}),
+        });
+        if (invalidation === null) {
+          throw new Error("jobArtifacts: settlement parent disappeared before revision invalidation");
+        }
+      }
+      return result;
+    },
     { behavior: "immediate" },
   );
 }

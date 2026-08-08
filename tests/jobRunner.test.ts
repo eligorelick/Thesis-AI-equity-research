@@ -78,7 +78,13 @@ vi.mock("@/providers/anthropic", () => ({
 }));
 
 import { resolveModel } from "@/providers/anthropic";
-import { bootstrapSchema, createDatabase, setDbForTests, type DatabaseHandle } from "@/db";
+import {
+  bootstrapSchema,
+  createDatabase,
+  setDbForTests,
+  type DatabaseHandle,
+  type ThesisDb,
+} from "@/db";
 import { costLog, jobLlmLeases, jobPassArtifacts, jobs, reports } from "@/db/schema";
 import { setSetting } from "@/settings/settings";
 import {
@@ -94,6 +100,7 @@ import {
   JOB_CANCELED_ERROR,
   JOB_HEARTBEAT_MS,
   readPassSnapshots,
+  recordQueuedResumeDispatchFailure,
   prepareJobResume,
   prepareQueuedJobResume,
   runJob,
@@ -705,6 +712,175 @@ describe("runJob — unsupported instruments", () => {
     }
   });
 
+  it.each([
+    ["live ledger", [0.4, 0.2], 0.6],
+    ["zero-row legacy fallback", [], 0.4],
+  ])("returns already-linked data-only report truth from the %s", async (_label, costs, expectedCost) => {
+    const { jobId } = createJob("AAPL");
+    const report = fakeReport(fakeJudgeOutput());
+    report.appendix.missingData.push({
+      field: "analysis.llm",
+      reason: "data-only fixture",
+      severity: "critical",
+      attemptedSources: [],
+    });
+    const linked = handle.db.insert(reports).values({
+      symbol: "AAPL",
+      createdAt: NOW().toISOString(),
+      model: "legacy-model",
+      status: "done",
+      reportJson: JSON.stringify(report),
+      verificationRate: null,
+      costUsd: 0.4,
+      specVersion: "1.0.0",
+    }).returning({ id: reports.id }).get();
+    for (const [index, costUsd] of costs.entries()) {
+      handle.db.insert(costLog).values({
+        jobId,
+        runGeneration: 0,
+        attemptId: `linked-cost-${index}`,
+        step: index === 0 ? "bull" : "bear",
+        model: "legacy-model",
+        costUsd,
+        createdAt: new Date(NOW().getTime() + index).toISOString(),
+      }).run();
+    }
+    handle.db.update(jobs).set({
+      status: "done",
+      reportId: linked.id,
+      revision: 5,
+    }).where(eq(jobs.id, jobId)).run();
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+
+    const result = await runJob(jobId, mockPasses().passes);
+    unsubscribe();
+
+    expect(result).toMatchObject({
+      status: "done",
+      reportId: linked.id,
+      totalCostUsd: expectedCost,
+      dataOnly: true,
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      revision: 5,
+      totalCostUsd: expectedCost,
+      dataOnly: true,
+    });
+  });
+
+  it("does not return or publish success for a dangling terminal report link", async () => {
+    const { jobId } = createJob("AAPL");
+    handle.sqlite.pragma("foreign_keys = OFF");
+    handle.sqlite.prepare(`UPDATE jobs SET status = 'done', reportId = 999999, revision = 2 WHERE id = ?`)
+      .run(jobId);
+    handle.sqlite.pragma("foreign_keys = ON");
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+    try {
+      await expect(runJob(jobId, mockPasses().passes)).rejects.toThrow(/already|blocked|report/i);
+    } finally {
+      unsubscribe();
+    }
+    expect(events.filter((event) => event.type === "done")).toEqual([]);
+  });
+
+  it("rolls cancellation back at the maximum safe revision", () => {
+    const { jobId } = createJob("AAPL");
+    handle.db.update(jobs).set({ revision: Number.MAX_SAFE_INTEGER })
+      .where(eq(jobs.id, jobId)).run();
+
+    expect(() => cancelJob(jobId)).toThrow(/safe|overflow|revision/i);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "queued",
+      revision: Number.MAX_SAFE_INTEGER,
+      error: null,
+    });
+  });
+
+  it("publishes canonical cost and data-only truth when a queued failure recovers a linked report", () => {
+    const { jobId } = createJob("AAPL");
+    const report = fakeReport(fakeJudgeOutput());
+    report.appendix.missingData.push({
+      field: "analysis.llm",
+      reason: "data-only fixture",
+      severity: "critical",
+      attemptedSources: [],
+    });
+    const linked = handle.db.insert(reports).values({
+      symbol: "AAPL",
+      createdAt: NOW().toISOString(),
+      model: "legacy-model",
+      status: "done",
+      reportJson: JSON.stringify(report),
+      verificationRate: null,
+      costUsd: 0.4,
+      specVersion: "1.0.0",
+    }).returning({ id: reports.id }).get();
+    handle.db.insert(costLog).values({
+      jobId,
+      runGeneration: 0,
+      attemptId: "queued-linked-late-cost",
+      step: "bull",
+      model: "legacy-model",
+      costUsd: 0.65,
+      createdAt: NOW().toISOString(),
+    }).run();
+    handle.db.update(jobs).set({ reportId: linked.id }).where(eq(jobs.id, jobId)).run();
+    const row = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+
+    expect(recordQueuedResumeDispatchFailure(
+      jobId,
+      row.runGeneration,
+      row.revision,
+      new Error("dispatch failed"),
+    )).toBe(true);
+    unsubscribe();
+
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reportId: linked.id,
+      totalCostUsd: 0.65,
+      dataOnly: true,
+    });
+    const recovered = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(recovered.status).toBe("done");
+    const recoveredSteps = JSON.parse(recovered.stepsJson) as StepProgress[];
+    expect(recoveredSteps).toHaveLength(7);
+    expect(recoveredSteps.every((step) => step.status === "skipped")).toBe(true);
+    expect(recoveredSteps.every((step) =>
+      step.detail === "covered by linked persisted report recovered after queued dispatch failure"
+    )).toBe(true);
+  });
+
+  it("terminalizes a queued dispatch failure with normalized steps in one revision", () => {
+    const { jobId } = createJob("AAPL");
+    const before = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+
+    expect(recordQueuedResumeDispatchFailure(
+      jobId,
+      before.runGeneration,
+      before.revision,
+      new Error("adapter exploded"),
+    )).toBe(true);
+
+    const terminal = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(terminal).toMatchObject({
+      status: "error",
+      error: "runJob: queued retry dispatch failed before execution",
+      revision: before.revision + 1,
+    });
+    const steps = JSON.parse(terminal.stepsJson) as StepProgress[];
+    expect(steps).toHaveLength(7);
+    expect(steps.some((step) => step.status === "pending" || step.status === "running"))
+      .toBe(false);
+    expect(steps.every((step) => step.status === "skipped")).toBe(true);
+    expect(steps.every((step) => step.detail === terminal.error)).toBe(true);
+  });
+
   it("terminalizes an ETF after validation with no company report, Stage C payload, or paid work", async () => {
     const { jobId } = createJob("SPY");
     const { passes, calls } = mockPasses();
@@ -758,6 +934,7 @@ describe("runJob — unsupported instruments", () => {
     expect(events.at(-1)).toEqual({
       type: "unsupported",
       jobId,
+      revision: expect.any(Number),
       kind: "etf",
       message: row?.unsupportedMessage,
       totalCostUsd: 0,
@@ -939,6 +1116,35 @@ describe("runJob — unsupported instruments", () => {
  * ------------------------------------------------------------------------ */
 
 describe("runJob - durable paid-pass settlements", () => {
+  it("does not bump the identical initial progress snapshot after a durable claim", async () => {
+    const { jobId } = createJob("AAPL");
+    const claim = claimNextQueuedJob(
+      "initial-progress-noop",
+      undefined,
+      configuredSchedulerLimits(),
+      handle.db,
+    )!;
+    const claimedRevision = claim.revision;
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+    try {
+      await runJob(jobId, mockPasses().passes, {
+        bundle: fakeBundle(),
+        hasAnthropicKey: false,
+        now: NOW,
+        claim,
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    const firstVisibleProgress = events.find((event) => event.type === "step-update");
+    expect(firstVisibleProgress).toMatchObject({
+      revision: claimedRevision + 1,
+      step: { step: "fetch", status: "running" },
+    });
+  });
+
   it("uses a supplied durable claim without invoking a second queued claimant", async () => {
     const { jobId } = createJob("AAPL");
     const scheduler = await import("@/pipeline/jobScheduler");
@@ -1016,7 +1222,7 @@ describe("runJob - durable paid-pass settlements", () => {
     const initialTimerCount = vi.getTimerCount();
     const addEventListener = vi.fn(() => {
       handle.db.update(jobs)
-        .set({ revision: claim.revision + 1 })
+        .set({ leaseOwner: "different-owner:nonce" })
         .where(eq(jobs.id, jobId))
         .run();
     });
@@ -2024,6 +2230,102 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(handle.db.select().from(costLog).all()).toEqual([]);
   });
 
+  it("fails a multi-pass run before provider launch when only one revision slot remains", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const providerBoundary = vi.fn();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (_deps, hooks) => {
+        handle.db.update(jobs).set({ revision: Number.MAX_SAFE_INTEGER - 1 })
+          .where(eq(jobs.id, jobId)).run();
+        await hooks?.beforePass?.("bull");
+        providerBoundary();
+        throw new Error("unreachable provider boundary");
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({ status: "error", reportId: null, totalCostUsd: 0 });
+    expect(providerBoundary).not.toHaveBeenCalled();
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+    expect(handle.db.select().from(jobPassArtifacts).all()).toEqual([]);
+    expect(handle.db.select().from(costLog).all()).toEqual([]);
+    const terminal = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(terminal).toMatchObject({
+      status: "error",
+      revision: Number.MAX_SAFE_INTEGER,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    });
+    expect(JSON.parse(terminal.stepsJson) as StepProgress[])
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ status: "running" })]));
+  });
+
+  it("reserves retry bookkeeping headroom before a near-MAX synth boundary", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const originalAnalysts = base.passes.runBullThenBear.bind(base.passes);
+    const synthProvider = vi.fn(async (...raw: unknown[]) => {
+      const settlement = raw[4] as TestSettlementHook<JudgeOutput> | undefined;
+      const authorize = raw[5] as (() => void | Promise<void>) | undefined;
+      await authorize?.();
+      const failed: PassResultLike<JudgeOutput> = {
+        data: fakeJudgeOutput(),
+        model: "claude-opus-4-8",
+        costUsd: 0.12,
+        fallbackUsed: false,
+      };
+      await settlement?.(testFailureSettlement(failed, "schema-invalid synth output"));
+      throw new Error("schema-invalid synth output");
+    });
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (...args) => {
+        const analysts = await originalAnalysts(...args);
+        // Simulate a job that reaches the retryable judge boundary near the
+        // finite revision ceiling after already committing analyst costs.
+        handle.db.update(jobs).set({ revision: Number.MAX_SAFE_INTEGER - 4 })
+          .where(eq(jobs.id, jobId)).run();
+        return analysts;
+      },
+      runJudgePass: synthProvider,
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      totalCostUsd: 1.37,
+      reportId: null,
+    });
+    expect(synthProvider).not.toHaveBeenCalled();
+    expect(handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all()
+      .map((row) => row.step).sort()).toEqual(["bear", "bull"]);
+    expect(handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all()
+      .map((row) => row.pass).sort()).toEqual(["bear", "bull"]);
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+    const terminal = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(terminal).toMatchObject({
+      status: "error",
+      revision: Number.MAX_SAFE_INTEGER - 2,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    });
+    const steps = JSON.parse(terminal.stepsJson) as StepProgress[];
+    expect(steps.some((step) => step.status === "pending" || step.status === "running"))
+      .toBe(false);
+  });
+
   it("persists bull artifact and cost before unresolved bear settles", async () => {
     const { jobId } = createJob("AAPL");
     const base = mockPasses();
@@ -2343,6 +2645,302 @@ describe("runJob - durable paid-pass settlements", () => {
     }
   });
 
+  it("commits paid cost and its terminal step in one wire-visible revision", async () => {
+    const { jobId } = createJob("AAPL");
+    const originalDb = handle.db;
+    const committedObservations: Array<{
+      revision: number;
+      bullStatus: StepProgress["status"] | undefined;
+      totalCostUsd: number;
+    }> = [];
+    const observedDb = new Proxy(originalDb, {
+      get(target, property) {
+        if (property === "transaction") {
+          return (...args: Parameters<ThesisDb["transaction"]>) => {
+            const value = target.transaction(...args);
+            const row = target.select().from(jobs).where(eq(jobs.id, jobId)).get();
+            const totalCostUsd = target.select().from(costLog)
+              .where(eq(costLog.jobId, jobId)).all()
+              .reduce((total, cost) => total + cost.costUsd, 0);
+            if (row !== undefined && totalCostUsd > 0) {
+              const bullStatus = (JSON.parse(row.stepsJson) as StepProgress[])
+                .find((step) => step.step === "bull")?.status;
+              committedObservations.push({ revision: row.revision, bullStatus, totalCostUsd });
+            }
+            return value;
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as ThesisDb;
+    setDbForTests(observedDb);
+    const base = mockPasses();
+    let beforeRevision = -1;
+    let afterRevision = -1;
+    let committedSteps: StepProgress[] = [];
+    let committedCost = -1;
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (...raw: unknown[]) => {
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        await launchTestAnalystSide(lifecycle, "bull");
+        const before = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+        beforeRevision = before.revision;
+        await settlements?.bull?.(testSuccessSettlement(testAnalystPass("bull")));
+        const after = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+        afterRevision = after.revision;
+        committedSteps = JSON.parse(after.stepsJson) as StepProgress[];
+        committedCost = handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all()
+          .reduce((total, row) => total + row.costUsd, 0);
+        throw new Error("stop after observing the atomic bull settlement");
+      },
+    };
+
+    try {
+      await runJob(jobId, passes, {
+        bundle: fakeBundle(),
+        hasAnthropicKey: true,
+        now: NOW,
+      });
+    } finally {
+      setDbForTests(originalDb);
+    }
+
+    expect(afterRevision - beforeRevision).toBe(1);
+    expect(committedCost).toBeCloseTo(0.9, 10);
+    expect(committedSteps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ step: "bull", status: "done", costUsd: 0.9 }),
+    ]));
+    expect(committedObservations).not.toContainEqual(expect.objectContaining({
+      bullStatus: "running",
+      totalCostUsd: expect.any(Number),
+    }));
+  });
+
+  it("rebases live step and terminal report mutations after an external revision-only cost bump", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const bull = testAnalystPass("bull");
+    const bear = testAnalystPass("bear");
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (...raw: unknown[]) => {
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        await launchTestAnalystSide(lifecycle, "bull");
+        await settlements?.bull?.(testSuccessSettlement(bull));
+        lifecycle?.onPassFinish?.("bull");
+
+        persistPassSettlement({
+          jobId,
+          runGeneration: 0,
+          attemptId: "external-late-cost",
+          pass: "bull",
+          settlement: testSuccessSettlement(testAnalystPass("bull", 0.05)),
+          payloadFingerprint: "1.3.0:external-late-cost",
+          settledAt: new Date().toISOString(),
+        });
+
+        await launchTestAnalystSide(lifecycle, "bear");
+        await settlements?.bear?.(testSuccessSettlement(bear));
+        lifecycle?.onPassFinish?.("bear");
+        return { bull, bear };
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: false });
+    expect(result.reportId).not.toBeNull();
+    const row = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(row).toMatchObject({ status: "done", reportId: result.reportId });
+    expect(JSON.parse(row.stepsJson)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ step: "bull", status: "done" }),
+      expect.objectContaining({ step: "bear", status: "done" }),
+      expect.objectContaining({ step: "synthesize", status: "done" }),
+      expect.objectContaining({ step: "verify", status: "done" }),
+    ]));
+    expect(handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all())
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ attemptId: "external-late-cost", costUsd: 0.05 }),
+        expect.objectContaining({ step: "bear", costUsd: 0.47 }),
+      ]));
+  });
+
+  it("reconciles report row and JSON from the in-transaction ledger after a final late charge", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runVerifyPass: async (deps, judge, evidence, settlement) => {
+        const verified = await base.passes.runVerifyPass(deps, judge, evidence);
+        if (!settlement) throw new Error("missing verify settlement hook");
+        await settlement(testSuccessSettlement({
+          data: verified.verifiedReport,
+          model: verified.model ?? "deterministic",
+          costUsd: verified.costUsd ?? 0,
+          fallbackUsed: verified.fallbackUsed ?? false,
+          usage: verified.usage,
+        }));
+        persistPassSettlement({
+          jobId,
+          runGeneration: 0,
+          attemptId: "late-before-report-link",
+          pass: "bull",
+          settlement: testSuccessSettlement(testAnalystPass("bull", 0.05)),
+          payloadFingerprint: "1.3.0:late-before-report-link",
+          settledAt: new Date().toISOString(),
+        });
+        return verified;
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({ status: "done", totalCostUsd: 2.02 });
+    const stored = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    expect(stored.costUsd).toBeCloseTo(2.02, 10);
+    const report = ReportSchema.parse(JSON.parse(stored.reportJson!));
+    expect(report.meta.costUsd).toBeCloseTo(2.02, 10);
+    expect(report.appendix.costBreakdown.reduce((total, row) => total + row.costUsd, 0))
+      .toBeCloseTo(2.02, 10);
+    expect(report.appendix.costBreakdown).toEqual(expect.arrayContaining([
+      expect.objectContaining({ step: "bull", costUsd: 0.05 }),
+    ]));
+  });
+
+  it("preserves ordered cost metadata while appending a late ledger row without invented fields", async () => {
+    const { jobId } = createJob("AAPL");
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "generation-0-bull",
+      pass: "bull",
+      settlement: testSuccessSettlement({
+        ...testAnalystPass("bull", 0.11),
+        model: "claude-haiku-3-5",
+        fallbackUsed: false,
+      }),
+      payloadFingerprint: "1.3.0:prior-ledger",
+      settledAt: NOW().toISOString(),
+    });
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "generation-0-synthesize",
+      pass: "synthesize",
+      settlement: testSuccessSettlement({
+        data: fakeJudgeOutput(),
+        model: "claude-sonnet-4-5",
+        costUsd: 0.2,
+        fallbackUsed: true,
+      }),
+      payloadFingerprint: "1.3.0:prior-ledger",
+      settledAt: NOW().toISOString(),
+    });
+    const schedulerLimits = configuredSchedulerLimits();
+    const sourceClaim = claimNextQueuedJob(
+      "ordered-ledger-metadata",
+      undefined,
+      schedulerLimits,
+      handle.db,
+    )!;
+    const claim = { ...sourceClaim, runGeneration: 1 };
+    handle.db.update(jobs).set({ runGeneration: 1 }).where(eq(jobs.id, jobId)).run();
+
+    const base = mockPasses();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runVerifyPass: async () => {
+        throw new Error("deterministic verification unavailable");
+      },
+      assembleReport: (input) => {
+        persistPassSettlement({
+          jobId,
+          runGeneration: 1,
+          attemptId: "generation-1-late-verify",
+          pass: "verify",
+          settlement: testSuccessSettlement({
+            data: fakeReport(input.judgeOutput),
+            model: "late-ledger-model",
+            costUsd: 0.07,
+            fallbackUsed: true,
+          }),
+          payloadFingerprint: "1.3.0:late-ledger",
+          settledAt: NOW().toISOString(),
+        });
+        return fakeReport(input.judgeOutput);
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      claim,
+      hasAnthropicKey: true,
+      now: NOW,
+      schedulerLimits,
+    });
+
+    expect(result.status).toBe("done");
+    const ledger = handle.db.select({
+      id: costLog.id,
+      step: costLog.step,
+      model: costLog.model,
+      costUsd: costLog.costUsd,
+      fallbackUsed: costLog.fallbackUsed,
+    }).from(costLog).where(eq(costLog.jobId, jobId)).orderBy(costLog.id).all();
+    expect(ledger.map(({ step, model, costUsd, fallbackUsed }) => ({
+      step,
+      model,
+      costUsd,
+      fallbackUsed,
+    }))).toEqual([
+      { step: "bull", model: "claude-haiku-3-5", costUsd: 0.11, fallbackUsed: false },
+      { step: "synthesize", model: "claude-sonnet-4-5", costUsd: 0.2, fallbackUsed: true },
+      { step: "bull", model: "claude-opus-4-8", costUsd: 0.9, fallbackUsed: false },
+      { step: "bear", model: "claude-opus-4-8", costUsd: 0.47, fallbackUsed: false },
+      { step: "synthesize", model: "claude-opus-4-8", costUsd: 0.4, fallbackUsed: false },
+      { step: "verify", model: "late-ledger-model", costUsd: 0.07, fallbackUsed: true },
+    ]);
+    const stored = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const report = ReportSchema.parse(JSON.parse(stored.reportJson!));
+    expect(report.appendix.costBreakdown.map(({ step, model, costUsd, fallbackUsed }) => ({
+      step,
+      model,
+      costUsd,
+      fallbackUsed,
+    }))).toEqual(ledger.map(({ step, model, costUsd, fallbackUsed }) => ({
+      step,
+      model,
+      costUsd,
+      fallbackUsed,
+    })));
+    for (const row of report.appendix.costBreakdown.slice(0, -1)) {
+      expect(row).toEqual(expect.objectContaining({
+        requestedModel: expect.any(String),
+        requestedEffort: expect.anything(),
+        effectiveEffort: expect.anything(),
+        adjustments: expect.any(Array),
+      }));
+    }
+    expect(report.appendix.costBreakdown.at(-1)).toEqual({
+      step: "verify",
+      model: "late-ledger-model",
+      costUsd: 0.07,
+      fallbackUsed: true,
+    });
+    expect(stored.costUsd).toBeCloseTo(2.15, 10);
+    expect(report.meta.costUsd).toBeCloseTo(2.15, 10);
+  });
+
   it("duplicate settlement callback bills exactly once", async () => {
     const { jobId } = createJob("AAPL");
     const base = mockPasses({ verifyCostUsd: 0 });
@@ -2497,6 +3095,58 @@ describe("runJob - durable paid-pass settlements", () => {
           event.type === "step-update" && event.step.step === "bull" && event.step.status === "done",
       ),
     ).toBe(false);
+  });
+
+  it.each([
+    ["within reservation", 0.9],
+    ["over reservation", 101],
+  ])("terminalizes safely after %s immutable paid truth commits but corrupt steps block projection", async (_label, costUsd) => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (...raw: unknown[]) => {
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        await launchTestAnalystSide(lifecycle, "bull");
+        handle.db.update(jobs).set({ stepsJson: "{corrupt-after-launch" })
+          .where(eq(jobs.id, jobId)).run();
+        if (!settlements?.bull) throw new Error("missing durable bull settlement hook");
+        await settlements.bull(testSuccessSettlement(testAnalystPass("bull", costUsd)));
+        throw new Error("unreachable after projection failure");
+      },
+    };
+
+    let surfaced: unknown;
+    try {
+      await runJob(jobId, passes, {
+        bundle: fakeBundle(),
+        hasAnthropicKey: true,
+        now: NOW,
+      });
+    } catch (error) {
+      surfaced = error;
+    }
+
+    expect(handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all())
+      .toHaveLength(1);
+    expect(handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all()).toEqual([
+      expect.objectContaining({ step: "bull", costUsd }),
+    ]);
+    expect(handle.db.select().from(jobLlmLeases).where(eq(jobLlmLeases.jobId, jobId)).all())
+      .toEqual([]);
+    const terminal = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(terminal).toMatchObject({
+      status: "error",
+      bullJson: null,
+      payloadFingerprint: null,
+    });
+    expect(JSON.parse(terminal.stepsJson)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ step: "bull", status: "error" }),
+      expect.objectContaining({ step: "bear", status: "skipped" }),
+    ]));
+    expect(surfaced).toMatchObject({
+      message: expect.stringMatching(/projection failed|step snapshot/i),
+    });
   });
 
   it("aborts a not-yet-launched sibling after analyst settlement persistence rejects", async () => {
@@ -3521,6 +4171,66 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(1);
   });
 
+  it.each([
+    [
+      "full terminal",
+      () => JSON.stringify(initialSteps().map((step, index) => ({
+        ...step,
+        status: index === 5 ? "error" as const : index === 6 ? "skipped" as const : "done" as const,
+      }))),
+    ],
+    ["malformed", () => "{not-json"],
+    [
+      "partial",
+      () => JSON.stringify([
+        { step: "bull", status: "done" },
+        { step: "bear", status: "done" },
+        { step: "synthesize", status: "error" },
+      ] satisfies StepProgress[]),
+    ],
+  ])("resets a %s source snapshot to seven pending retry steps in the claim revision", (
+    _label,
+    sourceSteps,
+  ) => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error", "1.3.0:retry-step-reset");
+    handle.db.update(jobs).set({ stepsJson: sourceSteps() }).where(eq(jobs.id, jobId)).run();
+    const before = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    const prepared = prepareJobResume(jobId, "error");
+    expect(prepared).not.toBeNull();
+
+    expect(claimPreparedJobResume(prepared!)).toBe(true);
+
+    const queued = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(queued).toMatchObject({
+      status: "queued",
+      runGeneration: before.runGeneration + 1,
+      revision: before.revision + 1,
+      bullJson: before.bullJson,
+      bearJson: before.bearJson,
+      payloadFingerprint: before.payloadFingerprint,
+    });
+    expect(JSON.parse(queued.stepsJson)).toEqual(initialSteps());
+    const snapshot = getJobSnapshot(jobId)!;
+    expect(snapshot).toMatchObject({
+      status: "queued",
+      revision: before.revision + 1,
+      steps: initialSteps(),
+    });
+    const queuedPlan = prepareQueuedJobResume(jobId);
+    expect(queuedPlan).toMatchObject({
+      sourceGeneration: prepared!.sourceGeneration,
+      targetGeneration: prepared!.targetGeneration,
+      bull: prepared!.bull,
+      bear: prepared!.bear,
+      synthesize: prepared!.synthesize,
+      verify: prepared!.verify,
+      payloadFingerprint: prepared!.payloadFingerprint,
+    });
+    expect(handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all())
+      .toEqual([]);
+  });
+
   it("one-sided paid analyst remains resumable after a preclaimed retry crashes early", () => {
     const { jobId } = createJob("AAPL");
     handle.db
@@ -3979,6 +4689,38 @@ describe("runJob - durable paid-pass settlements", () => {
       runGeneration: 1,
       reportId: danglingReportId,
     });
+  });
+
+  it("direct settlement invalidates the canonical snapshot exactly once", () => {
+    const { jobId } = createJob("AAPL");
+    const before = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    const input = {
+      jobId,
+      runGeneration: 0,
+      attemptId: "direct-revision-invalidation",
+      pass: "bull" as const,
+      settlement: testSuccessSettlement(testAnalystPass("bull", 0.25)),
+      payloadFingerprint: "1.3.0:direct-revision",
+      settledAt: NOW().toISOString(),
+    };
+
+    expect(persistPassSettlement(input)).toMatchObject({ inserted: true });
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      revision: before.revision + 1,
+      stepsJson: before.stepsJson,
+    });
+    expect(getJobSnapshot(jobId)).toMatchObject({
+      revision: before.revision + 1,
+      totalCostUsd: 0.25,
+    });
+
+    expect(persistPassSettlement(input)).toMatchObject({ inserted: false });
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.revision)
+      .toBe(before.revision + 1);
+    expect(handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all())
+      .toHaveLength(1);
+    expect(handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all())
+      .toHaveLength(1);
   });
 
   it("artifact settlement in the prepare-to-claim window loses the exact source-state CAS", () => {
@@ -4700,6 +5442,42 @@ describe("runJob — full pipeline with mock passes", () => {
     expect(row?.status).toBe("error");
   });
 
+  it("rolls back report persistence when a postcharge revision jump reaches MAX_SAFE", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const originalVerify = base.passes.runVerifyPass.bind(base.passes);
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runVerifyPass: async (deps, judge, evidence, settlement) => {
+        const verified = await originalVerify(deps, judge, evidence);
+        if (!settlement) throw new Error("missing verify settlement hook");
+        await settlement(testSuccessSettlement({
+          data: verified.verifiedReport,
+          model: verified.model ?? "deterministic",
+          costUsd: verified.costUsd ?? 0,
+          fallbackUsed: verified.fallbackUsed ?? false,
+          usage: verified.usage,
+        }));
+        handle.db.update(jobs).set({ revision: Number.MAX_SAFE_INTEGER })
+          .where(eq(jobs.id, jobId)).run();
+        return verified;
+      },
+    };
+
+    await expect(runJob(jobId, passes, {
+      bundle: fakeBundle("AAPL"),
+      hasAnthropicKey: true,
+      now: NOW,
+    })).rejects.toThrow(/safe|overflow|revision/i);
+
+    expect(handle.db.select().from(reports).all()).toEqual([]);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "running",
+      reportId: null,
+      revision: Number.MAX_SAFE_INTEGER,
+    });
+  });
+
   it("reconcileMeta preserves appendix.missingData — the H4 report-disclosure invariant (fix-review)", async () => {
     // The stageC adapter merges validation gaps into the assembled report's
     // appendix.missingData; the runner's reconcileMeta post-processing must
@@ -5419,7 +6197,7 @@ describe("runJob — judge retry on schema-validation failure (SPEC §2)", () =>
     expect(costRows.filter((r) => r.step === "verify")).toHaveLength(1);
   });
 
-  it("fails loudly on synthesize/verify when validation fails all attempts, still persists data-only (no crash)", async () => {
+  it("clamps an oversized judge retry override to the audited production maximum", async () => {
     const { jobId } = createJob("AAPL");
     const { passes } = mockPasses();
 
@@ -5438,6 +6216,7 @@ describe("runJob — judge retry on schema-validation failure (SPEC §2)", () =>
       bundle: fakeBundle("AAPL"),
       hasAnthropicKey: true,
       now: NOW,
+      maxJudgeRetries: MAX_JUDGE_RETRIES + 3,
     });
 
     // Exhausted all attempts (1 + MAX_JUDGE_RETRIES).

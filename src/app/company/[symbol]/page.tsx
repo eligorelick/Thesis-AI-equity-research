@@ -949,7 +949,7 @@ export async function CompanyBody({ symbol }: { symbol: string }) {
           </div>
         </div>
 
-        <GenerateReport symbol={bundle.symbol} />
+        <GenerateReport key={bundle.symbol} symbol={bundle.symbol} />
 
         <QuoteHeader bundle={bundle} computed={computed} />
 

@@ -132,7 +132,11 @@ export const jobs = sqliteTable(
      * chained retries; per-pass authority is folded forward from this cohort.
      */
     resumeSourceGeneration: integer("resumeSourceGeneration"),
-    /** Monotonic durable-state revision used to fence writers and SSE replay. */
+    /**
+     * Monotonic complete-snapshot version/invalidation for coherent GET/SSE
+     * replay. Execution authority comes from generation, status, and lease
+     * ownership/expiry rather than this revision.
+     */
     revision: integer("revision").notNull().default(0),
     /** Queue ordering timestamp; legacy queued rows are backfilled from createdAt. */
     queuedAt: text("queuedAt"),

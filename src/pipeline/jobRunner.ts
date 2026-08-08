@@ -30,7 +30,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, gt, gte, inArray, isNull, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { getDb, type ThesisDb } from "@/db";
 import { costLog, jobPassArtifacts, jobs, reports, type JobRow } from "@/db/schema";
 import { getConfig } from "@/config/env";
@@ -68,7 +68,14 @@ import { runStageB, type ComputedMetrics } from "@/pipeline/compute";
 import { validateBundle, type ValidationReport } from "@/pipeline/stageA/validate";
 import { sourceManifestEntries, type DataBundle } from "@/pipeline/types";
 import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
-import { parseStepsJson, publishJobEvent, type JobEvent } from "@/pipeline/events";
+import {
+  getJobSnapshot,
+  publishJobEvent,
+  reportJsonIsDataOnly,
+  type JobEvent,
+} from "@/pipeline/events";
+import { mutateJobSnapshotInTransaction } from "@/pipeline/jobState";
+import { normalizeLinkedReportRecoverySteps } from "@/pipeline/jobSteps";
 import {
   classifyInstrumentSupport,
   type InstrumentSupport,
@@ -102,6 +109,7 @@ import {
   type JobClaim,
   type PaidPassLease,
   type SchedulerLimits,
+  type SettlePaidPassResult,
 } from "@/pipeline/jobScheduler";
 
 /* ------------------------------------------------------------------------ *
@@ -462,6 +470,12 @@ interface RunState {
   totalCostUsd: number;
 }
 
+type JobEventPayload = JobEvent extends infer Event
+  ? Event extends JobEvent
+    ? Omit<Event, "revision">
+    : never
+  : never;
+
 interface LiveAuthorityRow {
   revision: number;
   stepsJson: string;
@@ -516,11 +530,30 @@ function findStep(state: RunState, step: PipelineStep): StepProgress {
 
 /** Persist the current StepProgress[] + updatedAt to the jobs row. */
 function persistSteps(state: RunState, status?: JobStatus, error?: string | null): void {
-  const persisted = withLiveRunAuthority(state, state.revision, (db, row, authorityAt) => {
+  const persisted = withLiveRunAuthority(state, null, (db, _row, authorityAt) => {
+    const canonicalSteps = status === "error"
+      ? state.steps.map((step): StepProgress => {
+          if (step.status === "running") {
+            return {
+              ...step,
+              status: "error",
+              detail: error ?? "job failed",
+              finishedAt: authorityAt,
+              completedAt: authorityAt,
+            };
+          }
+          if (step.status === "pending") {
+            return {
+              ...step,
+              status: "skipped",
+              detail: `not reached â€” ${error ?? "job failed"}`,
+            };
+          }
+          return step;
+        })
+      : state.steps;
     const set: Record<string, unknown> = {
-      stepsJson: JSON.stringify(state.steps),
-      updatedAt: authorityAt,
-      revision: row.revision + 1,
+      stepsJson: JSON.stringify(canonicalSteps),
     };
     if (status !== undefined) {
       set.status = status;
@@ -535,26 +568,31 @@ function persistSteps(state: RunState, status?: JobStatus, error?: string | null
       }
     }
     if (error !== undefined) set.error = error;
-    const result = db.update(jobs)
-      .set(set)
-      .where(and(
-        eq(jobs.id, state.jobId),
-        eq(jobs.runGeneration, state.runGeneration),
-        eq(jobs.status, "running"),
-        eq(jobs.leaseOwner, state.claim.leaseOwner),
-        eq(jobs.revision, row.revision),
-        gt(jobs.leaseExpiresAt, authorityAt),
-      ))
-      .run();
-    if (result.changes !== 1) {
-      throw new SupersededRunError(state.jobId, state.runGeneration);
+    const result = mutateJobSnapshotInTransaction(db, {
+      jobId: state.jobId,
+      now: new Date(authorityAt),
+      fence: {
+        runGeneration: state.runGeneration,
+        status: "running",
+        leaseOwner: state.claim.leaseOwner,
+        leaseValidAfter: authorityAt,
+      },
+      mutate: () => set,
+    });
+    if (result === null) {
+      // withLiveRunAuthority already proved this exact row/fence while holding
+      // BEGIN IMMEDIATE. Null therefore means the canonical patch is an exact
+      // no-op, not lost authority.
+      return { revision: _row.revision, steps: canonicalSteps };
     }
-    return row.revision + 1;
+    return { revision: result.revision, steps: canonicalSteps };
   });
   if (!persisted.authorized) {
     throw new SupersededRunError(state.jobId, state.runGeneration);
   }
-  state.revision = persisted.value;
+  state.revision = persisted.value.revision;
+  state.claim.revision = persisted.value.revision;
+  state.steps = persisted.value.steps;
 }
 
 /** Emit a step-update event for the given step's current state. */
@@ -568,10 +606,11 @@ function emitStep(state: RunState, step: PipelineStep): void {
 }
 
 /** Publish an event through the bus (isolated so a bad subscriber can't break the run). */
-function publish(_state: RunState, event: JobEvent): void {
+function publish(_state: RunState, event: JobEventPayload): void {
   const current = getDb()
     .select({
       runGeneration: jobs.runGeneration,
+      revision: jobs.revision,
       status: jobs.status,
       leaseOwner: jobs.leaseOwner,
       leaseExpiresAt: jobs.leaseExpiresAt,
@@ -590,7 +629,9 @@ function publish(_state: RunState, event: JobEvent): void {
     (event.type === "error" && current.status === "error") ||
     (event.type === "unsupported" && current.status === "unsupported")
   );
-  if (live || terminal) publishJobEvent(event);
+  if ((live || terminal) && current !== undefined) {
+    publishJobEvent({ ...event, revision: current.revision } as JobEvent);
+  }
 }
 
 /** Mark a step "running" (stamp startedAt), persist, and emit. */
@@ -753,61 +794,25 @@ function settlementStepDetail<T>(settlement: PassSettlement<T>): string {
   });
 }
 
-/** Merge a committed settlement into the latest step snapshot under a generation+revision CAS. */
-function mergeCommittedSettlement<T>(
+/** Adopt the one exact-current settlement snapshot after its outer transaction commits. */
+function adoptCommittedSettlement<T>(
   state: RunState,
   pass: DurablePass,
   settlement: PassSettlement<T>,
-  inserted: boolean,
+  persisted: SettlePaidPassResult,
 ): boolean {
-  const merged = withLiveRunAuthority(state, null, (db, row, authorityAt) => {
-    const latest = parseStepsJson(row.stepsJson);
-    const step = latest.find((candidate) => candidate.step === pass);
-    if (!step) throw new Error(`jobRunner: missing durable step ${pass}`);
-    if (!inserted) {
-      return {
-        steps: latest,
-        revision: row.revision,
-        totalCostUsd: sumLoggedCost(state.jobId, db),
-      };
-    }
-    step.status = settlement.outcome === "success" ? "done" : "error";
-    step.startedAt ??= authorityAt;
-    step.finishedAt = findStep(state, pass).finishedAt ?? authorityAt;
-    step.completedAt = step.finishedAt;
-    step.detail = settlementStepDetail(settlement);
-    const logged = sumLoggedStepCost(state.jobId, pass, db);
-    if (settlement.telemetry.billable || logged > 0) step.costUsd = logged;
-
-    const update = db.update(jobs)
-      .set({
-        stepsJson: JSON.stringify(latest),
-        updatedAt: authorityAt,
-        revision: row.revision + 1,
-      })
-      .where(and(
-        eq(jobs.id, state.jobId),
-        eq(jobs.runGeneration, state.runGeneration),
-        eq(jobs.revision, row.revision),
-        eq(jobs.status, "running"),
-        eq(jobs.leaseOwner, state.claim.leaseOwner),
-        gt(jobs.leaseExpiresAt, authorityAt),
-      ))
-      .run();
-    if (update.changes !== 1) {
-      throw new SupersededRunError(state.jobId, state.runGeneration);
-    }
-    return {
-      steps: latest,
-      revision: row.revision + 1,
-      totalCostUsd: sumLoggedCost(state.jobId, db),
-    };
-  });
-  if (!merged.authorized) return false;
-  state.steps = merged.value.steps;
-  state.revision = merged.value.revision;
-  state.totalCostUsd = merged.value.totalCostUsd;
-  if (inserted && settlement.telemetry.billable) {
+  if (!persisted.currentGeneration) return false;
+  if (
+    persisted.currentRevision === null ||
+    persisted.currentTotalCostUsd === null
+  ) {
+    if (!persisted.inserted) return true;
+    throw new Error("jobRunner: exact-current settlement omitted its canonical snapshot");
+  }
+  state.revision = persisted.currentRevision;
+  state.claim.revision = persisted.currentRevision;
+  state.totalCostUsd = persisted.currentTotalCostUsd;
+  if (persisted.inserted && settlement.telemetry.billable) {
     publish(state, {
       type: "cost-update",
       jobId: state.jobId,
@@ -816,7 +821,17 @@ function mergeCommittedSettlement<T>(
       totalCostUsd: state.totalCostUsd,
     });
   }
-  if (inserted) emitStep(state, pass);
+  if (persisted.projectionError !== null) {
+    throw new PassSettlementHookError(
+      `pass settlement projection failed after immutable commit: ${persisted.projectionError}`,
+    );
+  }
+  if (persisted.currentSteps === null) {
+    if (!persisted.inserted) return true;
+    throw new Error("jobRunner: exact-current settlement omitted its canonical steps");
+  }
+  state.steps = persisted.currentSteps;
+  if (persisted.inserted) emitStep(state, pass);
   return true;
 }
 
@@ -894,7 +909,14 @@ function createSettlementCheckpoint<T>(
         acquired.reason !== "job-budget-pending" &&
         acquired.reason !== "rolling-budget-pending"
       ) {
-        throw new Error(`paid ${pass} pass blocked by ${acquired.reason}`);
+        const error = new Error(`paid ${pass} pass blocked by ${acquired.reason}`);
+        if (acquired.reason === "revision-headroom" && !controller.signal.aborted) {
+          // Near revision exhaustion, degradation cannot safely spend several
+          // intermediate revisions. Abort into the runner's one-write terminal
+          // path while the reserved terminal slot still exists.
+          controller.abort(error);
+        }
+        throw error;
       }
       await new Promise<void>((resolve, reject) => {
         const cleanup = (): void => signal.removeEventListener("abort", onAbort);
@@ -979,21 +1001,26 @@ function createSettlementCheckpoint<T>(
       const persisted = settlePaidPassLease(lease, {
         settlement,
         payloadFingerprint,
+        step: {
+          finishedAt: findStep(state, pass).finishedAt ?? nowIso(),
+          detail: settlementStepDetail(settlement),
+        },
       });
-      if (persisted.currentRevision !== null) state.revision = persisted.currentRevision;
-      if (persisted.currentGeneration) {
-        mergeCommittedSettlement(state, pass, settlement, persisted.inserted);
-      }
+      // Once settlePaidPassLease returns inserted truth, a later projection
+      // error must remain an idempotent committed callback, never a rebill.
+      committed = persisted.inserted;
+      adoptCommittedSettlement(state, pass, settlement, persisted);
       committed = true;
-    } catch (error) {
-      if (error instanceof PaidPassOverReservationError) {
-        if (error.result.currentRevision !== null) {
-          state.revision = error.result.currentRevision;
+    } catch (caught) {
+      let error = caught;
+      if (caught instanceof PaidPassOverReservationError) {
+        committed = caught.result.inserted;
+        try {
+          adoptCommittedSettlement(state, pass, settlement, caught.result);
+          committed = true;
+        } catch (projectionError) {
+          error = projectionError;
         }
-        if (error.result.currentGeneration) {
-          mergeCommittedSettlement(state, pass, settlement, error.result.inserted);
-        }
-        committed = true;
       }
       const wrapped = error instanceof PassSettlementHookError
         ? error
@@ -1568,6 +1595,7 @@ export function claimPreparedJobResume(prepared: PreparedJobResume): boolean {
   let claimed = false;
   try {
     claimed = getDb().transaction((tx) => {
+      const authority = new Date();
       if (
         sourceArtifactSetDigest(
           tx,
@@ -1586,40 +1614,35 @@ export function claimPreparedJobResume(prepared: PreparedJobResume): boolean {
           .where(eq(reports.id, prepared.sourceReportId))
           .get() !== undefined;
       if (sourceReportExists !== prepared.sourceReportExists) return false;
-      const result = tx
-        .update(jobs)
-        .set({
+      const result = mutateJobSnapshotInTransaction(tx as ThesisDb, {
+        jobId: prepared.jobId,
+        now: authority,
+        fence: {
+          expectedRevision: prepared.sourceRevision,
+          status: prepared.sourceStatus,
+          runGeneration: prepared.claimGeneration,
+        },
+        mutate: (row) => {
+          if (
+            row.stepsJson !== prepared.sourceStepsJson ||
+            row.reportId !== prepared.sourceReportId ||
+            row.bullJson !== prepared.sourceBullJson ||
+            row.bearJson !== prepared.sourceBearJson ||
+            row.payloadFingerprint !== prepared.sourcePayloadFingerprint
+          ) return null;
+          return {
           status: "queued",
           error: null,
           unsupportedKind: null,
           unsupportedMessage: null,
           resumeSourceGeneration: prepared.sourceGeneration,
           runGeneration: prepared.targetGeneration,
-          revision: prepared.sourceRevision + 1,
-          queuedAt: nowIso(),
-          updatedAt: nowIso(),
-        })
-        .where(and(
-          eq(jobs.id, prepared.jobId),
-          eq(jobs.status, prepared.sourceStatus),
-          eq(jobs.runGeneration, prepared.claimGeneration),
-          eq(jobs.revision, prepared.sourceRevision),
-          eq(jobs.stepsJson, prepared.sourceStepsJson),
-          prepared.sourceReportId === null
-            ? isNull(jobs.reportId)
-            : eq(jobs.reportId, prepared.sourceReportId),
-          prepared.sourceBullJson === null
-            ? isNull(jobs.bullJson)
-            : eq(jobs.bullJson, prepared.sourceBullJson),
-          prepared.sourceBearJson === null
-            ? isNull(jobs.bearJson)
-            : eq(jobs.bearJson, prepared.sourceBearJson),
-          prepared.sourcePayloadFingerprint === null
-            ? isNull(jobs.payloadFingerprint)
-            : eq(jobs.payloadFingerprint, prepared.sourcePayloadFingerprint),
-        ))
-        .run();
-      return result.changes === 1;
+          stepsJson: JSON.stringify(initialSteps()),
+          queuedAt: authority.toISOString(),
+          };
+        },
+      });
+      return result !== null;
     }, { behavior: "immediate" });
   } catch {
     return false;
@@ -1778,15 +1801,21 @@ function canceledStepsJson(raw: string, at: string): string {
 /** Durably cancel an exact queued/running row, then abort any local worker. */
 export function cancelJob(jobId: string): boolean {
   const controller = liveJobControllers().get(jobId);
-  const canceled = getDb().transaction((tx): boolean => {
-    const at = nowIso();
+  const canceledRevision = getDb().transaction((tx): number | null => {
+    const authority = new Date();
+    const at = authority.toISOString();
     const row = tx.select().from(jobs).where(eq(jobs.id, jobId)).get();
-    if (row === undefined || (row.status !== "queued" && row.status !== "running")) return false;
-    const leaseFence = row.leaseOwner === null
-      ? isNull(jobs.leaseOwner)
-      : eq(jobs.leaseOwner, row.leaseOwner);
-    return tx.update(jobs)
-      .set({
+    if (row === undefined || (row.status !== "queued" && row.status !== "running")) return null;
+    const changed = mutateJobSnapshotInTransaction(tx as ThesisDb, {
+      jobId,
+      now: authority,
+      fence: {
+        expectedRevision: row.revision,
+        runGeneration: row.runGeneration,
+        status: ["queued", "running"],
+        leaseOwner: row.leaseOwner,
+      },
+      mutate: () => ({
         status: "error",
         error: JOB_CANCELED_ERROR,
         unsupportedKind: null,
@@ -1795,22 +1824,22 @@ export function cancelJob(jobId: string): boolean {
         leaseOwner: null,
         leaseExpiresAt: null,
         heartbeatAt: null,
-        updatedAt: at,
-        revision: row.revision + 1,
-      })
-      .where(and(
-        eq(jobs.id, jobId),
-        inArray(jobs.status, ["queued", "running"]),
-        eq(jobs.runGeneration, row.runGeneration),
-        eq(jobs.revision, row.revision),
-        leaseFence,
-      ))
-      .run().changes === 1;
+      }),
+    });
+    return changed?.revision ?? null;
   }, { behavior: "immediate" });
+  const canceled = canceledRevision !== null;
   if (canceled && controller !== undefined && !controller.signal.aborted) {
     controller.abort(new JobCanceledError(JOB_CANCELED_ERROR));
   }
-  if (canceled) publishJobEvent({ type: "error", jobId, message: JOB_CANCELED_ERROR });
+  if (canceledRevision !== null) {
+    publishJobEvent({
+      type: "error",
+      jobId,
+      revision: canceledRevision,
+      message: JOB_CANCELED_ERROR,
+    });
+  }
   return canceled;
 }
 
@@ -1860,7 +1889,8 @@ export interface RunJobOptions<TPayload = unknown> {
   now?: () => Date;
   /**
    * Override the report-schema retry budget. Defaults to MAX_JUDGE_RETRIES;
-   * set to 0 for one-attempt live harnesses that must not re-invoke judge.
+   * reductions such as 0 support one-attempt test harnesses, while larger
+   * values are clamped to the audited production maximum.
    */
   maxJudgeRetries?: number;
   /** Optional upstream cancellation (tests/embedding); composed with local cancel/deadline. */
@@ -1909,8 +1939,11 @@ type QueuedResumeSettlement =
       kind: "done";
       reportId: number;
       verificationRate: number | null;
+      totalCostUsd: number;
+      dataOnly: boolean;
+      revision: number;
     }
-  | { kind: "error"; message: string }
+  | { kind: "error"; message: string; revision: number }
   | { kind: "unchanged" };
 
 function safeQueuedResumeFailure(err: unknown): string {
@@ -1927,6 +1960,30 @@ function safeQueuedResumeFailure(err: unknown): string {
   return "runJob: queued retry dispatch failed before execution";
 }
 
+function normalizeQueuedDispatchFailureSteps(raw: string, message: string, at: string): string {
+  try {
+    const steps = JSON.parse(raw) as StepProgress[];
+    if (!Array.isArray(steps)) return raw;
+    return JSON.stringify(steps.map((step): StepProgress => {
+      if (step.status === "running") {
+        return {
+          ...step,
+          status: "error",
+          detail: message,
+          finishedAt: at,
+          completedAt: at,
+        };
+      }
+      if (step.status === "pending") {
+        return { ...step, status: "skipped", detail: message };
+      }
+      return step;
+    }));
+  } catch {
+    return raw;
+  }
+}
+
 /**
  * Finish an accepted queued retry without launching paid work. The exact
  * generation and queued status fence every write. A linked report is checked
@@ -1940,6 +1997,7 @@ function settleQueuedResumeWithoutExecution(
 ): QueuedResumeSettlement {
   const message = safeQueuedResumeFailure(failure);
   const settled = getDb().transaction((tx): QueuedResumeSettlement => {
+    const authority = new Date();
     const row = tx.select().from(jobs).where(eq(jobs.id, jobId)).get();
     if (
       row === undefined ||
@@ -1952,65 +2010,90 @@ function settleQueuedResumeWithoutExecution(
     const linkedReport = row.reportId === null
       ? undefined
       : tx
-          .select({ id: reports.id, verificationRate: reports.verificationRate })
+          .select({
+            id: reports.id,
+            verificationRate: reports.verificationRate,
+            costUsd: reports.costUsd,
+            reportJson: reports.reportJson,
+          })
           .from(reports)
           .where(eq(reports.id, row.reportId))
           .get();
     if (linkedReport !== undefined) {
-      const update = tx
-        .update(jobs)
-        .set({
+      const stepsJson = normalizeLinkedReportRecoverySteps(
+        row.stepsJson,
+        authority.toISOString(),
+        "covered by linked persisted report recovered after queued dispatch failure",
+      );
+      const update = mutateJobSnapshotInTransaction(tx as ThesisDb, {
+        jobId,
+        now: authority,
+        fence: {
+          expectedRevision,
+          status: "queued",
+          runGeneration: expectedGeneration,
+        },
+        mutate: (current) => current.reportId === linkedReport.id ? ({
           status: "done",
           error: null,
-          updatedAt: nowIso(),
-          revision: row.revision + 1,
-        })
-        .where(and(
-          eq(jobs.id, jobId),
-          eq(jobs.status, "queued"),
-          eq(jobs.runGeneration, expectedGeneration),
-          eq(jobs.revision, row.revision),
-          eq(jobs.reportId, linkedReport.id),
-        ))
-        .run();
-      return update.changes === 1
+          stepsJson,
+        }) : null,
+      });
+      const ledger = tx.select({ costUsd: costLog.costUsd }).from(costLog)
+        .where(eq(costLog.jobId, jobId)).all();
+      return update !== null
         ? {
             kind: "done",
             reportId: linkedReport.id,
             verificationRate: linkedReport.verificationRate,
+            totalCostUsd: round4(ledger.length > 0
+              ? ledger.reduce((total, cost) => total + cost.costUsd, 0)
+              : (linkedReport.costUsd ?? 0)),
+            dataOnly: reportJsonIsDataOnly(linkedReport.reportJson),
+            revision: update.revision,
           }
         : { kind: "unchanged" };
     }
-    const update = tx
-      .update(jobs)
-      .set({
+    const update = mutateJobSnapshotInTransaction(tx as ThesisDb, {
+      jobId,
+      now: authority,
+      fence: {
+        expectedRevision,
+        status: "queued",
+        runGeneration: expectedGeneration,
+      },
+      mutate: () => ({
         status: "error",
         error: message,
-        updatedAt: nowIso(),
-        revision: row.revision + 1,
-      })
-      .where(and(
-        eq(jobs.id, jobId),
-        eq(jobs.status, "queued"),
-        eq(jobs.runGeneration, expectedGeneration),
-        eq(jobs.revision, row.revision),
-      ))
-      .run();
-    return update.changes === 1 ? { kind: "error", message } : { kind: "unchanged" };
+        stepsJson: normalizeQueuedDispatchFailureSteps(
+          row.stepsJson,
+          message,
+          authority.toISOString(),
+        ),
+      }),
+    });
+    return update !== null
+      ? { kind: "error", message, revision: update.revision }
+      : { kind: "unchanged" };
   }, { behavior: "immediate" });
 
-  const totalCostUsd = round4(sumLoggedCost(jobId));
   if (settled.kind === "done") {
     publishJobEvent({
       type: "done",
       jobId,
+      revision: settled.revision,
       reportId: settled.reportId,
       verificationRate: settled.verificationRate,
-      totalCostUsd,
-      dataOnly: false,
+      totalCostUsd: settled.totalCostUsd,
+      dataOnly: settled.dataOnly,
     });
   } else if (settled.kind === "error") {
-    publishJobEvent({ type: "error", jobId, message: settled.message });
+    publishJobEvent({
+      type: "error",
+      jobId,
+      revision: settled.revision,
+      message: settled.message,
+    });
   }
   return settled;
 }
@@ -2084,28 +2167,21 @@ export async function runJob<TPayload = unknown>(
       schedulerLimits,
     ) ?? undefined;
     if (schedulerClaim === undefined) {
-      const afterClaim = getDb().select().from(jobs).where(eq(jobs.id, jobId)).get();
-      if (afterClaim?.status === "done" && afterClaim.reportId !== null) {
-        const linked = getDb()
-          .select({
-            verificationRate: reports.verificationRate,
-            costUsd: reports.costUsd,
-          })
-          .from(reports)
-          .where(eq(reports.id, afterClaim.reportId))
-          .get();
-        if (linked !== undefined) {
-          const result: RunJobResult = {
-            jobId,
-            status: "done",
-            reportId: afterClaim.reportId,
-            verificationRate: linked.verificationRate,
-            totalCostUsd: round4(linked.costUsd ?? sumLoggedCost(jobId)),
-            dataOnly: false,
-          };
-          publishJobEvent({ type: "done", ...result });
-          return result;
-        }
+      const afterClaim = getJobSnapshot(jobId);
+      const linkedReportExists = afterClaim?.reportId !== null && afterClaim?.reportId !== undefined &&
+        getDb().select({ id: reports.id }).from(reports)
+          .where(eq(reports.id, afterClaim.reportId)).get() !== undefined;
+      if (afterClaim?.status === "done" && afterClaim.reportId !== null && linkedReportExists) {
+        const result: RunJobResult = {
+          jobId,
+          status: "done",
+          reportId: afterClaim.reportId,
+          verificationRate: afterClaim.verificationRate,
+          totalCostUsd: round4(afterClaim.totalCostUsd),
+          dataOnly: afterClaim.dataOnly,
+        };
+        publishJobEvent({ type: "done", revision: afterClaim.revision, ...result });
+        return result;
       }
       if (afterClaim?.status === "error" && afterClaim.error !== null) {
         throw new Error(afterClaim.error);
@@ -2198,7 +2274,7 @@ export async function runJob<TPayload = unknown>(
   const now = opts.now ?? ((): Date => new Date());
   const maxJudgeRetries =
     opts.maxJudgeRetries !== undefined && Number.isFinite(opts.maxJudgeRetries)
-      ? Math.max(0, Math.trunc(opts.maxJudgeRetries))
+      ? Math.min(MAX_JUDGE_RETRIES, Math.max(0, Math.trunc(opts.maxJudgeRetries)))
       : MAX_JUDGE_RETRIES;
 
   try {
@@ -3138,7 +3214,7 @@ function finishRun(
   state: RunState,
   out: { reportId: number | null; verificationRate: number | null; dataOnly: boolean },
 ): RunJobResult {
-  const doneEvent: JobEvent = {
+  const doneEvent: JobEventPayload = {
     type: "done",
     jobId: state.jobId,
     reportId: out.reportId,
@@ -3175,34 +3251,32 @@ function finishUnsupported(
 ): RunJobResult {
   for (const step of state.steps) markSkipped(state, step.step, support.reason);
 
-  const terminal = withLiveRunAuthority(state, state.revision, (db, row, authorityAt) => {
-    const update = db.update(jobs)
-      .set({
+  const terminal = withLiveRunAuthority(state, null, (db, _row, authorityAt) => {
+    const update = mutateJobSnapshotInTransaction(db, {
+      jobId: state.jobId,
+      now: new Date(authorityAt),
+      fence: {
+        runGeneration: state.runGeneration,
+        status: "running",
+        leaseOwner: state.claim.leaseOwner,
+        leaseValidAfter: authorityAt,
+      },
+      mutate: () => ({
         status: "unsupported",
         error: null,
         reportId: null,
         unsupportedKind: support.kind,
         unsupportedMessage: support.reason,
         stepsJson: JSON.stringify(state.steps),
-        updatedAt: authorityAt,
         leaseOwner: null,
         leaseExpiresAt: null,
         heartbeatAt: null,
-        revision: row.revision + 1,
-      })
-      .where(and(
-        eq(jobs.id, state.jobId),
-        eq(jobs.runGeneration, state.runGeneration),
-        eq(jobs.status, "running"),
-        eq(jobs.leaseOwner, state.claim.leaseOwner),
-        eq(jobs.revision, row.revision),
-        gt(jobs.leaseExpiresAt, authorityAt),
-      ))
-      .run();
-    if (update.changes !== 1) {
+      }),
+    });
+    if (update === null) {
       throw new SupersededRunError(state.jobId, state.runGeneration);
     }
-    return row.revision + 1;
+    return update.revision;
   });
   if (!terminal.authorized) {
     throw new SupersededRunError(state.jobId, state.runGeneration);
@@ -3361,6 +3435,34 @@ function markSkipped(state: RunState, step: PipelineStep, reason: string): void 
  * Persistence
  * ------------------------------------------------------------------------ */
 
+function reconcilePersistedCostBreakdown(
+  existing: Report["appendix"]["costBreakdown"],
+  ledger: CostLedgerRow[],
+): Report["appendix"]["costBreakdown"] {
+  let matchingPrefix = true;
+  return ledger.map((entry, index) => {
+    const previous = existing[index];
+    const matches = matchingPrefix && previous !== undefined &&
+      previous.step === entry.step &&
+      previous.model === entry.model &&
+      Object.is(previous.costUsd, entry.costUsd);
+    if (matches) {
+      return {
+        ...previous,
+        // cost_log is the durable per-attempt fallback source of truth.
+        fallbackUsed: entry.fallbackUsed,
+      };
+    }
+    matchingPrefix = false;
+    return {
+      step: entry.step,
+      model: entry.model,
+      costUsd: entry.costUsd,
+      fallbackUsed: entry.fallbackUsed,
+    };
+  });
+}
+
 /** Insert a reports row, link jobs.reportId, return the new report id. */
 function persistReport(
   state: RunState,
@@ -3369,7 +3471,34 @@ function persistReport(
   verificationRate: number | null,
   status: string,
 ): number {
-  const persisted = withLiveRunAuthority(state, state.revision, (db, row, authorityAt) => {
+  const persisted = withLiveRunAuthority(state, null, (db, _row, authorityAt) => {
+    const ledger = db.select({
+      step: costLog.step,
+      model: costLog.model,
+      costUsd: costLog.costUsd,
+      fallbackUsed: costLog.fallbackUsed,
+    }).from(costLog)
+      .where(eq(costLog.jobId, state.jobId))
+      .orderBy(costLog.id)
+      .all();
+    const authoritativeCostUsd = ledger.reduce((total, entry) => total + entry.costUsd, 0);
+    const parsed = ReportSchema.safeParse(report);
+    const reportForPersistence: Report | unknown = parsed.success
+      ? {
+          ...parsed.data,
+          meta: {
+            ...parsed.data.meta,
+            costUsd: authoritativeCostUsd,
+          },
+          appendix: {
+            ...parsed.data.appendix,
+            costBreakdown: reconcilePersistedCostBreakdown(
+              parsed.data.appendix.costBreakdown,
+              ledger,
+            ),
+          },
+        }
+      : report;
     const inserted = db
       .insert(reports)
       .values({
@@ -3377,22 +3506,22 @@ function persistReport(
         createdAt: authorityAt,
         model,
         status,
-        reportJson: JSON.stringify(report),
+        reportJson: JSON.stringify(reportForPersistence),
         verificationRate,
-        costUsd: state.totalCostUsd,
+        costUsd: authoritativeCostUsd,
         specVersion: REPORT_SPEC_VERSION,
       })
       .returning({ id: reports.id })
       .get();
-    const parsed = ReportSchema.safeParse(report);
     if (parsed.success) {
+      const canonical = reportForPersistence as Report;
       const persistedReport: Report = {
-        ...parsed.data,
+        ...canonical,
         meta: {
-          ...parsed.data.meta,
+          ...canonical.meta,
           runId: state.jobId,
           reportId: inserted.id,
-          persistedAt: nowIso(),
+          persistedAt: authorityAt,
         },
       };
       db
@@ -3401,39 +3530,42 @@ function persistReport(
         .where(eq(reports.id, inserted.id))
         .run();
     }
-    const link = db
-      .update(jobs)
-      .set({
+    const link = mutateJobSnapshotInTransaction(db, {
+      jobId: state.jobId,
+      now: new Date(authorityAt),
+      fence: {
+        runGeneration: state.runGeneration,
+        status: "running",
+        leaseOwner: state.claim.leaseOwner,
+        leaseValidAfter: authorityAt,
+      },
+      mutate: () => ({
         reportId: inserted.id,
         status: "done",
         error: null,
         unsupportedKind: null,
         unsupportedMessage: null,
         stepsJson: JSON.stringify(state.steps),
-        updatedAt: authorityAt,
         leaseOwner: null,
         leaseExpiresAt: null,
         heartbeatAt: null,
-        revision: row.revision + 1,
-      })
-      .where(and(
-        eq(jobs.id, state.jobId),
-        eq(jobs.runGeneration, state.runGeneration),
-        eq(jobs.status, "running"),
-        eq(jobs.leaseOwner, state.claim.leaseOwner),
-        eq(jobs.revision, row.revision),
-        gt(jobs.leaseExpiresAt, authorityAt),
-      ))
-      .run();
-    if (link.changes !== 1) {
+      }),
+    });
+    if (link === null) {
       throw new SupersededRunError(state.jobId, state.runGeneration);
     }
-    return { reportId: inserted.id, revision: row.revision + 1 };
+    return {
+      reportId: inserted.id,
+      revision: link.revision,
+      totalCostUsd: authoritativeCostUsd,
+    };
   });
   if (!persisted.authorized) {
     throw new SupersededRunError(state.jobId, state.runGeneration);
   }
   state.revision = persisted.value.revision;
+  state.claim.revision = persisted.value.revision;
+  state.totalCostUsd = persisted.value.totalCostUsd;
   return persisted.value.reportId;
 }
 

@@ -1,17 +1,20 @@
 /**
- * Tiny in-process typed pub/sub for job progress (the application contract §5 — SSE-streamed
- * generation progress). Single local user, single process: subscribers live in
- * a Map<jobId, Set<callback>> stashed on globalThis so Next.js dev hot-reloads
- * reuse the same bus instead of orphaning subscribers on a fresh module copy.
+ * Process-local postcommit invalidation hints for job progress. Subscribers
+ * live in a global Map so dev hot reloads do not orphan them, but the database
+ * revisioned JobSnapshot is the only wire truth: SSE re-reads it after hints
+ * and also polls so commits from other processes cannot be missed.
  *
- * Server-only: getJobSnapshot() reads the jobs table (imports @/db). The SSE
- * route replays a snapshot to late/reconnecting clients, then streams live
- * events until a terminal ("done" | "error" | "unsupported") event arrives.
+ * Server-only: getJobSnapshot() reads one coherent jobs/cost/report/resume
+ * transaction. Typed events remain diagnostics/hints and are never trusted as
+ * terminal or financial payloads by the stream route.
  */
 
 import { eq } from "drizzle-orm";
-import { getDb } from "@/db";
-import { costLog, jobs, reports } from "@/db/schema";
+import { getDb, type ThesisDb } from "@/db";
+import { costLog, jobLlmLeases, jobs, reports } from "@/db/schema";
+import { readStoredJobResumeInTransaction } from "@/pipeline/jobStore";
+import { assertSafeJobRevision } from "@/pipeline/jobState";
+import { parseCanonicalJobSteps } from "@/pipeline/jobSteps";
 import { ReportSchema, withLenientLegacyRead } from "@/report/schema";
 import type { StepProgress } from "@/types/core";
 import type { UnsupportedInstrumentKind } from "@/pipeline/stageB/instrumentSupport";
@@ -27,6 +30,8 @@ import type { UnsupportedInstrumentKind } from "@/pipeline/stageB/instrumentSupp
 export interface StepUpdateEvent {
   type: "step-update";
   jobId: string;
+  /** Committed canonical snapshot revision; payload is only an invalidation hint. */
+  revision: number;
   /** The step whose status just changed. */
   step: StepProgress;
   /** Full ordered StepProgress[] snapshot after this transition. */
@@ -37,6 +42,7 @@ export interface StepUpdateEvent {
 export interface CostUpdateEvent {
   type: "cost-update";
   jobId: string;
+  revision: number;
   /** Pipeline step the cost is attributed to. */
   step: string;
   /** Cost of this pass, USD. */
@@ -49,6 +55,7 @@ export interface CostUpdateEvent {
 export interface JobDoneEvent {
   type: "done";
   jobId: string;
+  revision: number;
   /** reports.id of the persisted report (null for a data-only stub with no row). */
   reportId: number | null;
   /** Fraction of traceable numbers verified (null when verify did not run). */
@@ -62,6 +69,7 @@ export interface JobDoneEvent {
 export interface JobErrorEvent {
   type: "error";
   jobId: string;
+  revision: number;
   message: string;
 }
 
@@ -69,6 +77,7 @@ export interface JobErrorEvent {
 export interface JobUnsupportedEvent {
   type: "unsupported";
   jobId: string;
+  revision: number;
   kind: UnsupportedInstrumentKind;
   message: string;
   totalCostUsd: number;
@@ -134,6 +143,7 @@ export function subscribeJob(jobId: string, cb: JobEventCallback): () => void {
  * so late subscribers catch up via getJobSnapshot()).
  */
 export function publishJobEvent(event: JobEvent): void {
+  assertSafeJobRevision(event.revision);
   const set = bus().subscribers.get(event.jobId);
   if (set === undefined || set.size === 0) return;
   // Copy so an unsubscribe during iteration can't mutate the live Set.
@@ -163,6 +173,7 @@ export function _clearJobSubscribers(): void {
 
 export interface JobSnapshot {
   jobId: string;
+  revision: number;
   symbol: string;
   status: string;
   steps: StepProgress[];
@@ -173,17 +184,15 @@ export interface JobSnapshot {
   verificationRate: number | null;
   totalCostUsd: number;
   dataOnly: boolean;
+  resumable: boolean;
+  /** Terminal truth can still receive an immutable paid-pass settlement. */
+  settlementsPending: boolean;
   unsupported: { kind: UnsupportedInstrumentKind; message: string } | null;
 }
 
 /** Parse the persisted stepsJson defensively (never throw on a bad row). */
-export function parseStepsJson(stepsJson: string): StepProgress[] {
-  try {
-    const parsed = JSON.parse(stepsJson) as unknown;
-    return Array.isArray(parsed) ? (parsed as StepProgress[]) : [];
-  } catch {
-    return [];
-  }
+export function parseStepsJson(stepsJson: string, allowTerminalSubset = false): StepProgress[] {
+  return parseCanonicalJobSteps(stepsJson, { allowTerminalSubset }) ?? [];
 }
 
 /**
@@ -192,54 +201,75 @@ export function parseStepsJson(stepsJson: string): StepProgress[] {
  * the JSON polling-fallback endpoint.
  */
 export function getJobSnapshot(jobId: string): JobSnapshot | null {
-  const row = getDb()
-    .select()
-    .from(jobs)
-    .where(eq(jobs.id, jobId))
-    .get();
-  if (row === undefined) return null;
+  return getDb().transaction((tx): JobSnapshot | null => {
+    const db = tx as ThesisDb;
+    const row = db.select().from(jobs).where(eq(jobs.id, jobId)).get();
+    if (row === undefined) return null;
+    assertSafeJobRevision(row.revision);
 
-  const costRows = getDb()
-    .select({ costUsd: costLog.costUsd })
-    .from(costLog)
-    .where(eq(costLog.jobId, jobId))
-    .all();
-  const loggedCostUsd = costRows.reduce((acc, r) => acc + r.costUsd, 0);
-
-  let verificationRate: number | null = null;
-  let totalCostUsd = loggedCostUsd;
-  let dataOnly = false;
-  if (row.reportId !== null) {
-    const reportRow = getDb().select().from(reports).where(eq(reports.id, row.reportId)).get();
-    if (reportRow !== undefined) {
-      verificationRate = reportRow.verificationRate;
-      totalCostUsd = reportRow.costUsd ?? loggedCostUsd;
-      dataOnly = reportJsonIsDataOnly(reportRow.reportJson);
+    const costRows = db.select({ costUsd: costLog.costUsd })
+      .from(costLog)
+      .where(eq(costLog.jobId, jobId))
+      .all();
+    const loggedCostUsd = costRows.reduce((acc, cost) => acc + cost.costUsd, 0);
+    let verificationRate: number | null = null;
+    let legacyReportCostUsd: number | null = null;
+    let dataOnly = false;
+    if (row.reportId !== null) {
+      const reportRow = db.select().from(reports).where(eq(reports.id, row.reportId)).get();
+      if (reportRow !== undefined) {
+        verificationRate = reportRow.verificationRate;
+        legacyReportCostUsd = reportRow.costUsd;
+        dataOnly = reportJsonIsDataOnly(reportRow.reportJson);
+      }
     }
-  }
+    const resume = readStoredJobResumeInTransaction(db, jobId);
+    const terminal = row.status === "done" || row.status === "error" ||
+      row.status === "unsupported" || row.status === "canceled";
+    // Retained rows, including expired rows not yet pruned by the scheduler,
+    // are durable pending-settlement truth. Never derive this wire field from
+    // wall clock: pruning/deletion commits the revision that changes it.
+    const settlementsPending = terminal && db.select({ permitId: jobLlmLeases.permitId })
+      .from(jobLlmLeases)
+      .where(eq(jobLlmLeases.jobId, jobId))
+      .limit(1)
+      .get() !== undefined;
 
-  return {
-    jobId: row.id,
-    symbol: row.symbol,
-    status: row.status,
-    steps: parseStepsJson(row.stepsJson),
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    error: row.error,
-    reportId: row.reportId,
-    verificationRate,
-    totalCostUsd,
-    dataOnly,
-    unsupported:
-      row.status === "unsupported" &&
-      (row.unsupportedKind === "etf" ||
-        row.unsupportedKind === "fund" ||
-        row.unsupportedKind === "etf-fund") &&
-      typeof row.unsupportedMessage === "string" &&
-      row.unsupportedMessage.trim().length > 0
-        ? { kind: row.unsupportedKind, message: row.unsupportedMessage }
-        : null,
-  };
+    return {
+      jobId: row.id,
+      revision: row.revision,
+      symbol: row.symbol,
+      status: row.status,
+      steps: parseStepsJson(
+        row.stepsJson,
+        row.status === "done" || row.status === "error" ||
+          row.status === "unsupported" || row.status === "canceled",
+      ),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      error: row.error,
+      reportId: row.reportId,
+      verificationRate,
+      totalCostUsd: costRows.length > 0 ? loggedCostUsd : (legacyReportCostUsd ?? 0),
+      dataOnly,
+      resumable: resume?.plan.state.resumable ?? false,
+      settlementsPending,
+      unsupported:
+        row.status === "unsupported" &&
+        (row.unsupportedKind === "etf" ||
+          row.unsupportedKind === "fund" ||
+          row.unsupportedKind === "etf-fund") &&
+        typeof row.unsupportedMessage === "string" &&
+        row.unsupportedMessage.trim().length > 0
+          ? { kind: row.unsupportedKind, message: row.unsupportedMessage }
+          : null,
+    };
+  });
+}
+
+/** Lightweight existence probe used before allocating an SSE stream. */
+export function jobExists(jobId: string): boolean {
+  return getDb().select({ id: jobs.id }).from(jobs).where(eq(jobs.id, jobId)).get() !== undefined;
 }
 
 export function reportJsonIsDataOnly(reportJson: string | null): boolean {

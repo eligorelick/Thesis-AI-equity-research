@@ -636,10 +636,7 @@ function mergeCommittedSettlement<T>(
     const step = latest.find((candidate) => candidate.step === pass);
     if (!step) throw new Error(`jobRunner: missing durable step ${pass}`);
     const status = settlement.outcome === "success" ? "done" : "error";
-    if (
-      !inserted &&
-      (step.status === "done" || step.status === "error" || step.status === "skipped")
-    ) {
+    if (!inserted) {
       state.steps = latest;
       state.totalCostUsd = sumLoggedCost(state.jobId);
       return true;
@@ -2478,8 +2475,12 @@ export async function runJob<TPayload = unknown>(
     // Per-pass timing comes from the hooks (the passes overlap in the
     // streaming path); ensureStepStarted backfills for hook-less mocks so a
     // step never jumps pending -> terminal.
+    const analystLaunched = { bull: false, bear: false };
     const analystHooks: AnalystPassHooks = {
-      onPassStart: (side) => startStep(state, side),
+      onPassStart: (side) => {
+        analystLaunched[side] = true;
+        startStep(state, side);
+      },
       onPassFinish: (side) => stampStepFinished(state, side),
     };
     const bullCheckpoint = createSettlementCheckpoint<AnalystCase>(state, "bull", fingerprint);
@@ -2516,9 +2517,27 @@ export async function runJob<TPayload = unknown>(
       if (err instanceof PassSettlementHookError) throw err;
       // Adversarial passes failed — mark both error and fall through to a
       // data-only stub (we still have fetch/validate/compute).
-      ensureStepStarted(state, "bull");
-      ensureStepStarted(state, "bear");
       const partial = bullBearFailureFromError(err);
+      const bullLaunched = analystLaunched.bull ||
+        partial?.bullLaunched === true ||
+        partial?.bull !== undefined ||
+        partial?.bullBilledAttempt !== undefined ||
+        bullCheckpoint.wasCalled();
+      const bearLaunched = analystLaunched.bear ||
+        partial?.bearLaunched === true ||
+        partial?.bear !== undefined ||
+        partial?.bearBilledAttempt !== undefined ||
+        bearCheckpoint.wasCalled();
+      if (!bullLaunched) {
+        markSkipped(state, "bull", "provider pass was not launched");
+      } else {
+        ensureStepStarted(state, "bull");
+      }
+      if (!bearLaunched) {
+        markSkipped(state, "bear", "provider pass was not launched");
+      } else {
+        ensureStepStarted(state, "bear");
+      }
       const settleMissingSide = async (
         checkpoint: SettlementCheckpoint<AnalystCase>,
         result: PassResultLike<AnalystCase> | undefined,
@@ -2545,14 +2564,14 @@ export async function runJob<TPayload = unknown>(
           partial?.bull,
           partial?.bullError,
           partial?.bullBilledAttempt,
-          partial?.bullLaunched,
+          bullLaunched,
         ),
         settleMissingSide(
           bearCheckpoint,
           partial?.bear,
           partial?.bearError,
           partial?.bearBilledAttempt,
-          partial?.bearLaunched,
+          bearLaunched,
         ),
       ]);
       throwFirstSettlementRejection(fallbackSettlements);

@@ -999,6 +999,14 @@ describe("runJob - durable paid-pass settlements", () => {
     });
 
     expect(result.dataOnly).toBe(true);
+    const terminal = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    const steps = JSON.parse(terminal.stepsJson) as StepProgress[];
+    expect(terminal.status).toBe("done");
+    expect(steps.find((step) => step.step === "bull")?.status).toBe("error");
+    expect(steps.find((step) => step.step === "bear")).toMatchObject({
+      status: "skipped",
+      detail: "provider pass was not launched",
+    });
     expect(
       handle.db
         .select()
@@ -1007,6 +1015,46 @@ describe("runJob - durable paid-pass settlements", () => {
         .all()
         .map((artifact) => artifact.pass),
     ).toEqual(["bull"]);
+  });
+
+  it("plain failure before analyst provider dispatch creates no pass settlement", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const providerBoundary = vi.fn(base.passes.runBullThenBear);
+    const failBeforeDispatch = (): Promise<void> =>
+      Promise.reject(new Error("adapter preflight failed before provider dispatch"));
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (...args) => {
+        await failBeforeDispatch();
+        return providerBoundary(...args);
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: true });
+    expect(providerBoundary).not.toHaveBeenCalled();
+    expect(
+      handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all(),
+    ).toEqual([]);
+    expect(handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all()).toEqual([]);
+    const terminal = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    const steps = JSON.parse(terminal.stepsJson) as StepProgress[];
+    expect(terminal.status).toBe("done");
+    expect(steps.find((step) => step.step === "bull")).toMatchObject({
+      status: "skipped",
+      detail: "provider pass was not launched",
+    });
+    expect(steps.find((step) => step.step === "bear")).toMatchObject({
+      status: "skipped",
+      detail: "provider pass was not launched",
+    });
+    expect(steps.some((step) => step.status === "running")).toBe(false);
   });
 
   it("persists bull artifact and cost before unresolved bear settles", async () => {
@@ -2033,6 +2081,87 @@ describe("runJob - durable paid-pass settlements", () => {
     }
   });
 
+  it("duplicate replay of an earlier judge attempt is a no-op while its retry is running", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const secondEntered = deferred();
+    const releaseSecond = deferred();
+    let attempt = 0;
+    let firstHook: TestSettlementHook<JudgeOutput> | undefined;
+    const firstFailure: TestSettlement<JudgeOutput> = {
+      outcome: "failure",
+      failure: { name: "Error", message: "schema-invalid first judge", kind: "schema" },
+      telemetry: {
+        model: "claude-opus-4-8",
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        webSearches: 0,
+        costUsd: 0.12,
+        fallbackUsed: false,
+        billable: true,
+        fetchedUrls: [],
+      },
+    };
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runJudgePass: async (deps, bull, bear, feedback, settlement) => {
+        attempt += 1;
+        if (!settlement) throw new Error("missing judge settlement hook");
+        if (attempt === 1) {
+          firstHook = settlement;
+          await settlement(firstFailure);
+          throw new Error("schema-invalid first judge");
+        }
+        secondEntered.resolve(undefined);
+        await releaseSecond.promise;
+        const success = await base.passes.runJudgePass(deps, bull, bear, feedback);
+        await settlement(testSuccessSettlement(success));
+        return success;
+      },
+    };
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    await secondEntered.promise;
+    expect(firstHook).toBeTypeOf("function");
+    const before = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    const beforeSteps = JSON.parse(before.stepsJson) as StepProgress[];
+    expect(beforeSteps.find((step) => step.step === "synthesize")?.status).toBe("running");
+    const beforeArtifacts = handle.db
+      .select()
+      .from(jobPassArtifacts)
+      .where(eq(jobPassArtifacts.jobId, jobId))
+      .all();
+    const beforeCosts = handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all();
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+    try {
+      await firstHook!(firstFailure);
+      const after = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+      expect(after).toMatchObject({
+        stepsJson: before.stepsJson,
+        revision: before.revision,
+        updatedAt: before.updatedAt,
+      });
+      expect(events).toEqual([]);
+      expect(
+        handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all(),
+      ).toHaveLength(beforeArtifacts.length);
+      expect(handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all()).toHaveLength(
+        beforeCosts.length,
+      );
+    } finally {
+      unsubscribe();
+      releaseSecond.resolve(undefined);
+      await running.catch(() => undefined);
+    }
+  });
+
   it("current same-pass failure suppresses only that analyst legacy fallback", () => {
     const { jobId } = createJob("AAPL");
     seedResumableLegacyJob(jobId, "error", "1.3.0:same-pass");
@@ -2611,7 +2740,9 @@ describe("runJob — LLM pass failure", () => {
     const { jobId } = createJob("AAPL");
     const { passes } = mockPasses();
     // Make the adversarial passes throw.
-    passes.runBullThenBear = async () => {
+    passes.runBullThenBear = async (_deps, hooks) => {
+      hooks?.onPassStart?.("bull");
+      hooks?.onPassStart?.("bear");
       throw new Error("boom in bull/bear");
     };
 

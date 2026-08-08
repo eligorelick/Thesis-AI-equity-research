@@ -205,6 +205,49 @@ describe("EdgarClient (fake transport)", () => {
     }
   });
 
+  it("submissions rejects an unknown loose parallel array such as fileNumber when its length differs", async () => {
+    const body = JSON.parse(sample("aapl_submissions_truncated.json")) as {
+      filings: { recent: Record<string, unknown[]> };
+    };
+    body.filings.recent.fileNumber = body.filings.recent.fileNumber.slice(0, -1);
+    const { transport } = fakeTransport({
+      "submissions/CIK0000320193.json": { body: JSON.stringify(body) },
+    });
+    const client = new EdgarClient({ transport });
+
+    const result = await client.submissions(320193);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.gap.severity).toBe("critical");
+      expect(result.gap.reason).toMatch(/parallel array/i);
+      expect(result.gap.reason).toContain("fileNumber");
+    }
+  });
+
+  it.each([
+    ["malformed accession metadata", "accessionNumber", "0000320193-26-00001", /malformed accession/i],
+    ["invalid filing date metadata", "filingDate", "2026-02-30", /invalid filing date/i],
+    ["invalid report date metadata", "reportDate", "2025-02-29", /invalid report date/i],
+  ])("submissions rejects $0", async (_label, field, value, reason) => {
+    const body = JSON.parse(sample("aapl_submissions_truncated.json")) as {
+      filings: { recent: Record<string, unknown[]> };
+    };
+    body.filings.recent[field][0] = value;
+    const { transport } = fakeTransport({
+      "submissions/CIK0000320193.json": { body: JSON.stringify(body) },
+    });
+    const client = new EdgarClient({ transport });
+
+    const result = await client.submissions(320193);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.gap.severity).toBe("critical");
+      expect(result.gap.reason).toMatch(reason);
+    }
+  });
+
   it.each([
     ["malformed accession", { accessionNumber: "0000320193-26-00001" }, /malformed accession/i],
     ["filing date", { filingDate: "2026-02-30" }, /invalid filing date/i],
@@ -213,7 +256,7 @@ describe("EdgarClient (fake transport)", () => {
     ["primary document is a Windows path", { primaryDocument: "nested\\annual.htm" }, /unsafe primary document/i],
     ["primary document is dot", { primaryDocument: "." }, /unsafe primary document/i],
     ["primary document is dot-dot", { primaryDocument: ".." }, /unsafe primary document/i],
-    ["accession is owned by another CIK", { accessionNumber: "0000789019-26-000001" }, /not owned/i],
+    ["accession is owned by another CIK", { accessionNumber: "0000789019-26-000001" }, /not admitted/i],
   ])("fetchFilingDocument rejects $0 before transport", async (_label, override, reason) => {
     const { transport, calls } = fakeTransport({});
     const client = new EdgarClient({ transport });
@@ -254,6 +297,66 @@ describe("EdgarClient (fake transport)", () => {
     expect(calls[0].url).toBe(
       "https://www.sec.gov/Archives/edgar/data/320193/000032019326000001/annual.htm",
     );
+  });
+
+  it("fetchFilingDocument accepts an agent-filed accession only after identity-validated submissions admission", async () => {
+    const { transport, calls } = fakeTransport({
+      "submissions/CIK0000320193.json": { body: sample("aapl_submissions_truncated.json") },
+      "ef20071035_8k.htm": { body: "<html><body>Agent-filed AAPL 8-K</body></html>" },
+      "agent-exhibit.htm": { body: "<html><body>Exhibit under admitted accession</body></html>" },
+    });
+    const client = new EdgarClient({ transport });
+    const submissions = await client.submissions(320193);
+    expect(submissions.ok).toBe(true);
+    if (!submissions.ok) return;
+    const filing = submissions.value.data.recentFilings.find(
+      (row) => row.accessionNumber === "0001140361-26-015711",
+    );
+    expect(filing).toBeDefined();
+    if (filing === undefined) return;
+
+    const result = await client.fetchFilingDocument(320193, filing);
+
+    expect(result.ok).toBe(true);
+    expect(calls.at(-1)?.url).toBe(
+      "https://www.sec.gov/Archives/edgar/data/320193/000114036126015711/ef20071035_8k.htm",
+    );
+
+    const exhibit = await client.fetchFilingDocument(320193, {
+      ...filing,
+      primaryDocument: "agent-exhibit.htm",
+    });
+    expect(exhibit.ok).toBe(true);
+    expect(calls.at(-1)?.url).toBe(
+      "https://www.sec.gov/Archives/edgar/data/320193/000114036126015711/agent-exhibit.htm",
+    );
+  });
+
+  it("does not partially admit agent-filed accessions from an invalid submissions payload", async () => {
+    const body = JSON.parse(sample("aapl_submissions_truncated.json")) as {
+      filings: { recent: Record<string, unknown[]> };
+    };
+    body.filings.recent.fileNumber = body.filings.recent.fileNumber.slice(0, -1);
+    const { transport, calls } = fakeTransport({
+      "submissions/CIK0000320193.json": { body: JSON.stringify(body) },
+      "ef20071035_8k.htm": { body: "must not be fetched" },
+    });
+    const client = new EdgarClient({ transport });
+    const submissions = await client.submissions(320193);
+    expect(submissions.ok).toBe(false);
+    const filing: EdgarFiling = {
+      accessionNumber: "0001140361-26-015711",
+      form: "8-K",
+      filingDate: "2026-04-20",
+      reportDate: "2026-04-20",
+      primaryDocument: "ef20071035_8k.htm",
+    };
+
+    const result = await client.fetchFilingDocument(320193, filing);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.gap.reason).toMatch(/not admitted/i);
+    expect(calls).toHaveLength(1);
   });
 
   it("filingDocumentBodyProblem rejects an empty 200 body without excluding valid text filings", () => {

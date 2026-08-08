@@ -509,18 +509,6 @@ const recentFilingsSchema = z.looseObject({
   acceptanceDateTime: z.array(z.string().nullable()).optional(),
 });
 
-const RECENT_FILING_PARALLEL_FIELDS = [
-  "filingDate",
-  "reportDate",
-  "form",
-  "primaryDocument",
-  "primaryDocDescription",
-  "isInlineXBRL",
-  "isXBRL",
-  "items",
-  "acceptanceDateTime",
-] as const;
-
 const ACCESSION_NUMBER = /^\d{10}-\d{2}-\d{6}$/;
 
 function isValidIsoDate(value: string): boolean {
@@ -529,12 +517,16 @@ function isValidIsoDate(value: string): boolean {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
-function filingMetadataProblem(cik: number | string, filing: EdgarFiling): string | null {
+function filingMetadataProblem(
+  cik: number | string,
+  filing: EdgarFiling,
+  accessionWasAdmitted: boolean,
+): string | null {
   if (!ACCESSION_NUMBER.test(filing.accessionNumber)) {
     return `malformed accession number "${filing.accessionNumber}"`;
   }
-  if (!sameCik(cik, filing.accessionNumber.slice(0, 10))) {
-    return `accession ${filing.accessionNumber} is not owned by requested CIK ${padCik(cik)}`;
+  if (!sameCik(cik, filing.accessionNumber.slice(0, 10)) && !accessionWasAdmitted) {
+    return `accession ${filing.accessionNumber} was not admitted for requested CIK ${padCik(cik)}`;
   }
   if (!isValidIsoDate(filing.filingDate)) {
     return `invalid filing date "${filing.filingDate}"`;
@@ -676,6 +668,7 @@ export class EdgarClient {
   private readonly cooldownMs: number;
   private cooldownUntil = 0;
   private tickerMap: { map: Map<string, CikMapping>; fetchedAt: string; stale: boolean } | null = null;
+  private readonly admittedAccessionsByCik = new Map<string, Set<string>>();
 
   constructor(opts: EdgarClientOptions = {}) {
     this.transport =
@@ -796,12 +789,40 @@ export class EdgarClient {
     const d = parsed.data;
     const r = d.filings.recent;
     const n = r.accessionNumber.length;
-    for (const field of RECENT_FILING_PARALLEL_FIELDS) {
-      const values = r[field];
-      if (values !== undefined && values.length !== n) {
+    for (const [field, values] of Object.entries(r)) {
+      if (Array.isArray(values) && values.length !== n) {
         return this.gap(
           `edgar.submissions(${cik})`,
           `submissions parallel array ${field} had length ${values.length}; accessionNumber had length ${n}`,
+          [url],
+          "critical",
+        );
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      const accessionNumber = r.accessionNumber[i];
+      const filingDate = r.filingDate[i];
+      const reportDate = r.reportDate[i];
+      if (!ACCESSION_NUMBER.test(accessionNumber)) {
+        return this.gap(
+          `edgar.submissions(${cik})`,
+          `submissions filing row ${i} had malformed accession number "${accessionNumber}"`,
+          [url],
+          "critical",
+        );
+      }
+      if (!isValidIsoDate(filingDate)) {
+        return this.gap(
+          `edgar.submissions(${cik})`,
+          `submissions filing row ${i} had invalid filing date "${filingDate}"`,
+          [url],
+          "critical",
+        );
+      }
+      if (reportDate !== "" && !isValidIsoDate(reportDate)) {
+        return this.gap(
+          `edgar.submissions(${cik})`,
+          `submissions filing row ${i} had invalid report date "${reportDate}"`,
           [url],
           "critical",
         );
@@ -836,6 +857,7 @@ export class EdgarClient {
     };
     const asOf =
       recentFilings.length > 0 && recentFilings[0].filingDate !== "" ? recentFilings[0].filingDate : res.fetchedAt.slice(0, 10);
+    this.admittedAccessionsByCik.set(padCik(cik), new Set(r.accessionNumber));
     return { ok: true, value: this.sourced(sub, url, asOf, res.fetchedAt, res.stale) };
   }
 
@@ -887,7 +909,9 @@ export class EdgarClient {
   ): Promise<FetchResult<string>> {
     let problem: string | null;
     try {
-      problem = filingMetadataProblem(cik, filing);
+      const accessionWasAdmitted =
+        this.admittedAccessionsByCik.get(padCik(cik))?.has(filing.accessionNumber) === true;
+      problem = filingMetadataProblem(cik, filing, accessionWasAdmitted);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       problem = `invalid filing metadata: ${reason}`;

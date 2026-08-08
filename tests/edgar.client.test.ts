@@ -152,6 +152,39 @@ describe("EdgarClient (fake transport)", () => {
     if (!nope.ok) expect(nope.gap.severity).toBe("warn");
   });
 
+  it("ignores a Unicode-expanding map entry before the real ASCII ticker", async () => {
+    const body = JSON.stringify({
+      0: { cik_str: 111, ticker: "ſ", title: "invalid Unicode shadow" },
+      1: { cik_str: 222, ticker: "S", title: "real ASCII issuer" },
+    });
+    const { transport } = fakeTransport({ "company_tickers.json": { body } });
+    const client = new EdgarClient({ transport });
+
+    const result = await client.tickerToCik("S");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.data.cik).toBe(222);
+      expect(result.value.data.title).toBe("real ASCII issuer");
+    }
+  });
+
+  it.each(["ß", "ſ", "ﬀ"])(
+    "rejects invalid lookup symbol %s before fetching or share-class aliasing",
+    async (symbol) => {
+      const body = JSON.stringify({
+        0: { cik_str: 222, ticker: symbol.toUpperCase(), title: "ASCII expansion" },
+      });
+      const { transport, calls } = fakeTransport({ "company_tickers.json": { body } });
+      const client = new EdgarClient({ transport });
+
+      const result = await client.tickerToCik(symbol);
+
+      expect(result.ok).toBe(false);
+      expect(calls).toHaveLength(0);
+    },
+  );
+
   it("submissions + latestFiling: exact form match on parallel arrays (sample has 10-Q but NO 10-K in recent 40)", async () => {
     const { transport } = fakeTransport({ "submissions/CIK0000320193.json": { body: sample("aapl_submissions_truncated.json") } });
     const client = new EdgarClient({ transport });

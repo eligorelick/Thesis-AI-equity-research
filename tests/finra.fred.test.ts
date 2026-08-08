@@ -320,6 +320,21 @@ describe("finra response scope", () => {
     expect(result.ok).toBe(false);
   });
 
+  it.each(["ß", "ſ", "ﬀ"])(
+    "short interest rejects Unicode-expanding row symbol %s",
+    async (returnedSymbol) => {
+      const result = await shortInterest(
+        returnedSymbol.toUpperCase(),
+        config(
+          ["2026-06-15"],
+          [row(returnedSymbol, "2026-06-15", 100)],
+        ),
+      );
+
+      expect(result.ok).toBe(false);
+    },
+  );
+
   it("short interest trend rejects dates outside requested partitions", async () => {
     const result = await shortInterestTrend(
       "AAPL",

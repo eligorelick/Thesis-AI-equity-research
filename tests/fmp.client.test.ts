@@ -59,6 +59,18 @@ describe("FMP entity identity", () => {
     expect(sameEntitySymbol("BRK.B", "BRKB")).toBe(false);
   });
 
+  it.each(["ß", "ſ", "ﬀ"])(
+    "rejects Unicode-expanding returned symbol %s instead of aliasing an ASCII issuer",
+    async (returnedSymbol) => {
+      const expectedSymbol = returnedSymbol.toUpperCase();
+      const result = await liveClient(
+        fakeFetch([{ symbol: returnedSymbol, price: 999 }]).fetch,
+      ).quote(expectedSymbol);
+
+      expect(result.ok).toBe(false);
+    },
+  );
+
   it("rejects a wrong-symbol quote before cachedFetch can store it", async () => {
     let cacheWrites = 0;
     const cachedFetch: CachedFetchFn = async (_key, _ttl, loader) => {
@@ -172,6 +184,26 @@ describe("FMP entity identity", () => {
 
     expect(mismatched.ok).toBe(false);
   });
+
+  it.each(["ß", "ſ", "ﬀ"])(
+    "rejects Unicode-expanding cached request scope %s for a symbol-less row",
+    async (cachedSymbol) => {
+      const cachedFetch: CachedFetchFn = async <T>() => ({
+        value: {
+          body: [{ date: "2026-06-30", revenue: 100 }],
+          status: 200,
+          fetchedAt: "2026-08-01T00:00:00.000Z",
+          entityScope: { expectedSymbols: [cachedSymbol], returnedSymbol: "optional" },
+        } as T,
+      });
+
+      const result = await liveClient(fakeFetch([]).fetch, cachedFetch).incomeStatement(
+        cachedSymbol.toUpperCase(),
+      );
+
+      expect(result.ok).toBe(false);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

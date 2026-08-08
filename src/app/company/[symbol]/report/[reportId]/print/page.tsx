@@ -18,10 +18,12 @@
  */
 
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 
 import { getReportByIdForSymbol, parseReportId } from "@/report/history";
 import { reportToPrintBody, PRINT_CSS } from "@/report/export/printHtml";
 import { AutoPrint } from "@/components/report/AutoPrint";
+import { normalizeRouteSymbol } from "@/symbol";
 
 // Reads persisted rows at request time — never statically pre-render.
 export const dynamic = "force-dynamic";
@@ -37,9 +39,10 @@ export default async function PrintReportPage({
   params: Promise<{ symbol: string; reportId: string }>;
   searchParams: Promise<{ autoprint?: string }>;
 }) {
-  const { symbol: rawSymbol, reportId: rawId } = await params;
+  const { symbol: routeSymbol, reportId: rawId } = await params;
   const { autoprint } = await searchParams;
-  const symbol = decodeURIComponent(rawSymbol).toUpperCase().trim();
+  const symbol = normalizeRouteSymbol(routeSymbol);
+  if (symbol === null) notFound();
   const reportId = parseReportId(rawId);
 
   const loaded = reportId !== null ? getReportByIdForSymbol(reportId, symbol) : null;

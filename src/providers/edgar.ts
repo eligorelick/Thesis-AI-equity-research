@@ -35,6 +35,7 @@ import {
   type HttpResult,
   type TokenBucketLimiter,
 } from "@/providers/http";
+import { normalizeSymbol } from "@/symbol";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -1237,6 +1238,14 @@ export class EdgarClient {
    */
   async tickerToCik(symbol: string): Promise<FetchResult<CikMapping>> {
     const url = `${EDGAR_HOSTS.www}/files/company_tickers.json`;
+    const normalizedSymbol = normalizeSymbol(symbol);
+    if (normalizedSymbol === null) {
+      return this.gap(
+        `edgar.tickerToCik(${symbol})`,
+        `ticker "${symbol}" is invalid`,
+        [url],
+      );
+    }
     const mapExpired =
       this.tickerMap !== null && Date.now() - Date.parse(this.tickerMap.fetchedAt) > EDGAR_TTL.tickers;
     if (this.tickerMap === null || mapExpired) {
@@ -1256,7 +1265,8 @@ export class EdgarClient {
       for (const v of Object.values(rec.data)) {
         const e = tickerEntrySchema.safeParse(v);
         if (!e.success) continue;
-        const key = e.data.ticker.toUpperCase();
+        const key = normalizeSymbol(e.data.ticker);
+        if (key === null) continue;
         if (!map.has(key)) {
           map.set(key, {
             cik10: padCik(e.data.cik_str),
@@ -1269,8 +1279,10 @@ export class EdgarClient {
       this.tickerMap = { map, fetchedAt: res.fetchedAt, stale: res.stale };
     }
     const { map, fetchedAt, stale } = this.tickerMap;
-    const u = symbol.trim().toUpperCase();
-    const found = map.get(u) ?? map.get(u.replace(/\./g, "-")) ?? map.get(u.replace(/-/g, "."));
+    const found =
+      map.get(normalizedSymbol) ??
+      map.get(normalizedSymbol.replace(/\./g, "-")) ??
+      map.get(normalizedSymbol.replace(/-/g, "."));
     if (found === undefined) {
       return this.gap(`edgar.tickerToCik(${symbol})`, `ticker "${symbol}" not in SEC company_tickers.json`, [url]);
     }

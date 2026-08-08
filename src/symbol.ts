@@ -9,11 +9,28 @@ export function isValidSymbol(value: string): boolean {
   return symbol.length <= SYMBOL_MAX_LENGTH && SYMBOL_PATTERN.test(symbol);
 }
 
+/** Trim and validate a raw ASCII ticker before case normalization. */
+export function normalizeSymbol(value: string): string | null {
+  const symbol = value.trim();
+  return isValidSymbol(symbol) ? symbol.toUpperCase() : null;
+}
+
+/** Validate a Next dynamic-route param, which the route matcher already decoded. */
+export function normalizeRouteSymbol(value: string): string | null {
+  return normalizeSymbol(value);
+}
+
 /** Canonical provider identity: case-insensitive with dot/hyphen share-class aliases. */
-export function canonicalEntitySymbol(value: string): string {
-  return value.trim().toUpperCase().replaceAll("-", ".");
+export function canonicalEntitySymbol(value: string): string | null {
+  return normalizeSymbol(value)?.replaceAll("-", ".") ?? null;
 }
 
 export function sameEntitySymbol(expected: string, actual: string): boolean {
-  return canonicalEntitySymbol(expected) === canonicalEntitySymbol(actual);
+  const expectedCanonical = canonicalEntitySymbol(expected);
+  const actualCanonical = canonicalEntitySymbol(actual);
+  return (
+    expectedCanonical !== null &&
+    actualCanonical !== null &&
+    expectedCanonical === actualCanonical
+  );
 }

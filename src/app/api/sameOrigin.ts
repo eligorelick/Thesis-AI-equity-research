@@ -44,38 +44,28 @@
  */
 
 import { NextResponse } from "next/server";
-
-const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+import { assertAllowedHost, requestOriginMatchesHost } from "@/app/requestSecurity";
 
 function forbid(reason: string): NextResponse {
   return NextResponse.json(
     { error: `cross-origin request rejected: ${reason}` },
-    { status: 403 },
+    {
+      status: 403,
+      headers: {
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      },
+    },
   );
-}
-
-/** The bare hostname of a `host:port` value (handles IPv6 `[::1]:3000`). */
-function hostnameOfHost(host: string): string {
-  try {
-    return new URL(`http://${host}`).hostname.toLowerCase();
-  } catch {
-    return host;
-  }
-}
-
-/** True when the request's Host arrived on a loopback interface (any port). */
-function isLoopbackHost(host: string): boolean {
-  return LOOPBACK_HOSTNAMES.has(hostnameOfHost(host));
-}
-
-/** The optional configured LAN host allowlist entry, or null when unset. */
-function allowedHost(): string | null {
-  const raw = process.env.THESIS_ALLOWED_HOST?.trim().toLowerCase();
-  return raw !== undefined && raw.length > 0 ? raw : null;
 }
 
 /** Returns a 403 JSON response when the request is provably cross-site, else null. */
 export function assertSameOrigin(request: Request): NextResponse | null {
+  // This must precede the absent-Origin allowance: command-line clients send no
+  // Origin, but an attacker can also omit it while forging a rebound Host.
+  const rejectedHost = assertAllowedHost(request);
+  if (rejectedHost !== null) return rejectedHost;
+
   const secFetchSite = request.headers.get("sec-fetch-site")?.trim().toLowerCase();
   if (secFetchSite === "cross-site") {
     return forbid("sec-fetch-site is cross-site");
@@ -84,30 +74,13 @@ export function assertSameOrigin(request: Request): NextResponse | null {
   const origin = request.headers.get("origin");
   if (origin === null) return null; // rule 2: non-browser or header-free request
 
-  let parsed: URL;
-  try {
-    parsed = new URL(origin);
-  } catch {
-    return forbid(`unparseable origin "${origin}"`); // includes opaque "null"
+  // Classic same-origin check over the same strict authority representation as
+  // the Host allowlist. This covers IDNA, IPv6, and default-port equivalence
+  // without comparing a canonical Origin to attacker-controlled raw Host text.
+  if (!requestOriginMatchesHost(request, origin)) {
+    return forbid("origin does not match the request authority");
   }
 
-  const host = (request.headers.get("host") ?? new URL(request.url).host).trim().toLowerCase();
-
-  // (a) Classic same-origin check. Rejects ordinary cross-origin CSRF
-  //     (Origin=evil, Host=ours) even on browsers that omit Sec-Fetch-Site,
-  //     and a same-machine web server on a different port (its Origin's port
-  //     differs from ours).
-  if (parsed.host.toLowerCase() !== host) {
-    return forbid(`origin "${origin}" does not match host "${host}"`);
-  }
-
-  // (b) DNS-rebinding defense. Under a rebinding attack Origin==Host both carry
-  //     the attacker's own host (rebound to loopback), so (a) passes; require
-  //     the Host the request truly arrived on to be loopback (unforgeable to
-  //     loopback from a cross-origin browser fetch) or the configured LAN host.
-  if (isLoopbackHost(host)) return null;
-  const allowed = allowedHost();
-  if (allowed !== null && host === allowed) return null;
-
-  return forbid(`host "${host}" is not loopback or an allowed host`);
+  // The request-wide Host guard above already enforces loopback/exact allowlist.
+  return null;
 }

@@ -27,6 +27,7 @@ import {
 import type { ManifestEntry, Sourced } from "@/types/core";
 
 import { buildDataBundle } from "@/pipeline/dataBundle";
+import { createCompanyLoadCoordinator } from "@/pipeline/companyLoad";
 import type { DataBundle } from "@/pipeline/types";
 import { validateBundle, type ValidationReport } from "@/pipeline/stageA/validate";
 import { renderManifestSummary } from "@/pipeline/stageA/manifest";
@@ -52,8 +53,9 @@ import { getLatestDoneReport, type LatestReport } from "@/report/query";
 import { fmtBig, fmtFractionPct, fmtMoney, fmtNum, fmtPct, fmtSignedPct, fmtX, upsidePct } from "./format";
 import { GenerateReport } from "./GenerateReport";
 import { ReportTabs } from "./ReportTabs";
-import { isValidSymbol } from "@/symbol";
+import { normalizeRouteSymbol } from "@/symbol";
 import { notFound } from "next/navigation";
+import { FMP_EMPTY_ARRAY_REASON } from "@/providers/fmp";
 
 // The bundle reads keys from process.env at request time and hits the network
 // (live EDGAR/FINRA/FRED even keyless) — never statically render this route.
@@ -84,8 +86,18 @@ interface UnsupportedPageData {
 
 type PageData = SupportedPageData | UnsupportedPageData;
 
-async function loadCompany(symbol: string): Promise<PageData> {
+const COMPANY_LOAD_MAX_CONCURRENT = 2;
+const COMPANY_LOAD_MAX_QUEUED = 8;
+const UNKNOWN_SYMBOL_NEGATIVE_TTL_MS = 15_000;
+
+function isConfirmedUnknownProfile(bundle: DataBundle): boolean {
+  if (bundle.profile.ok) return bundle.profile.value.data.rows.length === 0;
+  return bundle.profile.gap.reason === FMP_EMPTY_ARRAY_REASON;
+}
+
+async function loadCompany(symbol: string): Promise<PageData | null> {
   const bundle = await buildDataBundle(symbol);
+  if (isConfirmedUnknownProfile(bundle)) return null;
   const validation = validateBundle(bundle, { now: new Date(bundle.builtAt) });
   const profileRow = bundle.profile.ok ? (bundle.profile.value.data.rows[0] ?? null) : null;
   const support = classifyInstrumentSupport(profileRow);
@@ -100,6 +112,13 @@ async function loadCompany(symbol: string): Promise<PageData> {
   }
   return { status: "supported", bundle, validation, computed, support, latestReport };
 }
+
+const coordinatedCompanyLoad = createCompanyLoadCoordinator<PageData>({
+  maxConcurrent: COMPANY_LOAD_MAX_CONCURRENT,
+  maxQueued: COMPANY_LOAD_MAX_QUEUED,
+  negativeTtlMs: UNKNOWN_SYMBOL_NEGATIVE_TTL_MS,
+  load: loadCompany,
+});
 
 // ---------------------------------------------------------------------------
 // Small render helpers
@@ -824,15 +843,9 @@ function UnknownTicker({ symbol, gap }: { symbol: string; gap: ManifestEntry | n
 // ---------------------------------------------------------------------------
 
 export default async function CompanyPage({ params }: { params: Promise<{ symbol: string }> }) {
-  const { symbol: rawSymbol } = await params;
-  let decodedSymbol: string;
-  try {
-    decodedSymbol = decodeURIComponent(rawSymbol);
-  } catch {
-    notFound();
-  }
-  const symbol = decodedSymbol!.toUpperCase().trim();
-  if (!isValidSymbol(symbol)) notFound();
+  const { symbol: routeSymbol } = await params;
+  const symbol = normalizeRouteSymbol(routeSymbol);
+  if (symbol === null) notFound();
 
   // Render the shell + sidebar immediately and STREAM the heavy pipeline body in
   // behind a Suspense boundary, so navigating to a ticker paints instantly
@@ -860,9 +873,9 @@ export default async function CompanyPage({ params }: { params: Promise<{ symbol
  * of blocking the whole route — the fix for the "rendering…" stall.
  */
 export async function CompanyBody({ symbol }: { symbol: string }) {
-  let data: PageData;
+  let data: PageData | null;
   try {
-    data = await loadCompany(symbol);
+    data = await coordinatedCompanyLoad(symbol);
   } catch (err) {
     return (
       <div className="mx-auto max-w-2xl p-6">
@@ -873,6 +886,8 @@ export async function CompanyBody({ symbol }: { symbol: string }) {
       </div>
     );
   }
+
+  if (data === null) return <UnknownTicker symbol={symbol} gap={null} />;
 
   const { bundle } = data;
 

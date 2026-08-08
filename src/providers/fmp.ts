@@ -31,7 +31,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
 import { fetchWithPolicy, HttpTransportError, type FetchPolicy, type TokenBucketLimiter } from "@/providers/http";
-import { canonicalEntitySymbol, sameEntitySymbol } from "@/symbol";
+import { canonicalEntitySymbol, isValidSymbol, sameEntitySymbol } from "@/symbol";
 
 // ---------------------------------------------------------------------------
 // Cache contract (implemented by @/cache/apiCache — injected to keep this
@@ -1018,8 +1018,13 @@ interface LiveExchange {
 }
 
 function canonicalEntityScope(scope: FmpEntityScope): FmpEntityScope {
+  const expectedSymbols = scope.expectedSymbols.map((symbol) => {
+    const canonical = canonicalEntitySymbol(symbol);
+    if (canonical === null) throw new Error(`invalid FMP entity scope symbol: ${symbol}`);
+    return canonical;
+  });
   return {
-    expectedSymbols: [...new Set(scope.expectedSymbols.map(canonicalEntitySymbol))].sort(),
+    expectedSymbols: [...new Set(expectedSymbols)].sort(),
     returnedSymbol: scope.returnedSymbol,
   };
 }
@@ -1028,7 +1033,13 @@ function matchingEntityScope(expected: FmpEntityScope, actual: unknown): boolean
   if (!isRecord(actual) || actual.returnedSymbol !== expected.returnedSymbol || !Array.isArray(actual.expectedSymbols)) {
     return false;
   }
-  if (actual.expectedSymbols.some((symbol) => typeof symbol !== "string")) return false;
+  if (
+    actual.expectedSymbols.some(
+      (symbol) => typeof symbol !== "string" || !isValidSymbol(symbol),
+    )
+  ) {
+    return false;
+  }
   const canonicalActual = canonicalEntityScope({
     expectedSymbols: actual.expectedSymbols as string[],
     returnedSymbol: expected.returnedSymbol,

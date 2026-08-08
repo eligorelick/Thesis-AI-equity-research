@@ -125,6 +125,13 @@ describe("normalizeSymbol", () => {
     expect(normalizeSymbol("  aapl ")).toBe("AAPL");
     expect(normalizeSymbol("brk.b")).toBe("BRK.B");
   });
+
+  it.each(["ß", "ſ", "ﬀ", "AAPL/US", ""])(
+    "rejects invalid raw symbol %s before uppercase normalization",
+    (raw) => {
+      expect(() => normalizeSymbol(raw)).toThrow(/invalid|symbol/i);
+    },
+  );
 });
 
 describe("add / remove / list", () => {
@@ -163,6 +170,16 @@ describe("add / remove / list", () => {
   it("rejects an empty symbol", () => {
     expect(() => addToWatchlist("   ")).toThrow();
   });
+
+  it.each(["ß", "ſ", "ﬀ"])(
+    "does not add or remove an ASCII ticker through Unicode alias %s",
+    (raw) => {
+      addToWatchlist(raw.toUpperCase());
+      expect(() => addToWatchlist(raw)).toThrow(/invalid|symbol/i);
+      expect(() => removeFromWatchlist(raw)).toThrow(/invalid|symbol/i);
+      expect(listWatchlist().map((row) => row.symbol)).toEqual([raw.toUpperCase()]);
+    },
+  );
 });
 
 /* ------------------------------------------------------------------------ *

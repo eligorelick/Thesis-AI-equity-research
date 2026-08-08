@@ -17,6 +17,7 @@
  */
 
 import Link from "next/link";
+import { notFound } from "next/navigation";
 
 import { AppShell } from "@/components/shell";
 import { Badge } from "@/components/ui";
@@ -24,6 +25,7 @@ import { WatchlistSidebar } from "@/components/watchlist/Sidebar";
 import { ReportView, isDataOnlyReport } from "@/components/report/ReportView";
 import { ExportButtons } from "@/components/report/ExportButtons";
 import { getReportByIdForSymbol, parseReportId } from "@/report/history";
+import { normalizeRouteSymbol } from "@/symbol";
 
 // Reads persisted rows at request time — never statically pre-render.
 export const dynamic = "force-dynamic";
@@ -38,8 +40,9 @@ export default async function RunReportPage({
 }: {
   params: Promise<{ symbol: string; reportId: string }>;
 }) {
-  const { symbol: rawSymbol, reportId: rawId } = await params;
-  const symbol = decodeURIComponent(rawSymbol).toUpperCase().trim();
+  const { symbol: routeSymbol, reportId: rawId } = await params;
+  const symbol = normalizeRouteSymbol(routeSymbol);
+  if (symbol === null) notFound();
   const reportId = parseReportId(rawId);
 
   const loaded = reportId !== null ? getReportByIdForSymbol(reportId, symbol) : null;

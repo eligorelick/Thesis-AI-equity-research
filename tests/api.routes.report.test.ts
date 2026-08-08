@@ -151,7 +151,7 @@ afterEach(() => {
 function reportRequest(body: unknown): Request {
   return new Request("http://localhost/api/report", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { host: "localhost", "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
@@ -211,6 +211,7 @@ describe("POST /api/report", () => {
   it("rejects a non-JSON body with 400", async () => {
     const req = new Request("http://localhost/api/report", {
       method: "POST",
+      headers: { host: "localhost" },
       body: "not json{",
     });
     const res = await reportPOST(req);
@@ -550,7 +551,10 @@ describe("GET /api/report/[jobId]", () => {
       expect((await get.json()) as { resumable: boolean }).toMatchObject({ resumable: false });
 
       const retry = await retryPOST(
-        new Request(`http://localhost/api/report/${jobId}/retry`, { method: "POST" }),
+        new Request(`http://localhost/api/report/${jobId}/retry`, {
+          method: "POST",
+          headers: { host: "localhost" },
+        }),
         { params: Promise.resolve({ jobId }) },
       );
       expect(retry.status).toBe(409);
@@ -570,7 +574,10 @@ describe("GET /api/report/[jobId]", () => {
 describe("POST /api/report/[jobId]/retry", () => {
   function retryReq(jobId: string): [Request, { params: Promise<{ jobId: string }> }] {
     return [
-      new Request(`http://localhost/api/report/${jobId}/retry`, { method: "POST" }),
+      new Request(`http://localhost/api/report/${jobId}/retry`, {
+        method: "POST",
+        headers: { host: "localhost" },
+      }),
       { params: Promise.resolve({ jobId }) },
     ];
   }
@@ -789,7 +796,10 @@ describe("POST /api/report/[jobId]/retry", () => {
 
 describe("POST /api/report/[jobId]/cancel", () => {
   const cancelReq = (jobId: string): [Request, { params: Promise<{ jobId: string }> }] => [
-    new Request(`http://localhost/api/report/${jobId}/cancel`, { method: "POST" }),
+    new Request(`http://localhost/api/report/${jobId}/cancel`, {
+      method: "POST",
+      headers: { host: "localhost" },
+    }),
     { params: Promise.resolve({ jobId }) },
   ];
 

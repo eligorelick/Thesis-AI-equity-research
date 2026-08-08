@@ -86,6 +86,7 @@ credential is optional.
 | `THESIS_ROLLING_COST_WINDOW_MINUTES` | Rolling spend window, at most `52560000` minutes | Defaults to `1440` |
 | `THESIS_PAID_PASS_LEASE_SECONDS` | Paid-call lease TTL; `601`–`2147483` seconds | Defaults to `900` |
 | `THESIS_JOB_LEASE_SECONDS` | Job-claim lease TTL; at most `2147483` seconds | Defaults to `900` |
+| `THESIS_ALLOWED_HOST` | One exact non-loopback Host authority | Accepts loopback authorities only |
 | `THESIS_DB_PATH` | Exact SQLite file location | Uses the operating-system app-data directory |
 | `THESIS_DATA_DIR` | SQLite directory override | Uses the operating-system app-data directory |
 

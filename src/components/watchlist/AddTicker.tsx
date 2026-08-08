@@ -11,6 +11,7 @@
 
 import { useCallback, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { prepareTickerSubmission } from "./addTickerInput";
 
 export function AddTicker() {
   const router = useRouter();
@@ -21,8 +22,12 @@ export function AddTicker() {
 
   const submit = useCallback(
     async (raw: string) => {
-      const symbol = raw.trim().toUpperCase();
-      if (symbol.length === 0) return;
+      const prepared = prepareTickerSubmission(raw);
+      if (!prepared.ok) {
+        setError(prepared.error);
+        return;
+      }
+      const { symbol } = prepared;
       setError(null);
       setSubmitting(true);
       try {

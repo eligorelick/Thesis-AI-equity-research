@@ -22,6 +22,7 @@
  */
 
 import Link from "next/link";
+import { notFound } from "next/navigation";
 
 import { AppShell } from "@/components/shell";
 import { GradeChip, Badge, Panel } from "@/components/ui";
@@ -40,6 +41,7 @@ import {
   type ProjectionChange,
   type ReportDiff,
 } from "@/report/diff";
+import { normalizeRouteSymbol } from "@/symbol";
 
 export const dynamic = "force-dynamic";
 
@@ -458,9 +460,10 @@ export default async function DiffPage({
   params: Promise<{ symbol: string }>;
   searchParams: Promise<{ a?: string; b?: string }>;
 }) {
-  const { symbol: rawSymbol } = await params;
+  const { symbol: routeSymbol } = await params;
   const { a: aRaw, b: bRaw } = await searchParams;
-  const symbol = decodeURIComponent(rawSymbol).toUpperCase().trim();
+  const symbol = normalizeRouteSymbol(routeSymbol);
+  if (symbol === null) notFound();
 
   // Strict digits-only parse (shared with the API routes): "12abc"/"12.9"/
   // "1e5" are invalid, not silently truncated to a different report's id.

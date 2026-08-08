@@ -12,6 +12,7 @@
  */
 
 import Link from "next/link";
+import { notFound } from "next/navigation";
 
 import { AppShell } from "@/components/shell";
 import { GradeChip, Badge, Panel } from "@/components/ui";
@@ -21,6 +22,7 @@ import {
   type ReportSummary,
   type GradeStripCell,
 } from "@/report/history";
+import { normalizeRouteSymbol } from "@/symbol";
 
 import { HistoryCompare, type CompareOption } from "./HistoryCompare";
 
@@ -156,8 +158,9 @@ export default async function HistoryPage({
 }: {
   params: Promise<{ symbol: string }>;
 }) {
-  const { symbol: rawSymbol } = await params;
-  const symbol = decodeURIComponent(rawSymbol).toUpperCase().trim();
+  const { symbol: routeSymbol } = await params;
+  const symbol = normalizeRouteSymbol(routeSymbol);
+  if (symbol === null) notFound();
 
   let reports: ReportSummary[] = [];
   let loadError: string | null = null;

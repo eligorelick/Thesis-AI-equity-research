@@ -55,7 +55,7 @@ afterEach(() => {
 function jsonReq(url: string, method: string, body: unknown): Request {
   return new Request(url, {
     method,
-    headers: { "content-type": "application/json" },
+    headers: { host: new URL(url).host, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
@@ -123,7 +123,11 @@ describe("GET /api/settings", () => {
 describe("POST /api/settings", () => {
   it("rejects a non-JSON body with 400", async () => {
     const res = await settingsPOST(
-      new Request("http://localhost/api/settings", { method: "POST", body: "oops{" }),
+      new Request("http://localhost/api/settings", {
+        method: "POST",
+        headers: { host: "localhost" },
+        body: "oops{",
+      }),
     );
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
@@ -217,6 +221,14 @@ describe("POST /api/watchlist", () => {
     expect(handle.db.select().from(watchlist).all()).toHaveLength(0);
   });
 
+  it.each(["ß", "ſ", "ﬀ"])("rejects raw Unicode symbol %s with 400 and adds nothing", async (symbol) => {
+    const res = await watchlistPOST(
+      jsonReq("http://localhost/api/watchlist", "POST", { symbol }),
+    );
+    expect(res.status).toBe(400);
+    expect(handle.db.select().from(watchlist).all()).toHaveLength(0);
+  });
+
   it("rejects an over-length symbol with 400", async () => {
     const res = await watchlistPOST(
       jsonReq("http://localhost/api/watchlist", "POST", { symbol: "ABCDEFGHIJKLM" }),
@@ -227,7 +239,11 @@ describe("POST /api/watchlist", () => {
 
   it("rejects a non-JSON body with 400", async () => {
     const res = await watchlistPOST(
-      new Request("http://localhost/api/watchlist", { method: "POST", body: "bad{" }),
+      new Request("http://localhost/api/watchlist", {
+        method: "POST",
+        headers: { host: "localhost" },
+        body: "bad{",
+      }),
     );
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
@@ -258,8 +274,28 @@ describe("DELETE /api/watchlist", () => {
 
   it("rejects a non-JSON DELETE body with 400", async () => {
     const res = await watchlistDELETE(
-      new Request("http://localhost/api/watchlist", { method: "DELETE", body: "x{" }),
+      new Request("http://localhost/api/watchlist", {
+        method: "DELETE",
+        headers: { host: "localhost" },
+        body: "x{",
+      }),
     );
     expect(res.status).toBe(400);
   });
+
+  it.each(["ß", "ſ", "ﬀ"])(
+    "rejects raw Unicode DELETE symbol %s without removing its ASCII expansion",
+    async (symbol) => {
+      await watchlistPOST(
+        jsonReq("http://localhost/api/watchlist", "POST", { symbol: symbol.toUpperCase() }),
+      );
+      const res = await watchlistDELETE(
+        jsonReq("http://localhost/api/watchlist", "DELETE", { symbol }),
+      );
+      expect(res.status).toBe(400);
+      expect(handle.db.select().from(watchlist).all().map((row) => row.symbol)).toEqual([
+        symbol.toUpperCase(),
+      ]);
+    },
+  );
 });

@@ -30,6 +30,7 @@ import { makeFmpCachedFetch } from "@/pipeline/dataBundle";
 import { createFmpClient, type FmpClient } from "@/providers/fmp";
 import { getLatestDoneReport } from "@/report/query";
 import { listRunRefsForSymbol, type RunRef } from "@/report/history";
+import { normalizeSymbol as normalizeTickerSymbol } from "@/symbol";
 import type { Grade } from "@/types/core";
 
 /* ------------------------------------------------------------------------ *
@@ -80,7 +81,9 @@ export interface WatchlistRowView {
 
 /** Normalize a user-supplied ticker to the canonical stored form. */
 export function normalizeSymbol(symbol: string): string {
-  return symbol.trim().toUpperCase();
+  const normalized = normalizeTickerSymbol(symbol);
+  if (normalized === null) throw new Error("watchlist symbol is invalid");
+  return normalized;
 }
 
 /**
@@ -89,9 +92,6 @@ export function normalizeSymbol(symbol: string): string {
  */
 export function addToWatchlist(symbol: string): string {
   const normalized = normalizeSymbol(symbol);
-  if (normalized.length === 0) {
-    throw new Error("addToWatchlist: symbol is empty");
-  }
   getDb()
     .insert(watchlist)
     .values({ symbol: normalized, addedAt: new Date().toISOString() })

@@ -2585,11 +2585,12 @@ export async function runJob<TPayload = unknown>(
         const checkpoint = side === "bull" ? bullCheckpoint : bearCheckpoint;
         if (checkpoint.lastSettlement()?.outcome === "success") continue;
         const sideError = side === "bull" ? partial?.bullError : partial?.bearError;
+        const launched = side === "bull" ? bullLaunched : bearLaunched;
         computed.gaps.push({
           field: `llm.${side}`,
           reason: sideError ?? errMessage(err),
           severity: "critical",
-          attemptedSources: ["anthropic"],
+          attemptedSources: launched ? ["anthropic"] : [],
         });
       }
       markSkipped(state, "synthesize", "upstream bull/bear pass failed");
@@ -3075,6 +3076,13 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
   });
 
   const missingData = collectMissingData(bundle, validation, computed);
+  const attemptedAnalysisSources = [
+    ...new Set(
+      missingData
+        .filter((gap) => gap.field.startsWith("llm."))
+        .flatMap((gap) => gap.attemptedSources ?? []),
+    ),
+  ].sort();
   const emptyCoverage: ProvenanceCoverage = {
     numeric: { supported: 0, total: 0, rate: null },
     factualClaims: { supported: 0, total: 0, rate: null },
@@ -3085,7 +3093,7 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
     field: "analysis.llm",
     reason: input.reason,
     severity: "critical",
-    attemptedSources: ["anthropic"],
+    attemptedSources: attemptedAnalysisSources,
   });
 
   const report: Report = {

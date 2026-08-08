@@ -1055,6 +1055,20 @@ describe("runJob - durable paid-pass settlements", () => {
       detail: "provider pass was not launched",
     });
     expect(steps.some((step) => step.status === "running")).toBe(false);
+    const reportRow = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const report = ReportSchema.parse(JSON.parse(reportRow.reportJson ?? "{}"));
+    const analysisGaps = report.appendix.missingData.filter(
+      (gap) => gap.field === "analysis.llm" || gap.field === "llm.bull" || gap.field === "llm.bear",
+    );
+    expect(analysisGaps.map((gap) => gap.field).sort()).toEqual([
+      "analysis.llm",
+      "llm.bear",
+      "llm.bull",
+    ]);
+    expect(analysisGaps.map((gap) => gap.reason).join(" ")).toContain(
+      "adapter preflight failed before provider dispatch",
+    );
+    expect(analysisGaps.flatMap((gap) => gap.attemptedSources ?? [])).toEqual([]);
   });
 
   it("persists bull artifact and cost before unresolved bear settles", async () => {
@@ -2770,6 +2784,17 @@ describe("runJob — LLM pass failure", () => {
     const repRow = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get();
     const parsed = ReportSchema.safeParse(JSON.parse(repRow?.reportJson ?? "{}"));
     expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      const analysisGaps = parsed.data.appendix.missingData.filter(
+        (gap) => gap.field === "analysis.llm" || gap.field === "llm.bull" || gap.field === "llm.bear",
+      );
+      expect(analysisGaps.map((gap) => gap.field).sort()).toEqual([
+        "analysis.llm",
+        "llm.bear",
+        "llm.bull",
+      ]);
+      expect(analysisGaps.every((gap) => gap.attemptedSources?.includes("anthropic"))).toBe(true);
+    }
   });
 
   it("preserves a successful bull pass and billed bear telemetry when only bear fails", async () => {

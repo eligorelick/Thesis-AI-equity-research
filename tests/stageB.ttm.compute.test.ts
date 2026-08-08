@@ -233,14 +233,126 @@ describe("ttmIncome/ttmCashFlow — quarter contiguity gate (audit M1)", () => {
     expect(gaps.some((g) => g.field === "compute.ttmIncome" && /duplicate/i.test(g.reason))).toBe(true);
   });
 
-  it("quarters out of descending order are rejected (mis-sorted feed)", () => {
+  it("normalizes out-of-order quarters before selecting the current TTM window", () => {
     const rows = [
       q({ date: "2025-06-30" }),
       q({ date: "2025-09-30" }),
       q({ date: "2025-12-31" }),
       q({ date: "2026-03-31" }),
     ];
-    expect(ttmIncome(rows)).toBeNull();
+    const ttm = ttmIncome(rows);
+    expect(ttm).not.toBeNull();
+    expect(ttm?.date).toBe("2026-03-31");
+    expect(ttm?.revenue).toBe(400);
+  });
+
+  it("uses the uniquely latest accepted duplicate as a whole row and derives currency from selected rows only", () => {
+    const rows = [
+      q({
+        date: "2026-03-31",
+        acceptedDate: "2026-05-01 15:00:00",
+        revenue: 900,
+        reportedCurrency: "JPY",
+      }),
+      q({
+        date: "2026-03-31",
+        acceptedDate: "2026-05-01 16:00:00",
+        revenue: 150,
+        reportedCurrency: " usd ",
+      }),
+      q({ date: "2025-12-31", reportedCurrency: "USD" }),
+      q({ date: "2025-09-30", reportedCurrency: "Usd" }),
+      q({ date: "2025-06-30", reportedCurrency: "USD" }),
+    ];
+
+    const ttm = ttmIncome(rows);
+
+    expect(ttm).not.toBeNull();
+    expect(ttm?.date).toBe("2026-03-31");
+    expect(ttm?.revenue).toBe(450);
+    expect(ttm?.reportedCurrency).toBe("USD");
+  });
+
+  it("selects a cash-flow restatement by later filing day without double-counting the period", () => {
+    const rows = [
+      cf({ date: "2026-03-31", filingDate: "2026-04-30", operatingCashFlow: 900 }),
+      cf({ date: "2026-03-31", filingDate: "2026-05-01", operatingCashFlow: 150 }),
+      cf({ date: "2025-12-31" }),
+      cf({ date: "2025-09-30" }),
+      cf({ date: "2025-06-30" }),
+    ];
+
+    const ttm = ttmCashFlow(rows);
+
+    expect(ttm).not.toBeNull();
+    expect(ttm?.operatingCashFlow).toBe(450);
+  });
+
+  it("does not roll current income TTM backward when the newest duplicate is ambiguous", () => {
+    const gaps: ManifestEntry[] = [];
+    const rows = [
+      q({ date: "2026-03-31", filingDate: "2026-05-01", revenue: 900 }),
+      q({ date: "2026-03-31", filingDate: "2026-05-01", revenue: 150 }),
+      q({ date: "2025-12-31" }),
+      q({ date: "2025-09-30" }),
+      q({ date: "2025-06-30" }),
+      q({ date: "2025-03-31" }),
+    ];
+
+    expect(ttmIncome(rows, gaps)).toBeNull();
+    expect(gaps.some((gap) => gap.field === "compute.ttmIncome" && /duplicate|ambiguous/i.test(gap.reason))).toBe(true);
+    expect(gaps.some((gap) => gap.field === "compute.quarterRows.income" && /2026-03-31/.test(gap.reason))).toBe(true);
+  });
+
+  it("does not roll current cash-flow TTM backward when an in-window duplicate is ambiguous", () => {
+    const gaps: ManifestEntry[] = [];
+    const rows = [
+      cf({ date: "2026-03-31" }),
+      cf({ date: "2025-12-31", acceptedDate: "2026-02-01 16:00:00" }),
+      cf({ date: "2025-12-31", acceptedDate: "2026-02-01 16:00:00" }),
+      cf({ date: "2025-09-30" }),
+      cf({ date: "2025-06-30" }),
+      cf({ date: "2025-03-31" }),
+    ];
+
+    expect(ttmCashFlow(rows, gaps)).toBeNull();
+    expect(gaps.some((gap) => gap.field === "compute.ttmCashFlow" && /duplicate|ambiguous/i.test(gap.reason))).toBe(true);
+    expect(gaps.some((gap) => gap.field === "compute.quarterRows.cashFlow" && /2025-12-31/.test(gap.reason))).toBe(true);
+  });
+
+  it("ignores an ambiguous old period numerically but still discloses its rejection", () => {
+    const gaps: ManifestEntry[] = [];
+    const rows = [
+      ...fourFull,
+      q({ date: "2024-12-31", filingDate: "2025-02-01" }),
+      q({ date: "2024-12-31", filingDate: "2025-02-01" }),
+    ];
+
+    const ttm = ttmIncome(rows, gaps);
+
+    expect(ttm?.revenue).toBe(400);
+    expect(gaps.some((gap) => gap.field === "compute.quarterRows.income" && /2024-12-31/.test(gap.reason))).toBe(true);
+    expect(gaps.some((gap) => gap.field === "compute.ttmIncome")).toBe(false);
+  });
+
+  it("ignores a provably old malformed timestamp numerically but still discloses its rejection", () => {
+    const gaps: ManifestEntry[] = [];
+    const ttm = ttmIncome([q({ date: "2010-12-31T00:00:00Z" }), ...fourFull], gaps);
+
+    expect(ttm?.revenue).toBe(400);
+    expect(gaps.some((gap) => gap.field === "compute.quarterRows.income" && /2010-12-31/.test(gap.reason))).toBe(true);
+    expect(gaps.some((gap) => gap.field === "compute.ttmIncome")).toBe(false);
+  });
+
+  it("rejects an impossible newest calendar date instead of rolling it through Date.parse", () => {
+    const gaps: ManifestEntry[] = [];
+    const rows = [
+      q({ date: "2026-04-31" }),
+      ...fourFull,
+    ];
+
+    expect(ttmIncome(rows, gaps)).toBeNull();
+    expect(gaps.some((gap) => /2026-04-31|invalid fiscal/i.test(gap.reason))).toBe(true);
   });
 
   it("53-week fiscal calendar (one 14-week quarter) still passes", () => {
@@ -279,6 +391,20 @@ describe("ttmIncome/ttmCashFlow — quarter contiguity gate (audit M1)", () => {
     const ttm = ttmCashFlow(rows);
     expect(ttm).not.toBeNull();
     expect(ttm!.operatingCashFlow).toBe(400);
+  });
+
+  it("ttmCashFlow normalizes out-of-order rows and rejects an impossible newest date", () => {
+    const outOfOrder = [
+      cf({ date: "2025-06-30" }),
+      cf({ date: "2026-03-31" }),
+      cf({ date: "2025-09-30" }),
+      cf({ date: "2025-12-31" }),
+    ];
+    expect(ttmCashFlow(outOfOrder)?.operatingCashFlow).toBe(400);
+
+    const gaps: ManifestEntry[] = [];
+    expect(ttmCashFlow([cf({ date: "2026-04-31" }), ...fourCf()], gaps)).toBeNull();
+    expect(gaps.some((gap) => /2026-04-31|invalid fiscal/i.test(gap.reason))).toBe(true);
   });
 });
 
@@ -533,6 +659,92 @@ describe("runStageB wiring — reported currency routing gate", () => {
     expect(computed.route.asOf.incomeAnnual).toBe("2025-12-31");
     expect(computed.route.notes.some((note) => /TTM revenue unavailable.*annual revenue/i.test(note))).toBe(true);
     expect(computed.route.gaps.some((g) => g.field === "route.overlays.preRevenue.currency")).toBe(false);
+  });
+
+  it("keeps a suppressed cash-flow TTM distinct from the annual routing fallback", () => {
+    const bundle = wiringBundle();
+    if (!bundle.statements.cashflowQuarterly.ok) throw new Error("expected quarterly cash-flow fixture");
+    bundle.statements.cashflowQuarterly.value.data.rows =
+      bundle.statements.cashflowQuarterly.value.data.rows.slice(0, 3);
+
+    const computed = runStageB(bundle);
+
+    expect(computed.route.asOf.cashflowTtm).toBeNull();
+    expect(computed.route.asOf.cashflowAnnual).toBe("2025-12-31");
+    expect(computed.route.notes.some((note) => /TTM operating cash flow unavailable.*annual OCF/i.test(note))).toBe(true);
+  });
+});
+
+describe("runStageB wiring — normalized quarterly statement families", () => {
+  it("uses uniquely latest whole income, cash-flow, and balance rows across every downstream consumer", () => {
+    const bundle = wiringBundle();
+    if (
+      !bundle.statements.incomeQuarterly.ok ||
+      !bundle.statements.cashflowQuarterly.ok ||
+      !bundle.statements.balanceQuarterly.ok
+    ) {
+      throw new Error("expected quarterly statement fixtures");
+    }
+
+    const incomeRows = bundle.statements.incomeQuarterly.value.data.rows;
+    const cashRows = bundle.statements.cashflowQuarterly.value.data.rows;
+    const balanceRows = bundle.statements.balanceQuarterly.value.data.rows;
+    const incomeLatest = incomeRows[0];
+    const cashLatest = cashRows[0];
+    const balanceLatest = balanceRows[0];
+
+    incomeRows.splice(
+      0,
+      1,
+      { ...incomeLatest, acceptedDate: "2026-05-01 15:00:00", revenue: 900 * M, weightedAverageShsOutDil: 5 },
+      { ...incomeLatest, acceptedDate: "2026-05-01 16:00:00" },
+    );
+    // Seven unique periods plus one duplicate: history depth must be seven, not eight raw rows.
+    incomeRows.pop();
+    cashRows.splice(
+      0,
+      1,
+      { ...cashLatest, acceptedDate: "2026-05-01 15:00:00", operatingCashFlow: 900 * M },
+      { ...cashLatest, acceptedDate: "2026-05-01 16:00:00" },
+    );
+    balanceRows.splice(
+      0,
+      1,
+      { ...balanceLatest, acceptedDate: "2026-05-01 15:00:00", totalDebt: 999 * M },
+      { ...balanceLatest, acceptedDate: "2026-05-01 16:00:00" },
+    );
+
+    const computed = runStageB(bundle);
+
+    expect(computed.route.asOf.incomeTtm).toBe("2026-03-31");
+    expect(computed.route.asOf.cashflowTtm).toBe("2026-03-31");
+    expect(computed.route.gaps.some((gap) => gap.field === "route.insufficientHistory")).toBe(true);
+    expect(computed.gaps.some((gap) => gap.field.startsWith("compute.quarterRows"))).toBe(false);
+    expect(computed.valuation.kind).toBe("dcf");
+    if (computed.valuation.kind !== "dcf" || computed.valuation.dcf === null) return;
+    expect((computed.valuation.dcf.enterpriseValue - (computed.valuation.dcf.equityValue as number)) / M).toBeCloseTo(160, 6);
+    expect((computed.valuation.dcf.equityValue as number) / computed.valuation.dcf.perShare!).toBeCloseTo(100, 6);
+  });
+
+  it("does not double-weight a resolvable cash-flow restatement in runway history", () => {
+    const bundle = wiringBundle({ quarterlyRevenue: 1 });
+    if (!bundle.statements.cashflowQuarterly.ok) throw new Error("expected quarterly cash-flow fixture");
+    const rows = bundle.statements.cashflowQuarterly.value.data.rows;
+    const latest = rows[0];
+    rows.splice(
+      0,
+      1,
+      { ...latest, acceptedDate: "2026-05-01 15:00:00", operatingCashFlow: -900 * M },
+      { ...latest, acceptedDate: "2026-05-01 16:00:00" },
+    );
+
+    const computed = runStageB(bundle);
+
+    expect(computed.route.overlays).toContain("pre-revenue");
+    expect(computed.runway).not.toBeNull();
+    expect(computed.runway?.burnWindowDates).toHaveLength(4);
+    expect(new Set(computed.runway?.burnWindowDates).size).toBe(4);
+    expect(computed.runway?.burnWindowDates.filter((date) => date === "2026-03-31")).toHaveLength(1);
   });
 });
 

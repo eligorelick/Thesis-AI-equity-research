@@ -30,8 +30,10 @@ import {
   type DcfAssumptionInputs,
   type DcfAssumptions,
   type DcfIncomeRow,
+  type EnterpriseValuesRow,
   type MultiplesFrameworkInputs,
   type PeerMultiples,
+  type QuarterlyFundamentalsRow,
 } from "@/pipeline/stageB/valuation";
 import type { CompanyRoute } from "@/types/core";
 
@@ -772,6 +774,29 @@ describe("multiplesFramework", () => {
     },
   };
 
+  const historyQuarterDates = (count: number): string[] => {
+    const suffixes = ["12-31", "09-30", "06-30", "03-31"] as const;
+    return Array.from({ length: count }, (_, index) => {
+      const year = 2026 - Math.floor(index / 4);
+      return `${year}-${suffixes[index % 4]}`;
+    });
+  };
+  const flatHistoryQuarters = (count: number): QuarterlyFundamentalsRow[] => historyQuarterDates(count).map((date) => ({
+    date,
+    revenue: 25,
+    operatingIncome: 5,
+    depreciationAndAmortization: 1,
+    netIncome: 4,
+    operatingCashFlow: 6,
+    capitalExpenditure: -1,
+    totalStockholdersEquity: 100,
+  }));
+  const flatEvHistory = (dates: readonly string[]): EnterpriseValuesRow[] => dates.map((date) => ({
+    date,
+    marketCapitalization: 400,
+    enterpriseValue: 400,
+  }));
+
   it("computes current multiples from RAW fields (not vendor pre-baked)", () => {
     const r = multiplesFramework("general", baseInputs);
     const by = Object.fromEntries(r.multiples.map((m) => [m.key, m.current]));
@@ -829,44 +854,260 @@ describe("multiplesFramework", () => {
     expect(r.notes.some((n) => /EV multiples suppressed/i.test(n))).toBe(true);
   });
 
-  it("builds own-history percentile bands from quarterly TTM windows + EV history", () => {
-    // 12 quarters of flat fundamentals so every TTM window is identical; the
-    // percentile band should then be degenerate (all obs equal) but present.
-    const quarters = Array.from({ length: 12 }, (_, i) => {
-      const y = 2025 - Math.floor(i / 4);
-      const q = ["12-31", "09-30", "06-30", "03-31"][i % 4];
-      return {
-        date: `${y}-${q}`,
-        revenue: 1250,
-        operatingIncome: 250,
-        depreciationAndAmortization: 50,
-        netIncome: 175,
-        operatingCashFlow: 225,
-        capitalExpenditure: -37.5,
-        totalStockholdersEquity: 4000,
-      };
-    });
-    const evRows = quarters.map((q) => ({
-      date: q.date,
-      marketCapitalization: 10000,
-      enterpriseValue: 11500,
-    }));
+  it("builds exactly nine own-history observations from twelve contiguous TTM windows", () => {
+    const quarters = flatHistoryQuarters(12);
+    const evRows = flatEvHistory(quarters.map((quarter) => quarter.date));
     const r = multiplesFramework("general", {
       ...baseInputs,
       quarterlyFundamentals: quarters,
       enterpriseValuesHistory: evRows,
     });
-    const pe = r.multiples.find((m) => m.key === "peTtm");
-    expect(pe?.ownHistory).not.toBeNull();
-    expect(pe?.ownHistory?.observations).toBeGreaterThanOrEqual(8);
-    // current P/E ~14.2857 sits above the flat historical TTM P/E (10000/700=14.2857)
-    // -> rank should be a finite number in [0,100].
-    expect(pe?.ownHistory?.percentileRank).not.toBeNull();
+    const history = r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory;
+
+    expect(history).not.toBeNull();
+    expect(history?.observations).toBe(9);
+    expect(history?.p5).toBe(4);
+    expect(history?.p25).toBe(4);
+    expect(history?.p50).toBe(4);
+    expect(history?.p75).toBe(4);
+    expect(history?.p95).toBe(4);
     // 12 quarters -> 9 TTM obs (< 20 = full 5y window) -> flagged low-sample so the
     // tail percentiles aren't over-read.
-    expect(pe?.ownHistory?.observations).toBeLessThan(20);
-    expect(pe?.ownHistory?.lowSample).toBe(true);
-    expect(pe?.ownHistory?.basis).toMatch(/LOW SAMPLE/);
+    expect(history?.lowSample).toBe(true);
+    expect(history?.basis).toMatch(/LOW SAMPLE/);
+  });
+
+  it("suppresses own-history when a missing middle quarter leaves only five valid windows", () => {
+    const quarters = flatHistoryQuarters(12).filter((_quarter, index) => index !== 5);
+    const r = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: flatEvHistory(quarters.map((quarter) => quarter.date)),
+    });
+
+    expect(r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory).toBeNull();
+    expect(r.gaps).toContainEqual(
+      expect.objectContaining({
+        field: "valuation.multiples.ownHistory",
+        reason: expect.stringMatching(/need.*8|insufficient history/i),
+      }),
+    );
+    expect(r.gaps).toContainEqual(
+      expect.objectContaining({
+        field: "valuation.multiples.ownHistory.windows",
+        reason: expect.stringMatching(/3.*rejected|rejected.*3|non-contiguous/i),
+      }),
+    );
+  });
+
+  it("selects a uniquely latest duplicate whole row before building historical windows", () => {
+    const quarters = flatHistoryQuarters(12);
+    const period = quarters[5];
+    const olderDuplicate = {
+      ...period,
+      acceptedDate: "2025-11-01 15:00:00",
+      revenue: 2_500,
+    };
+    const latestDuplicate = {
+      ...period,
+      acceptedDate: "2025-11-01 16:00:00",
+      revenue: 25,
+    };
+    const withDuplicate = [olderDuplicate, ...quarters.filter((_quarter, index) => index !== 5), latestDuplicate];
+    const r = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: withDuplicate,
+      enterpriseValuesHistory: flatEvHistory(quarters.map((quarter) => quarter.date)),
+    });
+    const history = r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory;
+
+    expect(history?.observations).toBe(9);
+    expect(history?.p5).toBe(4);
+    expect(history?.p50).toBe(4);
+    expect(history?.p95).toBe(4);
+    expect(r.gaps.some((gap) => gap.field === "valuation.multiples.ownHistory.windows")).toBe(false);
+  });
+
+  it("discloses an ambiguous fiscal period even when vendor history supplies the fallback band", () => {
+    const quarters = flatHistoryQuarters(12);
+    const ambiguous = {
+      ...quarters[5],
+      filingDate: "2025-11-01",
+    };
+    const r = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: [...quarters, ambiguous],
+      enterpriseValuesHistory: flatEvHistory(quarters.map((quarter) => quarter.date)),
+      keyMetricsHistory: Array.from({ length: 8 }, (_, index) => ({
+        date: `vendor-${index}`,
+        evToSales: 4,
+      })),
+    });
+
+    expect(r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory?.observations).toBe(8);
+    expect(r.notes.some((note) => /vendor pre-baked/i.test(note))).toBe(true);
+    expect(r.gaps).toContainEqual(
+      expect.objectContaining({
+        field: "valuation.multiples.ownHistory.windows",
+        reason: expect.stringMatching(/ambiguous|duplicate|2025-09-30/i),
+      }),
+    );
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["empty", [] as EnterpriseValuesRow[]],
+  ] satisfies Array<[string, EnterpriseValuesRow[] | undefined]>)("discloses every valid raw window when enterprise-value history is %s but vendor fallback succeeds", (_label, enterpriseValuesHistory) => {
+    const r = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: flatHistoryQuarters(12),
+      enterpriseValuesHistory,
+      keyMetricsHistory: Array.from({ length: 8 }, (_, index) => ({
+        date: `vendor-${index}`,
+        evToSales: 4,
+      })),
+    });
+
+    expect(r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory?.observations).toBe(8);
+    expect(r.gaps).toContainEqual(
+      expect.objectContaining({
+        field: "valuation.multiples.ownHistory.windows",
+        reason: expect.stringMatching(/enterprise-values history|no enterprise/i),
+      }),
+    );
+  });
+
+  it("scans beyond the first twenty date-valid windows until twenty financially usable observations exist", () => {
+    const quarters = flatHistoryQuarters(27);
+    const evRows = flatEvHistory(quarters.map((quarter) => quarter.date));
+    evRows[0] = { ...evRows[0], marketCapitalization: null, enterpriseValue: null };
+
+    const r = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: evRows,
+    });
+    const history = r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory;
+
+    expect(history?.observations).toBe(20);
+    expect(history?.lowSample).toBe(false);
+  });
+
+  it("continues per multiple when early windows support price-to-book but not EV multiples", () => {
+    const quarters = flatHistoryQuarters(27);
+    const evRows = flatEvHistory(quarters.map((quarter) => quarter.date));
+    for (let index = 0; index < 4; index++) {
+      evRows[index] = { ...evRows[index], enterpriseValue: null };
+    }
+
+    const r = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: evRows,
+    });
+    const evToSales = r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory;
+    const priceToBook = r.multiples.find((multiple) => multiple.key === "priceToBook")?.ownHistory;
+
+    expect(evToSales?.observations).toBe(20);
+    expect(priceToBook?.observations).toBe(20);
+    expect(r.gaps).toContainEqual(
+      expect.objectContaining({
+        field: "valuation.multiples.ownHistory.windows",
+        reason: expect.stringMatching(/enterprise value|EV.*unavailable|partial/i),
+      }),
+    );
+  });
+
+  it("chooses raw or vendor history per multiple when their usable counts differ", () => {
+    const quarters = flatHistoryQuarters(11);
+    const evRows = flatEvHistory(quarters.map((quarter) => quarter.date));
+    evRows[0] = { ...evRows[0], enterpriseValue: null };
+
+    const r = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: evRows,
+      keyMetricsHistory: Array.from({ length: 8 }, (_, index) => ({
+        date: `vendor-${index}`,
+        evToSales: 5,
+      })),
+    });
+    const evToSales = r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory;
+    const priceToBook = r.multiples.find((multiple) => multiple.key === "priceToBook")?.ownHistory;
+
+    expect(evToSales?.observations).toBe(8);
+    expect(evToSales?.p50).toBe(5);
+    expect(evToSales?.basis).toMatch(/vendor pre-baked/i);
+    expect(priceToBook?.observations).toBe(8);
+    expect(priceToBook?.p50).toBe(4);
+    expect(priceToBook?.basis).toMatch(/normalized contiguous/i);
+  });
+
+  it("scans vendor rows beyond the first twenty to fill each usable history series", () => {
+    const r = multiplesFramework("general", {
+      ...baseInputs,
+      keyMetricsHistory: Array.from({ length: 27 }, (_, index) => ({
+        date: `vendor-${index}`,
+        evToSales: index < 7 ? null : 4,
+      })),
+    });
+    const evToSales = r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory;
+
+    expect(evToSales?.observations).toBe(20);
+    expect(evToSales?.lowSample).toBe(false);
+  });
+
+  it("does not classify older windows after every derived series reaches its configured cap", () => {
+    const quarters = flatHistoryQuarters(27);
+    quarters[26] = { ...quarters[26], revenue: null };
+    const r = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: flatEvHistory(historyQuarterDates(27)),
+    });
+
+    expect(r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory?.observations).toBe(20);
+    expect(r.gaps.some((gap) => gap.field === "valuation.multiples.ownHistory.windows")).toBe(false);
+  });
+
+  it("discloses every partial metric while another series is still filling its cap", () => {
+    const quarters = flatHistoryQuarters(27);
+    quarters[23] = { ...quarters[23], netIncome: null };
+    const evRows = flatEvHistory(historyQuarterDates(27));
+    evRows[0] = { ...evRows[0], enterpriseValue: null };
+    const r = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: evRows,
+    });
+
+    expect(r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory?.observations).toBe(20);
+    expect(r.gaps).toContainEqual(
+      expect.objectContaining({
+        field: "valuation.multiples.ownHistory.windows",
+        reason: expect.stringMatching(/peTtm|2021-12-31/i),
+      }),
+    );
+  });
+
+  it("scans past rejected early windows and discloses them even after finding twenty valid observations", () => {
+    const quarters = flatHistoryQuarters(27);
+    quarters[5] = { ...quarters[5], date: "2025-09-31" };
+    const validDates = historyQuarterDates(27).filter((_date, index) => index !== 5);
+    const r = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: flatEvHistory(validDates),
+    });
+    const history = r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory;
+
+    expect(history?.observations).toBe(20);
+    expect(r.gaps).toContainEqual(
+      expect.objectContaining({
+        field: "valuation.multiples.ownHistory.windows",
+        reason: expect.stringMatching(/invalid|rejected|non-contiguous/i),
+      }),
+    );
   });
 
   it("does NOT flag low-sample once the full 5-year (20-quarter) window is reached", () => {

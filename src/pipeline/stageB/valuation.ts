@@ -21,6 +21,10 @@ import type { CompanyRoute, ManifestEntry, SectorRoute } from "@/types/core";
 import { deriveFcf } from "@/pipeline/stageB/financialValues";
 import { metricPolicy } from "@/pipeline/stageB/sectorRouting";
 import { linearRegressionSlope, yearsBetweenDates } from "@/pipeline/stageB/growth";
+import {
+  contiguousQuarterWindows,
+  normalizeQuarterRows,
+} from "@/pipeline/stageB/quarterWindows";
 
 // ---------------------------------------------------------------------------
 // Shared primitives
@@ -1134,6 +1138,8 @@ export interface MultiplesBalance {
 /** Quarterly fundamentals merged per quarter by the caller (FMP names). */
 export interface QuarterlyFundamentalsRow {
   date: string;
+  acceptedDate?: unknown;
+  filingDate?: unknown;
   revenue: number | null;
   operatingIncome: number | null;
   depreciationAndAmortization: number | null;
@@ -1258,41 +1264,86 @@ function peerStats(values: (number | null | undefined)[], notes: string[], key: 
 
 type HistorySeries = Partial<Record<MultipleKey, number[]>>;
 
+interface OwnHistoryDerivation {
+  series: HistorySeries;
+  observations: number;
+  rejectedPeriods: Array<{ period: string; reason: string }>;
+  rejectedWindows: Array<{ anchor: string; reason: string }>;
+  unusableWindows: Array<{ anchor: string; reason: string }>;
+}
+
+const DERIVED_HISTORY_KEYS: readonly MultipleKey[] = [
+  "evToSales",
+  "evToEbitda",
+  "peTtm",
+  "priceToFcf",
+  "priceToBook",
+];
+
+function strictHistoryDayMs(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1 || month < 1 || month > 12 || day < 1) return null;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const monthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
+  if (day > monthDays[month - 1]) return null;
+  const parsed = new Date(0);
+  parsed.setUTCHours(0, 0, 0, 0);
+  parsed.setUTCFullYear(year, month - 1, day);
+  return parsed.getTime();
+}
+
 /** Rolling-4-quarter TTM multiples derived from raw statements + EV history. */
 function deriveOwnHistory(
   quarters: QuarterlyFundamentalsRow[] | undefined,
   evRows: EnterpriseValuesRow[] | undefined,
-): { series: HistorySeries; observations: number } {
+): OwnHistoryDerivation {
   const series: HistorySeries = {};
-  if (!quarters || quarters.length < 4 || !evRows || evRows.length === 0) {
-    return { series, observations: 0 };
+  const normalized = normalizeQuarterRows(quarters ?? []);
+  const candidates = contiguousQuarterWindows(normalized.rows, normalized.rows.length);
+  if (candidates.windows.length === 0) {
+    return {
+      series,
+      observations: 0,
+      rejectedPeriods: normalized.rejected,
+      rejectedWindows: candidates.rejected,
+      unusableWindows: [],
+    };
   }
-  const qs = quarters.slice().sort((a, b) => b.date.localeCompare(a.date));
-  const evByTime = evRows
-    .slice()
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .map((r) => ({ t: Date.parse(r.date), row: r }));
-  const push = (k: MultipleKey, v: number | null): void => {
-    if (v !== null && v > 0) (series[k] ??= []).push(v);
+  const evByTime = (evRows ?? []).flatMap((row) => {
+    const epochMs = strictHistoryDayMs(row.date);
+    return epochMs === null ? [] : [{ epochMs, row }];
+  });
+  const unusableWindows: Array<{ anchor: string; reason: string }> = [];
+  const push = (key: MultipleKey, value: number): void => {
+    const values = (series[key] ??= []);
+    if (values.length < FULL_OWN_HISTORY_OBS) values.push(value);
   };
-  const maxObs = Math.min(20, qs.length - 3);
-  let observations = 0;
-  for (let i = 0; i < maxObs; i++) {
-    const window = qs.slice(i, i + 4);
-    if (window.length < 4) break;
-    const anchor = Date.parse(qs[i].date);
-    if (!Number.isFinite(anchor)) continue;
+  for (const window of candidates.windows) {
+    if (DERIVED_HISTORY_KEYS.every((key) => (series[key]?.length ?? 0) >= FULL_OWN_HISTORY_OBS)) break;
+    const anchor = strictHistoryDayMs(window[0].date);
+    if (anchor === null) continue;
     // Nearest EV row within 45 days of the quarter end.
     let ev: EnterpriseValuesRow | null = null;
     let best = Infinity;
-    for (const { t, row } of evByTime) {
-      const d = Math.abs(t - anchor);
-      if (Number.isFinite(t) && d < best && d <= 45 * 86_400_000) {
+    for (const { epochMs, row } of evByTime) {
+      const d = Math.abs(epochMs - anchor);
+      if (d < best && d <= 45 * 86_400_000) {
         best = d;
         ev = row;
       }
     }
-    if (!ev) continue;
+    if (!ev) {
+      unusableWindows.push({
+        anchor: window[0].date,
+        reason: "no enterprise-values history row within 45 days; historical multiple window unavailable",
+      });
+      continue;
+    }
     const sum = (f: (r: QuarterlyFundamentalsRow) => number | null): number | null => {
       let acc = 0;
       for (const r of window) {
@@ -1310,24 +1361,59 @@ function deriveOwnHistory(
     );
     const ttmNi = sum((r) => r.netIncome);
     const ttmFcf = sum((r) => deriveFcf(r.operatingCashFlow, r.capitalExpenditure));
-    const equity = qs[i].totalStockholdersEquity;
-    let counted = false;
+    const equity = window[0].totalStockholdersEquity;
     const evVal = ev.enterpriseValue;
     const mcap = ev.marketCapitalization;
-    const consider = (k: MultipleKey, v: number | null): void => {
-      if (v !== null && v > 0) {
-        push(k, v);
-        counted = true;
-      }
+    const values: Partial<Record<MultipleKey, number | null>> = {
+      evToSales: safeDiv(evVal, ttmRev),
+      evToEbitda: safeDiv(evVal, posOrNull(ttmEbitda)),
+      peTtm: safeDiv(mcap, posOrNull(ttmNi)),
+      priceToFcf: safeDiv(mcap, posOrNull(ttmFcf)),
+      priceToBook: safeDiv(mcap, posOrNull(equity)),
     };
-    consider("evToSales", safeDiv(evVal, ttmRev));
-    consider("evToEbitda", safeDiv(evVal, posOrNull(ttmEbitda)));
-    consider("peTtm", safeDiv(mcap, posOrNull(ttmNi)));
-    consider("priceToFcf", safeDiv(mcap, posOrNull(ttmFcf)));
-    consider("priceToBook", safeDiv(mcap, posOrNull(equity)));
-    if (counted) observations++;
+    const stillNeeded = DERIVED_HISTORY_KEYS.filter(
+      (key) => (series[key]?.length ?? 0) < FULL_OWN_HISTORY_OBS,
+    );
+    const unavailable = DERIVED_HISTORY_KEYS.filter((key) => {
+      const value = values[key];
+      return value === null || value === undefined || value <= 0;
+    });
+    for (const key of stillNeeded) {
+      const value = values[key];
+      if (value !== null && value !== undefined && value > 0) push(key, value);
+    }
+    if (unavailable.length > 0) {
+      unusableWindows.push({
+        anchor: window[0].date,
+        reason: `${unavailable.length === DERIVED_HISTORY_KEYS.length ? "historical multiple window unavailable" : "partial historical multiple window"}: no positive/computable ${unavailable.join(", ")}`,
+      });
+    }
   }
-  return { series, observations };
+  const observations = Math.max(0, ...DERIVED_HISTORY_KEYS.map((key) => series[key]?.length ?? 0));
+  return {
+    series,
+    observations,
+    rejectedPeriods: normalized.rejected,
+    rejectedWindows: candidates.rejected,
+    unusableWindows,
+  };
+}
+
+function ownHistoryWindowGap(derived: OwnHistoryDerivation): ManifestEntry | null {
+  const total = derived.rejectedPeriods.length + derived.rejectedWindows.length + derived.unusableWindows.length;
+  if (total === 0) return null;
+  const details = [
+    ...derived.rejectedPeriods.map(({ period, reason }) => `period ${period}: ${reason}`),
+    ...derived.rejectedWindows.map(({ anchor, reason }) => `window ${anchor}: ${reason}`),
+    ...derived.unusableWindows.map(({ anchor, reason }) => `window ${anchor}: ${reason}`),
+  ];
+  const shown = details.slice(0, 8);
+  const omitted = details.length - shown.length;
+  return gapEntry(
+    "valuation.multiples.ownHistory.windows",
+    `${derived.rejectedPeriods.length} rejected fiscal period(s), ${derived.rejectedWindows.length} rejected quarter window(s), and ${derived.unusableWindows.length} financially partial/unusable window(s): ${shown.join("; ")}${omitted > 0 ? `; +${omitted} more` : ""}`,
+    "info",
+  );
 }
 
 /** Vendor pre-baked history mapped to our multiple keys. */
@@ -1335,9 +1421,10 @@ function vendorHistory(rows: VendorMultiplesRow[] | undefined): HistorySeries {
   const series: HistorySeries = {};
   if (!rows) return series;
   const push = (k: MultipleKey, v: number | null | undefined): void => {
-    if (isNum(v) && v > 0) (series[k] ??= []).push(v);
+    const values = (series[k] ??= []);
+    if (isNum(v) && v > 0 && values.length < FULL_OWN_HISTORY_OBS) values.push(v);
   };
-  for (const r of rows.slice(0, 20)) {
+  for (const r of rows) {
     push("evToSales", r.evToSales);
     push("evToEbitda", r.evToEBITDA);
     push("peTtm", r.priceToEarningsRatio);
@@ -1354,9 +1441,10 @@ function bandFor(values: number[] | undefined, current: number | null, basis: st
   // near-min/near-max (≈ observed range), not stable tail percentiles. Flag thin
   // windows so p5/p95 aren't over-read; the median/quartiles stay robust.
   const lowSample = values.length < FULL_OWN_HISTORY_OBS;
+  const observationBasis = `${basis} (${values.length} observations)`;
   const notedBasis = lowSample
-    ? `${basis} — LOW SAMPLE (${values.length} quarters < 5y): p5/p95 track the tail observations (≈ observed range), not stable percentiles`
-    : basis;
+    ? `${observationBasis} — LOW SAMPLE (${values.length} quarterly observations < 5y): p5/p95 track the tail observations (≈ observed range), not stable percentiles`
+    : observationBasis;
   return {
     percentileRank: current !== null ? percentileRank(values, current) : null,
     p5: quantile(values, 0.05),
@@ -1463,18 +1551,36 @@ export function multiplesFramework(
 
   // --- Own-history bands ------------------------------------------------------
   const derived = deriveOwnHistory(inputs.quarterlyFundamentals, inputs.enterpriseValuesHistory);
-  let history: HistorySeries;
-  let historyBasis: string;
-  if (derived.observations >= MIN_HISTORY_OBS_FOR_BAND) {
-    history = derived.series;
-    historyBasis = `per-quarter TTM multiples derived from raw statements + enterprise-values history (${derived.observations} quarters)`;
-  } else if (!currencyMismatch && (inputs.keyMetricsHistory?.length ?? 0) > 0) {
-    history = vendorHistory(inputs.keyMetricsHistory);
-    historyBasis = "vendor pre-baked ratio history (FMP key-metrics/ratios quarterly) — derivation from raw statements not possible";
+  const windowGap = ownHistoryWindowGap(derived);
+  if (windowGap) gaps.push(windowGap);
+  const history: HistorySeries = {};
+  const historyBasisByKey: Partial<Record<MultipleKey, string>> = {};
+  const derivedBasis = "per-quarter TTM multiples derived from four normalized contiguous fiscal quarters of raw statements + enterprise-values history";
+  const vendorBasis = "vendor pre-baked ratio history (FMP key-metrics/ratios quarterly) — derivation from raw statements not possible for this multiple";
+  const vendor = !currencyMismatch ? vendorHistory(inputs.keyMetricsHistory) : {};
+  const historyKeys: readonly MultipleKey[] = [
+    ...DERIVED_HISTORY_KEYS,
+    "priceToTbv",
+    "priceToFfo",
+    "priceToAffo",
+  ];
+  let usedVendor = false;
+  for (const key of historyKeys) {
+    const ownValues = derived.series[key];
+    const vendorValues = vendor[key];
+    if ((ownValues?.length ?? 0) >= MIN_HISTORY_OBS_FOR_BAND) {
+      history[key] = ownValues;
+      historyBasisByKey[key] = derivedBasis;
+    } else if ((vendorValues?.length ?? 0) >= MIN_HISTORY_OBS_FOR_BAND) {
+      history[key] = vendorValues;
+      historyBasisByKey[key] = vendorBasis;
+      usedVendor = true;
+    }
+  }
+  if (usedVendor) {
     notes.push("own-history bands built from vendor pre-baked multiples (raw derivation unavailable)");
-  } else {
-    history = {};
-    historyBasis = "no usable multiple history";
+  }
+  if (!historyKeys.some((key) => (history[key]?.length ?? 0) >= MIN_HISTORY_OBS_FOR_BAND)) {
     if (currencyMismatch && (inputs.keyMetricsHistory?.length ?? 0) > 0) {
       notes.push("vendor pre-baked multiple history skipped: currency mismatch (ADR) makes it untrustworthy");
     }
@@ -1530,7 +1636,7 @@ export function multiplesFramework(
       key,
       current: cur,
       basis: basisByKey[key],
-      ownHistory: bandFor(history[key], cur, historyBasis),
+      ownHistory: bandFor(history[key], cur, historyBasisByKey[key] ?? "no usable multiple history"),
       peers: peerStats((inputs.peers ?? []).map((p) => p.multiples[key]), notes, key),
     };
   });

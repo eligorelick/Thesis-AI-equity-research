@@ -95,6 +95,11 @@ import { computeScenarioTargets } from "@/pipeline/stageB/scenarioTargets";
 import { computeFairValue } from "@/pipeline/stageB/fairValue";
 import { resolveNetDebt, type NetDebtResolution } from "@/pipeline/stageB/netDebt";
 import {
+  normalizeQuarterRows,
+  quarterWindowViolation,
+  type FiscalDatedRow,
+} from "@/pipeline/stageB/quarterWindows";
+import {
   classifyInstrumentSupport,
   UnsupportedInstrumentError,
 } from "@/pipeline/stageB/instrumentSupport";
@@ -382,53 +387,59 @@ export interface TtmIncome {
   incomeTaxExpense: number | null;
 }
 
-// --- Quarter contiguity gate (2026-07-09 audit M1) --------------------------
-// slice(0,4) only guarantees "the 4 newest rows", not "the last 4 quarters":
-// a missing middle quarter silently reaches back a 5th season (double-counting
-// one quarter's seasonality) and a duplicated row (restatement) double-counts
-// a quarter outright — either way the sum is mislabeled as TTM and feeds DCF
-// startRevenue, P/E and EV/Sales. Gate: 4 DISTINCT period-ends, strictly
-// descending, successive gaps each ~1 quarter and total span ~3 quarters.
-// Bands accept 52/53-week fiscal calendars (13- and 14-week quarters).
+interface NormalizedQuarterSet<T> {
+  rows: T[];
+  rejected: Array<{ period: string; reason: string }>;
+}
 
-const DAY_MS = 24 * 3600 * 1000;
-/**
- * Accepted days between successive quarter-ends (12-week ≈ 84d; 13-week ≈ 91d;
- * 14-week ≈ 98d; monthly drift). Floor 70 rejects fiscal-transition stub
- * periods (~2 months) that would relabel an ~11-month window as TTM (2026-07-09
- * fix review) while still admitting a legitimate 4-4-4 12-week quarter.
- */
-const QUARTER_GAP_DAYS: readonly [number, number] = [70, 135];
-/** Accepted days from oldest to newest period-end (~3 quarters; 274d on a calendar year; floor = 3 × 84d). */
-const TTM_SPAN_DAYS: readonly [number, number] = [250, 320];
+function quarterRowsGap(
+  family: "income" | "cashFlow" | "balance",
+  rejected: ReadonlyArray<{ period: string; reason: string }>,
+): ManifestEntry | null {
+  if (rejected.length === 0) return null;
+  const shown = rejected.slice(0, 8).map(({ period, reason }) => `${period}: ${reason}`);
+  const omitted = rejected.length - shown.length;
+  return {
+    field: `compute.quarterRows.${family}`,
+    reason: `${rejected.length} rejected quarterly period${rejected.length === 1 ? "" : "s"}: ${shown.join("; ")}${omitted > 0 ? `; +${omitted} more` : ""}`,
+    severity: "info",
+    attemptedSources: [
+      family === "income"
+        ? "fmp:/stable/income-statement?period=quarter"
+        : family === "cashFlow"
+          ? "fmp:/stable/cash-flow-statement?period=quarter"
+          : "fmp:/stable/balance-sheet-statement?period=quarter",
+    ],
+  };
+}
 
-/**
- * Returns a human-readable violation when the 4 newest-first rows are not a
- * contiguous trailing-twelve-month window, else null.
- */
-function ttmContiguityViolation(rows: ReadonlyArray<{ date?: unknown }>): string | null {
-  const ends: number[] = [];
-  const labels: string[] = [];
-  for (const r of rows) {
-    const label = String(r.date ?? "");
-    const t = Date.parse(label);
-    if (!Number.isFinite(t)) return `unparseable quarter period-end date "${label}"`;
-    ends.push(t);
-    labels.push(label);
-  }
-  for (let i = 0; i + 1 < ends.length; i++) {
-    const gapDays = Math.round((ends[i] - ends[i + 1]) / DAY_MS);
-    if (gapDays === 0) return `duplicate quarter period-end ${labels[i]}`;
-    if (gapDays < 0) return `quarter period-ends not in descending order (${labels[i]} before ${labels[i + 1]})`;
-    if (gapDays < QUARTER_GAP_DAYS[0] || gapDays > QUARTER_GAP_DAYS[1]) {
-      return `non-contiguous quarters: ${gapDays}-day gap between ${labels[i + 1]} and ${labels[i]} (accepted ${QUARTER_GAP_DAYS[0]}–${QUARTER_GAP_DAYS[1]} for 52/53-week calendars)`;
-    }
-  }
-  const spanDays = Math.round((ends[0] - ends[ends.length - 1]) / DAY_MS);
-  if (spanDays < TTM_SPAN_DAYS[0] || spanDays > TTM_SPAN_DAYS[1]) {
-    return `four quarter-ends span ${spanDays} days (accepted ${TTM_SPAN_DAYS[0]}–${TTM_SPAN_DAYS[1]}) — not a trailing twelve months`;
-  }
-  return null;
+function normalizeStatementQuarters<T extends FiscalDatedRow>(
+  rows: readonly T[],
+  family: "income" | "cashFlow" | "balance",
+  gaps?: ManifestEntry[],
+): NormalizedQuarterSet<T> {
+  const normalized = normalizeQuarterRows(rows);
+  const disclosure = quarterRowsGap(family, normalized.rejected);
+  if (disclosure) gaps?.push(disclosure);
+  return normalized;
+}
+
+function rejectedAffectsCurrentWindow<T extends FiscalDatedRow>(
+  normalized: NormalizedQuarterSet<T>,
+): { period: string; reason: string } | null {
+  if (normalized.rejected.length === 0) return null;
+  const selected = normalized.rows.slice(0, 4);
+  const oldestSelected = typeof selected[3]?.date === "string" ? selected[3].date : null;
+  if (oldestSelected === null) return normalized.rejected[0];
+
+  return normalized.rejected.find(({ period }) => {
+    const prefix = /^(\d{4}-\d{2}-\d{2})/.exec(period)?.[1] ?? null;
+    const orderable =
+      prefix !== null && normalizeQuarterRows([{ date: prefix }]).rows.length === 1
+        ? prefix
+        : null;
+    return orderable === null || orderable >= oldestSelected;
+  }) ?? null;
 }
 
 function sumField(rows: FmpIncomeStatementRow[], key: keyof FmpIncomeStatementRow): number | null {
@@ -476,11 +487,29 @@ export function ttmIncome(
   quarterly: FmpIncomeStatementRow[],
   gaps?: ManifestEntry[],
 ): TtmIncome | null {
-  if (quarterly.length < 4) return null;
-  const q = quarterly.slice(0, 4);
+  const normalized = normalizeStatementQuarters(quarterly, "income", gaps);
+  return ttmIncomeFromNormalized(normalized, gaps);
+}
+
+function ttmIncomeFromNormalized(
+  normalized: NormalizedQuarterSet<FmpIncomeStatementRow>,
+  gaps?: ManifestEntry[],
+): TtmIncome | null {
+  const rejected = rejectedAffectsCurrentWindow(normalized);
+  if (rejected) {
+    gaps?.push({
+      field: "compute.ttmIncome",
+      reason: `current TTM window is uncertain because fiscal period ${rejected.period} was rejected (${rejected.reason}) — TTM basis suppressed; latest annual statement used instead`,
+      severity: "info",
+      attemptedSources: ["fmp:/stable/income-statement?period=quarter"],
+    });
+    return null;
+  }
+  if (normalized.rows.length < 4) return null;
+  const q = normalized.rows.slice(0, 4);
 
   // Contiguity gate (audit M1): a non-TTM window must never be labeled TTM.
-  const violation = ttmContiguityViolation(q);
+  const violation = quarterWindowViolation(q);
   if (violation !== null) {
     gaps?.push({
       field: "compute.ttmIncome",
@@ -585,10 +614,28 @@ export function ttmCashFlow(
   quarterly: FmpCashFlowRow[],
   gaps?: ManifestEntry[],
 ): TtmCashFlow | null {
-  if (quarterly.length < 4) return null;
-  const q = quarterly.slice(0, 4);
+  const normalized = normalizeStatementQuarters(quarterly, "cashFlow", gaps);
+  return ttmCashFlowFromNormalized(normalized, gaps);
+}
+
+function ttmCashFlowFromNormalized(
+  normalized: NormalizedQuarterSet<FmpCashFlowRow>,
+  gaps?: ManifestEntry[],
+): TtmCashFlow | null {
+  const rejected = rejectedAffectsCurrentWindow(normalized);
+  if (rejected) {
+    gaps?.push({
+      field: "compute.ttmCashFlow",
+      reason: `current TTM window is uncertain because fiscal period ${rejected.period} was rejected (${rejected.reason}) — TTM basis suppressed; latest annual statement used instead`,
+      severity: "info",
+      attemptedSources: ["fmp:/stable/cash-flow-statement?period=quarter"],
+    });
+    return null;
+  }
+  if (normalized.rows.length < 4) return null;
+  const q = normalized.rows.slice(0, 4);
   // Contiguity gate (audit M1) — identical to ttmIncome.
-  const violation = ttmContiguityViolation(q);
+  const violation = quarterWindowViolation(q);
   if (violation !== null) {
     gaps?.push({
       field: "compute.ttmCashFlow",
@@ -687,9 +734,25 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   const incomeAnnual = rowsOf(bundle.statements.incomeAnnual);
   const balanceAnnual = rowsOf(bundle.statements.balanceAnnual);
   const cashflowAnnual = rowsOf(bundle.statements.cashflowAnnual);
-  const incomeQuarterly = rowsOf(bundle.statements.incomeQuarterly);
-  const balanceQuarterly = rowsOf(bundle.statements.balanceQuarterly);
-  const cashflowQuarterly = rowsOf(bundle.statements.cashflowQuarterly);
+  const ttmGaps: ManifestEntry[] = [];
+  const incomeQuarterSet = normalizeStatementQuarters(
+    rowsOf(bundle.statements.incomeQuarterly),
+    "income",
+    ttmGaps,
+  );
+  const balanceQuarterSet = normalizeStatementQuarters(
+    rowsOf(bundle.statements.balanceQuarterly),
+    "balance",
+    ttmGaps,
+  );
+  const cashflowQuarterSet = normalizeStatementQuarters(
+    rowsOf(bundle.statements.cashflowQuarterly),
+    "cashFlow",
+    ttmGaps,
+  );
+  const incomeQuarterly = incomeQuarterSet.rows;
+  const balanceQuarterly = balanceQuarterSet.rows;
+  const cashflowQuarterly = cashflowQuarterSet.rows;
 
   const todayIso = bundle.builtAt.slice(0, 10);
 
@@ -704,8 +767,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
         reportedCurrency: normalizeReportedCurrency(inc0.reportedCurrency),
       }
     : null;
-  const ttmGaps: ManifestEntry[] = [];
-  const ttmInc = ttmIncome(incomeQuarterly, ttmGaps);
+  const ttmInc = ttmIncomeFromNormalized(incomeQuarterSet, ttmGaps);
   const routingIncomeTtm: RoutingIncomeRow | null = ttmInc
     ? {
         date: ttmInc.date,
@@ -717,10 +779,10 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   const routingCashflowAnnual: RoutingCashflowRow | null = cf0
     ? { date: isoDay(cf0.date), operatingCashFlow: num(cf0.operatingCashFlow) }
     : null;
-  const ttmCf = ttmCashFlow(cashflowQuarterly, ttmGaps);
+  const ttmCf = ttmCashFlowFromNormalized(cashflowQuarterSet, ttmGaps);
   const routingCashflowTtm: RoutingCashflowRow | null = ttmCf
     ? { date: ttmCf.date, operatingCashFlow: ttmCf.operatingCashFlow }
-    : routingCashflowAnnual;
+    : null;
 
   const route = routeCompany(
     {
@@ -1438,6 +1500,8 @@ function mergeQuarterly(
     const bal = matchByDate(balByDate, d);
     return {
       date: d,
+      acceptedDate: i.acceptedDate,
+      filingDate: i.filingDate,
       revenue: num(i.revenue),
       operatingIncome: num(i.operatingIncome),
       depreciationAndAmortization: num(i.depreciationAndAmortization) ?? (cf ? num(cf.depreciationAndAmortization) : null),

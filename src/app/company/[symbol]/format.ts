@@ -23,6 +23,15 @@ export function fmtSignedPct(v: number | null | undefined, digits = 1): string {
   return formatPct(v, digits, true);
 }
 
+/** Format a fractional ratio (0.25 = 25%) without coercing missing values to zero. */
+export function fmtFractionPct(
+  value: number | null | undefined,
+  digits = 1,
+): string {
+  if (value == null || !Number.isFinite(value)) return "n/a";
+  return formatPct(value * 100, digits);
+}
+
 /** Compact currency scale: 1.23T / 45.6B / 789M / 12.3K. */
 export function fmtBig(v: number | null | undefined): string {
   return formatLargeNumber(v);

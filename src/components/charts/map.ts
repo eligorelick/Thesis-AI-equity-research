@@ -77,7 +77,15 @@ export function toPriceBars(rows: readonly FmpEodBarRow[]): PriceBar[] {
     if (!date || open === null || high === null || low === null || close === null) {
       continue;
     }
-    out.push({ date, open, high, low, close, volume: num(r.volume) ?? 0 });
+    const volume = num(r.volume);
+    out.push({
+      date,
+      open,
+      high,
+      low,
+      close,
+      volume: volume !== null && volume >= 0 ? volume : null,
+    });
   }
   return out;
 }

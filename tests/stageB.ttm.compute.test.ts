@@ -436,6 +436,62 @@ function wiringBundle(opts: WiringOpts = {}): DataBundle {
 }
 
 describe("runStageB wiring — net debt convention + point-in-time anchors (audit H2/M3/M4)", () => {
+  it("keeps provider price rows when missing provider volume propagates into technicals", () => {
+    const bundle = wiringBundle();
+    const start = Date.parse("2026-01-01T00:00:00Z");
+    const eod: Array<{
+      date: string;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume?: number;
+    }> = Array.from({ length: 120 }, (_, i) => {
+      const close = 100 + i;
+      return {
+        date: new Date(start + i * 86_400_000).toISOString().slice(0, 10),
+        open: close,
+        high: close,
+        low: close,
+        close,
+        volume: 1_000,
+      };
+    });
+    const spy = eod.map((row, i) => ({
+      ...row,
+      open: 200 + i,
+      high: 200 + i,
+      low: 200 + i,
+      close: 200 + i,
+    }));
+    delete eod[119].volume;
+    eod[100].volume = Number.NaN;
+    eod[80].volume = -1;
+    spy[119].volume = -1;
+    bundle.eodPrices = fmpP(eod, eod[119].date, "historical-price-eod/full");
+    bundle.benchmarkPrices = {
+      spy: fmpP(spy, spy[119].date, "historical-price-eod/full"),
+      sectorEtf: gapF,
+      sectorEtfSymbol: null,
+    };
+
+    const computed = runStageB(bundle);
+    const p3 = computed.technicals.relativeStrength.benchmark.points.find(
+      (point) => point.months === 3,
+    );
+
+    expect(computed.technicals.rowsUsed).toBe(120);
+    expect(computed.technicals.asOf).toBe(eod[119].date);
+    expect(computed.technicals.lastClose).toBe(219);
+    expect(computed.technicals.volumeTrend.avg90d).toBeNull();
+    expect(computed.technicals.volumeTrend.ratio).toBeNull();
+    expect(computed.technicals.volumeTrend.state).toBeNull();
+    expect(p3?.benchmarkReturnPct).not.toBeNull();
+    expect(
+      computed.technicals.notes.some((note) => /SPY:.*unavailable volume/i.test(note)),
+    ).toBe(true);
+  });
+
   it("sales-to-capital uses the newest complete whole balance point with quarterly provenance (audit H4)", () => {
     const computed = runStageB(wiringBundle());
     if (computed.valuation.kind !== "dcf") throw new Error("expected dcf kind");

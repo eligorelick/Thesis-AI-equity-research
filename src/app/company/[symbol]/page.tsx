@@ -49,7 +49,7 @@ import { ExportButtons } from "@/components/report/ExportButtons";
 import { WatchlistSidebar } from "@/components/watchlist/Sidebar";
 import { getLatestDoneReport, type LatestReport } from "@/report/query";
 
-import { fmtBig, fmtMoney, fmtNum, fmtPct, fmtSignedPct, fmtX, upsidePct } from "./format";
+import { fmtBig, fmtFractionPct, fmtMoney, fmtNum, fmtPct, fmtSignedPct, fmtX, upsidePct } from "./format";
 import { GenerateReport } from "./GenerateReport";
 import { ReportTabs } from "./ReportTabs";
 import { isValidSymbol } from "@/symbol";
@@ -348,14 +348,14 @@ function ReturnsPanel({ computed }: { computed: ComputedMetrics }) {
             <Row k="ERP" v={fmtPct(r.wacc.erpPct)} />
             <Row k="tax used" v={r.wacc.taxRateUsed === null ? "n/a" : fmtPct(r.wacc.taxRateUsed * 100)} />
             {r.wacc.syntheticRating ? <Row k="synthetic rating" v={r.wacc.syntheticRating} /> : null}
-            <Row k="weight E / D" v={`${fmtPct((r.wacc.weightEquity ?? 0) * 100)} / ${fmtPct((r.wacc.weightDebt ?? 0) * 100)}`} />
+            <Row k="weight E / D" v={`${fmtFractionPct(r.wacc.weightEquity)} / ${fmtFractionPct(r.wacc.weightDebt)}`} />
           </dl>
         </div>
         <div className="text-[11px]">
           <div className="mb-1 text-[10px] uppercase tracking-[0.1em] text-faint">dupont (latest FY)</div>
           {r.dupont.latest ? (
             <dl className="flex flex-col gap-0.5">
-              <Row k="net margin" v={fmtPct((r.dupont.latest.netMargin ?? 0) * 100)} />
+              <Row k="net margin" v={fmtFractionPct(r.dupont.latest.netMargin)} />
               <Row k="asset turnover" v={fmtNum(r.dupont.latest.assetTurnover, 2)} />
               <Row k="leverage" v={fmtNum(r.dupont.latest.leverage, 2)} />
               <Row k="→ ROE" v={fmtPct(r.dupont.latest.roePct)} />

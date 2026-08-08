@@ -36,7 +36,7 @@ export interface OhlcvRow {
   high: number;
   low: number;
   close: number;
-  volume: number;
+  volume: number | null;
 }
 
 /** Benchmark rows (SPY / sector ETF) share the same shape. */
@@ -82,8 +82,9 @@ export function shiftMonths(dayIso: string, deltaMonths: number): string {
 
 /**
  * Sanitize an input series: drop rows with unparseable dates or non-finite /
- * non-positive prices, truncate datetimes to days, and re-sort ASC if the
- * caller's contract (sorted ASC) was violated. Never throws.
+ * non-positive prices, normalize unavailable volume to null, truncate
+ * datetimes to days, and re-sort ASC if the caller's contract (sorted ASC) was
+ * violated. Never throws.
  */
 export function sanitizeRows(
   rows: readonly OhlcvRow[] | null | undefined,
@@ -92,28 +93,39 @@ export function sanitizeRows(
   const notes: string[] = [];
   if (!rows || rows.length === 0) return { rows: [], notes };
   const clean: OhlcvRow[] = [];
-  let dropped = 0;
+  let droppedPriceRows = 0;
+  let unavailableVolumeRows = 0;
   for (const r of rows) {
     const day = typeof r.date === "string" ? isoDay(r.date) : null;
-    const ok =
+    const validPrice =
       day !== null &&
       Number.isFinite(r.open) &&
       Number.isFinite(r.high) &&
       Number.isFinite(r.low) &&
       Number.isFinite(r.close) &&
-      Number.isFinite(r.volume) &&
       r.close > 0 &&
       r.high > 0 &&
-      r.low > 0 &&
-      r.volume >= 0;
-    if (!ok) {
-      dropped += 1;
+      r.low > 0;
+    if (!validPrice) {
+      droppedPriceRows += 1;
       continue;
     }
-    clean.push({ ...r, date: day });
+    const volume =
+      typeof r.volume === "number" && Number.isFinite(r.volume) && r.volume >= 0
+        ? r.volume
+        : null;
+    if (volume === null) unavailableVolumeRows += 1;
+    clean.push({ ...r, date: day, volume });
   }
-  if (dropped > 0) {
-    notes.push(`${label}: dropped ${dropped} row(s) with invalid dates or non-finite/non-positive values.`);
+  if (droppedPriceRows > 0) {
+    notes.push(
+      `${label}: dropped ${droppedPriceRows} row(s) with invalid dates or non-finite/non-positive prices.`,
+    );
+  }
+  if (unavailableVolumeRows > 0) {
+    notes.push(
+      `${label}: kept ${unavailableVolumeRows} valid price row(s) with unavailable volume normalized to null.`,
+    );
   }
   let sorted = true;
   for (let i = 1; i < clean.length; i++) {
@@ -548,9 +560,20 @@ export const VOLUME_TREND_FALLING_RATIO = 0.8;
 
 function meanVolume(rows: readonly OhlcvRow[], n: number): number | null {
   if (rows.length < n || n <= 0) return null;
-  let sum = 0;
-  for (let i = rows.length - n; i < rows.length; i++) sum += rows[i].volume;
-  return sum / n;
+  const start = rows.length - n;
+  let scale = 0;
+  for (let i = start; i < rows.length; i++) {
+    const volume = rows[i].volume;
+    if (typeof volume !== "number" || !Number.isFinite(volume) || volume < 0) return null;
+    if (volume > scale) scale = volume;
+  }
+  if (scale === 0) return 0;
+  let scaledSum = 0;
+  for (let i = start; i < rows.length; i++) {
+    scaledSum += (rows[i].volume as number) / scale;
+  }
+  const mean = (scaledSum / n) * scale;
+  return Number.isFinite(mean) ? mean : null;
 }
 
 /** 20-day vs 90-day average volume. */
@@ -558,7 +581,10 @@ export function volumeTrend(rows: readonly OhlcvRow[]): VolumeTrend {
   const asOf = rows.length > 0 ? rows[rows.length - 1].date : null;
   const avg20d = meanVolume(rows, 20);
   const avg90d = meanVolume(rows, 90);
-  const ratio = avg20d !== null && avg90d !== null && avg90d > 0 ? avg20d / avg90d : null;
+  const ratioCandidate =
+    avg20d !== null && avg90d !== null && avg90d > 0 ? avg20d / avg90d : null;
+  const ratio =
+    ratioCandidate !== null && Number.isFinite(ratioCandidate) ? ratioCandidate : null;
   const state =
     ratio === null
       ? null
@@ -873,6 +899,23 @@ export function computeTechnicals(
   const macdSnap = macd(px);
   const range = range52w(px);
   const vol = volumeTrend(px);
+  if (px.length >= 90 && vol.avg90d === null) {
+    const unavailable = px
+      .slice(-90)
+      .filter(
+        (row) =>
+          typeof row.volume !== "number" ||
+          !Number.isFinite(row.volume) ||
+          row.volume < 0,
+      ).length;
+    if (unavailable > 0) {
+      gaps.push({
+        field: "technicals.volumeTrend",
+        reason: `${unavailable} unavailable volume observation(s) in the trailing 90-row window — average and trend suppressed rather than backfilled`,
+        severity: "info",
+      });
+    }
+  }
   const atr = atr14(px);
   const drawdowns = [1, 3, 5].map((y) => maxDrawdown(px, y));
 

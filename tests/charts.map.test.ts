@@ -6,8 +6,8 @@
  * These functions are the seam between the deterministic quant layer and the
  * client chart components, so the invariants under test are:
  *   - missing/non-finite metrics degrade to `null` (a gap the chart renders as
- *     "no data"), never to a silent 0 — except `volume`, which deliberately
- *     defaults to 0 for the histogram pane (`?? 0` in source);
+ *     "no data"), never to a silent 0; missing volume omits only its histogram
+ *     point while preserving the price bar;
  *   - statements arrive DESC but every fundamentals series is emitted
  *     oldest→newest (ascByDate);
  *   - percent values are passed through / derived exactly once (no fraction↔
@@ -41,6 +41,7 @@ import {
   fundamentalsChartDataFromBundle,
   sensitivityCellsFromReport,
 } from "@/components/charts/map";
+import * as PriceChartModule from "@/components/charts/PriceChart";
 
 // ---------------------------------------------------------------------------
 // Fetch-wrapper helpers (structural — the module's rowsOf only reads
@@ -127,11 +128,40 @@ describe("toPriceBars", () => {
     expect(toPriceBars(rows)).toEqual([]);
   });
 
-  it("defaults ONLY missing volume to 0 (histogram pane), keeping real OHLC", () => {
+  it("keeps missing, non-finite, and negative volume null while preserving real OHLC", () => {
     const rows: FmpEodBarRow[] = [
       { date: "2026-01-02", open: 10, high: 12, low: 9, close: 11 },
+      { date: "2026-01-03", open: 11, high: 13, low: 10, close: 12, volume: Number.NaN },
+      { date: "2026-01-04", open: 12, high: 14, low: 11, close: 13, volume: -1 },
     ];
-    expect(toPriceBars(rows)[0].volume).toBe(0);
+    expect(toPriceBars(rows).map((row) => row.volume)).toEqual([null, null, null]);
+    expect(toPriceBars(rows).map((row) => row.close)).toEqual([11, 12, 13]);
+  });
+
+  it("omits unavailable volume histogram points but keeps price bars and observed zero volume", () => {
+    type VolumeMapper = (
+      rows: ReturnType<typeof toPriceBars>,
+    ) => Array<{ time: unknown; value: number }>;
+    const toVolumeHistogramData = (
+      PriceChartModule as unknown as { toVolumeHistogramData?: VolumeMapper }
+    ).toVolumeHistogramData;
+    expect(toVolumeHistogramData).toBeTypeOf("function");
+    if (!toVolumeHistogramData) return;
+
+    const bars: ReturnType<typeof toPriceBars> = [
+      { date: "2026-01-02", open: 10, high: 12, low: 9, close: 11, volume: null },
+      { date: "2026-01-03", open: 11, high: 13, low: 10, close: 12, volume: Number.NaN },
+      { date: "2026-01-04", open: 12, high: 14, low: 11, close: 13, volume: -1 },
+      { date: "2026-01-05", open: 13, high: 15, low: 12, close: 14, volume: 0 },
+      { date: "2026-01-06", open: 14, high: 16, low: 13, close: 15, volume: 500 },
+    ];
+
+    const priceBars = PriceChartModule.toSortedBars(bars);
+    expect(priceBars).toHaveLength(5);
+    expect(toVolumeHistogramData(priceBars).map((point) => [point.time, point.value])).toEqual([
+      ["2026-01-05", 0],
+      ["2026-01-06", 500],
+    ]);
   });
 
   it("preserves input order and duplicates (chart re-sorts/de-dups defensively, map does not)", () => {

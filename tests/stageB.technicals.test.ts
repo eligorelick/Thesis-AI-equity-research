@@ -387,6 +387,86 @@ describe("volumeTrend", () => {
     expect(v.ratio).toBeNull();
     expect(v.state).toBeNull();
   });
+
+  describe("missing volume and observed-zero semantics", () => {
+    it("keeps avg20d but nulls the required 90-day result when the oldest of exactly 90 volumes is missing", () => {
+      const rows = mkRows(range(90, () => 100));
+      rows[0] = { ...rows[0], volume: null };
+
+      const v = volumeTrend(rows);
+
+      expect(v.avg20d).toBe(1_000);
+      expect(v.avg90d).toBeNull();
+      expect(v.ratio).toBeNull();
+      expect(v.state).toBeNull();
+    });
+
+    it("nulls both required means when a volume is missing in the final 20 rows", () => {
+      const rows = mkRows(range(90, () => 100));
+      rows[89] = { ...rows[89], volume: null };
+
+      const v = volumeTrend(rows);
+
+      expect(v.avg20d).toBeNull();
+      expect(v.avg90d).toBeNull();
+      expect(v.ratio).toBeNull();
+      expect(v.state).toBeNull();
+    });
+
+    it("ignores missing volume before the trailing 90-row window without backfilling", () => {
+      const rows = mkRows(range(100, () => 100));
+      rows[0] = { ...rows[0], volume: null };
+
+      const v = volumeTrend(rows);
+
+      expect(v.avg20d).toBe(1_000);
+      expect(v.avg90d).toBe(1_000);
+      expect(v.ratio).toBe(1);
+      expect(v.state).toBe("flat");
+    });
+
+    it("keeps observed all-zero volume as zero while leaving the undefined ratio and state null", () => {
+      const rows = mkRows(range(90, () => 100), "2024-01-02", 0);
+
+      const v = volumeTrend(rows);
+
+      expect(v.avg20d).toBe(0);
+      expect(v.avg90d).toBe(0);
+      expect(v.ratio).toBeNull();
+      expect(v.state).toBeNull();
+    });
+
+    it("labels observed zero volume in the last 20 rows as falling against a positive 90-day mean", () => {
+      const rows = mkRows(range(90, () => 100));
+      for (let i = 70; i < rows.length; i++) rows[i] = { ...rows[i], volume: 0 };
+
+      const v = volumeTrend(rows);
+
+      expect(v.avg20d).toBe(0);
+      expect(v.avg90d).toBeCloseTo((70 * 1_000) / 90, 10);
+      expect(v.ratio).toBe(0);
+      expect(v.state).toBe("falling");
+    });
+
+    it("keeps extreme finite volume means and their ratio finite instead of overflowing", () => {
+      const flat = mkRows(range(90, () => 100), "2024-01-02", Number.MAX_VALUE);
+      const flatTrend = volumeTrend(flat);
+      expect(flatTrend.avg20d).toBe(Number.MAX_VALUE);
+      expect(flatTrend.avg90d).toBe(Number.MAX_VALUE);
+      expect(flatTrend.ratio).toBe(1);
+      expect(flatTrend.state).toBe("flat");
+
+      const rising = mkRows(range(90, () => 100), "2024-01-02", Number.MIN_VALUE);
+      for (let i = 70; i < rising.length; i++) {
+        rising[i] = { ...rising[i], volume: Number.MAX_VALUE };
+      }
+      const risingTrend = volumeTrend(rising);
+      expect(Number.isFinite(risingTrend.avg20d)).toBe(true);
+      expect(Number.isFinite(risingTrend.avg90d)).toBe(true);
+      expect(risingTrend.ratio).toBeCloseTo(4.5, 12);
+      expect(risingTrend.state).toBe("rising");
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -451,6 +531,29 @@ describe("sanitizeRows", () => {
       "symbol",
     );
     expect(rows[0].date).toBe("2024-01-02");
+  });
+
+  it("keeps valid price rows with missing volume and reports price drops separately", () => {
+    const validPrices = mkRows([10, 11, 12]);
+    validPrices[0] = { ...validPrices[0], volume: null };
+    validPrices[1] = { ...validPrices[1], volume: Number.NaN };
+    validPrices[2] = { ...validPrices[2], volume: -1 };
+    const invalidPrice: OhlcvRow = {
+      date: "2024-01-05",
+      open: 10,
+      high: 10,
+      low: 10,
+      close: 0,
+      volume: 100,
+    };
+
+    const { rows, notes } = sanitizeRows([...validPrices, invalidPrice], "symbol");
+
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.close)).toEqual([10, 11, 12]);
+    expect(rows.map((row) => row.volume)).toEqual([null, null, null]);
+    expect(notes.some((note) => /unavailable volume/i.test(note) && /3/.test(note))).toBe(true);
+    expect(notes.some((note) => /dropped 1 row/i.test(note) && /price/i.test(note))).toBe(true);
   });
 });
 
@@ -530,6 +633,32 @@ describe("computeTechnicals", () => {
     expect(res.notes.some((n) => /re-sorted/.test(n))).toBe(true);
     expect(res.smaCross.sma50).toBeCloseTo(sortedRes.smaCross.sma50 as number, 12);
     expect(res.asOf).toBe(sortedRes.asOf);
+  });
+
+  it("missing volume preserves symbol and benchmark price history while disclosing the unavailable volume trend", () => {
+    const rows = mkRows(range(100, (i) => 100 + i));
+    const spy = mkRows(range(100, (i) => 200 + i));
+    rows[99] = { ...rows[99], volume: null };
+    spy[99] = { ...spy[99], volume: null };
+
+    const res = computeTechnicals(rows, spy, [], null);
+    const p3 = res.relativeStrength.benchmark.points.find((point) => point.months === 3);
+
+    expect(res.rowsUsed).toBe(100);
+    expect(res.asOf).toBe(rows[99].date);
+    expect(res.lastClose).toBe(199);
+    expect(p3?.benchmarkReturnPct).not.toBeNull();
+    expect(res.volumeTrend.avg20d).toBeNull();
+    expect(res.volumeTrend.avg90d).toBeNull();
+    expect(res.volumeTrend.ratio).toBeNull();
+    expect(res.volumeTrend.state).toBeNull();
+    expect(res.notes.some((note) => /symbol:.*unavailable volume/i.test(note))).toBe(true);
+    expect(res.notes.some((note) => /SPY:.*unavailable volume/i.test(note))).toBe(true);
+    expect(
+      res.gaps.some(
+        (gap) => gap.field === "technicals.volumeTrend" && /trailing 90/i.test(gap.reason),
+      ),
+    ).toBe(true);
   });
 });
 

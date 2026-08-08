@@ -358,7 +358,7 @@ function toOhlcv(r: FmpRawRow): OhlcvRow {
     high: num(r.high) ?? 0,
     low: num(r.low) ?? 0,
     close: num(r.close) ?? 0,
-    volume: num(r.volume) ?? 0,
+    volume: num(r.volume),
   };
 }
 

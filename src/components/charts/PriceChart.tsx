@@ -51,7 +51,7 @@ export interface PriceBar {
   high: number;
   low: number;
   close: number;
-  volume: number;
+  volume: number | null;
 }
 
 export interface CrossMarker {
@@ -140,6 +140,24 @@ function lineDataFrom(
   const out: LineData<Time>[] = [];
   for (const p of sma) {
     if (p.value !== null) out.push({ time: p.date as Time, value: p.value });
+  }
+  return out;
+}
+
+/** Omit unavailable volume points without removing their price/candlestick bars. */
+export function toVolumeHistogramData(
+  bars: readonly PriceBar[],
+): HistogramData<Time>[] {
+  const out: HistogramData<Time>[] = [];
+  for (const b of bars) {
+    if (typeof b.volume !== "number" || !Number.isFinite(b.volume) || b.volume < 0) {
+      continue;
+    }
+    out.push({
+      time: barDate(b) as Time,
+      value: b.volume,
+      color: b.close >= b.open ? `${THEME.pos}55` : `${THEME.neg}55`,
+    });
   }
   return out;
 }
@@ -233,11 +251,7 @@ export function PriceChart({
       priceLineVisible: false,
       lastValueVisible: false,
     });
-    const volData: HistogramData<Time>[] = bars.map((b) => ({
-      time: barDate(b) as Time,
-      value: Number.isFinite(b.volume) ? b.volume : 0,
-      color: b.close >= b.open ? `${THEME.pos}55` : `${THEME.neg}55`,
-    }));
+    const volData = toVolumeHistogramData(bars);
     volume.setData(volData);
     chart.priceScale("volume").applyOptions({
       scaleMargins: { top: 0.78, bottom: 0 },

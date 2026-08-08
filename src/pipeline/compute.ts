@@ -23,6 +23,7 @@ import type {
 import {
   computeRunway,
   metricPolicy,
+  normalizeReportedCurrency,
   routeCompany,
   degradationPlan,
   type CompanyRouteResult,
@@ -369,6 +370,7 @@ function toOhlcv(r: FmpRawRow): OhlcvRow {
 
 export interface TtmIncome {
   date: string;
+  reportedCurrency: string | null;
   revenue: number | null;
   operatingIncome: number | null;
   depreciationAndAmortization: number | null;
@@ -536,8 +538,16 @@ export function ttmIncome(
     return null;
   };
 
+  const firstReportedCurrency = normalizeReportedCurrency(q[0].reportedCurrency);
+  const reportedCurrency =
+    firstReportedCurrency !== null &&
+    q.every((row) => normalizeReportedCurrency(row.reportedCurrency) === firstReportedCurrency)
+      ? firstReportedCurrency
+      : null;
+
   return {
     date: String(q[0].date ?? ""),
+    reportedCurrency,
     revenue: sumField(q, "revenue"),
     operatingIncome: gateComplete("operatingIncome"),
     depreciationAndAmortization: gateComplete("depreciationAndAmortization"),
@@ -687,13 +697,23 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   const inc0 = incomeAnnual[0];
   const cf0 = cashflowAnnual[0];
   const routingIncomeAnnual: RoutingIncomeRow | null = inc0
-    ? { date: isoDay(inc0.date), revenue: num(inc0.revenue), netIncome: num(inc0.netIncome) }
+    ? {
+        date: isoDay(inc0.date),
+        revenue: num(inc0.revenue),
+        netIncome: num(inc0.netIncome),
+        reportedCurrency: normalizeReportedCurrency(inc0.reportedCurrency),
+      }
     : null;
   const ttmGaps: ManifestEntry[] = [];
   const ttmInc = ttmIncome(incomeQuarterly, ttmGaps);
   const routingIncomeTtm: RoutingIncomeRow | null = ttmInc
-    ? { date: ttmInc.date, revenue: ttmInc.revenue, netIncome: ttmInc.netIncome }
-    : routingIncomeAnnual;
+    ? {
+        date: ttmInc.date,
+        revenue: ttmInc.revenue,
+        netIncome: ttmInc.netIncome,
+        reportedCurrency: ttmInc.reportedCurrency,
+      }
+    : null;
   const routingCashflowAnnual: RoutingCashflowRow | null = cf0
     ? { date: isoDay(cf0.date), operatingCashFlow: num(cf0.operatingCashFlow) }
     : null;

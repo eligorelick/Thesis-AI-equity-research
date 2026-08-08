@@ -46,8 +46,18 @@ function profile(over: Partial<RoutingProfile> = {}): RoutingProfile {
 
 function profitableStatements(over: Partial<RoutingStatements> = {}): RoutingStatements {
   return {
-    incomeTtm: { date: "2026-03-28", revenue: 400_000_000_000, netIncome: 100_000_000_000 },
-    incomeAnnual: { date: "2025-09-27", revenue: 416_161_000_000, netIncome: 112_010_000_000 },
+    incomeTtm: {
+      date: "2026-03-28",
+      revenue: 400_000_000_000,
+      netIncome: 100_000_000_000,
+      reportedCurrency: "USD",
+    },
+    incomeAnnual: {
+      date: "2025-09-27",
+      revenue: 416_161_000_000,
+      netIncome: 112_010_000_000,
+      reportedCurrency: "USD",
+    },
     cashflowTtm: { date: "2026-03-28", operatingCashFlow: 120_000_000_000 },
     cashflowAnnual: { date: "2025-09-27", operatingCashFlow: 118_000_000_000 },
     availableQuarters: 40,
@@ -138,7 +148,12 @@ describe("routeCompany overlays", () => {
     const r = route(
       { sector: "Healthcare", industry: "Biotechnology" },
       {
-        incomeTtm: { date: "2026-03-31", revenue: 3_000_000, netIncome: -50_000_000 },
+        incomeTtm: {
+          date: "2026-03-31",
+          revenue: 3_000_000,
+          netIncome: -50_000_000,
+          reportedCurrency: "USD",
+        },
         cashflowTtm: { date: "2026-03-31", operatingCashFlow: -45_000_000 },
         availableQuarters: 30,
       },
@@ -151,7 +166,14 @@ describe("routeCompany overlays", () => {
   });
 
   it("pre-revenue floor is strict: revenue exactly $10M is NOT pre-revenue", () => {
-    const r = route({}, { incomeTtm: { date: "2026-03-31", revenue: PRE_REVENUE_TTM_REVENUE_FLOOR_USD, netIncome: 1 } });
+    const r = route({}, {
+      incomeTtm: {
+        date: "2026-03-31",
+        revenue: PRE_REVENUE_TTM_REVENUE_FLOOR_USD,
+        netIncome: 1,
+        reportedCurrency: "USD",
+      },
+    });
     expect(r.overlays).not.toContain("pre-revenue");
   });
 
@@ -164,7 +186,12 @@ describe("routeCompany overlays", () => {
     const r = route(
       {},
       {
-        incomeTtm: { date: "2026-03-31", revenue: 5_000_000_000, netIncome: 0 },
+        incomeTtm: {
+          date: "2026-03-31",
+          revenue: 5_000_000_000,
+          netIncome: 0,
+          reportedCurrency: "USD",
+        },
         cashflowTtm: { date: "2026-03-31", operatingCashFlow: 0 },
       },
     );
@@ -177,7 +204,12 @@ describe("routeCompany overlays", () => {
       {
         incomeTtm: null,
         cashflowTtm: null,
-        incomeAnnual: { date: "2025-12-31", revenue: 2_000_000, netIncome: -10_000_000 },
+        incomeAnnual: {
+          date: "2025-12-31",
+          revenue: 2_000_000,
+          netIncome: -10_000_000,
+          reportedCurrency: "USD",
+        },
         cashflowAnnual: { date: "2025-12-31", operatingCashFlow: -8_000_000 },
       },
     );
@@ -246,7 +278,12 @@ describe("routeCompany overlays", () => {
     const r = route(
       { sector: "Technology", industry: "Semiconductors", isAdr: true, country: "TW", ipoDate: "1997-10-08" },
       {
-        incomeTtm: { date: "2026-03-31", revenue: 3_000_000, netIncome: -1 },
+        incomeTtm: {
+          date: "2026-03-31",
+          revenue: 3_000_000,
+          netIncome: -1,
+          reportedCurrency: "USD",
+        },
         cashflowTtm: { date: "2026-03-31", operatingCashFlow: -1 },
       },
     );
@@ -263,6 +300,144 @@ describe("routeCompany overlays", () => {
 
   it("throws TypeError only for the programming error of an unparseable today", () => {
     expect(() => routeCompany(profile(), profitableStatements(), { today: "garbage" })).toThrow(TypeError);
+  });
+});
+
+describe("routeCompany pre-revenue currency gate", () => {
+  it.each([
+    { revenue: 0, reportedCurrency: "USD", expected: true },
+    { revenue: 9_999_999, reportedCurrency: "  usd  ", expected: true },
+    { revenue: 10_000_000, reportedCurrency: "USD", expected: false },
+  ])(
+    "applies the raw USD threshold without losing zero or the strict boundary: $revenue $reportedCurrency",
+    ({ revenue, reportedCurrency, expected }) => {
+      const r = route({}, {
+        incomeTtm: {
+          date: "2026-03-31",
+          revenue,
+          netIncome: 1,
+          reportedCurrency,
+        },
+      });
+
+      expect(r.overlays.includes("pre-revenue")).toBe(expected);
+      expect(r.gaps.filter((g) => g.field === "route.overlays.preRevenue.currency")).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    { label: "JPY/low", revenue: 5_000_000 },
+    { label: "JPY/high", revenue: 500_000_000 },
+  ])("skips only the pre-revenue overlay and discloses non-USD currency for $label", ({ revenue }) => {
+    const r = route(
+      {},
+      {
+        incomeTtm: {
+          date: "2026-03-31",
+          revenue,
+          netIncome: -1,
+          reportedCurrency: "JPY",
+        },
+        cashflowTtm: { date: "2026-03-31", operatingCashFlow: -1 },
+      },
+    );
+
+    expect(r.overlays).toEqual(["unprofitable"]);
+    const currencyGaps = r.gaps.filter((g) => g.field === "route.overlays.preRevenue.currency");
+    expect(currencyGaps).toHaveLength(1);
+    expect(currencyGaps[0]).toEqual(
+      expect.objectContaining({
+        severity: "warn",
+        reason: expect.stringMatching(/ttm revenue.*JPY.*proven USD.*10,000,000.*no FX conversion/i),
+      }),
+    );
+  });
+
+  it.each([
+    { label: "missing", reportedCurrency: null },
+    { label: "invalid", reportedCurrency: "US$" },
+  ])("skips the currency-sensitive threshold when the selected observation currency is $label", ({ reportedCurrency }) => {
+    const r = route({}, {
+      incomeTtm: {
+        date: "2026-03-31",
+        revenue: 1,
+        netIncome: 1,
+        reportedCurrency,
+      },
+    });
+
+    expect(r.overlays).not.toContain("pre-revenue");
+    const currencyGaps = r.gaps.filter((g) => g.field === "route.overlays.preRevenue.currency");
+    expect(currencyGaps).toHaveLength(1);
+    expect(currencyGaps[0].reason).toMatch(/ttm revenue.*unknown or invalid.*proven USD/i);
+  });
+
+  it("evaluates the annual fallback only when TTM revenue is unavailable, using that annual row's currency", () => {
+    const annualUsd = route({}, {
+      incomeTtm: null,
+      incomeAnnual: {
+        date: "2025-12-31",
+        revenue: 9_999_999,
+        netIncome: 1,
+        reportedCurrency: " usd ",
+      },
+    });
+    expect(annualUsd.overlays).toContain("pre-revenue");
+    expect(annualUsd.gaps.some((g) => g.field === "route.overlays.preRevenue.currency")).toBe(false);
+
+    const annualJpy = route({}, {
+      incomeTtm: null,
+      incomeAnnual: {
+        date: "2025-12-31",
+        revenue: 1,
+        netIncome: 1,
+        reportedCurrency: "JPY",
+      },
+    });
+    expect(annualJpy.overlays).not.toContain("pre-revenue");
+    expect(annualJpy.gaps.filter((g) => g.field === "route.overlays.preRevenue.currency")).toHaveLength(1);
+    expect(annualJpy.gaps.find((g) => g.field === "route.overlays.preRevenue.currency")?.reason).toMatch(
+      /annual revenue.*JPY/i,
+    );
+    expect(annualJpy.notes.some((note) => /pre-revenue overlay evaluated/i.test(note))).toBe(false);
+  });
+
+  it("does not replace a selected non-USD TTM revenue observation with an annual USD row", () => {
+    const r = route({}, {
+      incomeTtm: {
+        date: "2026-03-31",
+        revenue: 1,
+        netIncome: 1,
+        reportedCurrency: "JPY",
+      },
+      incomeAnnual: {
+        date: "2025-12-31",
+        revenue: 1,
+        netIncome: 1,
+        reportedCurrency: "USD",
+      },
+    });
+
+    expect(r.overlays).not.toContain("pre-revenue");
+    expect(r.gaps.filter((g) => g.field === "route.overlays.preRevenue.currency")).toHaveLength(1);
+    expect(r.gaps.find((g) => g.field === "route.overlays.preRevenue.currency")?.reason).toMatch(/ttm revenue.*JPY/i);
+    expect(r.notes.some((note) => /pre-revenue.*annual/i.test(note))).toBe(false);
+  });
+
+  it("keeps missing revenue on the existing revenue-gap path without adding a currency gap", () => {
+    const r = route({}, {
+      incomeTtm: {
+        date: "2026-03-31",
+        revenue: null,
+        netIncome: 1,
+        reportedCurrency: null,
+      },
+      incomeAnnual: null,
+    });
+
+    expect(r.overlays).not.toContain("pre-revenue");
+    expect(r.gaps.filter((g) => g.field === "route.overlays.preRevenue")).toHaveLength(1);
+    expect(r.gaps.filter((g) => g.field === "route.overlays.preRevenue.currency")).toHaveLength(0);
   });
 });
 

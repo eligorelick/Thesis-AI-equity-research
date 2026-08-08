@@ -84,6 +84,8 @@ export interface RoutingIncomeRow {
   date?: string | null;
   revenue: number | null;
   netIncome: number | null;
+  /** Trimmed, uppercased three-letter ISO-like code, or null when unproven. */
+  reportedCurrency: string | null;
 }
 
 /** Minimal cash-flow row (FMP field names). */
@@ -167,6 +169,12 @@ function normStr(v: string | null | undefined): string | null {
   if (typeof v !== "string") return null;
   const t = v.trim();
   return t.length > 0 ? t : null;
+}
+
+/** Canonical three-letter ISO-like statement currency, consistent with Stage C payload identity. */
+export function normalizeReportedCurrency(value: unknown): string | null {
+  const currency = typeof value === "string" ? value.trim().toUpperCase() : null;
+  return currency !== null && /^[A-Z]{3}$/.test(currency) ? currency : null;
 }
 
 /** Parse a leading 4-digit SIC code out of "6021" or "6021 NATIONAL COMMERCIAL BANKS". */
@@ -334,13 +342,16 @@ export function routeCompany(
   // pre-revenue: TTM revenue < $10M (house rule)
   let revBasis: "ttm" | "annual" | null = null;
   let rev: number | null = null;
+  let revRow: RoutingIncomeRow | null = null;
   if (statements.incomeTtm && statements.incomeTtm.revenue !== null) {
     rev = statements.incomeTtm.revenue;
     revBasis = "ttm";
+    revRow = statements.incomeTtm;
   } else if (statements.incomeAnnual && statements.incomeAnnual.revenue !== null) {
     rev = statements.incomeAnnual.revenue;
     revBasis = "annual";
-    notes.push("TTM revenue unavailable — pre-revenue overlay evaluated on the latest annual revenue.");
+    revRow = statements.incomeAnnual;
+    notes.push("TTM revenue unavailable — latest annual revenue selected as the pre-revenue fallback observation.");
   }
   if (rev === null) {
     gaps.push({
@@ -348,6 +359,19 @@ export function routeCompany(
       reason: "revenue unavailable on both TTM and annual bases — pre-revenue overlay not evaluated",
       severity: "warn",
       attemptedSources: ["fmp:/stable/income-statement(-ttm)"],
+    });
+  } else if (normalizeReportedCurrency(revRow?.reportedCurrency) !== "USD") {
+    const reportedCurrency = normalizeReportedCurrency(revRow?.reportedCurrency);
+    gaps.push({
+      field: "route.overlays.preRevenue.currency",
+      reason:
+        `${revBasis} revenue ${rev} ${reportedCurrency === null
+          ? "has unknown or invalid reportedCurrency and"
+          : `has reportedCurrency ${reportedCurrency} and`} is not proven USD; the raw ` +
+        `$${PRE_REVENUE_TTM_REVENUE_FLOOR_USD.toLocaleString("en-US")} pre-revenue threshold was not evaluated ` +
+        "for that observation, and no FX conversion was attempted",
+      severity: "warn",
+      attemptedSources: ["fmp:/stable/income-statement(-ttm).reportedCurrency"],
     });
   } else if (rev < PRE_REVENUE_TTM_REVENUE_FLOOR_USD) {
     overlays.push("pre-revenue");

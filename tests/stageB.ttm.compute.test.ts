@@ -36,6 +36,7 @@ function q(over: Partial<Record<string, number | string | null>> = {}): FmpIncom
     interestExpense: 2,
     incomeBeforeTax: 19,
     incomeTaxExpense: 4,
+    reportedCurrency: "USD",
     ...over,
   } as FmpIncomeStatementRow;
 }
@@ -105,6 +106,7 @@ describe("ttmIncome — completeness gating", () => {
     expect(ttm!.incomeTaxExpense).toBe(16);
     expect(ttm!.interestExpense).toBe(8);
     expect(ttm!.date).toBe("2026-03-31");
+    expect(ttm!.reportedCurrency).toBe("USD");
   });
 
   it("returns null (annual-basis fallback) when a quarter's revenue is missing — never a partial TTM", () => {
@@ -162,6 +164,43 @@ describe("ttmIncome — completeness gating", () => {
     const ttm = ttmIncome(rows);
     expect(ttm).not.toBeNull();
     expect(ttm!.revenue).toBe(0);
+  });
+});
+
+describe("ttmIncome — reported currency consensus", () => {
+  it("normalizes agreeing reported currency values across all contributing quarters", () => {
+    const ttm = ttmIncome(fourQ([
+      { reportedCurrency: " usd " },
+      { reportedCurrency: "USD" },
+      { reportedCurrency: "Usd" },
+      { reportedCurrency: "  USD  " },
+    ]));
+
+    expect(ttm).not.toBeNull();
+    expect(ttm!.reportedCurrency).toBe("USD");
+  });
+
+  it.each([
+    {
+      label: "mixed USD/JPY",
+      currencies: ["USD", "JPY", "USD", "JPY"],
+    },
+    {
+      label: "missing value",
+      currencies: ["USD", null, "USD", "USD"],
+    },
+    {
+      label: "invalid code",
+      currencies: ["USD", "US$", "USD", "USD"],
+    },
+  ])("keeps reported currency null for $label without suppressing the numeric TTM row", ({ currencies }) => {
+    const ttm = ttmIncome(
+      fourQ(currencies.map((reportedCurrency) => ({ reportedCurrency }))),
+    );
+
+    expect(ttm).not.toBeNull();
+    expect(ttm!.revenue).toBe(400);
+    expect(ttm!.reportedCurrency).toBeNull();
   });
 });
 
@@ -318,6 +357,10 @@ function fmpP<T>(rows: T[], asOf: string, endpoint = "fmp") {
 interface WiringOpts {
   /** reportedCurrency stamped on income rows (default "USD"). */
   reportedCurrency?: string;
+  /** Per-quarter currency override for the latest TTM window. */
+  quarterlyReportedCurrencies?: readonly (string | null)[];
+  /** Revenue per latest TTM quarter before the fixture's $M scaling. */
+  quarterlyRevenue?: number;
   /** Replace the quarterly balance rows (empty array = annual fallback). */
   balanceQuarterly?: Record<string, unknown>[];
   /** Null out quarterly weightedAverageShsOutDil (annual-shares fallback). */
@@ -340,6 +383,11 @@ interface WiringOpts {
 
 function wiringBundle(opts: WiringOpts = {}): DataBundle {
   const rc = opts.reportedCurrency ?? "USD";
+  const qRevenue = opts.quarterlyRevenue ?? 250;
+  const qReportedCurrency = (index: number): string | null =>
+    opts.quarterlyReportedCurrencies === undefined
+      ? rc
+      : (opts.quarterlyReportedCurrencies[index] ?? null);
   const incomeAnnual = [
     { date: "2025-12-31", fiscalYear: "2025", period: "FY", revenue: 1000, grossProfit: 400, operatingIncome: 200, ebit: 200, netIncome: 150, epsDiluted: 1.5, weightedAverageShsOutDil: 101, interestExpense: 15, incomeBeforeTax: 190, incomeTaxExpense: 40, depreciationAndAmortization: 50, reportedCurrency: rc },
     { date: "2024-12-31", fiscalYear: "2024", period: "FY", revenue: 900, grossProfit: 360, operatingIncome: 180, ebit: 180, netIncome: 140, epsDiluted: 1.4, weightedAverageShsOutDil: 102, interestExpense: 15, incomeBeforeTax: 175, incomeTaxExpense: 35, depreciationAndAmortization: 45, reportedCurrency: rc },
@@ -348,10 +396,10 @@ function wiringBundle(opts: WiringOpts = {}): DataBundle {
   ];
   const qShs = opts.zeroQuarterlyShares ? 0 : opts.nullQuarterlyShares ? null : 100;
   const incomeQuarterly: Record<string, number | string | null>[] = [
-    { date: "2026-03-31", fiscalYear: "2026", period: "Q1", revenue: 250, operatingIncome: 50, ebit: 50, netIncome: 37.5, epsDiluted: 0.375, weightedAverageShsOutDil: qShs, interestExpense: 4, incomeBeforeTax: 47.5, incomeTaxExpense: 10, depreciationAndAmortization: 12.5, reportedCurrency: rc },
-    { date: "2025-12-31", fiscalYear: "2025", period: "Q4", revenue: 250, operatingIncome: 50, ebit: 50, netIncome: 37.5, epsDiluted: 0.375, weightedAverageShsOutDil: qShs, interestExpense: 4, incomeBeforeTax: 47.5, incomeTaxExpense: 10, depreciationAndAmortization: 12.5, reportedCurrency: rc },
-    { date: "2025-09-30", fiscalYear: "2025", period: "Q3", revenue: 250, operatingIncome: 50, ebit: 50, netIncome: 37.5, epsDiluted: 0.375, weightedAverageShsOutDil: qShs, interestExpense: 4, incomeBeforeTax: 47.5, incomeTaxExpense: 10, depreciationAndAmortization: 12.5, reportedCurrency: rc },
-    { date: "2025-06-30", fiscalYear: "2025", period: "Q2", revenue: 250, operatingIncome: 50, ebit: 50, netIncome: 37.5, epsDiluted: 0.375, weightedAverageShsOutDil: qShs, interestExpense: 4, incomeBeforeTax: 47.5, incomeTaxExpense: 10, depreciationAndAmortization: 12.5, reportedCurrency: rc },
+    { date: "2026-03-31", fiscalYear: "2026", period: "Q1", revenue: qRevenue, operatingIncome: 50, ebit: 50, netIncome: 37.5, epsDiluted: 0.375, weightedAverageShsOutDil: qShs, interestExpense: 4, incomeBeforeTax: 47.5, incomeTaxExpense: 10, depreciationAndAmortization: 12.5, reportedCurrency: qReportedCurrency(0) },
+    { date: "2025-12-31", fiscalYear: "2025", period: "Q4", revenue: qRevenue, operatingIncome: 50, ebit: 50, netIncome: 37.5, epsDiluted: 0.375, weightedAverageShsOutDil: qShs, interestExpense: 4, incomeBeforeTax: 47.5, incomeTaxExpense: 10, depreciationAndAmortization: 12.5, reportedCurrency: qReportedCurrency(1) },
+    { date: "2025-09-30", fiscalYear: "2025", period: "Q3", revenue: qRevenue, operatingIncome: 50, ebit: 50, netIncome: 37.5, epsDiluted: 0.375, weightedAverageShsOutDil: qShs, interestExpense: 4, incomeBeforeTax: 47.5, incomeTaxExpense: 10, depreciationAndAmortization: 12.5, reportedCurrency: qReportedCurrency(2) },
+    { date: "2025-06-30", fiscalYear: "2025", period: "Q2", revenue: qRevenue, operatingIncome: 50, ebit: 50, netIncome: 37.5, epsDiluted: 0.375, weightedAverageShsOutDil: qShs, interestExpense: 4, incomeBeforeTax: 47.5, incomeTaxExpense: 10, depreciationAndAmortization: 12.5, reportedCurrency: qReportedCurrency(3) },
     // Four older quarters so availableQuarters >= 8 (no recent-ipo overlay).
     { date: "2025-03-31", fiscalYear: "2025", period: "Q1", revenue: 240, operatingIncome: 48, ebit: 48, netIncome: 36, epsDiluted: 0.36, weightedAverageShsOutDil: qShs, interestExpense: 4, incomeBeforeTax: 45.5, incomeTaxExpense: 9.5, depreciationAndAmortization: 12, reportedCurrency: rc },
     { date: "2024-12-31", fiscalYear: "2024", period: "Q4", revenue: 235, operatingIncome: 47, ebit: 47, netIncome: 36, epsDiluted: 0.35, weightedAverageShsOutDil: qShs, interestExpense: 4, incomeBeforeTax: 45, incomeTaxExpense: 9, depreciationAndAmortization: 12, reportedCurrency: rc },
@@ -434,6 +482,59 @@ function wiringBundle(opts: WiringOpts = {}): DataBundle {
   } as unknown as DataBundle;
   return bundle;
 }
+
+describe("runStageB wiring — reported currency routing gate", () => {
+  it("keeps mixed USD/JPY TTM reported currency unknown, discloses one route gap, and makes no threshold decision", () => {
+    const computed = runStageB(
+      wiringBundle({
+        quarterlyRevenue: 1,
+        quarterlyReportedCurrencies: ["USD", "JPY", "USD", "JPY"],
+      }),
+    );
+
+    expect(computed.route.overlays).not.toContain("pre-revenue");
+    const routeCurrencyGaps = computed.route.gaps.filter(
+      (g) => g.field === "route.overlays.preRevenue.currency",
+    );
+    expect(routeCurrencyGaps).toHaveLength(1);
+    expect(routeCurrencyGaps[0].reason).toMatch(/ttm revenue.*unknown or invalid.*proven USD/i);
+    expect(computed.gaps.filter((g) => g.field === "route.overlays.preRevenue.currency")).toHaveLength(1);
+  });
+
+  it("routes agreeing normalized USD TTM reported currency through the strict raw threshold", () => {
+    const computed = runStageB(
+      wiringBundle({
+        quarterlyRevenue: 1,
+        quarterlyReportedCurrencies: [" usd ", "USD", "Usd", "  USD"],
+      }),
+    );
+
+    expect(computed.route.overlays).toContain("pre-revenue");
+    expect(computed.route.gaps.some((g) => g.field === "route.overlays.preRevenue.currency")).toBe(false);
+  });
+
+  it("keeps complete reported currency inputs compatible with existing routing", () => {
+    const computed = runStageB(wiringBundle());
+
+    expect(computed.route.base).toBe("general");
+    expect(computed.route.overlays).toEqual([]);
+    expect(computed.route.gaps.some((g) => g.field === "route.overlays.preRevenue.currency")).toBe(false);
+  });
+
+  it("passes absent TTM as null so annual reported currency fallback provenance remains honest", () => {
+    const bundle = wiringBundle();
+    if (!bundle.statements.incomeQuarterly.ok) throw new Error("expected quarterly income fixture");
+    bundle.statements.incomeQuarterly.value.data.rows =
+      bundle.statements.incomeQuarterly.value.data.rows.slice(0, 3);
+
+    const computed = runStageB(bundle);
+
+    expect(computed.route.asOf.incomeTtm).toBeNull();
+    expect(computed.route.asOf.incomeAnnual).toBe("2025-12-31");
+    expect(computed.route.notes.some((note) => /TTM revenue unavailable.*annual revenue/i.test(note))).toBe(true);
+    expect(computed.route.gaps.some((g) => g.field === "route.overlays.preRevenue.currency")).toBe(false);
+  });
+});
 
 describe("runStageB wiring — net debt convention + point-in-time anchors (audit H2/M3/M4)", () => {
   it("keeps provider price rows when missing provider volume propagates into technicals", () => {

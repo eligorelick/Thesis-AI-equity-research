@@ -144,6 +144,84 @@ export function applyUnsupportedTerminal(
   actions.closeStream();
 }
 
+type TerminalSnapshotFetch = (
+  url: string,
+  init: { cache: "no-store" },
+) => Promise<Pick<Response, "ok" | "json">>;
+
+/** Read the one server-owned retry decision after a terminal stream event. */
+export async function fetchTerminalResumable(
+  jobId: string,
+  fetcher: TerminalSnapshotFetch = fetch,
+): Promise<boolean> {
+  try {
+    const response = await fetcher(`/api/report/${jobId}`, { cache: "no-store" });
+    if (!response.ok) return false;
+    const value = await response.json() as unknown;
+    return value !== null &&
+      typeof value === "object" &&
+      (value as { resumable?: unknown }).resumable === true;
+  } catch {
+    return false;
+  }
+}
+
+interface TerminalResumeRequestToken {
+  jobId: string;
+  sequence: number;
+}
+
+export interface TerminalResumeRequestFence {
+  begin: (jobId: string) => TerminalResumeRequestToken;
+  accepts: (token: TerminalResumeRequestToken) => boolean;
+  invalidate: () => void;
+}
+
+/** Fence terminal GET results by both job identity and request order. */
+export function createTerminalResumeRequestFence(): TerminalResumeRequestFence {
+  let sequence = 0;
+  let currentJobId: string | null = null;
+  return {
+    begin(jobId) {
+      currentJobId = jobId;
+      sequence += 1;
+      return { jobId, sequence };
+    },
+    accepts(token) {
+      return token.sequence === sequence && token.jobId === currentJobId;
+    },
+    invalidate() {
+      currentJobId = null;
+      sequence += 1;
+    },
+  };
+}
+
+/** Component-used terminal refresh: stale jobs and stale requests cannot install state. */
+export async function refreshTerminalResumableState(
+  jobId: string,
+  fence: TerminalResumeRequestFence,
+  install: (jobId: string, resumable: boolean) => void,
+  fetcher: TerminalSnapshotFetch = fetch,
+): Promise<void> {
+  const token = fence.begin(jobId);
+  const resumable = await fetchTerminalResumable(jobId, fetcher);
+  if (fence.accepts(token)) install(jobId, resumable);
+}
+
+/** UI visibility consumes no step shape; steps remain display metadata only. */
+export function shouldShowServerRetry(input: {
+  busy: boolean;
+  jobId: string | null;
+  phase: Phase;
+  resumable: boolean;
+}): boolean {
+  return !input.busy &&
+    input.jobId !== null &&
+    (input.phase === "done" || input.phase === "error") &&
+    input.resumable;
+}
+
 /* ------------------------------------------------------------------------ *
  * Small presentational helpers
  * ------------------------------------------------------------------------ */
@@ -213,8 +291,13 @@ export function GenerateReport({ symbol }: { symbol: string }) {
   const [dataOnly, setDataOnly] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [unsupportedMessage, setUnsupportedMessage] = useState<string | null>(null);
+  const [resumable, setResumable] = useState(false);
 
   const esRef = useRef<EventSource | null>(null);
+  const currentJobIdRef = useRef<string | null>(null);
+  const terminalResumeFenceRef = useRef<TerminalResumeRequestFence>(
+    createTerminalResumeRequestFence(),
+  );
 
   const closeStream = useCallback(() => {
     if (esRef.current) {
@@ -236,9 +319,21 @@ export function GenerateReport({ symbol }: { symbol: string }) {
     }
   }, []);
 
+  const refreshTerminalResumable = useCallback(async (terminalJobId: string) => {
+    if (terminalJobId !== currentJobIdRef.current) return;
+    await refreshTerminalResumableState(
+      terminalJobId,
+      terminalResumeFenceRef.current,
+      (refreshedJobId, value) => {
+        if (refreshedJobId === currentJobIdRef.current) setResumable(value);
+      },
+    );
+  }, []);
+
   const openStream = useCallback(
     (jobId: string) => {
       closeStream();
+      currentJobIdRef.current = jobId;
       const es = new EventSource(`/api/report/${jobId}/stream`);
       esRef.current = es;
 
@@ -291,6 +386,7 @@ export function GenerateReport({ symbol }: { symbol: string }) {
           setDataOnly(e.dataOnly);
           if (typeof e.totalCostUsd === "number") setTotalCost(e.totalCostUsd);
           if (e.reportId !== null) void loadSummary(e.reportId);
+          void refreshTerminalResumable(jobId);
         } catch {
           /* ignore */
         }
@@ -322,6 +418,7 @@ export function GenerateReport({ symbol }: { symbol: string }) {
             const e = JSON.parse(data) as JobErrorEvent;
             setError(e.message);
             setPhase("error");
+            void refreshTerminalResumable(jobId);
             closeStream();
           } catch {
             /* ignore */
@@ -330,10 +427,12 @@ export function GenerateReport({ symbol }: { symbol: string }) {
         // Transport hiccups: EventSource auto-reconnects; leave the stream open.
       });
     },
-    [closeStream, loadSummary],
+    [closeStream, loadSummary, refreshTerminalResumable],
   );
 
   const start = useCallback(async () => {
+    currentJobIdRef.current = null;
+    terminalResumeFenceRef.current.invalidate();
     setPhase("starting");
     setError(null);
     setSummary(null);
@@ -341,6 +440,7 @@ export function GenerateReport({ symbol }: { symbol: string }) {
     setTotalCost(0);
     setDataOnly(false);
     setUnsupportedMessage(null);
+    setResumable(false);
     setSteps(PIPELINE_STEPS.map((step) => ({ step, status: "pending" as const })));
 
     try {
@@ -351,6 +451,7 @@ export function GenerateReport({ symbol }: { symbol: string }) {
       });
       if (res.status === 202) {
         const { jobId: newJobId } = (await res.json()) as { jobId: string };
+        currentJobIdRef.current = newJobId;
         setJobId(newJobId);
         openStream(newJobId);
         return;
@@ -382,34 +483,19 @@ export function GenerateReport({ symbol }: { symbol: string }) {
   const busy = phase === "starting" || phase === "running";
   const generationDisabled = busy || phase === "unsupported";
 
-  // Resume-from-failure (2026-07 audit item 1 + partial shape 2026-07-10):
-  // the runner persists every SUCCESSFUL analyst pass output the moment it
-  // has it. Two resumable shapes, mirroring the server predicate
-  // (stepsShowResumableFailure): both analysts done + synthesize errored
-  // (re-run only the judge tail), or exactly one analyst done + the other
-  // errored (re-run only the failed side). Nothing already paid is re-billed.
-  const stepOf = (step: PipelineStep): StepProgress | undefined =>
-    steps.find((s) => s.step === step);
-  const analystStatuses = [stepOf("bull")?.status, stepOf("bear")?.status];
-  const analystDoneCount = analystStatuses.filter((s) => s === "done").length;
-  const analystsTerminal = analystStatuses.every((s) => s === "done" || s === "error");
-  const resumableShape =
-    stepOf("synthesize")?.status !== "done" &&
-    analystsTerminal &&
-    (analystDoneCount === 2 ? stepOf("synthesize")?.status === "error" : analystDoneCount === 1);
-  const canResume =
-    !busy && jobId !== null && (phase === "done" || phase === "error") && resumableShape;
+  const canResume = shouldShowServerRetry({ busy, jobId, phase, resumable });
   const resumeHint =
-    analystDoneCount === 2
-      ? "the paid bull/bear analyst passes are saved — retry synthesis without re-billing them."
-      : `the paid ${analystStatuses[0] === "done" ? "bull" : "bear"} analyst pass is saved — retry re-runs only the failed side, then synthesis.`;
+    "durable prior work is available — retry continues from server-validated artifacts without re-billing reusable passes.";
 
   const retrySynthesis = useCallback(async () => {
     if (jobId === null) return;
+    terminalResumeFenceRef.current.invalidate();
+    currentJobIdRef.current = jobId;
     setPhase("starting");
     setError(null);
     setSummary(null);
     setDataOnly(false);
+    setResumable(false);
     try {
       const res = await fetch(`/api/report/${jobId}/retry`, { method: "POST" });
       if (res.status === 202) {

@@ -10,6 +10,7 @@
 import { NextResponse } from "next/server";
 import { getJobSnapshot, type JobSnapshot } from "@/pipeline/events";
 import { sweepAbandonedJobs } from "@/pipeline/jobRunner";
+import { readJobResumeState } from "@/pipeline/jobStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ export const dynamic = "force-dynamic";
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ jobId: string }> },
-): Promise<NextResponse<JobSnapshot | { error: string }>> {
+): Promise<NextResponse<(JobSnapshot & { resumable: boolean }) | { error: string }>> {
   const { jobId } = await params;
   // A job orphaned by a process death must poll as a terminal error, not
   // spin as "running" forever.
@@ -26,5 +27,6 @@ export async function GET(
   if (snapshot === null) {
     return NextResponse.json({ error: `no job with id "${jobId}"` }, { status: 404 });
   }
-  return NextResponse.json(snapshot);
+  const resumeState = readJobResumeState(jobId);
+  return NextResponse.json({ ...snapshot, resumable: resumeState?.resumable ?? false });
 }

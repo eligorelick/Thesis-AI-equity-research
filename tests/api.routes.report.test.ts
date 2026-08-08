@@ -56,8 +56,9 @@ import {
   setDbForTests,
   type DatabaseHandle,
 } from "@/db";
-import { jobs } from "@/db/schema";
+import { jobs, reports } from "@/db/schema";
 import { createJob as createJobReal, initialSteps } from "@/pipeline/jobRunner";
+import { persistPassSettlement } from "@/pipeline/jobArtifacts";
 import type { StepProgress } from "@/types/core";
 import { PIPELINE_STEPS } from "@/types/core";
 import type { AnalystCase } from "@/report/schema";
@@ -133,6 +134,7 @@ function seedResumableJob(symbol = "AAPL"): string {
       stepsJson: JSON.stringify(steps),
       bullJson: passSnapshotJson(0.9),
       bearJson: passSnapshotJson(0.47),
+      payloadFingerprint: "1.3.0:api-resume",
     })
     .where(eq(jobs.id, jobId))
     .run();
@@ -241,6 +243,7 @@ describe("GET /api/report/[jobId]", () => {
       reportId: number | null;
       totalCostUsd: number;
       dataOnly: boolean;
+      resumable: boolean;
     };
     expect(snap.jobId).toBe(jobId);
     expect(snap.symbol).toBe("AAPL");
@@ -249,7 +252,105 @@ describe("GET /api/report/[jobId]", () => {
     expect(snap.steps.every((s) => s.status === "pending")).toBe(true);
     expect(snap.reportId).toBeNull();
     expect(snap.totalCostUsd).toBe(0);
+    expect(snap.resumable).toBe(false);
   });
+
+  it("exposes authoritative resumable true even when synthesize steps lie done", async () => {
+    const jobId = seedResumableJob("AAPL");
+    const lyingSteps = initialSteps().map((step) => ({
+      step: step.step,
+      status: step.step === "synthesize" ? ("done" as const) : ("error" as const),
+    }));
+    handle.db
+      .update(jobs)
+      .set({ status: "done", stepsJson: JSON.stringify(lyingSteps) })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    const res = await reportGET(new Request(`http://localhost/api/report/${jobId}`), {
+      params: Promise.resolve({ jobId }),
+    });
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { resumable: boolean }).toMatchObject({ resumable: true });
+  });
+
+  it("exposes authoritative resumable false when reportId names an existing row", async () => {
+    const jobId = seedResumableJob("AAPL");
+    const report = handle.db
+      .insert(reports)
+      .values({
+        symbol: "AAPL",
+        createdAt: "2026-08-08T00:00:00.000Z",
+        model: "claude-opus-4-8",
+        status: "done",
+        reportJson: "{corrupt-json",
+        verificationRate: null,
+        costUsd: 1.37,
+        specVersion: "1.0.0",
+      })
+      .returning({ id: reports.id })
+      .get();
+    handle.db.update(jobs).set({ reportId: report.id }).where(eq(jobs.id, jobId)).run();
+
+    const res = await reportGET(new Request(`http://localhost/api/report/${jobId}`), {
+      params: Promise.resolve({ jobId }),
+    });
+
+    expect((await res.json()) as { resumable: boolean }).toMatchObject({ resumable: false });
+  });
+
+  it.each([null, "   "])(
+    "keeps current analyst provenance %j non-resumable across GET and retry claim",
+    async (payloadFingerprint) => {
+      const { jobId } = createJobReal("AAPL");
+      persistPassSettlement({
+        jobId,
+        runGeneration: 0,
+        attemptId: payloadFingerprint === null ? "unknown-current-null" : "unknown-current-blank",
+        pass: "bull",
+        settlement: {
+          outcome: "success",
+          data: fakeAnalystCase(),
+          telemetry: {
+            model: "claude-opus-4-8",
+            inputTokens: 100,
+            outputTokens: 50,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            webSearches: 0,
+            costUsd: 0.1,
+            fallbackUsed: false,
+            billable: true,
+            fetchedUrls: [],
+          },
+        },
+        payloadFingerprint,
+        settledAt: "2026-08-08T00:00:00.000Z",
+      });
+      handle.db
+        .update(jobs)
+        .set({ status: "error", error: "source failed", reportId: null })
+        .where(eq(jobs.id, jobId))
+        .run();
+
+      const get = await reportGET(new Request(`http://localhost/api/report/${jobId}`), {
+        params: Promise.resolve({ jobId }),
+      });
+      expect((await get.json()) as { resumable: boolean }).toMatchObject({ resumable: false });
+
+      const retry = await retryPOST(
+        new Request(`http://localhost/api/report/${jobId}/retry`, { method: "POST" }),
+        { params: Promise.resolve({ jobId }) },
+      );
+      expect(retry.status).toBe(409);
+      expect(runJobMock).not.toHaveBeenCalled();
+      expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+        status: "error",
+        runGeneration: 0,
+      });
+    },
+  );
 });
 
 /* ------------------------------------------------------------------------ *
@@ -322,6 +423,55 @@ describe("POST /api/report/[jobId]/retry", () => {
     expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.status).toBe("done");
   });
 
+  it("retries from durable legacy analysts even when synthesize steps lie done", async () => {
+    const jobId = seedResumableJob("AAPL");
+    handle.db
+      .update(jobs)
+      .set({
+        status: "done",
+        stepsJson: JSON.stringify([
+          { step: "bull", status: "error" },
+          { step: "bear", status: "error" },
+          { step: "synthesize", status: "done" },
+        ] satisfies StepProgress[]),
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    const res = await retryPOST(...retryReq(jobId));
+
+    expect(res.status).toBe(202);
+    await vi.waitFor(() => expect(runJobMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not retry a job whose reportId names an existing report row", async () => {
+    const jobId = seedResumableJob("AAPL");
+    const report = handle.db
+      .insert(reports)
+      .values({
+        symbol: "AAPL",
+        createdAt: "2026-08-08T00:00:00.000Z",
+        model: "claude-opus-4-8",
+        status: "done",
+        reportJson: null,
+        verificationRate: null,
+        costUsd: 1.37,
+        specVersion: "1.0.0",
+      })
+      .returning({ id: reports.id })
+      .get();
+    handle.db.update(jobs).set({ reportId: report.id }).where(eq(jobs.id, jobId)).run();
+
+    const res = await retryPOST(...retryReq(jobId));
+
+    expect(res.status).toBe(409);
+    expect(runJobMock).not.toHaveBeenCalled();
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "error",
+      reportId: report.id,
+    });
+  });
+
   it("returns 409 when the resumable shape has no persisted snapshots", async () => {
     const { jobId } = createJobReal("AAPL");
     const steps = initialSteps().map((s) => {
@@ -338,7 +488,7 @@ describe("POST /api/report/[jobId]/retry", () => {
     const res = await retryPOST(...retryReq(jobId));
     expect(res.status).toBe(409);
     const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("no persisted analyst passes");
+    expect(body.error).toContain("no reusable successful pass artifact");
     expect(runJobMock).not.toHaveBeenCalled();
   });
 
@@ -369,6 +519,25 @@ describe("POST /api/report/[jobId]/retry", () => {
     const second = await retryPOST(...retryReq(jobId));
     expect(second.status).toBe(409);
     expect(runJobMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("terminalizes a detached pre-run failure without leaking its raw detail or stranding queued", async () => {
+    const jobId = seedResumableJob("AAPL");
+    runJobMock.mockRejectedValueOnce(new Error("raw provider payload: secret-response-body"));
+
+    const res = await retryPOST(...retryReq(jobId));
+
+    expect(res.status).toBe(202);
+    await vi.waitFor(() => {
+      expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+        status: "error",
+        runGeneration: 1,
+        error: "runJob: queued retry dispatch failed before execution",
+      });
+    });
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.error).not.toContain(
+      "secret-response-body",
+    );
   });
 });
 

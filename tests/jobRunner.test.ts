@@ -48,10 +48,9 @@ import {
   JOB_HEARTBEAT_MS,
   readPassSnapshots,
   prepareJobResume,
+  prepareQueuedJobResume,
   runJob,
-  snapshotsCoverResume,
   sweepAbandonedJobs,
-  stepsShowResumableFailure,
   initialSteps,
   LLM_STEPS,
   NO_KEY_SKIP_REASON,
@@ -59,6 +58,7 @@ import {
   MODEL_RESOLUTION_SKIP_PREFIX,
   type PipelinePasses,
   type PassResultLike,
+  type RunJobOptions,
   type VerifyPassResult,
 } from "@/pipeline/jobRunner";
 import {
@@ -68,6 +68,7 @@ import {
   persistPassSettlement,
   readCurrentGenerationPassArtifacts,
 } from "@/pipeline/jobArtifacts";
+import { readJobResumeState } from "@/pipeline/jobStore";
 import {
   _clearJobSubscribers,
   subscribeJob,
@@ -529,6 +530,12 @@ function seedResumableLegacyJob(
     })
     .where(eq(jobs.id, jobId))
     .run();
+}
+
+function clearPreparedResumeProcessCache(): void {
+  delete (globalThis as typeof globalThis & {
+    __thesisPreparedJobResumes?: unknown;
+  }).__thesisPreparedJobResumes;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -1509,6 +1516,387 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(costs[0]?.costUsd).toBeCloseTo(0.9, 10);
   });
 
+  it("queued resume re-derives a source synthesize artifact after process-cache loss", async () => {
+    const { jobId } = createJob("AAPL");
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "source-synthesize-success",
+      pass: "synthesize",
+      settlement: testSuccessSettlement({
+        data: fakeJudgeOutput(),
+        model: "claude-opus-4-8",
+        costUsd: 0.4,
+        fallbackUsed: false,
+      }),
+      payloadFingerprint: "1.3.0:cross-process",
+      settledAt: NOW().toISOString(),
+    });
+    handle.db
+      .update(jobs)
+      .set({ status: "error", error: "worker crashed after synthesize", reportId: null })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(1);
+    clearPreparedResumeProcessCache();
+
+    const base = mockPasses();
+    const analysts = vi.fn(async () => {
+      throw new Error("source synthesize reuse must not launch analysts");
+    });
+    const judge = vi.fn(async () => {
+      throw new Error("source synthesize reuse must not launch judge");
+    });
+    const verify = vi.fn(base.passes.runVerifyPass);
+    const result = await runJob(
+      jobId,
+      {
+        ...base.passes,
+        fingerprintPayload: () => "1.3.0:cross-process",
+        runBullThenBear: analysts,
+        runJudgePass: judge,
+        runVerifyPass: verify,
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    );
+
+    expect(result.status).toBe("done");
+    expect(analysts).not.toHaveBeenCalled();
+    expect(judge).not.toHaveBeenCalled();
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses durable synthesize and verifies without a key or model-resolution prerequisite", async () => {
+    const { jobId } = createJob("AAPL");
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "source-synthesize-no-key",
+      pass: "synthesize",
+      settlement: testSuccessSettlement({
+        data: fakeJudgeOutput(),
+        model: "claude-opus-4-8",
+        costUsd: 0.4,
+        fallbackUsed: false,
+      }),
+      payloadFingerprint: "1.3.0:synthesize-no-key",
+      settledAt: NOW().toISOString(),
+    });
+    handle.db
+      .update(jobs)
+      .set({ status: "error", error: "worker stopped before verify", reportId: null })
+      .where(eq(jobs.id, jobId))
+      .run();
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    clearPreparedResumeProcessCache();
+    resolveModelMock.mockRejectedValue(new Error("models.list must not run for durable synthesize"));
+
+    const base = mockPasses();
+    const analysts = vi.fn(async () => {
+      throw new Error("durable synthesize must not launch analysts");
+    });
+    const oneAnalyst = vi.fn(async () => {
+      throw new Error("durable synthesize must not launch one analyst");
+    });
+    const judge = vi.fn(async () => {
+      throw new Error("durable synthesize must not launch judge");
+    });
+    const verify = vi.fn(base.passes.runVerifyPass);
+
+    const result = await runJob(
+      jobId,
+      {
+        ...base.passes,
+        fingerprintPayload: () => "1.3.0:synthesize-no-key",
+        runBullThenBear: analysts,
+        runAnalystPass: oneAnalyst,
+        runJudgePass: judge,
+        runVerifyPass: verify,
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: false, now: NOW, resume: true },
+    );
+
+    expect(result).toMatchObject({ status: "done", dataOnly: false });
+    expect(result.reportId).not.toBeNull();
+    expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(analysts).not.toHaveBeenCalled();
+    expect(oneAnalyst).not.toHaveBeenCalled();
+    expect(judge).not.toHaveBeenCalled();
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  it("queued resume re-derives a source verify artifact and persists it without paid work", async () => {
+    const { jobId } = createJob("AAPL");
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "source-verify-success",
+      pass: "verify",
+      settlement: testSuccessSettlement({
+        data: fakeReport(fakeJudgeOutput()),
+        model: "deterministic",
+        costUsd: 0,
+        fallbackUsed: false,
+      }, false),
+      payloadFingerprint: "1.3.0:cross-process",
+      settledAt: NOW().toISOString(),
+    });
+    handle.db
+      .update(jobs)
+      .set({ status: "error", error: "worker crashed before report link", reportId: null })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    clearPreparedResumeProcessCache();
+
+    const base = mockPasses();
+    const analysts = vi.fn(base.passes.runBullThenBear);
+    const judge = vi.fn(base.passes.runJudgePass);
+    const verify = vi.fn(base.passes.runVerifyPass);
+    const result = await runJob(
+      jobId,
+      {
+        ...base.passes,
+        fingerprintPayload: () => "1.3.0:cross-process",
+        runBullThenBear: analysts,
+        runJudgePass: judge,
+        runVerifyPass: verify,
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    );
+
+    expect(result).toMatchObject({ status: "done", dataOnly: false });
+    expect(result.reportId).not.toBeNull();
+    expect(analysts).not.toHaveBeenCalled();
+    expect(judge).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+    expect(
+      handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()?.model,
+    ).toBe("claude-opus-4-8");
+  });
+
+  it.each([null, "1.3.0:verified-final"])(
+    "links a durable verify result with fingerprint %j before fetch, key, model, or payload prerequisites",
+    async (payloadFingerprint) => {
+    const { jobId } = createJob("AAPL");
+    const verifiedReport = fakeReport(fakeJudgeOutput());
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: payloadFingerprint === null
+        ? "source-verify-earliest-terminal-null"
+        : "source-verify-earliest-terminal-known",
+      pass: "verify",
+      settlement: testSuccessSettlement({
+        data: verifiedReport,
+        model: "deterministic",
+        costUsd: 0,
+        fallbackUsed: false,
+      }, false),
+      payloadFingerprint,
+      settledAt: NOW().toISOString(),
+    });
+    handle.db
+      .update(jobs)
+      .set({ status: "error", error: "report link interrupted", reportId: null })
+      .where(eq(jobs.id, jobId))
+      .run();
+    const base = mockPasses();
+    const assemblePayload = vi.fn(() => {
+      throw new Error("payload prerequisite must not run for durable verify");
+    });
+    const analysts = vi.fn(base.passes.runBullThenBear);
+    const judge = vi.fn(base.passes.runJudgePass);
+    const verify = vi.fn(base.passes.runVerifyPass);
+    const fetchPrerequisite = vi.fn(() => {
+      throw new Error("fetch prerequisite must not run for durable verify");
+    });
+    const options: RunJobOptions = {
+      hasAnthropicKey: false,
+      now: NOW,
+      resume: true,
+    };
+    Object.defineProperty(options, "bundle", { get: fetchPrerequisite });
+
+    const result = await runJob(
+      jobId,
+      {
+        ...base.passes,
+        assembleContextPayload: assemblePayload,
+        fingerprintPayload: () => "1.3.0:naturally-changed-live-payload",
+        runBullThenBear: analysts,
+        runJudgePass: judge,
+        runVerifyPass: verify,
+      },
+      options,
+    );
+
+    expect(result).toMatchObject({ status: "done", dataOnly: false });
+    expect(result.reportId).not.toBeNull();
+    expect(fetchPrerequisite).not.toHaveBeenCalled();
+    expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(assemblePayload).not.toHaveBeenCalled();
+    expect(analysts).not.toHaveBeenCalled();
+    expect(judge).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+    const persistedJson = handle.db
+      .select()
+      .from(reports)
+      .where(eq(reports.id, result.reportId!))
+      .get()?.reportJson;
+    expect(persistedJson).not.toBeNull();
+    expect(JSON.parse(persistedJson!)).toMatchObject(verifiedReport);
+    },
+  );
+
+  it("queued resume includes a late source analyst settlement before worker dispatch", async () => {
+    const { jobId } = createJob("AAPL");
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "source-bull-before-enqueue",
+      pass: "bull",
+      settlement: testSuccessSettlement(testAnalystPass("bull")),
+      payloadFingerprint: "1.3.0:late-source",
+      settledAt: NOW().toISOString(),
+    });
+    handle.db
+      .update(jobs)
+      .set({ status: "error", error: "bear still settling", reportId: null })
+      .where(eq(jobs.id, jobId))
+      .run();
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "source-bear-after-enqueue",
+      pass: "bear",
+      settlement: testSuccessSettlement(testAnalystPass("bear")),
+      payloadFingerprint: "1.3.0:late-source",
+      settledAt: NOW().toISOString(),
+    });
+    clearPreparedResumeProcessCache();
+
+    const base = mockPasses();
+    const bothAnalysts = vi.fn(base.passes.runBullThenBear);
+    const oneAnalyst = vi.fn(async () => testAnalystPass("bear"));
+    const result = await runJob(
+      jobId,
+      {
+        ...base.passes,
+        fingerprintPayload: () => "1.3.0:late-source",
+        runBullThenBear: bothAnalysts,
+        runAnalystPass: oneAnalyst,
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    );
+
+    expect(result.status).toBe("done");
+    expect(bothAnalysts).not.toHaveBeenCalled();
+    expect(oneAnalyst).not.toHaveBeenCalled();
+  });
+
+  it("generation-zero resume dispatch remains a fresh run rather than reading generation minus one", async () => {
+    const { jobId } = createJob("AAPL");
+    clearPreparedResumeProcessCache();
+    const base = mockPasses();
+    const analysts = vi.fn(base.passes.runBullThenBear);
+
+    const result = await runJob(
+      jobId,
+      { ...base.passes, runBullThenBear: analysts },
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    );
+
+    expect(result.status).toBe("done");
+    expect(analysts).toHaveBeenCalledTimes(1);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(0);
+  });
+
+  it("terminalizes an unrecoverable source-artifact digest race without paid work or a queued strand", async () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error", "1.3.0:digest-race");
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    clearPreparedResumeProcessCache();
+    handle.sqlite.exec(`
+      CREATE TRIGGER inject_source_artifact_during_resume_dispatch
+      BEFORE UPDATE OF status ON jobs
+      WHEN OLD.status = 'queued' AND NEW.status = 'running' AND OLD.runGeneration = 1
+      BEGIN
+        INSERT INTO job_pass_artifacts (
+          jobId, runGeneration, attemptId, pass, outcomeJson, telemetryJson, costJson, settledAt
+        ) VALUES (
+          OLD.id, 0, 'late-digest-race', 'bull', '{}', '{}', '{}', '2026-07-06T12:00:00.000Z'
+        );
+      END;
+    `);
+    const base = mockPasses();
+    const paidJudge = vi.fn(base.passes.runJudgePass);
+
+    await expect(runJob(
+      jobId,
+      {
+        ...base.passes,
+        fingerprintPayload: () => "1.3.0:digest-race",
+        runJudgePass: paidJudge,
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    )).rejects.toThrow(/source artifact.*changed|digest/i);
+
+    expect(paidJudge).not.toHaveBeenCalled();
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "error",
+      runGeneration: 1,
+      error: expect.stringMatching(/source artifact.*changed|digest/i),
+    });
+    expect(
+      handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all(),
+    ).toEqual([]);
+  });
+
+  it("two queued-resume workers launch the reusable tail exactly once", async () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error", "1.3.0:two-workers");
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    clearPreparedResumeProcessCache();
+    const base = mockPasses();
+    const originalJudge = base.passes.runJudgePass.bind(base.passes);
+    const entered = deferred();
+    const release = deferred();
+    const paidJudge = vi.fn(async (...args: Parameters<PipelinePasses["runJudgePass"]>) => {
+      entered.resolve(undefined);
+      await release.promise;
+      return originalJudge(...args);
+    });
+    const passes: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: () => "1.3.0:two-workers",
+      runJudgePass: paidJudge,
+    };
+
+    const first = runJob(
+      jobId,
+      passes,
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    );
+    await entered.promise;
+    const second = runJob(
+      jobId,
+      passes,
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    );
+    await expect(second).rejects.toThrow(/already dispatched/);
+    release.resolve(undefined);
+
+    expect(await first).toMatchObject({ status: "done", dataOnly: false });
+    expect(paidJudge).toHaveBeenCalledTimes(1);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(1);
+  });
+
   it("preclaimed resume bumps exactly once, keeps legacy fallbacks, and clones no artifacts", async () => {
     const { jobId } = createJob("AAPL");
     const source = mockPasses();
@@ -1533,6 +1921,7 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(terminal.runGeneration).toBe(0);
     expect(terminal.bullJson).not.toBeNull();
     expect(terminal.bearJson).not.toBeNull();
+    handle.db.update(jobs).set({ reportId: null }).where(eq(jobs.id, jobId)).run();
 
     expect(claimJobForResume(jobId, "done")).toBe(true);
     const claimed = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
@@ -1880,6 +2269,7 @@ describe("runJob - durable paid-pass settlements", () => {
       },
       { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW },
     );
+    handle.db.update(jobs).set({ reportId: null }).where(eq(jobs.id, jobId)).run();
     expect(claimJobForResume(jobId, "done")).toBe(true);
 
     const retry = mockPasses();
@@ -1920,6 +2310,7 @@ describe("runJob - durable paid-pass settlements", () => {
     ).toHaveLength(2);
     expect(readPassSnapshots(jobId)?.bull).not.toBeNull();
     expect(readPassSnapshots(jobId)?.bear).not.toBeNull();
+    handle.db.update(jobs).set({ reportId: null }).where(eq(jobs.id, jobId)).run();
     expect(claimJobForResume(jobId, "done")).toBe(true);
     expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(2);
   });
@@ -1927,28 +2318,128 @@ describe("runJob - durable paid-pass settlements", () => {
   it("report-link change in the prepare-to-claim window loses the exact source-state CAS", () => {
     const { jobId } = createJob("AAPL");
     seedResumableLegacyJob(jobId, "error");
-    const reportValues = (suffix: string) => ({
-      symbol: "AAPL",
-      createdAt: `2026-07-06T00:00:0${suffix}.000Z`,
-      model: "deterministic",
-      status: "done",
-      reportJson: JSON.stringify(fakeReport(fakeJudgeOutput())),
-      verificationRate: null,
-      costUsd: 0,
-      specVersion: "1.0.0",
-    });
-    const first = handle.db.insert(reports).values(reportValues("1")).returning({ id: reports.id }).get();
-    const second = handle.db.insert(reports).values(reportValues("2")).returning({ id: reports.id }).get();
-    handle.db.update(jobs).set({ reportId: first.id }).where(eq(jobs.id, jobId)).run();
+    const first = 999_981;
+    const second = 999_982;
+    handle.sqlite.pragma("foreign_keys = OFF");
+    handle.sqlite.prepare("UPDATE jobs SET reportId = ? WHERE id = ?").run(first, jobId);
     const prepared = prepareJobResume(jobId, "error");
     expect(prepared).not.toBeNull();
-    handle.db.update(jobs).set({ reportId: second.id }).where(eq(jobs.id, jobId)).run();
+    handle.sqlite.prepare("UPDATE jobs SET reportId = ? WHERE id = ?").run(second, jobId);
+    handle.sqlite.pragma("foreign_keys = ON");
 
     expect(claimPreparedJobResume(prepared!)).toBe(false);
     expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
       status: "error",
       runGeneration: 0,
-      reportId: second.id,
+      reportId: second,
+    });
+  });
+
+  it("report existence appearing in the prepare-to-claim window prevents the retry bump", () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error", "1.3.0:report-race");
+    const danglingReportId = 999_991;
+    handle.sqlite.pragma("foreign_keys = OFF");
+    handle.sqlite.prepare("UPDATE jobs SET reportId = ? WHERE id = ?").run(danglingReportId, jobId);
+    handle.sqlite.pragma("foreign_keys = ON");
+    const prepared = prepareJobResume(jobId, "error");
+    expect(prepared).not.toBeNull();
+
+    handle.db.insert(reports).values({
+      id: danglingReportId,
+      symbol: "AAPL",
+      createdAt: NOW().toISOString(),
+      model: "deterministic",
+      status: "done",
+      reportJson: "corrupt but existing",
+      verificationRate: null,
+      costUsd: 0,
+      specVersion: "1.0.0",
+    }).run();
+
+    expect(claimPreparedJobResume(prepared!)).toBe(false);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "error",
+      runGeneration: 0,
+      reportId: danglingReportId,
+    });
+  });
+
+  it("preserves a dangling report projection so a new process can revalidate it after enqueue", () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error", "1.3.0:dangling-enqueue");
+    const danglingReportId = 999_992;
+    handle.sqlite.pragma("foreign_keys = OFF");
+    handle.sqlite.prepare("UPDATE jobs SET reportId = ? WHERE id = ?").run(danglingReportId, jobId);
+    handle.sqlite.pragma("foreign_keys = ON");
+
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    clearPreparedResumeProcessCache();
+
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "queued",
+      runGeneration: 1,
+      reportId: danglingReportId,
+    });
+    expect(prepareQueuedJobResume(jobId)).toMatchObject({
+      sourceGeneration: 0,
+      targetGeneration: 1,
+      sourceReportId: danglingReportId,
+      sourceReportExists: false,
+    });
+  });
+
+  it("finishes from a report that appears after queued preparation without paid work or a queued strand", async () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error", "1.3.0:report-after-prepare");
+    const danglingReportId = 999_993;
+    handle.sqlite.pragma("foreign_keys = OFF");
+    handle.sqlite.prepare("UPDATE jobs SET reportId = ? WHERE id = ?").run(danglingReportId, jobId);
+    handle.sqlite.pragma("foreign_keys = ON");
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    clearPreparedResumeProcessCache();
+    expect(prepareQueuedJobResume(jobId)).not.toBeNull();
+
+    handle.db.insert(reports).values({
+      id: danglingReportId,
+      symbol: "AAPL",
+      createdAt: NOW().toISOString(),
+      model: "claude-opus-4-8",
+      status: "done",
+      reportJson: "corrupt but existing",
+      verificationRate: 0.75,
+      costUsd: 1.37,
+      specVersion: "1.0.0",
+    }).run();
+    const base = mockPasses();
+    const paidAnalysts = vi.fn(base.passes.runBullThenBear);
+    const paidJudge = vi.fn(base.passes.runJudgePass);
+    const paidVerify = vi.fn(base.passes.runVerifyPass);
+
+    const result = await runJob(
+      jobId,
+      {
+        ...base.passes,
+        fingerprintPayload: () => "1.3.0:report-after-prepare",
+        runBullThenBear: paidAnalysts,
+        runJudgePass: paidJudge,
+        runVerifyPass: paidVerify,
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    );
+
+    expect(result).toMatchObject({
+      status: "done",
+      reportId: danglingReportId,
+      verificationRate: 0.75,
+    });
+    expect(paidAnalysts).not.toHaveBeenCalled();
+    expect(paidJudge).not.toHaveBeenCalled();
+    expect(paidVerify).not.toHaveBeenCalled();
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "done",
+      runGeneration: 1,
+      reportId: danglingReportId,
     });
   });
 
@@ -2331,13 +2822,9 @@ describe("createJob", () => {
     expect(handle.db.select().from(jobs).where(eq(jobs.id, done)).get()?.status).toBe("done");
   });
 
-  // Regression (2026-07-20 audit): a process crash mid-synthesize used to leave
-  // stepsJson with synthesize:"running" forever — the sweep flipped only the
-  // job STATUS, so stepsShowResumableFailure never matched and the retry route
-  // 409'd, stranding two already-paid analyst snapshots. The sweep must
-  // normalize stepsJson the way abortRun does (running → error, pending →
-  // skipped) so a swept synthesize-crash is resumable.
-  it("sweepAbandonedJobs makes a mid-synthesize crash resumable (steps normalized)", () => {
+  // Sweep step normalization is display metadata only; durable artifacts, not
+  // these words, decide whether the swept job can resume.
+  it("sweepAbandonedJobs normalizes a mid-synthesize crash for display", () => {
     const now = new Date("2026-07-09T12:00:00.000Z");
     const staleIso = new Date(now.getTime() - ACTIVE_JOB_STALE_MS - 1000).toISOString();
     const { jobId } = createJob("NVDA");
@@ -2373,11 +2860,6 @@ describe("createJob", () => {
     expect(by.get("verify")?.status).toBe("skipped");
     expect(by.get("bull")?.status).toBe("done");
 
-    // The whole point: the swept job now presents the resumable shape.
-    expect(stepsShowResumableFailure(steps)).toEqual({
-      doneSides: ["bull", "bear"],
-      failedSides: [],
-    });
   });
 
   it("sweepAbandonedJobs leaves malformed stepsJson untouched but still un-wedges the row", () => {
@@ -3415,6 +3897,7 @@ describe("runJob — resume from persisted analyst snapshots", () => {
     const calls: string[] = [];
     const passes: PipelinePasses = {
       ...base.passes,
+      fingerprintPayload: () => "fp-v1",
       runBullThenBear: async (deps, hooks) => {
         calls.push("runBullThenBear");
         return base.passes.runBullThenBear(deps, hooks);
@@ -3458,12 +3941,14 @@ describe("runJob — resume from persisted analyst snapshots", () => {
     const first = failingJudgePasses();
     await runJob(jobId, first.passes, { bundle: fakeBundle("AAPL"), hasAnthropicKey: true, now: NOW });
     expect(first.calls).toContain("runBullThenBear");
+    handle.db.update(jobs).set({ reportId: null }).where(eq(jobs.id, jobId)).run();
 
     // Retry with a healthy judge: bull/bear must NOT run again.
     const second = mockPasses();
     const resumeCalls: string[] = [];
     const resumePasses: PipelinePasses = {
       ...second.passes,
+      fingerprintPayload: () => "fp-v1",
       runBullThenBear: async () => {
         resumeCalls.push("runBullThenBear");
         throw new Error("must not re-run the analyst passes on resume");
@@ -3507,6 +3992,7 @@ describe("runJob — resume from persisted analyst snapshots", () => {
       { ...first.passes, fingerprintPayload: () => "fp-v1" },
       { bundle: fakeBundle("AAPL"), hasAnthropicKey: true, now: NOW },
     );
+    handle.db.update(jobs).set({ reportId: null }).where(eq(jobs.id, jobId)).run();
 
     // Force the assembleReport path (verify throws) and record the computed
     // gaps the runner hands it — the drift gap must be among them.
@@ -3517,7 +4003,7 @@ describe("runJob — resume from persisted analyst snapshots", () => {
         { ...second.passes, fingerprintPayload: () => "fp-v2-DRIFTED" },
         { bundle: fakeBundle("AAPL"), hasAnthropicKey: true, now: NOW, resume: true },
       ),
-    ).rejects.toThrow(/fingerprint mismatch|start a fresh job/i);
+    ).rejects.toThrow(/not resumable|fingerprint mismatch|start a fresh job/i);
     expect(second.calls).toEqual(["assembleContextPayload"]);
     expect(
       handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all(),
@@ -3568,7 +4054,7 @@ describe("runJob — resume from persisted analyst snapshots", () => {
         now: NOW,
         resume: true,
       }),
-    ).rejects.toThrow(/fingerprint mismatch|start a fresh job/i);
+    ).rejects.toThrow(/not resumable|fingerprint mismatch|start a fresh job/i);
     expect(paidAnalysts).not.toHaveBeenCalled();
     expect(paidJudge).not.toHaveBeenCalled();
   });
@@ -3668,6 +4154,7 @@ describe("runJob — resume from persisted analyst snapshots", () => {
       },
       { bundle: fakeBundle("AAPL"), hasAnthropicKey: true, now: NOW },
     );
+    handle.db.update(jobs).set({ reportId: null }).where(eq(jobs.id, jobId)).run();
     const persisted = readPassSnapshots(jobId);
     expect(persisted!.bull).not.toBeNull();
     expect(persisted!.bear).toBeNull();
@@ -3737,6 +4224,7 @@ describe("runJob — resume from persisted analyst snapshots", () => {
       jobId,
       {
         ...first.passes,
+        fingerprintPayload: () => "fp-v1",
         runBullThenBear: async () => {
           throw Object.assign(new Error("bull/bear pass failed"), {
             bull: {
@@ -3751,12 +4239,14 @@ describe("runJob — resume from persisted analyst snapshots", () => {
       },
       { bundle: fakeBundle("AAPL"), hasAnthropicKey: true, now: NOW },
     );
+    handle.db.update(jobs).set({ reportId: null }).where(eq(jobs.id, jobId)).run();
 
     const second = mockPasses();
     const result = await runJob(
       jobId,
       {
         ...second.passes,
+        fingerprintPayload: () => "fp-v1",
         runBullThenBear: async () => {
           throw new Error("must not re-run BOTH analyst passes on partial resume");
         },
@@ -3833,6 +4323,464 @@ describe("runJob — resume from persisted analyst snapshots", () => {
  * ------------------------------------------------------------------------ */
 
 describe("review regressions — cost rehydration, live-job guard, resumability predicate", () => {
+  describe("durable resume authority", () => {
+    function markTerminal(jobId: string, status: "done" | "error" = "error"): void {
+      handle.db
+        .update(jobs)
+        .set({ status, reportId: null, error: status === "error" ? "fixture terminal" : null })
+        .where(eq(jobs.id, jobId))
+        .run();
+    }
+
+    it("reports a dangling report link while preserving reusable analyst work", () => {
+      const { jobId } = createJob("AAPL");
+      seedResumableLegacyJob(jobId, "error", "1.3.0:dangling");
+      handle.sqlite.pragma("foreign_keys = OFF");
+      handle.sqlite.prepare("UPDATE jobs SET reportId = 999999 WHERE id = ?").run(jobId);
+      handle.sqlite.pragma("foreign_keys = ON");
+
+      expect(readJobResumeState(jobId)).toEqual({
+        resumable: true,
+        reusablePasses: ["bull", "bear"],
+        rerunPasses: ["synthesize", "verify"],
+        reason: "dangling report link; reusable analyst work is available",
+      });
+    });
+
+    it("reuses a schema-valid synthesize success and reruns only verify", () => {
+      const { jobId } = createJob("AAPL");
+      persistPassSettlement({
+        jobId,
+        runGeneration: 0,
+        attemptId: "resume-synthesize",
+        pass: "synthesize",
+        settlement: testSuccessSettlement({
+          data: fakeJudgeOutput(),
+          model: "claude-opus-4-8",
+          costUsd: 0.4,
+          fallbackUsed: false,
+        }),
+        payloadFingerprint: "1.3.0:tail",
+        settledAt: NOW().toISOString(),
+      });
+      markTerminal(jobId);
+
+      expect(readJobResumeState(jobId)).toEqual({
+        resumable: true,
+        reusablePasses: ["synthesize"],
+        rerunPasses: ["verify"],
+        reason: "reusable synthesize work is available",
+      });
+    });
+
+    it("reuses a schema-valid verify success and reruns no paid pass", () => {
+      const { jobId } = createJob("AAPL");
+      persistPassSettlement({
+        jobId,
+        runGeneration: 0,
+        attemptId: "resume-verify",
+        pass: "verify",
+        settlement: testSuccessSettlement({
+          data: fakeReport(fakeJudgeOutput()),
+          model: "deterministic",
+          costUsd: 0,
+          fallbackUsed: false,
+        }, false),
+        payloadFingerprint: "1.3.0:tail",
+        settledAt: NOW().toISOString(),
+      });
+      markTerminal(jobId);
+
+      expect(readJobResumeState(jobId)).toEqual({
+        resumable: true,
+        reusablePasses: ["verify"],
+        rerunPasses: [],
+        reason: "reusable verified report is available",
+      });
+    });
+
+    it.each(["failure", "malformed"] as const)(
+      "current bull %s suppresses matching legacy bull but leaves legacy bear reusable",
+      (kind) => {
+        const { jobId } = createJob("AAPL");
+        seedResumableLegacyJob(jobId, "error", "1.3.0:per-pass");
+        persistPassSettlement({
+          jobId,
+          runGeneration: 0,
+          attemptId: `current-bull-${kind}`,
+          pass: "bull",
+          settlement: {
+            outcome: "failure",
+            failure: { name: "Error", message: "current bull unavailable" },
+            telemetry: testTelemetry(testAnalystPass("bull", 0), false),
+          },
+          payloadFingerprint: "1.3.0:per-pass",
+          settledAt: NOW().toISOString(),
+        });
+        if (kind === "malformed") {
+          handle.db
+            .update(jobPassArtifacts)
+            .set({ outcomeJson: "{malformed" })
+            .where(eq(jobPassArtifacts.attemptId, `current-bull-${kind}`))
+            .run();
+        }
+
+        expect(readJobResumeState(jobId)).toEqual({
+          resumable: true,
+          reusablePasses: ["bear"],
+          rerunPasses: ["bull", "synthesize", "verify"],
+          reason: "reusable analyst work is available",
+        });
+      },
+    );
+
+    it("does not combine current bull fpA with legacy bear fpB", () => {
+      const { jobId } = createJob("AAPL");
+      seedResumableLegacyJob(jobId, "error", "fpB");
+      persistPassSettlement({
+        jobId,
+        runGeneration: 0,
+        attemptId: "current-bull-fpA",
+        pass: "bull",
+        settlement: testSuccessSettlement(testAnalystPass("bull")),
+        payloadFingerprint: "fpA",
+        settledAt: NOW().toISOString(),
+      });
+      handle.db
+        .update(jobs)
+        .set({
+          bearJson: JSON.stringify(testAnalystPass("bear")),
+          payloadFingerprint: "fpB",
+        })
+        .where(eq(jobs.id, jobId))
+        .run();
+
+      expect(readJobResumeState(jobId)).toMatchObject({
+        resumable: true,
+        reusablePasses: ["bull"],
+        rerunPasses: ["bear", "synthesize", "verify"],
+      });
+    });
+
+    it("treats current bull and bear successes from different fingerprints as cohort corruption", () => {
+      const { jobId } = createJob("AAPL");
+      for (const [side, fingerprint] of [["bull", "fpA"], ["bear", "fpB"]] as const) {
+        persistPassSettlement({
+          jobId,
+          runGeneration: 0,
+          attemptId: `current-${side}-${fingerprint}`,
+          pass: side,
+          settlement: testSuccessSettlement(testAnalystPass(side)),
+          payloadFingerprint: fingerprint,
+          settledAt: NOW().toISOString(),
+        });
+      }
+      markTerminal(jobId);
+
+      expect(readJobResumeState(jobId)).toMatchObject({
+        resumable: false,
+        reusablePasses: [],
+        rerunPasses: [],
+      });
+    });
+
+    it("ignores malformed stepsJson when durable legacy analysts are coherent", () => {
+      const { jobId } = createJob("AAPL");
+      seedResumableLegacyJob(jobId, "error", "1.3.0:malformed-steps");
+      handle.db.update(jobs).set({ stepsJson: "{malformed" }).where(eq(jobs.id, jobId)).run();
+
+      expect(readJobResumeState(jobId)).toMatchObject({
+        resumable: true,
+        reusablePasses: ["bull", "bear"],
+        rerunPasses: ["synthesize", "verify"],
+      });
+      expect(prepareJobResume(jobId, "error")).not.toBeNull();
+    });
+
+    it("treats two distinct current successes for one pass as cohort corruption", () => {
+      const { jobId } = createJob("AAPL");
+      for (const attemptId of ["bull-success-a", "bull-success-b"]) {
+        persistPassSettlement({
+          jobId,
+          runGeneration: 0,
+          attemptId,
+          pass: "bull",
+          settlement: testSuccessSettlement(testAnalystPass("bull")),
+          payloadFingerprint: "1.3.0:ambiguous",
+          settledAt: NOW().toISOString(),
+        });
+      }
+      persistPassSettlement({
+        jobId,
+        runGeneration: 0,
+        attemptId: "bear-success",
+        pass: "bear",
+        settlement: testSuccessSettlement(testAnalystPass("bear")),
+        payloadFingerprint: "1.3.0:ambiguous",
+        settledAt: NOW().toISOString(),
+      });
+      markTerminal(jobId);
+
+      expect(readJobResumeState(jobId)).toMatchObject({
+        resumable: false,
+        reusablePasses: [],
+        rerunPasses: [],
+      });
+    });
+
+    it("isolates an artifact-cost half-pair to its pass and reuses the healthy sibling", () => {
+      const { jobId } = createJob("AAPL");
+      for (const side of ["bull", "bear"] as const) {
+        persistPassSettlement({
+          jobId,
+          runGeneration: 0,
+          attemptId: `half-pair-${side}`,
+          pass: side,
+          settlement: testSuccessSettlement(testAnalystPass(side)),
+          payloadFingerprint: "1.3.0:half-pair",
+          settledAt: NOW().toISOString(),
+        });
+      }
+      handle.db.delete(costLog).where(eq(costLog.attemptId, "half-pair-bull")).run();
+      markTerminal(jobId);
+
+      expect(readJobResumeState(jobId)).toEqual({
+        resumable: true,
+        reusablePasses: ["bear"],
+        rerunPasses: ["bull", "synthesize", "verify"],
+        reason: "reusable analyst work is available",
+      });
+    });
+
+    it.each(["queued", "running", "unsupported"])(
+      "never marks %s jobs resumable even with compatible snapshots",
+      (status) => {
+        const { jobId } = createJob("AAPL");
+        seedResumableLegacyJob(jobId, "error", "1.3.0:inactive");
+        handle.db.update(jobs).set({ status }).where(eq(jobs.id, jobId)).run();
+        expect(readJobResumeState(jobId)).toMatchObject({ resumable: false });
+      },
+    );
+
+    it("failure-only artifacts save no paid work and are not resumable", () => {
+      const { jobId } = createJob("AAPL");
+      persistPassSettlement({
+        jobId,
+        runGeneration: 0,
+        attemptId: "failure-only",
+        pass: "synthesize",
+        settlement: {
+          outcome: "failure",
+          failure: { name: "Error", message: "no reusable output" },
+          telemetry: testTelemetry({
+            data: fakeJudgeOutput(),
+            model: "claude-opus-4-8",
+            costUsd: 0.3,
+            fallbackUsed: false,
+          }),
+        },
+        payloadFingerprint: "1.3.0:failure-only",
+        settledAt: NOW().toISOString(),
+      });
+      markTerminal(jobId);
+
+      expect(readJobResumeState(jobId)).toMatchObject({ resumable: false });
+    });
+
+    it.each([
+      { label: "analyst null", pass: "bull" as const, fingerprint: null },
+      { label: "analyst whitespace", pass: "bull" as const, fingerprint: "   " },
+      { label: "synthesize null", pass: "synthesize" as const, fingerprint: null },
+      { label: "synthesize whitespace", pass: "synthesize" as const, fingerprint: "   " },
+    ])(
+      "rejects current $label provenance before claim, generation bump, or paid dispatch",
+      async ({ pass, fingerprint }) => {
+        const { jobId } = createJob("AAPL");
+        if (pass === "bull") {
+          persistPassSettlement({
+            jobId,
+            runGeneration: 0,
+            attemptId: `unknown-${pass}-${fingerprint === null ? "null" : "blank"}`,
+            pass,
+            settlement: testSuccessSettlement(testAnalystPass("bull")),
+            payloadFingerprint: fingerprint,
+            settledAt: NOW().toISOString(),
+          });
+        } else {
+          persistPassSettlement({
+            jobId,
+            runGeneration: 0,
+            attemptId: `unknown-${pass}-${fingerprint === null ? "null" : "blank"}`,
+            pass,
+            settlement: testSuccessSettlement({
+              data: fakeJudgeOutput(),
+              model: "claude-opus-4-8",
+              costUsd: 0.4,
+              fallbackUsed: false,
+            }),
+            payloadFingerprint: fingerprint,
+            settledAt: NOW().toISOString(),
+          });
+        }
+        markTerminal(jobId);
+        const base = mockPasses();
+        const paidAnalysts = vi.fn(base.passes.runBullThenBear);
+        const paidJudge = vi.fn(base.passes.runJudgePass);
+
+        expect(readJobResumeState(jobId)).toMatchObject({ resumable: false });
+        expect(claimJobForResume(jobId, "error")).toBe(false);
+        await expect(runJob(
+          jobId,
+          { ...base.passes, runBullThenBear: paidAnalysts, runJudgePass: paidJudge },
+          { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+        )).rejects.toThrow(/not resumable/i);
+        expect(paidAnalysts).not.toHaveBeenCalled();
+        expect(paidJudge).not.toHaveBeenCalled();
+        expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+          status: "error",
+          runGeneration: 0,
+        });
+      },
+    );
+
+    it("rejects blank current verify provenance before authority, claim, generation bump, or paid dispatch", async () => {
+        const payloadFingerprint = "   ";
+        const { jobId } = createJob("AAPL");
+        persistPassSettlement({
+          jobId,
+          runGeneration: 0,
+          attemptId: "unknown-verify-blank",
+          pass: "verify",
+          settlement: testSuccessSettlement({
+            data: fakeReport(fakeJudgeOutput()),
+            model: "deterministic",
+            costUsd: 0,
+            fallbackUsed: false,
+          }, false),
+          payloadFingerprint,
+          settledAt: NOW().toISOString(),
+        });
+        markTerminal(jobId);
+        const base = mockPasses();
+        const paidAnalysts = vi.fn(base.passes.runBullThenBear);
+        const paidJudge = vi.fn(base.passes.runJudgePass);
+        const paidVerify = vi.fn(base.passes.runVerifyPass);
+
+        expect.soft(readJobResumeState(jobId)).toMatchObject({ resumable: false });
+        expect.soft(claimJobForResume(jobId, "error")).toBe(false);
+        await expect(runJob(
+          jobId,
+          {
+            ...base.passes,
+            fingerprintPayload: () => "1.3.0:known-current",
+            runBullThenBear: paidAnalysts,
+            runJudgePass: paidJudge,
+            runVerifyPass: paidVerify,
+          },
+          { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+        )).rejects.toThrow(/not resumable|fingerprint mismatch/i);
+        expect(paidAnalysts).not.toHaveBeenCalled();
+        expect(paidJudge).not.toHaveBeenCalled();
+        expect(paidVerify).not.toHaveBeenCalled();
+        expect.soft(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+          status: "error",
+          runGeneration: 0,
+        });
+      });
+  });
+
+  it("synthesize step done without a linked report or judge artifact remains resumable", () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "done", "1.3.0:step-lie");
+    handle.db
+      .update(jobs)
+      .set({
+        stepsJson: JSON.stringify([
+          { step: "bull", status: "error" },
+          { step: "bear", status: "error" },
+          { step: "synthesize", status: "done" },
+        ] satisfies StepProgress[]),
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    const prepared = prepareJobResume(jobId, "done");
+
+    expect(prepared).not.toBeNull();
+    expect(prepared?.bull).not.toBeNull();
+    expect(prepared?.bear).not.toBeNull();
+  });
+
+  it("an existing linked report blocks retry even when its JSON is corrupt", () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "done", "1.3.0:linked-report");
+    const linked = handle.db
+      .insert(reports)
+      .values({
+        symbol: "AAPL",
+        createdAt: "2026-08-08T00:00:00.000Z",
+        model: "claude-opus-4-8",
+        status: "done",
+        reportJson: "{corrupt-json",
+        verificationRate: null,
+        costUsd: 1.37,
+        specVersion: "1.0.0",
+      })
+      .returning({ id: reports.id })
+      .get();
+    handle.db.update(jobs).set({ reportId: linked.id }).where(eq(jobs.id, jobId)).run();
+
+    expect(prepareJobResume(jobId, "done")).toBeNull();
+  });
+
+  it.each([null, "", "   "])(
+    "legacy analyst snapshots with fingerprint %j fail closed",
+    (payloadFingerprint) => {
+      const { jobId } = createJob("AAPL");
+      seedResumableLegacyJob(jobId, "error", "1.3.0:temporary");
+      handle.db
+        .update(jobs)
+        .set({ payloadFingerprint })
+        .where(eq(jobs.id, jobId))
+        .run();
+
+      expect(prepareJobResume(jobId, "error")).toBeNull();
+    },
+  );
+
+  it("ignores stale-generation successes when deciding whether the terminal generation can resume", () => {
+    const { jobId } = createJob("AAPL");
+    for (const side of ["bull", "bear"] as const) {
+      persistPassSettlement({
+        jobId,
+        runGeneration: 0,
+        attemptId: `stale-${side}`,
+        pass: side,
+        settlement: testSuccessSettlement(testAnalystPass(side)),
+        payloadFingerprint: "1.3.0:stale",
+        settledAt: NOW().toISOString(),
+      });
+    }
+    handle.db
+      .update(jobs)
+      .set({
+        status: "error",
+        runGeneration: 1,
+        bullJson: null,
+        bearJson: null,
+        payloadFingerprint: null,
+        stepsJson: JSON.stringify([
+          { step: "bull", status: "done" },
+          { step: "bear", status: "done" },
+          { step: "synthesize", status: "error" },
+        ] satisfies StepProgress[]),
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    expect(prepareJobResume(jobId, "error")).toBeNull();
+  });
+
   it("rejects a direct resume of a healthy completed job", async () => {
     const { jobId } = createJob("AAPL");
     const passes = mockPasses();
@@ -3973,29 +4921,6 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
     expect(handle.db.select().from(reports).all()).toHaveLength(0);
   });
 
-  it("stepsShowResumableFailure accepts synthesis failures AND one-sided analyst failures", () => {
-    const shape = (bull: string, bear: string, synth: string) =>
-      stepsShowResumableFailure([
-        { step: "bull", status: bull },
-        { step: "bear", status: bear },
-        { step: "synthesize", status: synth },
-      ] as StepProgress[]);
-    // Classic shape: both analysts paid, synthesis failed — resume the tail.
-    expect(shape("done", "done", "error")).toEqual({ doneSides: ["bull", "bear"], failedSides: [] });
-    // Partial shape: one paid side saved, the other errored — resume re-runs
-    // only the failed side (synthesize was honestly "skipped").
-    expect(shape("done", "error", "skipped")).toEqual({ doneSides: ["bull"], failedSides: ["bear"] });
-    expect(shape("error", "done", "skipped")).toEqual({ doneSides: ["bear"], failedSides: ["bull"] });
-    // Never resumable: healthy job (would re-bill / could overwrite its report)…
-    expect(shape("done", "done", "done")).toBeNull();
-    // …both analysts dead (nothing to reuse — fresh run is strictly correct)…
-    expect(shape("error", "error", "skipped")).toBeNull();
-    // …or a run that never reached a terminal analyst state.
-    expect(shape("done", "done", "skipped")).toBeNull();
-    expect(shape("done", "running", "pending")).toBeNull();
-    expect(stepsShowResumableFailure([])).toBeNull();
-  });
-
   it("claimJobForResume lets exactly one terminal-state contender claim a retry", () => {
     const { jobId } = createJob("AAPL");
     seedResumableLegacyJob(jobId, "done");
@@ -4008,11 +4933,8 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
     expect(claimJobForResume(jobId, "done")).toBe(false);
   });
 
-  // Regression (2026-07-20 audit): a resume that DEGRADES before re-marking the
-  // analyst steps (no-key/model-resolution failure) rewrote bull/bear/synthesize
-  // "skipped" and finished "done", so stepsShowResumableFailure returned null
-  // forever and the retry route 409'd — stranding BOTH already-paid snapshots.
-  // snapshotsCoverResume rescues that shape; a re-resume reuses the snapshots.
+  // A degraded retry may rewrite all display steps to skipped. Durable legacy
+  // analysts remain authoritative regardless of that presentation shape.
   it("a degraded resume does not strand the paid snapshots — the job stays resumable", async () => {
     const { jobId } = createJob("AAPL");
 
@@ -4020,19 +4942,19 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
     //    persisted; classic resumable shape.
     const firstPasses: PipelinePasses = {
       ...mockPasses().passes,
+      fingerprintPayload: () => "1.3.0:degraded-resume",
       runJudgePass: async () => {
         throw new Error("judge pass failed (transport): stream rejected (simulated)");
       },
     };
     await runJob(jobId, firstPasses, { bundle: fakeBundle("AAPL"), hasAnthropicKey: true, now: NOW });
     const afterFirst = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
-    expect(
-      stepsShowResumableFailure(JSON.parse(afterFirst.stepsJson) as StepProgress[]),
-    ).not.toBeNull();
 
     // 2) Resume that DEGRADES before the resume branch (no key): steps rewritten
     //    all-skipped, job finishes "done" — the step shape is now non-resumable.
     expect(afterFirst.status).toBe("done");
+    handle.db.update(jobs).set({ reportId: null }).where(eq(jobs.id, jobId)).run();
+    expect(readJobResumeState(jobId)?.resumable).toBe(true);
     claimJobForResume(jobId, "done"); // mirror the retry route's claim
     await runJob(jobId, mockPasses().passes, {
       bundle: fakeBundle("AAPL"),
@@ -4041,13 +4963,11 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
       resume: true,
     });
     const afterDegraded = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
-    const degradedSteps = JSON.parse(afterDegraded.stepsJson) as StepProgress[];
-    expect(stepsShowResumableFailure(degradedSteps)).toBeNull(); // shape lost…
     const snapshots = readPassSnapshots(jobId);
     expect(snapshots!.bull).not.toBeNull();
     expect(snapshots!.bear).not.toBeNull();
-    // …but the snapshot-level fallback keeps it resumable.
-    expect(snapshotsCoverResume(snapshots, degradedSteps)).toBe(true);
+    handle.db.update(jobs).set({ reportId: null }).where(eq(jobs.id, jobId)).run();
+    expect(readJobResumeState(jobId)?.resumable).toBe(true);
 
     // 3) Re-resume with a healthy judge: BOTH snapshots reused (analysts must
     //    NOT re-run), a real report is produced — nothing re-billed.
@@ -4056,6 +4976,7 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
     const healthy = mockPasses();
     const rebillGuard: PipelinePasses = {
       ...healthy.passes,
+      fingerprintPayload: () => "1.3.0:degraded-resume",
       runBullThenBear: async () => {
         throw new Error("must not re-run analyst passes — the snapshots were stranded");
       },
@@ -4069,31 +4990,6 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
     expect(result.status).toBe("done");
     expect(result.dataOnly).toBe(false);
     expect(result.reportId).not.toBeNull();
-  });
-
-  it("snapshotsCoverResume: both snapshots + synthesize!=done ⇒ resumable; done or a missing side ⇒ not", () => {
-    const { jobId } = createJob("AAPL");
-    const bothSnap = JSON.stringify({
-      data: fakeAnalystCase(),
-      model: "m",
-      costUsd: 0.9,
-      fallbackUsed: false,
-    });
-    handle.db
-      .update(jobs)
-      .set({ bullJson: bothSnap, bearJson: bothSnap })
-      .where(eq(jobs.id, jobId))
-      .run();
-    const snap = readPassSnapshots(jobId);
-    const skipped = [{ step: "synthesize", status: "skipped" }] as StepProgress[];
-    expect(snapshotsCoverResume(snap, skipped)).toBe(true);
-    // A completed synthesis is never resumable (its report must not be re-billed).
-    expect(snapshotsCoverResume(snap, [{ step: "synthesize", status: "done" }] as StepProgress[])).toBe(false);
-    // A missing side falls to the single-side path, not this fallback.
-    handle.db.update(jobs).set({ bearJson: null }).where(eq(jobs.id, jobId)).run();
-    expect(snapshotsCoverResume(readPassSnapshots(jobId), skipped)).toBe(false);
-    // No snapshots at all.
-    expect(snapshotsCoverResume(null, skipped)).toBe(false);
   });
 
   // Regression (2026-07-20 audit): the sweep's per-row UPDATE dropped the
@@ -4158,6 +5054,7 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
         ]),
         bullJson: snap,
         bearJson: snap,
+        payloadFingerprint: "1.3.0:cancel-window",
       })
       .where(eq(jobs.id, jobId))
       .run();

@@ -4,6 +4,7 @@ import {
   costLog,
   jobPassArtifacts,
   jobs,
+  type CostLogRow,
   type JobPassArtifactRow,
 } from "@/db/schema";
 import {
@@ -89,6 +90,56 @@ export interface CurrentGenerationPassArtifact<T = unknown>
   telemetry: PassTelemetry;
   cost: PassCostDetails;
   settledAt: string;
+}
+
+/** Structural result shared by reusable durable and legacy pass outputs. */
+export interface ReusablePassResult<T> {
+  data: T;
+  model: string;
+  costUsd: number;
+  fallbackUsed: boolean;
+  usage?: {
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+    cache_read_input_tokens?: number | null;
+    cache_creation_input_tokens?: number | null;
+  };
+  webSearches?: number;
+  fetchedUrls?: string[];
+}
+
+export type ReusableAnalystPass = ReusablePassResult<AnalystCase>;
+export type ReusableSynthesizePass = ReusablePassResult<JudgeOutput>;
+export type ReusableVerifyPass = ReusablePassResult<Report>;
+
+/** One coherent database snapshot used by the sole public resume authority. */
+export interface ResumeArtifacts {
+  status: string;
+  runGeneration: number;
+  reportId: number | null;
+  reportExists: boolean;
+  currentArtifacts: CurrentGenerationPassArtifact[];
+  corruptPasses: DurablePass[];
+  legacyBullJson: string | null;
+  legacyBearJson: string | null;
+  legacyPayloadFingerprint: string | null;
+}
+
+export interface JobResumeState {
+  resumable: boolean;
+  reusablePasses: DurablePass[];
+  rerunPasses: DurablePass[];
+  reason: string;
+}
+
+/** Internal typed plan; all public state is projected from this calculation. */
+export interface ComputedJobResumePlan {
+  state: JobResumeState;
+  bull: ReusableAnalystPass | null;
+  bear: ReusableAnalystPass | null;
+  synthesize: ReusableSynthesizePass | null;
+  verify: ReusableVerifyPass | null;
+  payloadFingerprint: string | null;
 }
 
 export interface PassCostDetails {
@@ -203,6 +254,249 @@ function parseOutput(pass: DurablePass, value: unknown): AnalystCase | JudgeOutp
     throw new Error(`jobArtifacts: schema-invalid ${pass} success artifact`);
   }
   return parsed.data;
+}
+
+/** Parse a legacy analyst projection without granting authority to step metadata. */
+export function parseLegacyAnalystSnapshot(json: string | null): ReusableAnalystPass | null {
+  if (json === null || json.length === 0) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!isRecord(raw)) return null;
+  const parsedData = ANALYST_CASE_SCHEMA.safeParse(raw.data);
+  if (
+    !parsedData.success ||
+    typeof raw.model !== "string" ||
+    raw.model.trim().length === 0 ||
+    typeof raw.costUsd !== "number" ||
+    !Number.isFinite(raw.costUsd) ||
+    raw.costUsd < 0 ||
+    typeof raw.fallbackUsed !== "boolean"
+  ) {
+    return null;
+  }
+  const fetchedUrls = Array.isArray(raw.fetchedUrls)
+    ? [
+        ...new Set(
+          raw.fetchedUrls.flatMap((value) => {
+            if (typeof value !== "string") return [];
+            const canonical = canonicalizeFetchedUrl(value);
+            return canonical ? [canonical] : [];
+          }),
+        ),
+      ].sort()
+    : [];
+  const usage = isRecord(raw.usage)
+    ? {
+        input_tokens: typeof raw.usage.input_tokens === "number" ? raw.usage.input_tokens : undefined,
+        output_tokens: typeof raw.usage.output_tokens === "number" ? raw.usage.output_tokens : undefined,
+        cache_read_input_tokens:
+          typeof raw.usage.cache_read_input_tokens === "number"
+            ? raw.usage.cache_read_input_tokens
+            : undefined,
+        cache_creation_input_tokens:
+          typeof raw.usage.cache_creation_input_tokens === "number"
+            ? raw.usage.cache_creation_input_tokens
+            : undefined,
+      }
+    : undefined;
+  return {
+    data: parsedData.data,
+    model: raw.model,
+    costUsd: raw.costUsd,
+    fallbackUsed: raw.fallbackUsed,
+    ...(usage === undefined ? {} : { usage }),
+    ...(typeof raw.webSearches === "number" ? { webSearches: raw.webSearches } : {}),
+    fetchedUrls,
+  };
+}
+
+interface AnalystResumeCandidate {
+  pass: ReusableAnalystPass;
+  fingerprint: string | null;
+  source: "artifact" | "legacy";
+}
+
+function reusableResultFromArtifact<T>(
+  artifact: CurrentGenerationPassArtifact,
+): ReusablePassResult<T> {
+  if (artifact.envelope.outcome !== "success") {
+    throw new Error("jobArtifacts: analyst artifact is not successful");
+  }
+  return {
+    data: artifact.envelope.data as T,
+    model: artifact.telemetry.model,
+    costUsd: artifact.telemetry.costUsd,
+    fallbackUsed: artifact.telemetry.fallbackUsed,
+    usage: {
+      input_tokens: artifact.telemetry.inputTokens,
+      output_tokens: artifact.telemetry.outputTokens,
+      cache_read_input_tokens: artifact.telemetry.cacheReadTokens,
+      cache_creation_input_tokens: artifact.telemetry.cacheWriteTokens,
+    },
+    webSearches: artifact.telemetry.webSearches,
+    fetchedUrls: artifact.telemetry.fetchedUrls,
+  };
+}
+
+function hasKnownPayloadFingerprint(value: string | null): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function analystResumeCandidate(
+  input: ResumeArtifacts,
+  side: "bull" | "bear",
+): AnalystResumeCandidate | null {
+  if (input.corruptPasses.includes(side)) return null;
+  const current = input.currentArtifacts.filter((artifact) => artifact.pass === side);
+  if (current.length > 0) {
+    const successes = current.filter((artifact) => artifact.envelope.outcome === "success");
+    if (successes.length !== 1) return null;
+    const success = successes[0]!;
+    if (!hasKnownPayloadFingerprint(success.envelope.payloadFingerprint)) return null;
+    return {
+      pass: reusableResultFromArtifact<AnalystCase>(success),
+      fingerprint: success.envelope.payloadFingerprint,
+      source: "artifact",
+    };
+  }
+  const fingerprint = input.legacyPayloadFingerprint;
+  if (typeof fingerprint !== "string" || fingerprint.trim().length === 0) return null;
+  const pass = parseLegacyAnalystSnapshot(
+    side === "bull" ? input.legacyBullJson : input.legacyBearJson,
+  );
+  return pass === null ? null : { pass, fingerprint, source: "legacy" };
+}
+
+function notResumable(reason: string): ComputedJobResumePlan {
+  return {
+    state: { resumable: false, reusablePasses: [], rerunPasses: [], reason },
+    bull: null,
+    bear: null,
+    synthesize: null,
+    verify: null,
+    payloadFingerprint: null,
+  };
+}
+
+function singleSuccessfulArtifact(
+  input: ResumeArtifacts,
+  pass: "synthesize" | "verify",
+): CurrentGenerationPassArtifact | null {
+  if (input.corruptPasses.includes(pass)) return null;
+  const successes = input.currentArtifacts.filter(
+    (artifact) => artifact.pass === pass && artifact.envelope.outcome === "success",
+  );
+  if (successes.length !== 1) return null;
+  const success = successes[0]!;
+  const fingerprint = success.envelope.payloadFingerprint;
+  // Verify is a schema-valid final report, so Task 20's explicit null legacy
+  // compatibility remains safe. Every artifact that can feed paid downstream
+  // work must instead carry a known, nonblank payload provenance cohort.
+  if (pass === "verify") {
+    return fingerprint === null || hasKnownPayloadFingerprint(fingerprint) ? success : null;
+  }
+  return hasKnownPayloadFingerprint(fingerprint) ? success : null;
+}
+
+/** Detailed calculation consumed by preparation/execution; never inspect stepsJson. */
+export function computeJobResumePlan(input: ResumeArtifacts): ComputedJobResumePlan {
+  if (input.status !== "done" && input.status !== "error") {
+    return notResumable(`job status ${input.status} is not terminal`);
+  }
+  if (input.reportId !== null && input.reportExists) {
+    return notResumable("linked report already exists");
+  }
+  const dangling = input.reportId !== null && !input.reportExists;
+  const verifyArtifact = singleSuccessfulArtifact(input, "verify");
+  if (verifyArtifact !== null) {
+    return {
+      state: {
+        resumable: true,
+        reusablePasses: ["verify"],
+        rerunPasses: [],
+        reason: dangling
+          ? "dangling report link; reusable verified report is available"
+          : "reusable verified report is available",
+      },
+      bull: null,
+      bear: null,
+      synthesize: null,
+      verify: reusableResultFromArtifact<Report>(verifyArtifact),
+      payloadFingerprint: verifyArtifact.envelope.payloadFingerprint,
+    };
+  }
+  const synthesizeArtifact = singleSuccessfulArtifact(input, "synthesize");
+  if (synthesizeArtifact !== null) {
+    return {
+      state: {
+        resumable: true,
+        reusablePasses: ["synthesize"],
+        rerunPasses: ["verify"],
+        reason: dangling
+          ? "dangling report link; reusable synthesize work is available"
+          : "reusable synthesize work is available",
+      },
+      bull: null,
+      bear: null,
+      synthesize: reusableResultFromArtifact<JudgeOutput>(synthesizeArtifact),
+      verify: null,
+      payloadFingerprint: synthesizeArtifact.envelope.payloadFingerprint,
+    };
+  }
+
+  for (const side of ["bull", "bear"] as const) {
+    const successes = input.currentArtifacts.filter(
+      (artifact) => artifact.pass === side && artifact.envelope.outcome === "success",
+    );
+    if (successes.length > 1) {
+      return notResumable(`ambiguous current-generation ${side} successes`);
+    }
+  }
+
+  let bull = analystResumeCandidate(input, "bull");
+  let bear = analystResumeCandidate(input, "bear");
+  if (bull && bear && bull.fingerprint !== bear.fingerprint) {
+    if (bull.source === "artifact" && bear.source === "legacy") bear = null;
+    else if (bear.source === "artifact" && bull.source === "legacy") bull = null;
+    else return notResumable("reusable analyst artifacts have incompatible fingerprints");
+  }
+  if (bull === null && bear === null) {
+    return notResumable("no reusable successful pass artifact");
+  }
+
+  const reusablePasses = DURABLE_PASSES.filter(
+    (pass) => (pass === "bull" && bull !== null) || (pass === "bear" && bear !== null),
+  );
+  const rerunPasses = DURABLE_PASSES.filter(
+    (pass) =>
+      (pass === "bull" && bull === null) ||
+      (pass === "bear" && bear === null) ||
+      pass === "synthesize" ||
+      pass === "verify",
+  );
+  return {
+    state: {
+      resumable: true,
+      reusablePasses,
+      rerunPasses,
+      reason: dangling
+        ? "dangling report link; reusable analyst work is available"
+        : "reusable analyst work is available",
+    },
+    bull: bull?.pass ?? null,
+    bear: bear?.pass ?? null,
+    synthesize: null,
+    verify: null,
+    payloadFingerprint: bull?.fingerprint ?? bear?.fingerprint ?? null,
+  };
+}
+
+export function computeJobResumeState(input: ResumeArtifacts): JobResumeState {
+  return computeJobResumePlan(input).state;
 }
 
 export function parsePassArtifactEnvelope<T = unknown>(
@@ -444,7 +738,7 @@ function costWhere(identity: PassArtifactIdentity) {
 }
 
 function matchingCost(
-  row: typeof costLog.$inferSelect,
+  row: CostLogRow,
   telemetry: PassTelemetry,
 ): boolean {
   return row.model === telemetry.model &&
@@ -455,6 +749,13 @@ function matchingCost(
     row.webSearches === telemetry.webSearches &&
     row.costUsd === telemetry.costUsd &&
     row.fallbackUsed === telemetry.fallbackUsed;
+}
+
+export function passCostMatchesTelemetry(
+  row: CostLogRow,
+  telemetry: PassTelemetry,
+): boolean {
+  return matchingCost(row, telemetry);
 }
 
 function legacySnapshot<T>(data: T, telemetry: PassTelemetry): string {
@@ -629,58 +930,122 @@ export function parsePassArtifactRow(row: JobPassArtifactRow): CurrentGeneration
   };
 }
 
-/** Read and strictly validate only artifacts belonging to the job's current generation. */
-export function readCurrentGenerationPassArtifacts(
+type ArtifactReadDb = Pick<ThesisDb, "select">;
+
+export interface GenerationPassArtifactRead {
+  artifacts: CurrentGenerationPassArtifact[];
+  corruptPasses: DurablePass[];
+  /** Parser/pairing detail retained so the legacy strict reader stays exact. */
+  corruptionReasons: Partial<Record<DurablePass, string>>;
+}
+
+/** Resume-safe reader: corruption suppresses only the affected durable pass. */
+export function readGenerationResumeArtifacts(
+  db: ArtifactReadDb,
   jobId: string,
-): CurrentGenerationPassArtifact[] {
-  const row = getDb()
-    .select({ runGeneration: jobs.runGeneration })
-    .from(jobs)
-    .where(eq(jobs.id, jobId))
-    .get();
-  if (!row) return [];
-  const rows = getDb()
+  runGeneration: number,
+): GenerationPassArtifactRead {
+  const rows = db
     .select()
     .from(jobPassArtifacts)
     .where(and(
       eq(jobPassArtifacts.jobId, jobId),
-      eq(jobPassArtifacts.runGeneration, row.runGeneration),
+      eq(jobPassArtifacts.runGeneration, runGeneration),
     ))
     .all();
-  const parsed = rows
-    .map(parsePassArtifactRow)
-    .sort((left, right) =>
-      left.settledAt.localeCompare(right.settledAt) ||
-      left.pass.localeCompare(right.pass) ||
-      left.attemptId.localeCompare(right.attemptId),
-    );
-  const ledger = getDb()
+  const ledger = db
     .select()
     .from(costLog)
     .where(and(
       eq(costLog.jobId, jobId),
-      eq(costLog.runGeneration, row.runGeneration),
+      eq(costLog.runGeneration, runGeneration),
     ))
     .all()
     .filter((cost) => cost.attemptId !== null);
-  for (const artifact of parsed) {
-    const costs = ledger.filter(
-      (cost) => cost.attemptId === artifact.attemptId && cost.step === artifact.pass,
-    );
-    if (artifact.cost.billable) {
-      if (costs.length !== 1 || !matchingCost(costs[0]!, artifact.telemetry)) {
-        throw new Error("jobArtifacts: billable artifact has no exact cost pair");
+  const artifacts: CurrentGenerationPassArtifact[] = [];
+  const corrupt = new Set<DurablePass>();
+  const corruptionReasons: Partial<Record<DurablePass, string>> = {};
+  const hasUnknownPass = rows.some(
+    (row) => !(DURABLE_PASSES as readonly string[]).includes(row.pass),
+  ) || ledger.some(
+    (row) => !(DURABLE_PASSES as readonly string[]).includes(row.step),
+  );
+  if (hasUnknownPass) {
+    for (const pass of DURABLE_PASSES) {
+      corruptionReasons[pass] = "jobArtifacts: invalid pass identity";
+    }
+    return {
+      artifacts: [],
+      corruptPasses: [...DURABLE_PASSES],
+      corruptionReasons,
+    };
+  }
+
+  for (const pass of DURABLE_PASSES) {
+    const passRows = rows.filter((row) => row.pass === pass);
+    const passLedger = ledger.filter((row) => row.step === pass);
+    const parsed: CurrentGenerationPassArtifact[] = [];
+    try {
+      for (const row of passRows) parsed.push(parsePassArtifactRow(row));
+      for (const artifact of parsed) {
+        const costs = passLedger.filter((cost) => cost.attemptId === artifact.attemptId);
+        if (artifact.cost.billable) {
+          if (costs.length !== 1 || !matchingCost(costs[0]!, artifact.telemetry)) {
+            throw new Error("jobArtifacts: billable artifact has no exact cost pair");
+          }
+        } else if (costs.length !== 0) {
+          throw new Error("jobArtifacts: unbillable artifact unexpectedly has a cost row");
+        }
       }
-    } else if (costs.length !== 0) {
-      throw new Error("jobArtifacts: unbillable artifact unexpectedly has a cost row");
+      for (const cost of passLedger) {
+        if (!parsed.some((artifact) => artifact.attemptId === cost.attemptId)) {
+          throw new Error("jobArtifacts: cost row exists without its artifact");
+        }
+      }
+      artifacts.push(...parsed);
+    } catch (error) {
+      corrupt.add(pass);
+      corruptionReasons[pass] = error instanceof Error ? error.message : String(error);
     }
   }
-  for (const cost of ledger) {
-    if (!parsed.some(
-      (artifact) => artifact.attemptId === cost.attemptId && artifact.pass === cost.step,
-    )) {
-      throw new Error("jobArtifacts: cost row exists without its artifact");
-    }
+  artifacts.sort((left, right) =>
+    left.settledAt.localeCompare(right.settledAt) ||
+    left.pass.localeCompare(right.pass) ||
+    left.attemptId.localeCompare(right.attemptId),
+  );
+  return {
+    artifacts,
+    corruptPasses: DURABLE_PASSES.filter((pass) => corrupt.has(pass)),
+    corruptionReasons,
+  };
+}
+
+/** Strictly read one explicit generation, including every artifact/cost pairing. */
+export function readGenerationPassArtifacts(
+  db: ArtifactReadDb,
+  jobId: string,
+  runGeneration: number,
+): CurrentGenerationPassArtifact[] {
+  const result = readGenerationResumeArtifacts(db, jobId, runGeneration);
+  if (result.corruptPasses.length > 0) {
+    const first = result.corruptPasses[0]!;
+    throw new Error(
+      result.corruptionReasons[first] ??
+        `jobArtifacts: corrupt artifact/cost pair for ${result.corruptPasses.join(", ")}`,
+    );
   }
-  return parsed;
+  return result.artifacts;
+}
+
+/** Read and strictly validate only artifacts belonging to the job's current generation. */
+export function readCurrentGenerationPassArtifacts(
+  jobId: string,
+): CurrentGenerationPassArtifact[] {
+  const db = getDb();
+  const row = db
+    .select({ runGeneration: jobs.runGeneration })
+    .from(jobs)
+    .where(eq(jobs.id, jobId))
+    .get();
+  return row === undefined ? [] : readGenerationPassArtifacts(db, jobId, row.runGeneration);
 }

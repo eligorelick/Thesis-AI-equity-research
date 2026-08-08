@@ -310,6 +310,15 @@ function makeReport(overrides: Partial<Report> = {}): Report {
   return { ...base, ...overrides };
 }
 
+function diffContext(from: Report, to: Report) {
+  return {
+    fromReportVersion: from.meta.pipelineVersion,
+    toReportVersion: to.meta.pipelineVersion,
+    fromSpecVersion: from.meta.specVersion,
+    toSpecVersion: to.meta.specVersion,
+  };
+}
+
 /* ------------------------------------------------------------------------ *
  * Valid fixture parses
  * ------------------------------------------------------------------------ */
@@ -903,12 +912,14 @@ describe("diffReports", () => {
     const a = makeReport();
     const b = makeReport();
     b.verdict.gradeStrip.valuation = gradeBlock("D"); // was C
-    const diff = diffReports(a, b);
-    expect(diff.gradeChanges).toContainEqual({
-      section: "valuation",
-      from: "C",
-      to: "D",
-    });
+    const diff = diffReports(a, b, diffContext(a, b));
+    expect(diff.gradeChanges).toContainEqual(
+      expect.objectContaining({
+        section: "valuation",
+        from: "C",
+        to: "D",
+      }),
+    );
     // Unchanged sections do not appear.
     expect(diff.gradeChanges.every((g) => g.section !== "fundamentals")).toBe(
       true,
@@ -927,7 +938,7 @@ describe("diffReports", () => {
         reasoning: claim("EU approval opens a new market."),
       },
     ];
-    const diff = diffReports(a, b);
+    const diff = diffReports(a, b, diffContext(a, b));
     expect(diff.newCatalysts).toContain("Regulatory approval in the EU");
     // The original "AI feature launch" is gone from b.
     expect(diff.removedCatalysts).toContain("AI feature launch");
@@ -938,7 +949,7 @@ describe("diffReports", () => {
     const b = makeReport();
     // Reword the same catalyst — high similarity, should NOT count as new/removed.
     b.catalystsRisks.catalysts[0].title = "AI features launch";
-    const diff = diffReports(a, b);
+    const diff = diffReports(a, b, diffContext(a, b));
     expect(diff.newCatalysts).toHaveLength(0);
     expect(diff.removedCatalysts).toHaveLength(0);
   });
@@ -955,7 +966,7 @@ describe("diffReports", () => {
       source: "web:news",
       reasoning: claim("Pending antitrust cases."),
     });
-    const diff = diffReports(a, b);
+    const diff = diffReports(a, b, diffContext(a, b));
     expect(diff.newRisks).toEqual(["Antitrust litigation"]);
     expect(diff.removedRisks).toHaveLength(0);
   });
@@ -968,7 +979,7 @@ describe("diffReports", () => {
       scenario("base", 0.5, 190),
       scenario("bear", 0.2, 140),
     ];
-    const diff = diffReports(a, b);
+    const diff = diffReports(a, b, diffContext(a, b));
     const bull = diff.targetChanges.find((t) => t.scenario === "bull");
     expect(bull).toBeDefined();
     expect(bull?.fromValue).toBe(240);
@@ -981,13 +992,15 @@ describe("diffReports", () => {
     const b = makeReport();
     b.verdict.synthesis = "The thesis has shifted materially on new data.";
     b.meta.costUsd = 2.6; // a.meta.costUsd = 2.1
-    const diff = diffReports(a, b);
+    const diff = diffReports(a, b, diffContext(a, b));
     expect(diff.verdictChanged).toBe(true);
     expect(diff.costDelta).toBeCloseTo(0.5, 5);
   });
 
   it("reports no changes for identical reports", () => {
-    const diff = diffReports(makeReport(), makeReport());
+    const a = makeReport();
+    const b = makeReport();
+    const diff = diffReports(a, b, diffContext(a, b));
     expect(diff.gradeChanges).toHaveLength(0);
     expect(diff.targetChanges).toHaveLength(0);
     expect(diff.newCatalysts).toHaveLength(0);
@@ -996,6 +1009,49 @@ describe("diffReports", () => {
     expect(diff.removedRisks).toHaveLength(0);
     expect(diff.verdictChanged).toBe(false);
     expect(diff.costDelta).toBe(0);
+  });
+
+  it("fails closed for cross-entity direct diffs and accepts dot-hyphen aliases", () => {
+    const aapl = makeReport();
+    const msft = makeReport();
+    msft.meta.symbol = "MSFT";
+    msft.valuation.scenarios[0]!.priceTarget!.value = 999;
+    msft.meta.costUsd = 99;
+    const crossEntity = diffReports(aapl, msft, diffContext(aapl, msft));
+    expect(crossEntity.comparisonStatus).toBe("not-comparable");
+    expect(crossEntity.notComparableReasons).toContain("entity-mismatch");
+    expect(crossEntity.targetChanges).toEqual([]);
+    expect(crossEntity.costDelta).toBe(0);
+
+    const dot = makeReport();
+    const hyphen = makeReport();
+    dot.meta.symbol = "BRK.B";
+    hyphen.meta.symbol = "BRK-B";
+    const aliases = diffReports(dot, hyphen, diffContext(dot, hyphen));
+    expect(aliases.comparisonStatus).toBe("unchanged");
+    expect(aliases.notComparableReasons).toEqual([]);
+  });
+
+  it("diffs legacy optional score and projection blocks without changing schema compatibility", () => {
+    const legacy = makeReport();
+    const current = makeReport();
+    current.scores = scoring();
+    current.projections = projections();
+    const legacyBytes = JSON.stringify(legacy);
+    const currentBytes = JSON.stringify(current);
+
+    expect(ReportSchema.safeParse(legacy).success).toBe(true);
+    expect(ReportSchema.safeParse(current).success).toBe(true);
+    const diff = diffReports(legacy, current, diffContext(legacy, current));
+    expect(diff.scoreChanges).toHaveLength(8);
+    expect(diff.scoreChanges.every((change) => change.transition === "added")).toBe(true);
+    expect(diff.projectionChanges).toHaveLength(20);
+    expect(diff.projectionChanges.every((change) => change.transition === "added")).toBe(true);
+    for (const path of ["historical", "bull", "base", "bear", "weighted"] as const) {
+      expect(diff.projectionChanges.filter((change) => change.path === path)).toHaveLength(4);
+    }
+    expect(JSON.stringify(legacy)).toBe(legacyBytes);
+    expect(JSON.stringify(current)).toBe(currentBytes);
   });
 });
 

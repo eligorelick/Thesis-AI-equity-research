@@ -17,12 +17,17 @@
 
 import "server-only";
 
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 
 import { getDb } from "@/db";
 import { reports, type ReportRow } from "@/db/schema";
 import { parseStoredReportWithSafety } from "@/report/legacyEntitySafety";
 import type { Report } from "@/report/schema";
+import {
+  canonicalEntitySymbol,
+  normalizeSymbol,
+  sameEntitySymbol,
+} from "@/symbol";
 import type { Grade } from "@/types/core";
 
 /* ------------------------------------------------------------------------ *
@@ -96,9 +101,20 @@ export function parseStoredReport(reportJson: string | null): Report | null {
   return parseStoredReportWithSafety(reportJson)?.report ?? null;
 }
 
+/** Row and embedded identities must both be valid and name the same entity. */
+function rowMatchesEmbeddedReport(row: ReportRow, report: Report): boolean {
+  return (
+    normalizeSymbol(row.symbol) !== null &&
+    normalizeSymbol(report.meta.symbol) !== null &&
+    sameEntitySymbol(row.symbol, report.meta.symbol)
+  );
+}
+
 /** Build a {@link ReportSummary} from a raw row, parsing its report content. */
 function toSummary(row: ReportRow): ReportSummary {
-  const report = parseStoredReport(row.reportJson);
+  const parsed = parseStoredReport(row.reportJson);
+  const report =
+    parsed !== null && rowMatchesEmbeddedReport(row, parsed) ? parsed : null;
   return {
     id: row.id,
     symbol: row.symbol,
@@ -121,10 +137,14 @@ function toSummary(row: ReportRow): ReportSummary {
  * diff a partial row and see its metadata).
  */
 export function listReportsForSymbol(symbol: string): ReportSummary[] {
+  const canonical = canonicalEntitySymbol(symbol);
+  if (canonical === null) return [];
   const rows = getDb()
     .select()
     .from(reports)
-    .where(eq(reports.symbol, symbol))
+    .where(
+      sql`upper(replace(${reports.symbol}, '-', '.')) = ${canonical}`,
+    )
     .orderBy(desc(reports.createdAt), desc(reports.id))
     .all();
   return rows.map(toSummary);
@@ -147,10 +167,14 @@ export interface RunRef {
  * with many. Symbols are stored uppercased by the runner; callers uppercase.
  */
 export function listRunRefsForSymbol(symbol: string): RunRef[] {
+  const canonical = canonicalEntitySymbol(symbol);
+  if (canonical === null) return [];
   return getDb()
     .select({ id: reports.id, createdAt: reports.createdAt, status: reports.status })
     .from(reports)
-    .where(eq(reports.symbol, symbol))
+    .where(
+      sql`upper(replace(${reports.symbol}, '-', '.')) = ${canonical}`,
+    )
     .orderBy(desc(reports.createdAt), desc(reports.id))
     .all();
 }
@@ -226,10 +250,16 @@ export function getReportById(id: number): LoadedReport | null {
 
 /** Load one report only when it belongs to the requested URL/company symbol. */
 export function getReportByIdForSymbol(id: number, symbol: string): LoadedReport | null {
+  const expected = normalizeSymbol(symbol);
+  if (expected === null) return null;
   const loaded = getReportById(id);
   if (loaded === null) return null;
-  const expected = symbol.trim().toUpperCase();
-  return loaded.row.symbol === expected ? loaded : null;
+  return (
+    sameEntitySymbol(expected, loaded.row.symbol) &&
+    sameEntitySymbol(expected, loaded.report.meta.symbol)
+  )
+    ? loaded
+    : null;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -253,6 +283,13 @@ export function loadReportPair(aId: number, bId: number): ReportPair | null {
   const a = getReportById(aId);
   const b = getReportById(bId);
   if (a === null || b === null) return null;
+  if (
+    !rowMatchesEmbeddedReport(a.row, a.report) ||
+    !rowMatchesEmbeddedReport(b.row, b.report)
+  ) {
+    return null;
+  }
+  if (!sameEntitySymbol(a.row.symbol, b.row.symbol)) return null;
   return { a, b };
 }
 
@@ -269,10 +306,16 @@ export function loadReportPairForSymbol(
   bId: number,
   symbol: string,
 ): ReportPair | null {
+  const expected = normalizeSymbol(symbol);
+  if (expected === null) return null;
   const pair = loadReportPair(aId, bId);
   if (pair === null) return null;
-  const expected = symbol.trim().toUpperCase();
-  if (pair.a.row.symbol !== expected || pair.b.row.symbol !== expected) {
+  if (
+    !sameEntitySymbol(expected, pair.a.row.symbol) ||
+    !sameEntitySymbol(expected, pair.a.report.meta.symbol) ||
+    !sameEntitySymbol(expected, pair.b.row.symbol) ||
+    !sameEntitySymbol(expected, pair.b.report.meta.symbol)
+  ) {
     return null;
   }
   return pair;

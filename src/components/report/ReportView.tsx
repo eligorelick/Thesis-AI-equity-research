@@ -13,8 +13,8 @@
  *   - all sections in SPEC §7 order as anchored blocks;
  *   - a right-rail sticky anchor nav (the denser option vs. tabs) for jumping.
  *
- * Data-only reports (the LLM analysis did not run — no API key, or a degraded
- * pass) are detected exactly as the view API detects them
+ * Data-only reports (the multi-pass analysis is absent, including attempted
+ * passes that failed) are detected exactly as the view API detects them
  * (appendix.missingData has an `analysis.llm` entry) and render a clear banner;
  * the graded LLM sections still render (the data-only report carries all-F
  * placeholder grades with a data-only synthesis) but the banner sets
@@ -31,6 +31,7 @@
 import type { ReactNode } from "react";
 
 import type { Report } from "@/report/schema";
+import { deriveReportCompletenessPresentation } from "@/report/completeness";
 import {
   REPORT_SECTION_MANIFEST,
   reportSection,
@@ -108,22 +109,16 @@ function AnchorNav() {
  * billing real cost). Hardcoding "no API key" here misdescribed the 2026-07-10
  * incident, where two ~8-minute analyst passes billed and then died overloaded.
  */
-function DataOnlyBanner({ reason }: { reason: string | null }) {
+function DataOnlyBanner({ text }: { text: string }) {
   return (
     <div className="border border-warn/50 bg-warn/10 px-3 py-2.5">
       <div className="flex items-center gap-2">
         <span className="mono border border-warn/50 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.1em] text-warn">
           data-only
         </span>
-        <span className="text-[12px] font-medium text-warn">
-          {reason ?? "no LLM analysis in this report"}
-        </span>
       </div>
       <p className="mt-1 text-[11px] leading-snug text-muted">
-        The multi-pass AI analysis is absent from this report, so the graded
-        sections below carry placeholder grades and no reasoning. The fetched
-        data, computed metrics, and the disclosed missing-data manifest (in the
-        appendix) are still complete.
+        {text}
       </p>
     </div>
   );
@@ -144,7 +139,10 @@ export function ReportView({
   technicalsChart?: ReactNode;
   fundamentalsChart?: ReactNode;
 }) {
-  const dataOnly = isDataOnlyReport(report);
+  const completeness = deriveReportCompletenessPresentation(
+    report.meta.dataCompleteness,
+    report.appendix.missingData,
+  );
   const sections: Record<ReportSectionKey, ReactNode> = {
     verdict: (
       <div id={sectionAnchorId("verdict")} className="scroll-mt-28">
@@ -168,7 +166,7 @@ export function ReportView({
     outlook: <OutlookSection outlook={report.outlook} index={reportSection("outlook").index} />,
     projections: report.projections ? <ProjectionsSection projections={report.projections} index={reportSection("projections").index} /> : null,
     macro: <MacroSection macro={report.macro} index={reportSection("macro").index} />,
-    appendix: <AppendixSection appendix={report.appendix} disagreements={report.disagreements} index={reportSection("appendix").index} />,
+    appendix: <AppendixSection appendix={report.appendix} disagreements={report.disagreements} asOfMap={report.meta.asOfMap} completeness={completeness} index={reportSection("appendix").index} />,
   };
 
   return (
@@ -178,15 +176,9 @@ export function ReportView({
         <GradeStripBar gradeStrip={report.verdict.gradeStrip} compact />
       </div>
 
-      {report.meta && <ReportMetaStrip report={report} />}
+      {report.meta && <ReportMetaStrip report={report} completeness={completeness} />}
 
-      {dataOnly && (
-        <DataOnlyBanner
-          reason={
-            report.appendix.missingData.find((m) => m.field === "analysis.llm")?.reason ?? null
-          }
-        />
-      )}
+      {completeness.bannerText && <DataOnlyBanner text={completeness.bannerText} />}
 
       <div className="flex gap-4">
         {/* Main column */}

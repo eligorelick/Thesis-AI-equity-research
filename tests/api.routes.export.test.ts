@@ -21,6 +21,7 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // @/report/history (pulled in by the export route) imports the `server-only`
@@ -29,10 +30,12 @@ vi.mock("server-only", () => ({}));
 
 import { createDatabase, setDbForTests, type DatabaseHandle } from "@/db";
 import { reports } from "@/db/schema";
+import { buildDataCompleteness } from "@/report/completeness";
 import { ReportSchema, REPORT_SPEC_VERSION, type Report } from "@/report/schema";
 
 import { GET as exportGET } from "@/app/api/export/[reportId]/route";
 import { GET as viewGET } from "@/app/api/report/view/[reportId]/route";
+import { task28SentinelReport } from "./helpers/task28Report";
 
 /* ------------------------------------------------------------------------ *
  * Harness
@@ -148,8 +151,41 @@ describe("GET /api/export/[reportId]", () => {
     report.meta.symbol = "LLY";
     report.meta.companyName = "Eli Lilly and Company";
     report.verdict.synthesis = entityConflict;
+    report.scores!.aspects.fundamentals.drivers[0]!.verificationNote = entityConflict;
     return JSON.stringify(ReportSchema.parse(report));
   }
+
+  it("renders Task 28 score, evidence, projection, and provenance sentinels through both persisted export routes", async () => {
+    const report = task28SentinelReport();
+    const storedBytes = JSON.stringify(report);
+    const id = seedReport(report);
+
+    const markdownResponse = await exportGET(...exportReq(String(id), "md"));
+    const printResponse = await exportGET(...exportReq(String(id), "pdf"));
+    expect(markdownResponse.status).toBe(200);
+    expect(printResponse.status).toBe(200);
+    const markdown = await markdownResponse.text();
+    const print = await printResponse.text();
+    for (const output of [markdown, print]) {
+      for (const sentinel of [
+        "TASK28:composite:methodology",
+        "TASK28:fundamentals:driver:duplicate-identity-note",
+        "TASK28:evidence:guidanceVsActuals:source-id",
+        "TASK28:evidence:compensation:source-display",
+        "TASK28:revenue:historical:0:source-id",
+        "TASK28:epsDiluted:weighted:1:citation-note",
+        "TASK28:PROJECTION-WEIGHTS:VERSION",
+        "TASK28.verification.computed.path",
+        "TASK28.asOfMap.alpha",
+      ]) expect(output).toContain(sentinel);
+    }
+
+    const stored = handle.db.select({ reportJson: reports.reportJson })
+      .from(reports)
+      .where(eq(reports.id, id))
+      .get();
+    expect(stored?.reportJson).toBe(storedBytes);
+  });
 
   it("applies immutable legacy entity safety to the Markdown API read", async () => {
     const entityConflict = "TRIUMPH evaluates Foundayo";
@@ -304,6 +340,131 @@ describe("GET /api/export/[reportId]", () => {
  * ------------------------------------------------------------------------ */
 
 describe("GET /api/report/view/[reportId]", () => {
+  it("returns persisted completeness and the complete missing-data manifest without mutation", async () => {
+    const report = task28SentinelReport();
+    const storedBytes = JSON.stringify(report);
+    const id = seedReport(report);
+
+    const response = await viewGET(...viewReq(String(id)));
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      dataOnly: boolean | null;
+      dataCompleteness: unknown;
+      missingData: unknown;
+    };
+    expect(body.dataOnly).toBe(false);
+    expect(body.dataCompleteness).toEqual(report.meta.dataCompleteness);
+    expect(body.missingData).toEqual(report.appendix.missingData);
+
+    const stored = handle.db.select({ reportJson: reports.reportJson })
+      .from(reports)
+      .where(eq(reports.id, id))
+      .get();
+    expect(stored?.reportJson).toBe(storedBytes);
+  });
+
+  it("keeps parseable legacy completeness unknown while preserving its manifest and data-only truth", async () => {
+    const report = task28SentinelReport();
+    delete report.meta.dataCompleteness;
+    const storedBytes = JSON.stringify(report);
+    const id = seedReport(ReportSchema.parse(report));
+
+    const response = await viewGET(...viewReq(String(id)));
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      dataOnly: boolean | null;
+      dataCompleteness: unknown;
+      missingData: unknown;
+    };
+    expect(body.dataOnly).toBe(false);
+    expect(body.dataCompleteness).toBeNull();
+    expect(body.missingData).toEqual(report.appendix.missingData);
+    expect(handle.db.select({ reportJson: reports.reportJson })
+      .from(reports).where(eq(reports.id, id)).get()?.reportJson).toBe(storedBytes);
+  });
+
+  it("keeps exact analysis.llm data-only truth when legacy completeness metadata is absent", async () => {
+    const report = task28SentinelReport();
+    report.appendix.missingData.unshift({
+      field: "analysis.llm",
+      reason: "TASK28:legacy:data-only:reason",
+      severity: "critical",
+      attemptedSources: ["anthropic"],
+    });
+    delete report.meta.dataCompleteness;
+    const storedBytes = JSON.stringify(report);
+    const id = seedReport(ReportSchema.parse(report));
+
+    const response = await viewGET(...viewReq(String(id)));
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      dataOnly: boolean | null;
+      dataCompleteness: unknown;
+      missingData: unknown;
+    };
+    expect(body.dataOnly).toBe(true);
+    expect(body.dataCompleteness).toBeNull();
+    expect(body.missingData).toEqual(report.appendix.missingData);
+    expect(JSON.stringify(body)).toContain("TASK28:legacy:data-only:reason");
+    expect(handle.db.select({ reportJson: reports.reportJson })
+      .from(reports).where(eq(reports.id, id)).get()?.reportJson).toBe(storedBytes);
+  });
+
+  it("returns inconsistent persisted completeness unchanged for client-side unknown presentation", async () => {
+    const report = task28SentinelReport();
+    report.meta.dataCompleteness = {
+      ...report.meta.dataCompleteness!,
+      warningCount: 99,
+    };
+    const storedBytes = JSON.stringify(report);
+    const id = seedReport(ReportSchema.parse(report));
+
+    const response = await viewGET(...viewReq(String(id)));
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      dataOnly: boolean | null;
+      dataCompleteness: unknown;
+      missingData: unknown;
+    };
+    expect(body.dataOnly).toBe(false);
+    expect(body.dataCompleteness).toEqual(report.meta.dataCompleteness);
+    expect(body.missingData).toEqual(report.appendix.missingData);
+    expect(handle.db.select({ reportJson: reports.reportJson })
+      .from(reports).where(eq(reports.id, id)).get()?.reportJson).toBe(storedBytes);
+  });
+
+  it("returns a confirmed data-only compact summary from exact analysis.llm metadata", async () => {
+    const report = task28SentinelReport();
+    report.appendix.missingData.unshift({
+      field: "analysis.llm",
+      reason: "TASK28:data-only:provider-unavailable",
+      severity: "critical",
+      attemptedSources: ["TASK28:data-only:provider"],
+      expected: false,
+    });
+    report.meta.dataCompleteness = buildDataCompleteness(report.appendix.missingData);
+    const storedBytes = JSON.stringify(report);
+    const id = seedReport(ReportSchema.parse(report));
+
+    const response = await viewGET(...viewReq(String(id)));
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      dataOnly: boolean | null;
+      dataCompleteness: unknown;
+      missingData: unknown;
+    };
+    expect(body.dataOnly).toBe(true);
+    expect(body.dataCompleteness).toEqual(report.meta.dataCompleteness);
+    expect(body.missingData).toEqual(report.appendix.missingData);
+    expect(JSON.stringify(body)).toContain("TASK28:data-only:provider-unavailable");
+
+    const stored = handle.db.select({ reportJson: reports.reportJson })
+      .from(reports)
+      .where(eq(reports.id, id))
+      .get();
+    expect(stored?.reportJson).toBe(storedBytes);
+  });
+
   it("applies immutable legacy entity safety and exposes its critical disclosure", async () => {
     const entityConflict = "TRIUMPH evaluates Foundayo";
     const report = clone(loadFixtureReport());
@@ -409,7 +570,7 @@ describe("GET /api/report/view/[reportId]", () => {
 
   it("degrades to a friendly payload (no throw) when the stored JSON is malformed", async () => {
     // Seed a row whose reportJson cannot be parsed — the route must still 200
-    // with empty grades and dataOnly=true rather than 500.
+    // with empty grades and unknown completeness rather than 500.
     const row = handle.db
       .insert(reports)
       .values({
@@ -430,12 +591,16 @@ describe("GET /api/report/view/[reportId]", () => {
     const body = (await res.json()) as {
       symbol: string;
       grades: unknown[];
-      dataOnly: boolean;
+      dataOnly: boolean | null;
+      dataCompleteness: unknown;
+      missingData: unknown;
       synthesis: string;
     };
     expect(body.symbol).toBe("AAPL");
     expect(body.grades).toEqual([]);
-    expect(body.dataOnly).toBe(true);
+    expect(body.dataOnly).toBeNull();
+    expect(body.dataCompleteness).toBeNull();
+    expect(body.missingData).toBeNull();
     expect(body.synthesis).toContain("unavailable");
   });
 });

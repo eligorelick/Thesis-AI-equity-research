@@ -17,7 +17,6 @@ import type { ReactNode } from "react";
 import {
   Badge,
   DataTable,
-  GapNotice,
   GradeChip,
   ScorePill,
   SectionHeading,
@@ -55,14 +54,30 @@ import type {
 import { citationOutcomeLabel } from "@/report/schema";
 import {
   formatCostUsd,
-  formatVerificationClaim,
   roundedDisplayedCostTotal,
 } from "@/report/format";
+import type { ReportCompletenessPresentation } from "@/report/completeness";
+import { deriveReportCompletenessPresentation } from "@/report/completeness";
 import type { Grade } from "@/types/core";
 import {
   EXECUTIVE_EVIDENCE_GROUPS,
+  ASPECT_SCORE_FIELDS,
+  AS_OF_MAP_FIELDS,
+  COMPOSITE_SCORE_FIELDS,
+  MANIFEST_ENTRY_FIELDS,
+  PROJECTION_METRIC_BY_KEY,
+  PROJECTION_PATHS,
+  PROJECTION_POINT_FIELD_BY_KEY,
+  PROJECTION_ROOT_FIELDS,
+  PROJECTION_SCENARIO_WEIGHTS,
+  PROJECTION_DISCLOSURE_FIELDS,
+  PROJECTION_SERIES_FIELD_BY_KEY,
+  SCORE_WEIGHTS,
   SCORE_SURFACES,
   SCORE_SURFACE_BY_KEY,
+  SOURCE_ENTRY_FIELDS,
+  TRACED_NUMBER_FIELDS,
+  VERIFICATION_LOG_FIELDS,
   gradeSurfaceEntries,
   orderedProjectionSeries,
 } from "@/report/surfaceManifest";
@@ -131,20 +146,84 @@ export function SectionFrame({
 /** Small labeled sub-block used inside sections. */
 function SubBlock({
   label,
+  semanticToken,
   children,
 }: {
   label: ReactNode;
+  semanticToken?: string;
   children: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="text-[9px] uppercase tracking-[0.12em] text-faint">
+        {semanticToken && <span aria-hidden="true" className="sr-only">{semanticToken}</span>}
         {label}
       </div>
       {children}
     </div>
   );
 }
+
+interface AuditRow {
+  key: string;
+  cells: readonly ReactNode[];
+}
+
+function AuditTable({
+  headers,
+  rows,
+}: {
+  headers: readonly string[];
+  rows: readonly AuditRow[];
+}) {
+  return (
+    <div className="overflow-x-auto border border-edge">
+      <table className="w-full border-collapse text-[10px]">
+        <thead>
+          <tr className="border-b border-edge bg-raised">
+            {headers.map((header, headerIndex) => (
+              <th key={`${headerIndex}:${header}`} className="whitespace-nowrap px-2 py-1 text-left font-medium text-faint">
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr><td colSpan={headers.length} className="px-2 py-1 text-faint">n/a</td></tr>
+          ) : rows.map((row) => (
+            <tr key={row.key} className="border-b border-edge last:border-b-0">
+              {row.cells.map((cell, index) => (
+                <td key={index} className="whitespace-nowrap px-2 py-1 align-top text-muted">
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function auditValue(value: string | number | boolean | null | undefined): string {
+  if (value === null || value === undefined) return "n/a";
+  return String(value);
+}
+
+function citationTraceLabel(value: TracedNumber["verified"]): string {
+  return value === true ? "citation-traced" : value === false ? "uncited" : "not checked";
+}
+
+function tracedAuditCells(trace: TracedNumber): readonly ReactNode[] {
+  return TRACED_NUMBER_FIELDS.map((descriptor) => {
+    if (descriptor.key === "value") return String(trace.value);
+    if (descriptor.key === "verified") return citationTraceLabel(trace.verified);
+    return auditValue(trace[descriptor.key]);
+  });
+}
+
+const TRACED_AUDIT_HEADERS = TRACED_NUMBER_FIELDS.map((descriptor) => descriptor.label);
 
 /* ======================================================================== *
  * §7.1 Verdict header + grade strip
@@ -266,6 +345,76 @@ export function CompositeScorecard({ scores }: { scores: Scoring }) {
           })}
         </div>
       </div>
+      <div className="flex flex-col gap-3 border-t border-edge px-3 py-3">
+        <AuditTable
+          headers={[
+            "Score identity",
+            ...COMPOSITE_SCORE_FIELDS
+              .filter((field) => field.key !== "weights")
+              .map((field) => field.label),
+          ]}
+          rows={[{
+            key: "composite",
+            cells: [
+              SCORE_SURFACE_BY_KEY.composite.label,
+              ...COMPOSITE_SCORE_FIELDS
+                .filter((field) => field.key !== "weights")
+                .map((field) => {
+                  if (field.key === "score") return auditValue(c.score);
+                  if (field.key === "band") return auditValue(c.band);
+                  if (field.key === "methodology") return c.methodology;
+                  return "n/a";
+                }),
+            ],
+          }]}
+        />
+        <SubBlock label="Composite weights">
+          <AuditTable
+            headers={["Aspect", "Weight"]}
+            rows={SCORE_WEIGHTS.map((descriptor) => ({
+              key: descriptor.id,
+              cells: [descriptor.label, String(c.weights[descriptor.aspect])],
+            }))}
+          />
+        </SubBlock>
+        <SubBlock label="Aspect scores">
+          <AuditTable
+            headers={[
+              "Aspect",
+              ...ASPECT_SCORE_FIELDS
+                .filter((field) => field.key !== "drivers")
+                .map((field) => field.label),
+            ]}
+            rows={SCORE_SURFACES.flatMap((descriptor) => {
+              if (descriptor.kind !== "aspect") return [];
+              const aspect = scores.aspects[descriptor.key];
+              return [{
+                key: descriptor.id,
+                cells: [descriptor.label, ...ASPECT_SCORE_FIELDS
+                  .filter((field) => field.key !== "drivers")
+                  .map((field) => {
+                    if (field.key === "dataCompleteness") {
+                      return String(aspect.dataCompleteness);
+                    }
+                    return auditValue(aspect[field.key]);
+                  })],
+              }];
+            })}
+          />
+        </SubBlock>
+        <SubBlock label="Score drivers">
+          <AuditTable
+            headers={["Aspect", ...TRACED_AUDIT_HEADERS]}
+            rows={SCORE_SURFACES.flatMap((descriptor) => {
+              if (descriptor.kind !== "aspect") return [];
+              return scores.aspects[descriptor.key].drivers.map((driver, index) => ({
+                key: `${descriptor.id}:${index}`,
+                cells: [descriptor.label, ...tracedAuditCells(driver)],
+              }));
+            })}
+          />
+        </SubBlock>
+      </div>
       <div className="border-t border-edge px-3 py-1.5">
         <p className="text-[10px] leading-snug text-faint">{c.methodology}</p>
       </div>
@@ -302,19 +451,8 @@ export function ProjectionsSection({
   projections: Projections;
   index: number;
 }) {
-  if (projections.series.length === 0) {
-    return (
-      <SectionFrame id="projections" index={index} title="Weighted Projections">
-        <div className="text-[11px] text-faint">
-          Projections not applicable
-          {projections.notApplicableReason ? `: ${projections.notApplicableReason}` : "."}
-        </div>
-      </SectionFrame>
-    );
-  }
   const weights = projections.scenarioWeights;
   const series = orderedProjectionSeries(projections.series);
-  const disclosures = series.flatMap((s) => s.disclosures);
   return (
     <SectionFrame
       id="projections"
@@ -327,13 +465,20 @@ export function ProjectionsSection({
         </span>
       }
     >
-      <div className="grid gap-4 lg:grid-cols-2">
-        {series.map((s, index) => (
-          <div key={`${s.metric}:${index}`} className="border border-edge bg-bg p-2">
-            <ProjectionFanChart series={s} />
-          </div>
-        ))}
-      </div>
+      {series.length === 0 ? (
+        <div className="text-[11px] text-faint">
+          Projections not applicable
+          {projections.notApplicableReason ? `: ${projections.notApplicableReason}` : "."}
+        </div>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {series.map((s, seriesIndex) => (
+            <div key={`${s.metric}:${seriesIndex}`} className="border border-edge bg-bg p-2">
+              <ProjectionFanChart series={s} />
+            </div>
+          ))}
+        </div>
+      )}
       {series[0] && series[0].assumptions.length > 0 && (
         <SubBlock label="method & assumptions">
           <ul className="flex flex-col gap-0.5">
@@ -343,19 +488,98 @@ export function ProjectionsSection({
           </ul>
         </SubBlock>
       )}
-      {disclosures.length > 0 && (
-        <SubBlock label="disclosures">
-          <div className="flex flex-col gap-1.5">
-            {disclosures.map((d, i) => (
-              <GapNotice key={i} entry={d} />
-            ))}
-          </div>
-        </SubBlock>
+      <SubBlock label="Projection audit trail">
+        <div className="flex flex-col gap-4">
+          <AuditTable
+            headers={["Field", "Value"]}
+            rows={PROJECTION_ROOT_FIELDS.flatMap<AuditRow>((field) => {
+              if (field.key === "scenarioWeights") {
+                return PROJECTION_SCENARIO_WEIGHTS.map((descriptor) => ({
+                  key: descriptor.id,
+                  cells: [
+                    `${descriptor.label} scenario weight`,
+                    String(projections.scenarioWeights[descriptor.key]),
+                  ],
+                }));
+              }
+              if (field.key === "horizonYears") {
+                return [{ key: field.id, cells: [field.label, String(projections.horizonYears)] }];
+              }
+              if (field.key === "weightsVersion") {
+                return [{ key: field.id, cells: [field.label, projections.weightsVersion] }];
+              }
+              if (field.key === "series") {
+                return [{ key: field.id, cells: [field.label, String(projections.series.length)] }];
+              }
+              return [{
+                key: field.id,
+                cells: [field.label, auditValue(projections.notApplicableReason)],
+              }];
+            })}
+          />
+          {series.map((projectionSeries, seriesIndex) => {
+            const metric = PROJECTION_METRIC_BY_KEY[projectionSeries.metric];
+            return (
+              <div key={`${metric.id}:audit:${seriesIndex}`} className="flex flex-col gap-2">
+                <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted">
+                  {metric.label} projection series
+                </div>
+                <AuditTable
+                  headers={[
+                    "Metric",
+                    "Path",
+                    PROJECTION_POINT_FIELD_BY_KEY.period.label,
+                    "Series unit",
+                    ...TRACED_AUDIT_HEADERS,
+                  ]}
+                  rows={PROJECTION_PATHS.flatMap((path) =>
+                    projectionSeries[path.key].map((point, pointIndex) => ({
+                      key: `${metric.id}:${seriesIndex}:${path.id}:${pointIndex}`,
+                      cells: [
+                        metric.label,
+                        path.label,
+                        point.period,
+                        projectionSeries.unit,
+                        ...tracedAuditCells(point.value),
+                      ],
+                    })))
+                  }
+                />
+                <AuditTable
+                  headers={[PROJECTION_SERIES_FIELD_BY_KEY.assumptions.label]}
+                  rows={projectionSeries.assumptions.map((assumption, assumptionIndex) => ({
+                    key: `${metric.id}:${seriesIndex}:assumption:${assumptionIndex}`,
+                    cells: [assumption],
+                  }))}
+                />
+                <AuditTable
+                  headers={PROJECTION_DISCLOSURE_FIELDS.map((field) => field.label)}
+                  rows={projectionSeries.disclosures.map((disclosure, disclosureIndex) => ({
+                    key: `${metric.id}:${seriesIndex}:disclosure:${disclosureIndex}`,
+                    cells: PROJECTION_DISCLOSURE_FIELDS.map((field) => {
+                      if (field.key === "attemptedSources") {
+                        return disclosure.attemptedSources?.join(", ") ?? "n/a";
+                      }
+                      if (field.key === "expected") {
+                        return disclosure.expected === undefined
+                          ? "unknown"
+                          : disclosure.expected ? "yes" : "no";
+                      }
+                      return disclosure[field.key];
+                    }),
+                  }))}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </SubBlock>
+      {series.length > 0 && (
+        <p className="text-[10px] leading-snug text-faint">
+          Forward figures are model ESTIMATEs (computed.projections.*), not facts. The weighted path uses a
+          versioned, unbacktested display prior—not empirical outcome probabilities or a point prediction.
+        </p>
       )}
-      <p className="text-[10px] leading-snug text-faint">
-        Forward figures are model ESTIMATEs (computed.projections.*), not facts. The weighted path uses a
-        versioned, unbacktested display prior—not empirical outcome probabilities or a point prediction.
-      </p>
     </SectionFrame>
   );
 }
@@ -1084,7 +1308,11 @@ function ExecutiveCard({ exec }: { exec: Executive }) {
           descriptor,
           claims: exec.evidence[descriptor.key],
         })).filter((group) => group.claims && group.claims.length > 0).map((group) => (
-          <SubBlock key={group.descriptor.id} label={group.descriptor.label.toLowerCase()}>
+          <SubBlock
+            key={group.descriptor.id}
+            label={group.descriptor.label}
+            semanticToken={group.descriptor.label.toLowerCase()}
+          >
             <ClaimList claims={group.claims ?? []} />
           </SubBlock>
         ))}
@@ -1117,7 +1345,7 @@ export function LeadershipSection({
         </div>
       </SubBlock>
       <div className="grid gap-4 lg:grid-cols-2">
-        <SubBlock label="insider activity">
+        <SubBlock label="Insider activity" semanticToken="insider activity">
           <ClaimList claims={leadership.insiderSummary} empty="no insider data" />
         </SubBlock>
         <SubBlock label="board / comp notes">
@@ -1579,55 +1807,16 @@ function DisagreementsBlock({
 export function AppendixSection({
   appendix,
   disagreements,
+  asOfMap,
+  completeness,
   index,
 }: {
   appendix: Appendix;
   disagreements: readonly Disagreement[];
+  asOfMap?: Report["meta"]["asOfMap"];
+  completeness?: ReportCompletenessPresentation;
   index: number;
 }) {
-  const sourceCols: Column<Appendix["sources"][number]>[] = [
-    {
-      key: "prov",
-      header: "provider",
-      render: (s) => <span className="mono text-fg">{s.provider}</span>,
-    },
-    {
-      key: "ep",
-      header: "endpoint",
-      render: (s) => (
-        <span className="mono break-all text-[10px] text-muted">
-          {s.endpoint}
-        </span>
-      ),
-    },
-    {
-      key: "asof",
-      header: "as of",
-      align: "right",
-      render: (s) => <span className="mono text-[10px] text-faint">{s.asOf}</span>,
-    },
-    {
-      key: "fetched",
-      header: "fetched",
-      align: "right",
-      render: (s) => (
-        <span className="mono text-[10px] text-faint">
-          {s.fetchedAt.replace("T", " ").slice(0, 16)}
-        </span>
-      ),
-    },
-    {
-      key: "stale",
-      header: "stale",
-      align: "right",
-      render: (s) => (
-        <span className="mono text-[10px] text-faint">
-          {s.stale === undefined ? "unknown" : s.stale ? "yes" : "no"}
-        </span>
-      ),
-    },
-  ];
-
   const costCols: Column<Appendix["costBreakdown"][number]>[] = [
     {
       key: "step",
@@ -1651,6 +1840,11 @@ export function AppendixSection({
   const totalCost = roundedDisplayedCostTotal(appendix.costBreakdown.map((entry) => entry.costUsd));
   const rate = appendix.verificationRate;
   const provenance = appendix.provenanceCoverage;
+  const presentation = completeness ?? deriveReportCompletenessPresentation(
+    undefined,
+    appendix.missingData,
+  );
+  const reportAsOfMap = asOfMap ?? {};
   const log = appendix.verificationLog ?? [];
   const verifiedCount = log.filter((l) => l.outcome === "verified").length;
   const coverageValue = (
@@ -1682,11 +1876,17 @@ export function AppendixSection({
     >
       <div className="grid gap-4 lg:grid-cols-2">
         <SubBlock label={`sources (${appendix.sources.length})`}>
-          <DataTable
-            columns={sourceCols}
-            rows={appendix.sources}
-            rowKey={(s, i) => `${s.provider}-${i}`}
-            empty="no sources logged"
+          <AuditTable
+            headers={SOURCE_ENTRY_FIELDS.map((field) => field.label.toLowerCase())}
+            rows={appendix.sources.map((source, sourceIndex) => ({
+              key: `source:${sourceIndex}`,
+              cells: SOURCE_ENTRY_FIELDS.map((field) => {
+                if (field.key === "stale") {
+                  return source.stale === undefined ? "unknown" : source.stale ? "yes" : "no";
+                }
+                return source[field.key];
+              }),
+            }))}
           />
         </SubBlock>
         <SubBlock label="per-report cost">
@@ -1745,14 +1945,26 @@ export function AppendixSection({
       >
         {appendix.missingData.length === 0 ? (
           <div className="text-[11px] text-faint">
-            no gaps — full data coverage.
+            {presentation.manifestText}
           </div>
         ) : (
-          <div className="flex flex-col gap-1.5">
-            {appendix.missingData.map((m, i) => (
-              <GapNotice key={`${m.field}-${i}`} entry={m} />
-            ))}
-          </div>
+          <AuditTable
+            headers={MANIFEST_ENTRY_FIELDS.map((field) => field.label)}
+            rows={appendix.missingData.map((entry, index) => ({
+              key: `${entry.field}:${index}`,
+              cells: MANIFEST_ENTRY_FIELDS.map((field) => {
+                if (field.key === "attemptedSources") {
+                  return entry.attemptedSources?.join(", ") ?? "n/a";
+                }
+                if (field.key === "expected") {
+                  return entry.expected === undefined
+                    ? "unknown"
+                    : entry.expected ? "yes" : "no";
+                }
+                return entry[field.key];
+              }),
+            }))}
+          />
         )}
       </SubBlock>
 
@@ -1760,35 +1972,29 @@ export function AppendixSection({
         <SubBlock
           label={`citation-coverage log (${verifiedCount}/${log.length} cited)`}
         >
-          <div className="max-h-64 overflow-y-auto">
-            <table className="w-full border-collapse text-[11px]">
-              <tbody>
-                {log.map((l, i) => {
-                  const tone: Tone =
-                    l.outcome === "verified"
-                      ? "pos"
-                      : l.outcome === "removed"
-                        ? "neg"
-                        : "warn";
-                  return (
-                    <tr key={i} className="border-b border-edge last:border-b-0">
-                      <td className="px-2 py-1 align-top">
-                        <Badge tone={tone}>{citationOutcomeLabel(l.outcome)}</Badge>
-                      </td>
-                      <td className="px-2 py-1 text-[10px] leading-snug text-muted">
-                        {formatVerificationClaim(l.claim)}
-                        {l.note && (
-                          <span className="text-faint"> — {l.note}</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="max-h-64 overflow-auto">
+            <AuditTable
+              headers={VERIFICATION_LOG_FIELDS.map((field) => field.label)}
+              rows={log.map((entry, logIndex) => ({
+                key: `verification-log:${logIndex}`,
+                cells: VERIFICATION_LOG_FIELDS.map((field) => field.key === "outcome"
+                  ? citationOutcomeLabel(entry.outcome)
+                  : auditValue(entry[field.key])),
+              }))}
+            />
           </div>
         </SubBlock>
       )}
+
+      <SubBlock label="As-of map">
+        <AuditTable
+          headers={AS_OF_MAP_FIELDS.map((field) => field.label)}
+          rows={Object.entries(reportAsOfMap).map(([field, asOf], mapIndex) => ({
+            key: `as-of:${mapIndex}`,
+            cells: [field, asOf],
+          }))}
+        />
+      </SubBlock>
 
       <DisagreementsBlock disagreements={disagreements} />
     </SectionFrame>
@@ -1799,8 +2005,18 @@ export function AppendixSection({
  * Meta strip — symbol / company / model / generated / cost
  * ======================================================================== */
 
-export function ReportMetaStrip({ report }: { report: Report }) {
+export function ReportMetaStrip({
+  report,
+  completeness,
+}: {
+  report: Report;
+  completeness?: ReportCompletenessPresentation;
+}) {
   const m = report.meta;
+  const presentation = completeness ?? deriveReportCompletenessPresentation(
+    report.meta.dataCompleteness,
+    report.appendix.missingData,
+  );
   const displayedCost = roundedDisplayedCostTotal(
     report.appendix.costBreakdown.map((entry) => entry.costUsd),
   );
@@ -1840,14 +2056,17 @@ export function ReportMetaStrip({ report }: { report: Report }) {
           </span>
         </span>
         <span className="mono">spec {m.specVersion}</span>
-        {m.dataCompleteness && m.dataCompleteness.state !== "complete" && (
-          <span
-            className={m.dataCompleteness.state === "blocked" ? "font-semibold text-red-500" : "font-semibold text-amber-500"}
-            title="Critical provider gaps make dependent forensic conclusions provisional."
-          >
-            data {m.dataCompleteness.state}; forensics {m.dataCompleteness.forensicValidation}
-          </span>
-        )}
+        <span
+          className={presentation.state === "blocked"
+            ? "font-semibold text-red-500"
+            : presentation.state === "degraded" || presentation.state === "unknown"
+              ? "font-semibold text-amber-500"
+              : "text-muted"}
+          title="Persisted completeness metadata reconciled against the missing-data manifest."
+          data-report-completeness={presentation.metadataStatus}
+        >
+          Data completeness · {presentation.statusText}
+        </span>
       </div>
     </div>
   );

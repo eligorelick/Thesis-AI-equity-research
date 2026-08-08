@@ -48,13 +48,18 @@ vi.mock("@/report/history", async (importOriginal) => {
 vi.mock("@/app/company/[symbol]/GenerateReport", () => ({
   GenerateReport: () => null,
 }));
+vi.mock("@/components/watchlist/Sidebar", () => ({
+  WatchlistSidebar: () => null,
+}));
 
 import { CompanyBody } from "@/app/company/[symbol]/page";
 import { ReportTabs } from "@/app/company/[symbol]/ReportTabs";
 import SavedReportPage from "@/app/company/[symbol]/report/[reportId]/page";
+import PrintReportPage from "@/app/company/[symbol]/report/[reportId]/print/page";
 import { FundamentalsChartGrid, TechnicalsChartPanel } from "@/components/charts/lazy";
 import { ReportView } from "@/components/report/ReportView";
 import { ReportSchema } from "@/report/schema";
+import { task28SentinelReport } from "./helpers/task28Report";
 
 type Props = Record<string, unknown> & { children?: ReactNode };
 type PersistedReportViewExport =
@@ -88,6 +93,27 @@ const report = ReportSchema.parse(
 const bundle = {
   symbol: "DEMO",
   builtAt: "2026-08-07T00:00:00.000Z",
+  quote: {
+    ok: true,
+    value: {
+      data: {
+        rows: [{
+          symbol: "DEMO",
+          name: "Demo Systems",
+          price: 100,
+          changePercentage: 1.25,
+          marketCap: 1_000_000,
+          exchange: "TEST",
+        }],
+        raw: {},
+      },
+      asOf: "2026-08-07",
+      source: "fmp",
+      endpoint: "quote",
+      fetchedAt: "2026-08-07T00:00:00.000Z",
+      stale: false,
+    },
+  },
   profile: {
     ok: true,
     value: {
@@ -115,6 +141,8 @@ const bundle = {
 };
 
 const computed = {
+  route: { base: "standard", overlays: [] },
+  gaps: [],
   growth: {
     revenueCagrs: [],
     epsDilutedCagrs: [],
@@ -232,5 +260,54 @@ describe("persisted report presentation", () => {
     expect(elementsWithin(technicalsRoot).some((element) => element.type === TechnicalsChartPanel)).toBe(true);
     expect(renderToStaticMarkup(fundamentalsRoot.props.right as ReactElement)).toMatch(/as of.*2025-12-31/i);
     expect(renderToStaticMarkup(technicalsRoot.props.right as ReactElement)).toMatch(/as of.*2026-08-06/i);
+  });
+
+  it("renders every Task 28 audit family through latest, saved, and print pages without mutation", async () => {
+    const rich = task28SentinelReport();
+    const unsafe = '<script data-task28-route="persisted">alert(28)</script>';
+    rich.scores!.aspects.valuation.drivers[0]!.verificationNote = unsafe;
+    const before = JSON.stringify(rich);
+    harness.getLatestDoneReport.mockReturnValue({
+      reportId: 42,
+      createdAt: "2026-07-01T12:00:00.000Z",
+      report: rich,
+    });
+    harness.getReportByIdForSymbol.mockReturnValue({
+      row: {
+        id: 42,
+        createdAt: "2026-07-01T12:00:00.000Z",
+        model: "claude-opus-4-8",
+        status: "done",
+        verificationRate: 1,
+        costUsd: 1,
+      },
+      report: rich,
+    });
+
+    const latestHtml = renderToStaticMarkup(await CompanyBody({ symbol: "DEMO" }));
+    const savedHtml = renderToStaticMarkup(await SavedReportPage({
+      params: Promise.resolve({ symbol: "DEMO", reportId: "42" }),
+    }));
+    const printHtml = renderToStaticMarkup(await PrintReportPage({
+      params: Promise.resolve({ symbol: "DEMO", reportId: "42" }),
+      searchParams: Promise.resolve({}),
+    }));
+    for (const html of [latestHtml, savedHtml, printHtml]) {
+      for (const sentinel of [
+        "TASK28:composite:methodology",
+        "TASK28:fundamentals:driver:duplicate-identity-note",
+        "TASK28:evidence:guidanceVsActuals:source-id",
+        "TASK28:revenue:historical:0:citation-note",
+        "TASK28:epsDiluted:weighted:1:source-id",
+        "TASK28:PROJECTION-WEIGHTS:VERSION",
+        "TASK28-provider-stale",
+        "2026-07-02T03:04:05.678Z",
+        "TASK28.verification.computed.path",
+        "TASK28.asOfMap.beta",
+      ]) expect(html).toContain(sentinel);
+      expect(html).toContain("&lt;script data-task28-route=&quot;persisted&quot;&gt;alert(28)&lt;/script&gt;");
+      expect(html).not.toContain(unsafe);
+    }
+    expect(JSON.stringify(rich)).toBe(before);
   });
 });

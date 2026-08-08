@@ -1,6 +1,7 @@
 import type {
   AspectScore,
   CompositeScore,
+  DataCompleteness,
   ExecutiveEvidence,
   GradeStrip,
   ProjectionMetric,
@@ -9,7 +10,9 @@ import type {
   Projections,
   ScoreAspect,
   Scoring,
+  SourceEntry,
   TracedNumber,
+  VerificationLogEntry,
 } from "@/report/schema";
 import type { ManifestEntry } from "@/types/core";
 
@@ -451,6 +454,109 @@ export const PROJECTION_DISCLOSURE_FIELD_BY_KEY = {
   attemptedSources: PROJECTION_DISCLOSURE_FIELDS[3],
   expected: PROJECTION_DISCLOSURE_FIELDS[4],
 } as const satisfies Record<ProjectionDisclosureFieldKey, FieldDescriptor<ProjectionDisclosureFieldKey>>;
+
+export type SourceEntryFieldKey = keyof SourceEntry;
+export const SOURCE_ENTRY_FIELD_ORDER = [
+  "provider",
+  "endpoint",
+  "asOf",
+  "fetchedAt",
+  "stale",
+] as const satisfies readonly SourceEntryFieldKey[];
+export const SOURCE_ENTRY_FIELDS = [
+  { id: "source-entry-field:provider", key: "provider", label: "Provider", optional: false },
+  { id: "source-entry-field:endpoint", key: "endpoint", label: "Endpoint", optional: false },
+  { id: "source-entry-field:asOf", key: "asOf", label: "As of", optional: false },
+  { id: "source-entry-field:fetchedAt", key: "fetchedAt", label: "Fetched at", optional: false },
+  { id: "source-entry-field:stale", key: "stale", label: "Stale", optional: true },
+] as const satisfies readonly FieldDescriptor<SourceEntryFieldKey>[];
+export const SOURCE_ENTRY_FIELD_BY_KEY = {
+  provider: SOURCE_ENTRY_FIELDS[0],
+  endpoint: SOURCE_ENTRY_FIELDS[1],
+  asOf: SOURCE_ENTRY_FIELDS[2],
+  fetchedAt: SOURCE_ENTRY_FIELDS[3],
+  stale: SOURCE_ENTRY_FIELDS[4],
+} as const satisfies Record<SourceEntryFieldKey, FieldDescriptor<SourceEntryFieldKey>>;
+
+export type ManifestEntryFieldKey = ProjectionDisclosureFieldKey;
+export const MANIFEST_ENTRY_FIELD_ORDER = PROJECTION_DISCLOSURE_FIELD_ORDER;
+export const MANIFEST_ENTRY_FIELDS = PROJECTION_DISCLOSURE_FIELDS;
+export const MANIFEST_ENTRY_FIELD_BY_KEY = PROJECTION_DISCLOSURE_FIELD_BY_KEY;
+
+export type VerificationLogFieldKey = keyof VerificationLogEntry;
+export const VERIFICATION_LOG_FIELD_ORDER = [
+  "claim",
+  "outcome",
+  "note",
+  "path",
+  "evidenceKind",
+  "source",
+  "reason",
+  "traceKind",
+] as const satisfies readonly VerificationLogFieldKey[];
+export const VERIFICATION_LOG_FIELDS = [
+  { id: "verification-log-field:claim", key: "claim", label: "Claim", optional: false },
+  { id: "verification-log-field:outcome", key: "outcome", label: "Outcome", optional: false },
+  { id: "verification-log-field:note", key: "note", label: "Note", optional: true },
+  { id: "verification-log-field:path", key: "path", label: "Path", optional: true },
+  { id: "verification-log-field:evidenceKind", key: "evidenceKind", label: "Evidence kind", optional: true },
+  { id: "verification-log-field:source", key: "source", label: "Source", optional: true },
+  { id: "verification-log-field:reason", key: "reason", label: "Reason", optional: true },
+  { id: "verification-log-field:traceKind", key: "traceKind", label: "Trace kind", optional: true },
+] as const satisfies readonly FieldDescriptor<VerificationLogFieldKey>[];
+export const VERIFICATION_LOG_FIELD_BY_KEY = {
+  claim: VERIFICATION_LOG_FIELDS[0],
+  outcome: VERIFICATION_LOG_FIELDS[1],
+  note: VERIFICATION_LOG_FIELDS[2],
+  path: VERIFICATION_LOG_FIELDS[3],
+  evidenceKind: VERIFICATION_LOG_FIELDS[4],
+  source: VERIFICATION_LOG_FIELDS[5],
+  reason: VERIFICATION_LOG_FIELDS[6],
+  traceKind: VERIFICATION_LOG_FIELDS[7],
+} as const satisfies Record<VerificationLogFieldKey, FieldDescriptor<VerificationLogFieldKey>>;
+
+export type AsOfMapFieldKey = "field" | "asOf";
+export const AS_OF_MAP_FIELD_ORDER = [
+  "field",
+  "asOf",
+] as const satisfies readonly AsOfMapFieldKey[];
+export const AS_OF_MAP_FIELDS = [
+  { id: "as-of-map-field:field", key: "field", label: "Field", optional: false },
+  { id: "as-of-map-field:asOf", key: "asOf", label: "As of", optional: false },
+] as const satisfies readonly FieldDescriptor<AsOfMapFieldKey>[];
+export const AS_OF_MAP_FIELD_BY_KEY = {
+  field: AS_OF_MAP_FIELDS[0],
+  asOf: AS_OF_MAP_FIELDS[1],
+} as const satisfies Record<AsOfMapFieldKey, FieldDescriptor<AsOfMapFieldKey>>;
+
+export type DataCompletenessFieldKey = keyof DataCompleteness;
+export const DATA_COMPLETENESS_FIELD_ORDER = [
+  "state",
+  "criticalCount",
+  "warningCount",
+  "edgar",
+  "xbrl",
+  "forensicValidation",
+] as const satisfies readonly DataCompletenessFieldKey[];
+export const DATA_COMPLETENESS_FIELDS = [
+  { id: "data-completeness-field:state", key: "state", label: "State", optional: false },
+  { id: "data-completeness-field:criticalCount", key: "criticalCount", label: "Critical count", optional: false },
+  { id: "data-completeness-field:warningCount", key: "warningCount", label: "Warning count", optional: false },
+  { id: "data-completeness-field:edgar", key: "edgar", label: "EDGAR", optional: false },
+  { id: "data-completeness-field:xbrl", key: "xbrl", label: "XBRL", optional: false },
+  { id: "data-completeness-field:forensicValidation", key: "forensicValidation", label: "Forensic validation", optional: false },
+] as const satisfies readonly FieldDescriptor<DataCompletenessFieldKey>[];
+export const DATA_COMPLETENESS_FIELD_BY_KEY = {
+  state: DATA_COMPLETENESS_FIELDS[0],
+  criticalCount: DATA_COMPLETENESS_FIELDS[1],
+  warningCount: DATA_COMPLETENESS_FIELDS[2],
+  edgar: DATA_COMPLETENESS_FIELDS[3],
+  xbrl: DATA_COMPLETENESS_FIELDS[4],
+  forensicValidation: DATA_COMPLETENESS_FIELDS[5],
+} as const satisfies Record<
+  DataCompletenessFieldKey,
+  FieldDescriptor<DataCompletenessFieldKey>
+>;
 
 type GradeBlock = NonNullable<GradeStrip[GradeSurfaceKey]>;
 

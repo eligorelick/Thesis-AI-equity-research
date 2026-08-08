@@ -23,12 +23,24 @@ import Link from "next/link";
 import { Panel } from "@/components/ui";
 import { ExportButtons } from "@/components/report/ExportButtons";
 import {
+  deriveReportCompletenessPresentation,
+  type DataCompleteness,
+} from "@/report/completeness";
+import {
+  DATA_COMPLETENESS_FIELD_ORDER,
   GRADE_SURFACES,
   GRADE_SURFACE_BY_KEY,
+  MANIFEST_ENTRY_FIELDS,
   isCanonicalGradeSurfaceKeySequence,
   type GradeSurfaceKey,
 } from "@/report/surfaceManifest";
-import { PIPELINE_STEPS, type StepProgress, type PipelineStep, type Grade } from "@/types/core";
+import {
+  PIPELINE_STEPS,
+  type Grade,
+  type ManifestEntry,
+  type PipelineStep,
+  type StepProgress,
+} from "@/types/core";
 
 /* ------------------------------------------------------------------------ *
  * Event + summary shapes (mirror the server contracts)
@@ -67,7 +79,9 @@ interface ReportSummary {
   verificationRate: number | null;
   synthesis: string;
   grades: GradeStripCell[];
-  dataOnly: boolean;
+  dataOnly: boolean | null;
+  dataCompleteness: DataCompleteness | null;
+  missingData: ManifestEntry[] | null;
 }
 
 type Phase = "idle" | "starting" | "running" | "done" | "error" | "unsupported";
@@ -269,10 +283,12 @@ export function decodeAcceptedJobId(value: unknown): string | null {
 
 export function canonicalReportPresentation(
   snapshot: { totalCostUsd: number; dataOnly: boolean },
-  summary: { costUsd: number | null; dataOnly: boolean } | null,
-): { costUsd: number; dataOnly: boolean } {
-  void summary;
-  return { costUsd: snapshot.totalCostUsd, dataOnly: snapshot.dataOnly };
+  summary: { costUsd: number | null; dataOnly: boolean | null } | null,
+): { costUsd: number; dataOnly: boolean | null } {
+  return {
+    costUsd: snapshot.totalCostUsd,
+    dataOnly: summary === null ? snapshot.dataOnly : summary.dataOnly,
+  };
 }
 
 export function terminalStateFromSnapshot(
@@ -303,6 +319,50 @@ export function closeMatchingJobStream(
 type SummaryFetch = (url: string, init: { cache: "no-store" }) =>
   Promise<Pick<Response, "ok" | "json">>;
 
+function hasExactKeys(value: object, allowed: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === allowed.length && keys.every((key) => allowed.includes(key));
+}
+
+function validManifestEntry(value: unknown): value is ManifestEntry {
+  if (value === null || typeof value !== "object") return false;
+  const allowed = MANIFEST_ENTRY_FIELDS.map((field) => field.key);
+  if (!Object.keys(value).every((key) => allowed.includes(key as never))) return false;
+  const entry = value as Partial<ManifestEntry>;
+  if (
+    typeof entry.field !== "string" ||
+    typeof entry.reason !== "string" ||
+    !(entry.severity === "info" || entry.severity === "warn" || entry.severity === "critical")
+  ) return false;
+  if (
+    entry.attemptedSources !== undefined &&
+    (!Array.isArray(entry.attemptedSources) ||
+      !entry.attemptedSources.every((source) => typeof source === "string"))
+  ) return false;
+  return entry.expected === undefined || typeof entry.expected === "boolean";
+}
+
+function validCompleteness(value: unknown): value is DataCompleteness {
+  if (value === null || typeof value !== "object") return false;
+  if (!hasExactKeys(value, DATA_COMPLETENESS_FIELD_ORDER)) return false;
+  const completeness = value as Partial<DataCompleteness>;
+  return (
+    (completeness.state === "complete" ||
+      completeness.state === "degraded" ||
+      completeness.state === "blocked") &&
+    Number.isSafeInteger(completeness.criticalCount) &&
+    (completeness.criticalCount ?? -1) >= 0 &&
+    Number.isSafeInteger(completeness.warningCount) &&
+    (completeness.warningCount ?? -1) >= 0 &&
+    (completeness.edgar === "available" || completeness.edgar === "missing") &&
+    (completeness.xbrl === "checked" ||
+      completeness.xbrl === "skipped" ||
+      completeness.xbrl === "failed") &&
+    (completeness.forensicValidation === "complete" ||
+      completeness.forensicValidation === "provisional")
+  );
+}
+
 function decodeReportSummary(
   value: unknown,
   reportId: number,
@@ -316,7 +376,7 @@ function decodeReportSummary(
     typeof summary.model !== "string" ||
     !validIsoTimestamp(summary.createdAt) ||
     typeof summary.synthesis !== "string" ||
-    typeof summary.dataOnly !== "boolean"
+    !(typeof summary.dataOnly === "boolean" || summary.dataOnly === null)
   ) return null;
   if (summary.costUsd !== null && !finiteNonnegative(summary.costUsd)) return null;
   if (summary.verificationRate !== null && (
@@ -330,6 +390,7 @@ function decodeReportSummary(
     if (
       grade === null ||
       typeof grade !== "object" ||
+      !hasExactKeys(grade, ["key", "grade", "oneLineWhy"]) ||
       typeof grade.key !== "string" ||
       !Object.prototype.hasOwnProperty.call(GRADE_SURFACE_BY_KEY, grade.key) ||
       typeof grade.grade !== "string" ||
@@ -337,11 +398,24 @@ function decodeReportSummary(
     ) return null;
     gradeKeys.push(grade.key);
   }
-  if (gradeKeys.length === 0) {
-    if (!summary.dataOnly) return null;
-  } else if (!isCanonicalGradeSurfaceKeySequence(gradeKeys)) {
+  if (summary.dataOnly === null) {
+    if (
+      gradeKeys.length !== 0 ||
+      summary.dataCompleteness !== null ||
+      summary.missingData !== null
+    ) return null;
+    return summary as ReportSummary;
+  }
+  if (!isCanonicalGradeSurfaceKeySequence(gradeKeys)) {
     return null;
   }
+  if (
+    !(summary.dataCompleteness === null || validCompleteness(summary.dataCompleteness)) ||
+    !Array.isArray(summary.missingData) ||
+    !summary.missingData.every(validManifestEntry)
+  ) return null;
+  const hasAnalysisGap = summary.missingData.some((entry) => entry.field === "analysis.llm");
+  if (summary.dataOnly !== hasAnalysisGap) return null;
   return summary as ReportSummary;
 }
 
@@ -877,8 +951,8 @@ function dataOnlyBannerText(steps: StepProgress[]): string {
     (s) => (s.step === "bull" || s.step === "bear" || s.step === "synthesize") && s.status === "error",
   );
   return llmFailed
-    ? "LLM analysis failed mid-run (see the step details above for the provider error) — the failed passes' billed cost is included in the total below. This is a data-only report: sections are ungraded; the fetched data + disclosed gaps are still available."
-    : "LLM analysis did not run (no ANTHROPIC key, or the model could not be resolved). This is a data-only report — sections are ungraded; the fetched data + disclosed gaps are still available.";
+    ? "No completed multi-pass analysis. The attempted analysis failed; see the step details above for the provider error. Failed-pass cost remains included in the total below."
+    : "No completed multi-pass analysis. Persisted analysis and completeness details are not yet available.";
 }
 
 export function ReportReadyPanel({
@@ -897,19 +971,32 @@ export function ReportReadyPanel({
     summary,
   );
   const rate = summary?.verificationRate ?? null;
+  const missingData = summary?.missingData ?? [];
+  const completeness = deriveReportCompletenessPresentation(
+    summary?.dataCompleteness ?? undefined,
+    missingData,
+  );
+  const completenessText = completeness.metadataStatus === "confirmed"
+    ? `completeness confirmed · ${completeness.state} · ${completeness.criticalCount} critical · ${completeness.warningCount} warning · EDGAR ${completeness.edgar} · XBRL ${completeness.xbrl} · forensic validation ${completeness.forensicValidation}`
+    : completeness.statusText.replace(/^Completeness/, "completeness");
+  const persistedDataOnlyText = summary !== null ? completeness.bannerText : null;
 
   return (
     <Panel
       title={
         <span className="flex items-center gap-2">
           report ready
-          {isDataOnly ? (
+          {isDataOnly === true ? (
             <span className="mono border border-warn/40 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.1em] text-warn">
               data-only
             </span>
-          ) : (
+          ) : isDataOnly === false ? (
             <span className="mono border border-pos/40 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.1em] text-pos">
               analyzed
+            </span>
+          ) : (
+            <span className="mono border border-edge px-1.5 py-0.5 text-[9px] uppercase tracking-[0.1em] text-faint">
+              status unknown
             </span>
           )}
         </span>
@@ -929,10 +1016,24 @@ export function ReportReadyPanel({
         ) : null
       }
     >
-      {isDataOnly ? (
+      {isDataOnly === true ? (
         <div className="mb-2 border border-warn/40 bg-warn/10 px-2 py-1.5 text-[11px] text-warn">
-          {dataOnlyBannerText(steps)}
+          {persistedDataOnlyText ?? dataOnlyBannerText(steps)}
         </div>
+      ) : null}
+
+      <div className="mb-2 border border-edge bg-raised px-2 py-1.5 text-[11px] text-muted">
+        {completenessText}
+      </div>
+
+      {missingData.length > 0 ? (
+        <ul className="mb-2 flex flex-col gap-1 border border-edge px-2 py-1.5 text-[10px] text-faint">
+          {missingData.map((entry, index) => (
+            <li key={`${entry.field}:${index}`}>
+              <span className="mono">{entry.field}</span>: {entry.reason}
+            </li>
+          ))}
+        </ul>
       ) : null}
 
       {summary ? (

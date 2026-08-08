@@ -46,9 +46,28 @@ import type {
   Valuation,
 } from "@/report/schema";
 import {
+  deriveReportCompletenessPresentation,
+  type ReportCompletenessPresentation,
+} from "@/report/completeness";
+import {
+  ASPECT_SCORE_FIELDS,
+  AS_OF_MAP_FIELDS,
+  COMPOSITE_SCORE_FIELDS,
+  EXECUTIVE_EVIDENCE_GROUPS,
+  MANIFEST_ENTRY_FIELDS,
   PROJECTION_METRIC_BY_KEY,
   PROJECTION_PATHS,
+  PROJECTION_POINT_FIELD_BY_KEY,
+  PROJECTION_ROOT_FIELDS,
+  PROJECTION_SCENARIO_WEIGHTS,
+  PROJECTION_SERIES_FIELD_BY_KEY,
+  PROJECTION_DISCLOSURE_FIELDS,
+  SCORE_WEIGHTS,
+  SCORE_SURFACE_BY_KEY,
   SCORE_SURFACES,
+  SOURCE_ENTRY_FIELDS,
+  TRACED_NUMBER_FIELDS,
+  VERIFICATION_LOG_FIELDS,
   gradeSurfaceEntries,
   orderedProjectionSeries,
   projectionCellPoint,
@@ -59,7 +78,6 @@ import {
   formatCostUsd,
   formatFinancialValue,
   formatPct,
-  formatVerificationClaim,
   roundedDisplayedCostTotal,
 } from "@/report/format";
 import {
@@ -160,6 +178,22 @@ function gradeClass(grade: string): string {
   return `g-${grade.toLowerCase()}`;
 }
 
+function auditValue(value: string | number | boolean | null | undefined): string {
+  if (value === null || value === undefined) return "n/a";
+  return String(value);
+}
+
+function citationTraceLabel(value: TracedNumber["verified"]): string {
+  return value === true ? "citation-traced" : value === false ? "uncited" : "not checked";
+}
+
+function tracedAuditCells(trace: TracedNumber): string[] {
+  return TRACED_NUMBER_FIELDS.map((field) => {
+    if (field.key === "verified") return esc(citationTraceLabel(trace.verified));
+    return esc(auditValue(trace[field.key]));
+  });
+}
+
 /* ======================================================================== *
  * HTML building blocks
  * ======================================================================== */
@@ -196,7 +230,7 @@ function claimList(claims: readonly SourcedClaim[]): string {
           c.label,
         )}</span> ${esc(c.text)}${asOfTag(c.asOf)} <span class="src">src: ${esc(
           c.source,
-        )}</span></li>`,
+        )}</span> <span class="src">source id: ${esc(c.sourceId ?? "n/a")}</span></li>`,
     )
     .join("")}</ul>`;
 }
@@ -297,20 +331,9 @@ function sectionVerdict(report: Report): string {
 
 function sectionScores(scores: Scoring): string {
   const c = scores.composite;
-  const rows = SCORE_SURFACES.flatMap((descriptor) => {
-    if (descriptor.kind !== "aspect") return [];
-    const a = scores.aspects[descriptor.key];
-    const bandChip = a.band
-      ? `<span class="chip ${gradeClass(a.band)}">${esc(a.band)}</span>`
-      : DASH;
-    return [[
-      esc(descriptor.label),
-      a.score === null ? DASH : `<span class="mono">${Math.round(a.score)}</span>`,
-      bandChip,
-      `<span class="mono">${Math.round(a.dataCompleteness * 100)}%</span>`,
-      esc(a.notApplicableReason ?? a.note),
-    ]];
-  });
+  const aspectDescriptors = SCORE_SURFACES.filter((descriptor) => descriptor.kind === "aspect");
+  const compositeFields = COMPOSITE_SCORE_FIELDS.filter((field) => field.key !== "weights");
+  const aspectFields = ASPECT_SCORE_FIELDS.filter((field) => field.key !== "drivers");
   const compositeChip = c.band
     ? `<span class="chip ${gradeClass(c.band)}">${esc(c.band)}</span>`
     : DASH;
@@ -318,18 +341,54 @@ function sectionScores(scores: Scoring): string {
     <p>Composite: <strong class="mono">${
       c.score === null ? DASH : Math.round(c.score)
     } / 100</strong> ${compositeChip}</p>
-    ${table(["Aspect", "Score", "Band", "Completeness", "Note"], rows)}
+    ${table(
+      ["Score identity", ...compositeFields.map((field) => field.label)],
+      [[
+        esc(SCORE_SURFACE_BY_KEY.composite.label),
+        ...compositeFields.map((field) => {
+          if (field.key === "score") return esc(auditValue(c.score));
+          if (field.key === "band") return esc(auditValue(c.band));
+          return esc(c.methodology);
+        }),
+      ]],
+    )}
+    <h3>Composite weights</h3>${table(
+      ["Aspect", "Weight"],
+      SCORE_WEIGHTS.map((descriptor) => [
+        esc(descriptor.label),
+        esc(String(c.weights[descriptor.aspect])),
+      ]),
+    )}
+    <h3>Aspect scores</h3>${table(
+      ["Aspect", ...aspectFields.map((field) => field.label)],
+      aspectDescriptors.map((descriptor) => {
+        const aspect = scores.aspects[descriptor.key];
+        return [
+          esc(descriptor.label),
+          ...aspectFields.map((field) => {
+            if (field.key === "dataCompleteness") {
+              return esc(String(aspect.dataCompleteness));
+            }
+            return esc(auditValue(aspect[field.key]));
+          }),
+        ];
+      }),
+    )}
+    <h3>Score drivers</h3>${table(
+      ["Aspect", ...TRACED_NUMBER_FIELDS.map((field) => field.label)],
+      aspectDescriptors.flatMap((descriptor) =>
+        scores.aspects[descriptor.key].drivers.map((driver) => [
+          esc(descriptor.label),
+          ...tracedAuditCells(driver),
+        ])),
+    )}
     <p class="faint">${esc(c.methodology)} <em>(bands ${esc(scores.bandsVersion)})</em></p></section>`;
 }
 
 function sectionProjections(p: Projections): string {
-  if (p.series.length === 0) {
-    return `<section class="block">${sectionHeading("projections")}<p class="faint">Not applicable${
-      p.notApplicableReason ? `: ${esc(p.notApplicableReason)}` : "."
-    }</p></section>`;
-  }
+  const series = orderedProjectionSeries(p.series);
   const forwardPaths = PROJECTION_PATHS.filter((descriptor) => descriptor.kind !== "historical");
-  const blocks = orderedProjectionSeries(p.series)
+  const blocks = series
     .map((s) => {
       const rows = projectionPeriodRows(s).flatMap((row) => {
         const points = forwardPaths.map((descriptor) =>
@@ -352,9 +411,65 @@ function sectionProjections(p: Projections): string {
       )}${assumptions}`;
     })
     .join("");
+  const rootAudit = table(
+    ["Field", "Value"],
+    PROJECTION_ROOT_FIELDS.flatMap((field) => {
+      if (field.key === "scenarioWeights") {
+        return PROJECTION_SCENARIO_WEIGHTS.map((descriptor) => [
+          esc(`${descriptor.label} scenario weight`),
+          esc(String(p.scenarioWeights[descriptor.key])),
+        ]);
+      }
+      if (field.key === "horizonYears") return [[esc(field.label), esc(String(p.horizonYears))]];
+      if (field.key === "weightsVersion") return [[esc(field.label), esc(p.weightsVersion)]];
+      if (field.key === "series") return [[esc(field.label), esc(String(p.series.length))]];
+      return [[esc(field.label), esc(auditValue(p.notApplicableReason))]];
+    }),
+  );
+  const seriesAudit = series.map((s) => {
+    const metric = PROJECTION_METRIC_BY_KEY[s.metric];
+    const points = table(
+      [
+        PROJECTION_SERIES_FIELD_BY_KEY.metric.label,
+        "Path",
+        PROJECTION_POINT_FIELD_BY_KEY.period.label,
+        "Series unit",
+        ...TRACED_NUMBER_FIELDS.map((field) => field.label),
+      ],
+      PROJECTION_PATHS.flatMap((path) =>
+        s[path.key].map((point) => [
+          esc(metric.label),
+          esc(path.label),
+          esc(point.period),
+          esc(s.unit),
+          ...tracedAuditCells(point.value),
+        ])),
+    );
+    const assumptions = table(
+      [PROJECTION_SERIES_FIELD_BY_KEY.assumptions.label],
+      s.assumptions.map((assumption) => [esc(assumption)]),
+    );
+    const disclosures = table(
+      PROJECTION_DISCLOSURE_FIELDS.map((field) => field.label),
+      s.disclosures.map((disclosure) =>
+        PROJECTION_DISCLOSURE_FIELDS.map((field) => {
+          if (field.key === "attemptedSources") {
+            return esc(disclosure.attemptedSources?.join(", ") ?? "n/a");
+          }
+          if (field.key === "expected") {
+            return disclosure.expected === undefined
+              ? "unknown"
+              : disclosure.expected ? "yes" : "no";
+          }
+          return esc(disclosure[field.key]);
+        })),
+    );
+    return `<h4>${esc(metric.label)} projection series</h4>${points}${assumptions}${disclosures}`;
+  }).join("");
   return `<section class="block">${sectionHeading("projections")}
-    <p class="faint">Horizon ${p.horizonYears}y · unbacktested display-prior weights ${p.scenarioWeights.bull}/${p.scenarioWeights.base}/${p.scenarioWeights.bear} (bull/base/bear). Forward figures are ESTIMATEs, not facts or empirically calibrated odds.</p>
-    ${blocks}</section>`;
+    <p class="faint">Horizon ${p.horizonYears}y · unbacktested display prior weights ${p.scenarioWeights.bull}/${p.scenarioWeights.base}/${p.scenarioWeights.bear} (bull/base/bear). Forward figures are ESTIMATEs, not facts or empirically calibrated odds.</p>
+    ${series.length === 0 ? `<p class="faint">Not applicable${p.notApplicableReason ? `: ${esc(p.notApplicableReason)}` : "."}</p>` : ""}
+    ${blocks}<h3>Projection audit trail</h3>${rootAudit}${seriesAudit}</section>`;
 }
 
 function sectionBusiness(b: Business): string {
@@ -557,17 +672,21 @@ function sectionTechnicals(t: Technicals): string {
 
 function sectionLeadership(l: Leadership): string {
   const execs = l.executives
-    .map(
-      (e) =>
-        `<div class="exec"><h4>${esc(e.name)} &mdash; ${esc(e.title)}</h4>
+    .map((e) => {
+      const evidence = EXECUTIVE_EVIDENCE_GROUPS.map((descriptor) => {
+        const claims = e.evidence[descriptor.key];
+        if (!claims || claims.length === 0) return "";
+        return `<h4>${esc(descriptor.label)}</h4>${claimList(claims)}`;
+      }).join("");
+      return `<div class="exec"><h4>${esc(e.name)} &mdash; ${esc(e.title)}</h4>
         <p>Grade <span class="chip ${gradeClass(e.grade)}">${esc(
           e.grade,
         )}</span> &middot; credibility <span class="chip ${gradeClass(
           e.credibilityGrade,
         )}">${esc(e.credibilityGrade)}</span>${
           e.tenureYears === null ? "" : ` &middot; tenure ${e.tenureYears.toFixed(1)}y`
-        }</p>${claimList(e.reasoning)}</div>`,
-    )
+        }</p>${claimList(e.reasoning)}${evidence}</div>`;
+    })
     .join("");
   return `<section class="block">${sectionHeading("leadership")}${gradeBlock(
     "Leadership",
@@ -681,29 +800,38 @@ function disagreementsBlock(disagreements: readonly Disagreement[]): string {
   return `<h3>Bull/bear disagreements</h3><ul class="disagreements">${items}</ul>`;
 }
 
-function sectionAppendix(a: Appendix, disagreements: readonly Disagreement[]): string {
+function sectionAppendix(
+  a: Appendix,
+  disagreements: readonly Disagreement[],
+  asOfMap: Report["meta"]["asOfMap"],
+  completeness: ReportCompletenessPresentation,
+): string {
   const sources = table(
-    ["Provider", "Endpoint", "As of", "Fetched at", "Stale"],
-    a.sources.map((s) => [
-      esc(s.provider),
-      esc(s.endpoint),
-      esc(s.asOf),
-      esc(s.fetchedAt),
-      s.stale === undefined ? "unknown" : s.stale ? "yes" : "no",
-    ]),
+    SOURCE_ENTRY_FIELDS.map((field) => field.label),
+    a.sources.map((source) =>
+      SOURCE_ENTRY_FIELDS.map((field) => {
+        if (field.key === "stale") {
+          return source.stale === undefined ? "unknown" : source.stale ? "yes" : "no";
+        }
+        return esc(source[field.key]);
+      })),
   );
   const missing =
     a.missingData.length > 0
       ? table(
-          ["Field", "Severity", "Reason", "Tried"],
-          a.missingData.map((g) => [
-            esc(g.field),
-            esc(g.severity),
-            esc(g.reason),
-            esc(g.attemptedSources ? g.attemptedSources.join(", ") : DASH),
-          ]),
+          MANIFEST_ENTRY_FIELDS.map((field) => field.label),
+          a.missingData.map((gap) =>
+            MANIFEST_ENTRY_FIELDS.map((field) => {
+              if (field.key === "attemptedSources") {
+                return esc(gap.attemptedSources?.join(", ") ?? "n/a");
+              }
+              if (field.key === "expected") {
+                return gap.expected === undefined ? "unknown" : gap.expected ? "yes" : "no";
+              }
+              return esc(gap[field.key]);
+            })),
         )
-      : `<p class="faint">No gaps &mdash; full data coverage.</p>`;
+      : `<p class="faint">${esc(completeness.manifestText)}</p>`;
   const totalCost = roundedDisplayedCostTotal(a.costBreakdown.map((entry) => entry.costUsd));
   const cost = table(
     ["Step", "Model", "Cost (USD)"],
@@ -712,14 +840,16 @@ function sectionAppendix(a: Appendix, disagreements: readonly Disagreement[]): s
   const vlog =
     a.verificationLog && a.verificationLog.length > 0
       ? table(
-          ["Claim", "Outcome", "Note"],
-          a.verificationLog.map((v) => [
-            esc(formatVerificationClaim(v.claim)),
-            esc(citationOutcomeLabel(v.outcome)),
-            esc(v.note ?? DASH),
-          ]),
+          VERIFICATION_LOG_FIELDS.map((field) => field.label),
+          a.verificationLog.map((entry) =>
+            VERIFICATION_LOG_FIELDS.map((field) => {
+              if (field.key === "outcome") return esc(citationOutcomeLabel(entry.outcome));
+              return esc(auditValue(entry[field.key]));
+            })),
         )
       : "";
+  const asOfRows = Object.keys(asOfMap).sort().map((field) => [esc(field), esc(asOfMap[field])]);
+  const asOfTable = table(AS_OF_MAP_FIELDS.map((field) => field.label), asOfRows);
   return `<section class="block">${sectionHeading("appendix")}
     ${disagreementsBlock(disagreements)}
     <h3>Sources</h3>${sources}
@@ -731,6 +861,7 @@ function sectionAppendix(a: Appendix, disagreements: readonly Disagreement[]): s
     }</strong> <span class="muted">— share of report figures traceable to a citation or payload value; a provenance check, not a correctness/accuracy check.</span></p>${
       a.provenanceCoverage ? provenanceCoverageHtml(a.provenanceCoverage) : ""
     }${vlog}
+    <h3>As-of map</h3>${asOfTable}
     <h3>Cost breakdown</h3>${cost}<p>Total: <strong>${formatCostUsd(totalCost)}</strong></p></section>`;
 }
 
@@ -738,7 +869,10 @@ function sectionAppendix(a: Appendix, disagreements: readonly Disagreement[]): s
  * Header + document shell
  * ======================================================================== */
 
-function headerBlock(report: Report): string {
+function headerBlock(
+  report: Report,
+  completeness: ReportCompletenessPresentation,
+): string {
   const m = report.meta;
   const displayedCost = roundedDisplayedCostTotal(
     report.appendix.costBreakdown.map((entry) => entry.costUsd),
@@ -758,12 +892,7 @@ function headerBlock(report: Report): string {
       ...(m.verifyModel !== undefined ? [["Verify model", m.verifyModel]] : []),
       ["Spec version", m.specVersion],
       ["Pipeline version", m.pipelineVersion],
-      ...(m.dataCompleteness
-        ? [[
-            "Data completeness",
-            `${m.dataCompleteness.state}; EDGAR ${m.dataCompleteness.edgar}; XBRL ${m.dataCompleteness.xbrl}; forensics ${m.dataCompleteness.forensicValidation}`,
-          ]]
-        : []),
+      ["Data completeness", completeness.statusText],
       ["Cost (USD)", formatCostUsd(displayedCost)],
       [
         "Citation coverage",
@@ -786,6 +915,10 @@ function headerBlock(report: Report): string {
  * standalone document and the React print page. Does NOT include <html>/<head>.
  */
 export function reportToPrintBody(report: Report): string {
+  const completeness = deriveReportCompletenessPresentation(
+    report.meta.dataCompleteness,
+    report.appendix.missingData,
+  );
   const sections: Record<ReportSectionKey, string> = {
     verdict: `${sectionVerdict(report)}${report.scores ? sectionScores(report.scores) : ""}`,
     business: sectionBusiness(report.business),
@@ -800,10 +933,18 @@ export function reportToPrintBody(report: Report): string {
     outlook: sectionOutlook(report),
     projections: report.projections ? sectionProjections(report.projections) : "",
     macro: sectionMacro(report.macro),
-    appendix: sectionAppendix(report.appendix, report.disagreements),
+    appendix: sectionAppendix(
+      report.appendix,
+      report.disagreements,
+      report.meta.asOfMap,
+      completeness,
+    ),
   };
   return [
-    headerBlock(report),
+    headerBlock(report, completeness),
+    completeness.bannerText
+      ? `<aside class="data-only-banner">${esc(completeness.bannerText)}</aside>`
+      : "",
     ...REPORT_SECTION_MANIFEST.map((section) => sections[section.key]),
   ]
     .filter((b) => b.length > 0)
@@ -841,7 +982,9 @@ p { margin: 4pt 0; }
 .mono { font-family: "SF Mono", "Consolas", "Menlo", monospace; font-variant-numeric: tabular-nums; }
 .asof { color: #8a919e; font-size: 8.5pt; font-family: "SF Mono", Consolas, monospace; }
 .src { color: #8a919e; font-size: 8.5pt; font-family: "SF Mono", Consolas, monospace; }
-table { width: 100%; border-collapse: collapse; margin: 5pt 0 9pt; font-size: 9.5pt; }
+table { width: 100%; border-collapse: collapse; margin: 5pt 0 9pt; font-size: 9.5pt; break-inside: auto; page-break-inside: auto; }
+thead { display: table-header-group; }
+tr { break-inside: avoid; page-break-inside: avoid; }
 th, td { border: 1px solid #d5d9e0; padding: 3pt 5pt; text-align: left; vertical-align: top; }
 th { background: #f1f3f6; font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.03em; color: #55606e; }
 td.empty { text-align: center; color: #8a919e; }
@@ -875,7 +1018,7 @@ ul.claims li { margin: 3pt 0; }
 @media print {
   .print-doc { max-width: none; padding: 0; margin: 0; }
   h2.sec, h3, h4 { break-after: avoid-page; page-break-after: avoid; }
-  table, .scenario, .gradeblock, .exec, tr { break-inside: avoid; page-break-inside: avoid; }
+  .scenario, .gradeblock, .exec { break-inside: avoid; page-break-inside: avoid; }
   @page { margin: 0.6in 0.5in; }
 }
 `;

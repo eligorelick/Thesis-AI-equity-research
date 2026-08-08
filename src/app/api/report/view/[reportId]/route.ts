@@ -42,10 +42,12 @@ export interface ReportSummary {
   verificationRate: number | null;
   synthesis: string;
   grades: GradeStripCell[];
-  /** True when this is a data-only report (LLM analysis did not run). */
-  dataOnly: boolean;
+  /** Persisted content truth; null when the stored report cannot be parsed. */
+  dataOnly: boolean | null;
+  /** Persisted completeness metadata; null when absent or content is unavailable. */
+  dataCompleteness: NonNullable<Report["meta"]["dataCompleteness"]> | null;
   /** Sanitized missing-data disclosures needed by compact consumers. */
-  missingData: Report["appendix"]["missingData"];
+  missingData: Report["appendix"]["missingData"] | null;
 }
 
 export async function GET(
@@ -80,8 +82,9 @@ export async function GET(
       }))
     : [];
 
-  const dataOnly =
-    report?.appendix.missingData.some((m) => m.field === "analysis.llm") ?? true;
+  const dataOnly = report === null
+    ? null
+    : report.appendix.missingData.some((entry) => entry.field === "analysis.llm");
 
   return NextResponse.json({
     reportId,
@@ -94,6 +97,7 @@ export async function GET(
     synthesis: report?.verdict.synthesis ?? "Report content unavailable.",
     grades,
     dataOnly,
-    missingData: report?.appendix.missingData ?? [],
+    dataCompleteness: report?.meta.dataCompleteness ?? null,
+    missingData: report?.appendix.missingData ?? null,
   });
 }

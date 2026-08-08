@@ -44,9 +44,27 @@ import type {
   Valuation,
 } from "@/report/schema";
 import {
+  deriveReportCompletenessPresentation,
+  type ReportCompletenessPresentation,
+} from "@/report/completeness";
+import {
+  ASPECT_SCORE_FIELDS,
+  AS_OF_MAP_FIELDS,
+  COMPOSITE_SCORE_FIELDS,
+  EXECUTIVE_EVIDENCE_GROUPS,
+  MANIFEST_ENTRY_FIELDS,
   PROJECTION_METRIC_BY_KEY,
   PROJECTION_PATHS,
+  PROJECTION_POINT_FIELD_BY_KEY,
+  PROJECTION_ROOT_FIELDS,
+  PROJECTION_SCENARIO_WEIGHTS,
+  PROJECTION_SERIES_FIELD_BY_KEY,
+  PROJECTION_DISCLOSURE_FIELDS,
+  SCORE_WEIGHTS,
   SCORE_SURFACES,
+  SOURCE_ENTRY_FIELDS,
+  TRACED_NUMBER_FIELDS,
+  VERIFICATION_LOG_FIELDS,
   gradeSurfaceEntries,
   orderedProjectionSeries,
   projectionCellPoint,
@@ -154,6 +172,22 @@ function verifiedMark(n: TracedNumber): string {
   return DASH;
 }
 
+function auditValue(value: string | number | boolean | null | undefined): string {
+  if (value === null || value === undefined) return "n/a";
+  return String(value);
+}
+
+function citationTraceLabel(value: TracedNumber["verified"]): string {
+  return value === true ? "citation-traced" : value === false ? "uncited" : "not checked";
+}
+
+function tracedAuditCells(trace: TracedNumber): string[] {
+  return TRACED_NUMBER_FIELDS.map((field) => {
+    if (field.key === "verified") return citationTraceLabel(trace.verified);
+    return auditValue(trace[field.key]);
+  });
+}
+
 /* ======================================================================== *
  * Markdown-safe cell text (escape pipes/newlines so tables don't break)
  * ======================================================================== */
@@ -179,6 +213,11 @@ function table(headers: string[], rows: string[][]): string {
   return [head, sep, body].join("\n");
 }
 
+/** One generated blockquote line, routed through the shared Markdown cell boundary. */
+function blockquote(text: string): string {
+  return `> ${cell(text)}`;
+}
+
 /* ======================================================================== *
  * Shared block renderers
  * ======================================================================== */
@@ -187,7 +226,9 @@ function table(headers: string[], rows: string[][]): string {
 function claimList(claims: readonly SourcedClaim[]): string {
   if (claims.length === 0) return `- ${DASH}`;
   return claims
-    .map((c) => `- **[${c.label}]** ${c.text.replace(/\r\n?|\n/g, " ")}${asOfSuffix(c.asOf)} \`src: ${c.source}\``)
+    .map((c) =>
+      `- **[${c.label}]** ${c.text.replace(/\r\n?|\n/g, " ")}${asOfSuffix(c.asOf)} ` +
+      `\`source id: ${c.sourceId ?? "n/a"}\` \`src: ${c.source}\``)
     .join("\n");
 }
 
@@ -281,25 +322,78 @@ function renderVerdict(report: Report): string {
 
 function renderScores(scores: Scoring): string {
   const c = scores.composite;
-  const rows = SCORE_SURFACES.flatMap((descriptor) => {
-    if (descriptor.kind !== "aspect") return [];
-    const a = scores.aspects[descriptor.key];
-    return [
-      [
-        descriptor.label,
-        a.score === null ? DASH : String(Math.round(a.score)),
-        a.band ?? DASH,
-        `${Math.round(a.dataCompleteness * 100)}%`,
-        a.notApplicableReason ?? a.note,
-      ],
-    ];
-  });
+  const aspectDescriptors = SCORE_SURFACES.filter((descriptor) => descriptor.kind === "aspect");
+  const compositeFields = COMPOSITE_SCORE_FIELDS.filter((field) => field.key !== "weights");
+  const aspectFields = ASPECT_SCORE_FIELDS.filter((field) => field.key !== "drivers");
   return [
     "## 1b. Scorecard (deterministic)",
     "",
     `**Composite: ${c.score === null ? DASH : Math.round(c.score)} / 100 (${c.band ?? DASH})**`,
     "",
-    table(["Aspect", "Score", "Band", "Completeness", "Note"], rows),
+    table(
+      ["Aspect", "Score", "Band", "Completeness", "Note"],
+      aspectDescriptors.map((descriptor) => {
+        const aspect = scores.aspects[descriptor.key];
+        return [
+          descriptor.label,
+          aspect.score === null ? DASH : String(Math.round(aspect.score)),
+          aspect.band ?? DASH,
+          `${Math.round(aspect.dataCompleteness * 100)}%`,
+          aspect.notApplicableReason ?? aspect.note,
+        ];
+      }),
+    ),
+    "",
+    table(
+      ["Score identity", ...compositeFields.map((field) => field.label)],
+      [[
+        SCORE_SURFACES[0].label,
+        ...compositeFields.map((field) => {
+          if (field.key === "score") return auditValue(c.score);
+          if (field.key === "band") return auditValue(c.band);
+          return c.methodology;
+        }),
+      ]],
+    ),
+    "",
+    "### Composite weights",
+    "",
+    table(
+      ["Aspect", "Weight"],
+      SCORE_WEIGHTS.map((descriptor) => [
+        descriptor.label,
+        String(c.weights[descriptor.aspect]),
+      ]),
+    ),
+    "",
+    "### Aspect scores",
+    "",
+    table(
+      ["Aspect", ...aspectFields.map((field) => field.label)],
+      aspectDescriptors.map((descriptor) => {
+        const aspect = scores.aspects[descriptor.key];
+        return [
+          descriptor.label,
+          ...aspectFields.map((field) => {
+            if (field.key === "dataCompleteness") {
+              return String(aspect.dataCompleteness);
+            }
+            return auditValue(aspect[field.key]);
+          }),
+        ];
+      }),
+    ),
+    "",
+    "### Score drivers",
+    "",
+    table(
+      ["Aspect", ...TRACED_NUMBER_FIELDS.map((field) => field.label)],
+      aspectDescriptors.flatMap((descriptor) =>
+        scores.aspects[descriptor.key].drivers.map((driver) => [
+          descriptor.label,
+          ...tracedAuditCells(driver),
+        ])),
+    ),
     "",
     `_${c.methodology}_`,
     "",
@@ -308,21 +402,18 @@ function renderScores(scores: Scoring): string {
 }
 
 function renderProjections(p: Projections): string {
-  if (p.series.length === 0) {
-    return [
-      "## 11b. Weighted Projections",
-      "",
-      `_Not applicable${p.notApplicableReason ? `: ${p.notApplicableReason}` : "."}_`,
-    ].join("\n");
-  }
+  const series = orderedProjectionSeries(p.series);
   const lines: string[] = [
     "## 11b. Weighted Projections",
     "",
-    `Horizon ${p.horizonYears}y · unbacktested display-prior weights ${p.scenarioWeights.bull}/${p.scenarioWeights.base}/${p.scenarioWeights.bear} (bull/base/bear). Forward figures are ESTIMATEs, not facts or empirically calibrated odds.`,
+    `Horizon ${p.horizonYears}y · unbacktested display prior weights ${p.scenarioWeights.bull}/${p.scenarioWeights.base}/${p.scenarioWeights.bear} (bull/base/bear). Forward figures are ESTIMATEs, not facts or empirically calibrated odds.`,
     "",
   ];
+  if (series.length === 0) {
+    lines.push(`_Not applicable${p.notApplicableReason ? `: ${p.notApplicableReason}` : "."}_`, "");
+  }
   const forwardPaths = PROJECTION_PATHS.filter((descriptor) => descriptor.kind !== "historical");
-  for (const s of orderedProjectionSeries(p.series)) {
+  for (const s of series) {
     lines.push(`### ${PROJECTION_METRIC_BY_KEY[s.metric].label} (${s.unit})`, "");
     const rows = projectionPeriodRows(s).flatMap((row) => {
       const points = forwardPaths.map((descriptor) =>
@@ -337,6 +428,71 @@ function renderProjections(p: Projections): string {
     if (s.assumptions.length > 0) {
       lines.push("Assumptions:", "", s.assumptions.map((a) => `- ${a}`).join("\n"), "");
     }
+  }
+
+  lines.push("### Projection audit trail", "");
+  lines.push(
+    table(
+      ["Field", "Value"],
+      PROJECTION_ROOT_FIELDS.flatMap((field) => {
+        if (field.key === "scenarioWeights") {
+          return PROJECTION_SCENARIO_WEIGHTS.map((descriptor) => [
+            `${descriptor.label} scenario weight`,
+            String(p.scenarioWeights[descriptor.key]),
+          ]);
+        }
+        if (field.key === "horizonYears") return [[field.label, String(p.horizonYears)]];
+        if (field.key === "weightsVersion") return [[field.label, p.weightsVersion]];
+        if (field.key === "series") return [[field.label, String(p.series.length)]];
+        return [[field.label, auditValue(p.notApplicableReason)]];
+      }),
+    ),
+    "",
+  );
+  for (const s of series) {
+    const metric = PROJECTION_METRIC_BY_KEY[s.metric];
+    lines.push(`#### ${metric.label} projection series`, "");
+    lines.push(
+      table(
+        [
+          PROJECTION_SERIES_FIELD_BY_KEY.metric.label,
+          "Path",
+          PROJECTION_POINT_FIELD_BY_KEY.period.label,
+          "Series unit",
+          ...TRACED_NUMBER_FIELDS.map((field) => field.label),
+        ],
+        PROJECTION_PATHS.flatMap((path) =>
+          s[path.key].map((point) => [
+            metric.label,
+            path.label,
+            point.period,
+            s.unit,
+            ...tracedAuditCells(point.value),
+          ])),
+      ),
+      "",
+      table(
+        [PROJECTION_SERIES_FIELD_BY_KEY.assumptions.label],
+        s.assumptions.map((assumption) => [assumption]),
+      ),
+      "",
+      table(
+        PROJECTION_DISCLOSURE_FIELDS.map((field) => field.label),
+        s.disclosures.map((disclosure) =>
+          PROJECTION_DISCLOSURE_FIELDS.map((field) => {
+            if (field.key === "attemptedSources") {
+              return disclosure.attemptedSources?.join(", ") ?? "n/a";
+            }
+            if (field.key === "expected") {
+              return disclosure.expected === undefined
+                ? "unknown"
+                : disclosure.expected ? "yes" : "no";
+            }
+            return disclosure[field.key];
+          })),
+      ),
+      "",
+    );
   }
   return lines.join("\n").trimEnd();
 }
@@ -630,6 +786,11 @@ function renderLeadership(l: Leadership): string {
       claimList(e.reasoning),
       "",
     );
+    for (const descriptor of EXECUTIVE_EVIDENCE_GROUPS) {
+      const claims = e.evidence[descriptor.key];
+      if (!claims || claims.length === 0) continue;
+      lines.push(`##### ${descriptor.label}`, "", claimList(claims), "");
+    }
   }
   lines.push("### Insider activity", "", claimList(l.insiderSummary), "");
   lines.push("### Governance", "", claimList(l.governanceNotes));
@@ -759,20 +920,23 @@ function renderDisagreements(disagreements: readonly Disagreement[]): string {
   return lines.join("\n");
 }
 
-function renderAppendix(a: Appendix): string {
+function renderAppendix(
+  a: Appendix,
+  completeness: ReportCompletenessPresentation,
+): string {
   const lines: string[] = ["## 13. Appendix", ""];
   lines.push(
     "### Sources",
     "",
     table(
-      ["Provider", "Endpoint", "As of", "Fetched at", "Stale"],
-      a.sources.map((s) => [
-        s.provider,
-        s.endpoint,
-        s.asOf,
-        s.fetchedAt,
-        s.stale === undefined ? "unknown" : s.stale ? "yes" : "no",
-      ]),
+      SOURCE_ENTRY_FIELDS.map((field) => field.label),
+      a.sources.map((source) =>
+        SOURCE_ENTRY_FIELDS.map((field) => {
+          if (field.key === "stale") {
+            return source.stale === undefined ? "unknown" : source.stale ? "yes" : "no";
+          }
+          return source[field.key];
+        })),
     ),
     "",
   );
@@ -781,15 +945,19 @@ function renderAppendix(a: Appendix): string {
     "",
     a.missingData.length > 0
       ? table(
-          ["Field", "Severity", "Reason", "Tried"],
-          a.missingData.map((g) => [
-            g.field,
-            g.severity,
-            g.reason,
-            g.attemptedSources ? g.attemptedSources.join(", ") : DASH,
-          ]),
+          MANIFEST_ENTRY_FIELDS.map((field) => field.label),
+          a.missingData.map((gap) =>
+            MANIFEST_ENTRY_FIELDS.map((field) => {
+              if (field.key === "attemptedSources") {
+                return gap.attemptedSources?.join(", ") ?? "n/a";
+              }
+              if (field.key === "expected") {
+                return gap.expected === undefined ? "unknown" : gap.expected ? "yes" : "no";
+              }
+              return gap[field.key];
+            })),
         )
-      : `_No gaps — full data coverage._`,
+      : `_${completeness.manifestText}_`,
     "",
   );
   lines.push(
@@ -808,8 +976,12 @@ function renderAppendix(a: Appendix): string {
   if (a.verificationLog && a.verificationLog.length > 0) {
     lines.push(
       table(
-        ["Claim", "Outcome", "Note"],
-        a.verificationLog.map((v) => [v.claim, citationOutcomeLabel(v.outcome), v.note ?? DASH]),
+        VERIFICATION_LOG_FIELDS.map((field) => field.label),
+        a.verificationLog.map((entry) =>
+          VERIFICATION_LOG_FIELDS.map((field) => {
+            if (field.key === "outcome") return citationOutcomeLabel(entry.outcome);
+            return auditValue(entry[field.key]);
+          })),
       ),
       "",
     );
@@ -832,7 +1004,10 @@ function renderAppendix(a: Appendix): string {
  * Header / meta
  * ======================================================================== */
 
-function renderHeader(report: Report): string {
+function renderHeader(
+  report: Report,
+  completeness: ReportCompletenessPresentation,
+): string {
   const m = report.meta;
   const lines: string[] = [];
   lines.push(`# ${m.companyName} (${m.symbol}) — Research Report`);
@@ -848,6 +1023,7 @@ function renderHeader(report: Report): string {
         ["Spec version", m.specVersion],
         ["Pipeline version", m.pipelineVersion],
         ["Cost (USD)", `$${m.costUsd.toFixed(4)}`],
+        ["Data completeness", completeness.statusText],
         [
           "Citation coverage",
           m.verificationRate === null
@@ -871,7 +1047,7 @@ function renderAsOfMap(asOfMap: Record<string, string>): string {
     "### As-of map",
     "",
     table(
-      ["Field", "As of"],
+      AS_OF_MAP_FIELDS.map((field) => field.label),
       keys.map((k) => [k, asOfMap[k]]),
     ),
   ].join("\n");
@@ -899,8 +1075,13 @@ function capitalize(s: string): string {
  * are present; every figure carries its as-of and verification state.
  */
 export function reportToMarkdown(report: Report): string {
+  const completeness = deriveReportCompletenessPresentation(
+    report.meta.dataCompleteness,
+    report.appendix.missingData,
+  );
   const blocks: string[] = [
-    renderHeader(report),
+    renderHeader(report, completeness),
+    completeness.bannerText ? blockquote(completeness.bannerText) : "",
     renderVerdict(report),
     report.scores ? renderScores(report.scores) : "",
     renderBusiness(report.business),
@@ -916,7 +1097,7 @@ export function reportToMarkdown(report: Report): string {
     report.projections ? renderProjections(report.projections) : "",
     renderMacro(report.macro),
     renderDisagreements(report.disagreements),
-    renderAppendix(report.appendix),
+    renderAppendix(report.appendix, completeness),
     renderAsOfMap(report.meta.asOfMap),
   ].filter((b) => b.length > 0);
 

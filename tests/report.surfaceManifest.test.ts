@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   AspectScoreSchema,
   CompositeScoreSchema,
+  DataCompletenessSchema,
   ExecutiveEvidenceSchema,
   GradeStripSchema,
   ManifestEntrySchema,
@@ -12,7 +13,9 @@ import {
   ProjectionsSchema,
   ScoreAspectSchema,
   ScoringSchema,
+  SourceEntrySchema,
   TracedNumberSchema,
+  VerificationLogEntrySchema,
   type GradeStrip,
   type ProjectionSeries,
   type ScoreAspect,
@@ -26,15 +29,24 @@ import {
   ASPECT_SCORE_FIELD_BY_KEY,
   ASPECT_SCORE_FIELD_ORDER,
   ASPECT_SCORE_FIELDS,
+  AS_OF_MAP_FIELD_BY_KEY,
+  AS_OF_MAP_FIELD_ORDER,
+  AS_OF_MAP_FIELDS,
   COMPOSITE_SCORE_FIELD_BY_KEY,
   COMPOSITE_SCORE_FIELD_ORDER,
   COMPOSITE_SCORE_FIELDS,
+  DATA_COMPLETENESS_FIELD_BY_KEY,
+  DATA_COMPLETENESS_FIELD_ORDER,
+  DATA_COMPLETENESS_FIELDS,
   EXECUTIVE_EVIDENCE_BY_KEY,
   EXECUTIVE_EVIDENCE_GROUPS,
   EXECUTIVE_EVIDENCE_ORDER,
   GRADE_SURFACE_BY_KEY,
   GRADE_SURFACE_ORDER,
   GRADE_SURFACES,
+  MANIFEST_ENTRY_FIELD_BY_KEY,
+  MANIFEST_ENTRY_FIELD_ORDER,
+  MANIFEST_ENTRY_FIELDS,
   PROJECTION_DISCLOSURE_FIELD_BY_KEY,
   PROJECTION_DISCLOSURE_FIELD_ORDER,
   PROJECTION_DISCLOSURE_FIELDS,
@@ -62,12 +74,18 @@ import {
   SCORE_SURFACES,
   SCORE_WEIGHT_BY_ASPECT,
   SCORE_WEIGHTS,
+  SOURCE_ENTRY_FIELD_BY_KEY,
+  SOURCE_ENTRY_FIELD_ORDER,
+  SOURCE_ENTRY_FIELDS,
   SCORING_FIELD_BY_KEY,
   SCORING_FIELD_ORDER,
   SCORING_FIELDS,
   TRACED_NUMBER_FIELD_BY_KEY,
   TRACED_NUMBER_FIELD_ORDER,
   TRACED_NUMBER_FIELDS,
+  VERIFICATION_LOG_FIELD_BY_KEY,
+  VERIFICATION_LOG_FIELD_ORDER,
+  VERIFICATION_LOG_FIELDS,
   gradeSurfaceEntries,
   isCanonicalGradeSurfaceKeySequence,
   orderedProjectionSeries,
@@ -168,6 +186,26 @@ const PROJECTION_DISCLOSURE_ORDER = [
   "severity",
   "attemptedSources",
   "expected",
+] as const;
+const SOURCE_ENTRY_ORDER = ["provider", "endpoint", "asOf", "fetchedAt", "stale"] as const;
+const VERIFICATION_LOG_ORDER = [
+  "claim",
+  "outcome",
+  "note",
+  "path",
+  "evidenceKind",
+  "source",
+  "reason",
+  "traceKind",
+] as const;
+const AS_OF_MAP_ORDER = ["field", "asOf"] as const;
+const DATA_COMPLETENESS_ORDER = [
+  "state",
+  "criticalCount",
+  "warningCount",
+  "edgar",
+  "xbrl",
+  "forensicValidation",
 ] as const;
 
 function keysOfShape(schema: { shape: Record<string, unknown> }): string[] {
@@ -326,6 +364,10 @@ describe("shared report surface manifest", () => {
       ...ids(PROJECTION_SERIES_FIELDS),
       ...ids(PROJECTION_POINT_FIELDS),
       ...ids(PROJECTION_DISCLOSURE_FIELDS),
+      ...ids(SOURCE_ENTRY_FIELDS),
+      ...ids(VERIFICATION_LOG_FIELDS),
+      ...ids(AS_OF_MAP_FIELDS),
+      ...ids(DATA_COMPLETENESS_FIELDS),
     ];
     expect(new Set(everyId).size).toBe(everyId.length);
     expect(new Set(GRADE_SURFACES.map((entry) => entry.shortLabel)).size).toBe(
@@ -372,6 +414,7 @@ describe("shared report surface manifest", () => {
       [PROJECTION_SERIES_FIELD_ORDER, PROJECTION_SERIES_FIELDS, PROJECTION_SERIES_FIELD_BY_KEY, ProjectionSeriesSchema],
       [PROJECTION_POINT_FIELD_ORDER, PROJECTION_POINT_FIELDS, PROJECTION_POINT_FIELD_BY_KEY, ProjectionPointSchema],
       [PROJECTION_DISCLOSURE_FIELD_ORDER, PROJECTION_DISCLOSURE_FIELDS, PROJECTION_DISCLOSURE_FIELD_BY_KEY, ManifestEntrySchema],
+      [DATA_COMPLETENESS_FIELD_ORDER, DATA_COMPLETENESS_FIELDS, DATA_COMPLETENESS_FIELD_BY_KEY, DataCompletenessSchema],
     ] as const;
 
     for (const [order, fields, byKey, schema] of fieldCases) {
@@ -420,6 +463,70 @@ describe("shared report surface manifest", () => {
     );
     expect(ids(PROJECTION_DISCLOSURE_FIELDS)).toEqual(
       PROJECTION_DISCLOSURE_ORDER.map((key) => `projection-disclosure-field:${key}`),
+    );
+  });
+
+  it("pins source, manifest, verification-log, and as-of-map audit fields without duplicate manifests", () => {
+    expect(SOURCE_ENTRY_FIELD_ORDER).toEqual(SOURCE_ENTRY_ORDER);
+    expect(VERIFICATION_LOG_FIELD_ORDER).toEqual(VERIFICATION_LOG_ORDER);
+    expect(AS_OF_MAP_FIELD_ORDER).toEqual(AS_OF_MAP_ORDER);
+    expect(new Set(SOURCE_ENTRY_FIELD_ORDER)).toEqual(new Set(keysOfShape(SourceEntrySchema)));
+    expect(new Set(VERIFICATION_LOG_FIELD_ORDER)).toEqual(
+      new Set(keysOfShape(VerificationLogEntrySchema)),
+    );
+    expect(SOURCE_ENTRY_FIELDS).toEqual([
+      { id: "source-entry-field:provider", key: "provider", label: "Provider", optional: false },
+      { id: "source-entry-field:endpoint", key: "endpoint", label: "Endpoint", optional: false },
+      { id: "source-entry-field:asOf", key: "asOf", label: "As of", optional: false },
+      { id: "source-entry-field:fetchedAt", key: "fetchedAt", label: "Fetched at", optional: false },
+      { id: "source-entry-field:stale", key: "stale", label: "Stale", optional: true },
+    ]);
+    expect(VERIFICATION_LOG_FIELDS).toEqual([
+      { id: "verification-log-field:claim", key: "claim", label: "Claim", optional: false },
+      { id: "verification-log-field:outcome", key: "outcome", label: "Outcome", optional: false },
+      { id: "verification-log-field:note", key: "note", label: "Note", optional: true },
+      { id: "verification-log-field:path", key: "path", label: "Path", optional: true },
+      { id: "verification-log-field:evidenceKind", key: "evidenceKind", label: "Evidence kind", optional: true },
+      { id: "verification-log-field:source", key: "source", label: "Source", optional: true },
+      { id: "verification-log-field:reason", key: "reason", label: "Reason", optional: true },
+      { id: "verification-log-field:traceKind", key: "traceKind", label: "Trace kind", optional: true },
+    ]);
+    expect(AS_OF_MAP_FIELDS).toEqual([
+      { id: "as-of-map-field:field", key: "field", label: "Field", optional: false },
+      { id: "as-of-map-field:asOf", key: "asOf", label: "As of", optional: false },
+    ]);
+    expect(SOURCE_ENTRY_FIELD_BY_KEY).toEqual(
+      Object.fromEntries(SOURCE_ENTRY_FIELDS.map((entry) => [entry.key, entry])),
+    );
+    expect(VERIFICATION_LOG_FIELD_BY_KEY).toEqual(
+      Object.fromEntries(VERIFICATION_LOG_FIELDS.map((entry) => [entry.key, entry])),
+    );
+    expect(AS_OF_MAP_FIELD_BY_KEY).toEqual(
+      Object.fromEntries(AS_OF_MAP_FIELDS.map((entry) => [entry.key, entry])),
+    );
+    expect(MANIFEST_ENTRY_FIELD_ORDER).toBe(PROJECTION_DISCLOSURE_FIELD_ORDER);
+    expect(MANIFEST_ENTRY_FIELDS).toBe(PROJECTION_DISCLOSURE_FIELDS);
+    expect(MANIFEST_ENTRY_FIELD_BY_KEY).toBe(PROJECTION_DISCLOSURE_FIELD_BY_KEY);
+  });
+
+  it("pins the client-safe persisted completeness field manifest", () => {
+    expect(DATA_COMPLETENESS_FIELD_ORDER).toEqual(DATA_COMPLETENESS_ORDER);
+    expect(new Set(DATA_COMPLETENESS_FIELD_ORDER)).toEqual(
+      new Set(keysOfShape(DataCompletenessSchema)),
+    );
+    expect(DATA_COMPLETENESS_FIELDS).toEqual([
+      { id: "data-completeness-field:state", key: "state", label: "State", optional: false },
+      { id: "data-completeness-field:criticalCount", key: "criticalCount", label: "Critical count", optional: false },
+      { id: "data-completeness-field:warningCount", key: "warningCount", label: "Warning count", optional: false },
+      { id: "data-completeness-field:edgar", key: "edgar", label: "EDGAR", optional: false },
+      { id: "data-completeness-field:xbrl", key: "xbrl", label: "XBRL", optional: false },
+      { id: "data-completeness-field:forensicValidation", key: "forensicValidation", label: "Forensic validation", optional: false },
+    ]);
+    expect(DATA_COMPLETENESS_FIELD_BY_KEY).toEqual(
+      Object.fromEntries(DATA_COMPLETENESS_FIELDS.map((entry) => [entry.key, entry])),
+    );
+    expect(ids(DATA_COMPLETENESS_FIELDS)).toEqual(
+      DATA_COMPLETENESS_ORDER.map((key) => `data-completeness-field:${key}`),
     );
   });
 

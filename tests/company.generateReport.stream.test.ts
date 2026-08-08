@@ -15,6 +15,22 @@ import {
 } from "@/app/company/[symbol]/GenerateReport";
 import type { StepProgress } from "@/types/core";
 
+const COMPLETE_DATA_COMPLETENESS = {
+  state: "complete",
+  criticalCount: 0,
+  warningCount: 0,
+  edgar: "available",
+  xbrl: "checked",
+  forensicValidation: "complete",
+} as const;
+
+const ANALYSIS_GAP = {
+  field: "analysis.llm",
+  reason: "TASK28:summary:data-only",
+  severity: "critical",
+  attemptedSources: ["anthropic"],
+} as const;
+
 function snapshot(over: Record<string, unknown> = {}) {
   return {
     jobId: "job-A",
@@ -64,6 +80,8 @@ function reportSummary(over: Record<string, unknown> = {}) {
       { key: "moat", grade: "B", oneLineWhy: "moat sentinel" },
     ],
     dataOnly: false,
+    dataCompleteness: COMPLETE_DATA_COMPLETENESS,
+    missingData: [],
     ...over,
   };
 }
@@ -246,10 +264,18 @@ describe("GenerateReport — revisioned snapshot stream fence", () => {
     expect(decodeAcceptedJobId({ jobId: "job-A" })).toBe("job-A");
   });
 
-  it("keeps canonical snapshot cost and data-only truth when a delayed summary is stale", () => {
+  it("keeps canonical snapshot cost while a valid persisted summary owns data-only truth", () => {
     expect(canonicalReportPresentation(
       { totalCostUsd: 1.25, dataOnly: true },
       { costUsd: 0.4, dataOnly: false },
+    )).toEqual({ costUsd: 1.25, dataOnly: false });
+    expect(canonicalReportPresentation(
+      { totalCostUsd: 1.25, dataOnly: false },
+      { costUsd: 0.4, dataOnly: null },
+    )).toEqual({ costUsd: 1.25, dataOnly: null });
+    expect(canonicalReportPresentation(
+      { totalCostUsd: 1.25, dataOnly: true },
+      null,
     )).toEqual({ costUsd: 1.25, dataOnly: true });
   });
 
@@ -308,6 +334,83 @@ describe("GenerateReport — revisioned snapshot stream fence", () => {
       reportSummary({ costUsd: -1 }),
       reportSummary({ dataOnly: "false" }),
       reportSummary({ synthesis: 42 }),
+      reportSummary({ missingData: null }),
+      reportSummary({ missingData: [{ field: null, reason: "reason", severity: "info" }] }),
+      reportSummary({ missingData: [{ field: "field", reason: null, severity: "info" }] }),
+      reportSummary({ missingData: [{ field: "field", reason: "reason", severity: "warning" }] }),
+      reportSummary({ missingData: [{
+        field: "field",
+        reason: "reason",
+        severity: "warn",
+        attemptedSources: ["source", 28],
+      }] }),
+      reportSummary({ missingData: [{
+        field: "field",
+        reason: "reason",
+        severity: "warn",
+        expected: null,
+      }] }),
+      reportSummary({ missingData: [{
+        field: "field",
+        reason: "reason",
+        severity: "warn",
+        extra: "not permitted",
+      }] }),
+      reportSummary({ dataCompleteness: {} }),
+      ...Object.entries({
+        state: "finished",
+        criticalCount: -1,
+        warningCount: 0.5,
+        edgar: "unknown",
+        xbrl: "unchecked",
+        forensicValidation: "unknown",
+      }).map(([field, invalid]) => reportSummary({
+        dataCompleteness: { ...COMPLETE_DATA_COMPLETENESS, [field]: invalid },
+      })),
+      reportSummary({
+        dataCompleteness: { ...COMPLETE_DATA_COMPLETENESS, extra: "not permitted" },
+      }),
+      reportSummary({
+        dataCompleteness: { ...COMPLETE_DATA_COMPLETENESS, criticalCount: Number.NaN },
+      }),
+      reportSummary({
+        dataCompleteness: { ...COMPLETE_DATA_COMPLETENESS, warningCount: Number.POSITIVE_INFINITY },
+      }),
+      reportSummary({
+        dataCompleteness: {
+          ...COMPLETE_DATA_COMPLETENESS,
+          criticalCount: Number.MAX_SAFE_INTEGER + 1,
+        },
+      }),
+      reportSummary({ dataOnly: false, missingData: [ANALYSIS_GAP] }),
+      reportSummary({ dataOnly: true, grades: [], missingData: [] }),
+      reportSummary({ dataOnly: true, missingData: [] }),
+      reportSummary({
+        dataOnly: true,
+        grades: [],
+        dataCompleteness: {
+          state: "blocked",
+          criticalCount: 1,
+          warningCount: 0,
+          edgar: "available",
+          xbrl: "checked",
+          forensicValidation: "complete",
+        },
+        missingData: [ANALYSIS_GAP],
+      }),
+      reportSummary({ dataOnly: null, dataCompleteness: null, missingData: null }),
+      reportSummary({
+        dataOnly: null,
+        grades: [],
+        dataCompleteness: null,
+        missingData: [],
+      }),
+      reportSummary({
+        dataOnly: null,
+        grades: [],
+        dataCompleteness: COMPLETE_DATA_COMPLETENESS,
+        missingData: null,
+      }),
     ];
     for (const value of cases) {
       await fetchReportSummaryForSnapshot(
@@ -361,7 +464,59 @@ describe("GenerateReport — revisioned snapshot stream fence", () => {
     for (const value of [
       reportSummary({ grades: canonical }),
       reportSummary({ grades: withoutBalance }),
-      reportSummary({ grades: [], dataOnly: true }),
+      reportSummary({
+        grades: withoutBalance.map((grade) => ({ ...grade, grade: "F" })),
+        dataOnly: true,
+        dataCompleteness: {
+          state: "blocked",
+          criticalCount: 1,
+          warningCount: 1,
+          edgar: "available",
+          xbrl: "checked",
+          forensicValidation: "complete",
+        },
+        missingData: [
+          ANALYSIS_GAP,
+          {
+            field: "llm.bull",
+            reason: "TASK28:summary:additional-info",
+            severity: "info",
+            attemptedSources: ["anthropic"],
+            expected: false,
+          },
+          {
+            field: "shares.float",
+            reason: "TASK28:summary:additional-warning",
+            severity: "warn",
+            attemptedSources: ["fmp", "sec"],
+          },
+          {
+            field: "projections.eps.shareCountTrend",
+            reason: "TASK28:summary:expected",
+            severity: "warn",
+            expected: true,
+          },
+        ],
+      }),
+      reportSummary({
+        grades: [],
+        dataOnly: null,
+        dataCompleteness: null,
+        missingData: null,
+      }),
+      reportSummary({
+        dataCompleteness: null,
+        missingData: [{
+          field: "shares.float",
+          reason: "TASK28:summary:legacy-gap",
+          severity: "info",
+          expected: false,
+        }],
+      }),
+      reportSummary({
+        dataCompleteness: { ...COMPLETE_DATA_COMPLETENESS, warningCount: 99 },
+        missingData: [],
+      }),
     ]) {
       await fetchReportSummaryForSnapshot(
         11,
@@ -371,11 +526,17 @@ describe("GenerateReport — revisioned snapshot stream fence", () => {
         async () => new Response(JSON.stringify(value), { status: 200 }),
       );
     }
-    expect(installed).toHaveLength(3);
+    expect(installed).toHaveLength(6);
     expect(installed).toEqual([
       expect.objectContaining({ grades: canonical }),
       expect.objectContaining({ grades: withoutBalance }),
-      expect.objectContaining({ grades: [] }),
+      expect.objectContaining({
+        dataOnly: true,
+        grades: expect.arrayContaining([expect.objectContaining({ grade: "F" })]),
+      }),
+      expect.objectContaining({ grades: [], dataOnly: null }),
+      expect.objectContaining({ dataCompleteness: null }),
+      expect.objectContaining({ dataCompleteness: expect.objectContaining({ warningCount: 99 }) }),
     ]);
   });
 

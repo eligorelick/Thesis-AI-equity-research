@@ -144,6 +144,27 @@ describe("reportToPrintHtml — full schema-valid report", () => {
     expect(PRINT_CSS).toMatch(/tr \{ break-inside: avoid/);
   });
 
+  it("lets long tables paginate while repeating headers and keeping individual rows intact", () => {
+    expect(PRINT_CSS).toMatch(/thead\s*\{[^}]*display:\s*table-header-group/i);
+    expect(PRINT_CSS).toMatch(/table\s*\{[^}]*break-inside:\s*auto/i);
+    expect(PRINT_CSS).toMatch(/table\s*\{[^}]*page-break-inside:\s*auto/i);
+    expect(PRINT_CSS).toMatch(/tr\s*\{[^}]*break-inside:\s*avoid/i);
+    const avoidWholeBlockSelectors = [...PRINT_CSS.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter((match) => /(?:break-inside|page-break-inside)\s*:\s*avoid/i.test(match[2]!))
+      .flatMap((match) => match[1]!.split(",").map((selector) => selector.trim()));
+    const targetsWholeTable = (selector: string): boolean => {
+      const subject = selector.split(/[\s>+~]+/).filter(Boolean).at(-1) ?? "";
+      return /^table(?:$|[.#:\[])/i.test(subject)
+        || /^[.#][a-z0-9_-]*table(?:$|[.#:\[])/i.test(subject);
+    };
+    expect(targetsWholeTable("table")).toBe(true);
+    expect(targetsWholeTable("#print-root table")).toBe(true);
+    expect(targetsWholeTable(".audit-table")).toBe(true);
+    expect(targetsWholeTable(".audit-table tr")).toBe(false);
+    expect(targetsWholeTable("table.audit-table thead")).toBe(false);
+    expect(avoidWholeBlockSelectors.filter(targetsWholeTable)).toEqual([]);
+  });
+
   it("auto-print script is opt-in", () => {
     expect(reportToPrintHtml(report)).not.toContain("window.print()");
     expect(reportToPrintHtml(report, { autoPrint: true })).toContain(
@@ -219,14 +240,18 @@ describe("reportToPrintBody — optional sections absent", () => {
     expect(body).toContain("Future Outlook");
   });
 
-  it("renders the 'no gaps' fallback when the manifest is empty", () => {
+  it("keeps legacy empty-manifest completeness unknown when metadata was never persisted", () => {
     const base = loadReport();
     const clean: Report = {
       ...base,
+      meta: { ...base.meta, dataCompleteness: undefined },
       appendix: { ...base.appendix, missingData: [] },
     };
     const body = reportToPrintBody(clean);
-    expect(body).toContain("full data coverage");
+    expect(body).toContain("No missing-data entries recorded");
+    expect(body).toMatch(/completeness (?:was )?(?:not recorded|unknown)/i);
+    expect(body).not.toMatch(/full (data )?coverage/i);
+    expect(body).not.toMatch(/deterministic data is complete/i);
   });
 
   it("labels per-number provenance as citation coverage, never 'verified'/'unverified' (audit #2)", () => {

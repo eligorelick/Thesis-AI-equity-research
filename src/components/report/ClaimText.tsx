@@ -27,11 +27,22 @@ export function ClaimLabelChip({ label }: { label: ClaimLabel }) {
 }
 
 /** A tiny source + as-of provenance line (used inside popovers). */
-function Provenance({ source, asOf }: { source: string; asOf: string | null }) {
+function Provenance({
+  sourceId,
+  source,
+  asOf,
+}: {
+  sourceId?: string;
+  source: string;
+  asOf: string | null;
+}) {
   return (
     <div className="mono flex flex-col gap-0.5 text-[10px] leading-snug text-faint">
       <span className="break-all">
-        <span className="text-muted">src</span> {source}
+        <span className="text-muted">source id</span> {sourceId ?? "n/a"}
+      </span>
+      <span className="break-all">
+        <span className="text-muted">source</span> {source}
       </span>
       <span>
         <span className="text-muted">as of</span> {asOf ?? "—"}
@@ -71,7 +82,7 @@ export function ClaimText({
         </span>
       </summary>
       <div className="ml-[3.25rem] border-l border-edge pl-2">
-        <Provenance source={claim.source} asOf={claim.asOf} />
+        <Provenance sourceId={claim.sourceId} source={claim.source} asOf={claim.asOf} />
       </div>
     </details>
   );

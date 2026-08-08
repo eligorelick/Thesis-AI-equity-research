@@ -414,9 +414,11 @@ function gapResult<T>(
   reason: string,
   severity: ManifestEntry["severity"],
   attemptedSources?: string[],
+  expected = false,
 ): FetchResult<T> {
   const gap: ManifestEntry = { field, reason, severity };
   if (attemptedSources !== undefined) gap.attemptedSources = attemptedSources;
+  if (expected) gap.expected = true;
   return { ok: false, gap };
 }
 
@@ -1078,17 +1080,25 @@ async function buildEdgarBundle(
           doc.gap.attemptedSources,
         );
       }
-    } else if (latestTenQ.ok) {
+    } else if (latestTenQ.ok && latestTenQ.value.data.form === "6-K") {
       tenQMdna = gapResult(
         `edgar.tenQMdna(${symbol})`,
         `latest interim filing is ${latestTenQ.value.data.form}; Form 6-K has no standardized Part I Item 2 MD&A, so no section was inferred`,
         "info",
         [latestTenQ.value.endpoint],
+        true,
+      );
+    } else if (latestTenQ.ok) {
+      tenQMdna = gapResult(
+        `edgar.tenQMdna(${symbol})`,
+        `latest interim filing had unexpected form ${latestTenQ.value.data.form}; no standardized Part I Item 2 MD&A was extracted`,
+        "warn",
+        [latestTenQ.value.endpoint],
       );
     } else {
       tenQMdna = gapResult(
         `edgar.tenQMdna(${symbol})`,
-        `no 10-Q to extract from: ${latestTenQ.gap.reason} (20-F/6-K filers have no 10-Q — expected for foreign issuers)`,
+        `no 10-Q or confirmed 6-K interim filing to classify: ${latestTenQ.gap.reason}`,
         "warn",
       );
     }

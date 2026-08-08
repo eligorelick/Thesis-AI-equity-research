@@ -27,6 +27,10 @@ import {
   TTL,
 } from "@/cache/apiCache";
 import {
+  createDbCachedEdgarTransport,
+  filingDocumentBodyProblem,
+} from "@/providers/edgar";
+import {
   DEFAULT_ANALYSIS_EFFORT,
   EFFORT_LEVELS,
   getAnalysisEffortSetting,
@@ -425,6 +429,49 @@ describe("cachedFetch — empty body never clobbers good cached data (M6)", () =
     await cachedFetch({ ...bareOpts, fetcher: async () => ({ body: [], asOf: "2026-07-01" }) });
     await flushPendingRefreshes();
     expect(JSON.parse(readRow(bareKey)!.bodyJson)).toEqual([]); // overwritten (no guard configured)
+  });
+});
+
+describe("EDGAR durable-cache semantic admission", () => {
+  it("does not cache a blank HTTP-200 filing on cold miss", async () => {
+    const url = "https://www.sec.gov/Archives/edgar/data/320193/cold-durable.htm";
+    const transport = createDbCachedEdgarTransport({
+      fetchFn: () => Promise.resolve(new Response(" \r\n\t ", { status: 200 })),
+    });
+
+    await expect(
+      transport.fetchText(url, { ttlMs: 60_000, validateBody: filingDocumentBodyProblem }),
+    ).rejects.toThrow(/empty/i);
+
+    expect(readRow(buildCacheKey("edgar", url, {}))).toBeUndefined();
+  });
+
+  it("preserves the last-good filing in the durable cache when refresh is blank", async () => {
+    const url = "https://www.sec.gov/Archives/edgar/data/320193/refresh-durable.htm";
+    let body = "<html><body>GOOD durable filing disclosure</body></html>";
+    const transport = createDbCachedEdgarTransport({
+      fetchFn: () => Promise.resolve(new Response(body, { status: 200 })),
+    });
+    const opts = { ttlMs: 1, validateBody: filingDocumentBodyProblem };
+    await transport.fetchText(url, opts);
+    const key = buildCacheKey("edgar", url, {});
+    backdate(key, 1);
+    const beforeRefresh = readRow(key);
+
+    body = " \n ";
+    const stale = await transport.fetchText(url, opts);
+    expect(stale.body).toContain("GOOD");
+    expect(stale.stale).toBe(true);
+
+    await flushPendingRefreshes();
+    const stored = readRow(key);
+    expect(stored).toBeDefined();
+    expect(stored!.fetchedAt).toBe(beforeRefresh!.fetchedAt);
+    expect(stored!.asOf).toBe(beforeRefresh!.asOf);
+    expect(JSON.parse(stored!.bodyJson)).toEqual({
+      status: 200,
+      body: "<html><body>GOOD durable filing disclosure</body></html>",
+    });
   });
 });
 

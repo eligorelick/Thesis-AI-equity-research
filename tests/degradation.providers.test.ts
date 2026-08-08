@@ -23,6 +23,7 @@ import { buildDataBundle } from "@/pipeline/dataBundle";
 import { runStageB } from "@/pipeline/compute";
 import { validateBundle } from "@/pipeline/stageA/validate";
 import { assembleContextPayload } from "@/pipeline/stageC/payload";
+import { buildDataCompleteness } from "@/report/completeness";
 import { createEdgarClient, type EdgarTransport, type EdgarTransportResponse } from "@/providers/edgar";
 import { createFmpClient, type FmpClient } from "@/providers/fmp";
 import { makeLimiter } from "@/providers/http";
@@ -629,17 +630,29 @@ describe("degradation: FINRA down", () => {
  * standardized Part I Item 2 MD&A section.
  * ------------------------------------------------------------------------ */
 
-function foreignIssuerSubmissionsBody(): string {
+function foreignIssuerSubmissionsBody(includeSixK = true): string {
+  const accessionNumber = ["0001046179-26-000010"];
+  const filingDate = ["2026-04-15"];
+  const reportDate = ["2025-12-31"];
+  const form = ["20-F"];
+  const primaryDocument = ["fpi-20251231_20f.htm"];
+  if (includeSixK) {
+    accessionNumber.push("0001046179-26-000005");
+    filingDate.push("2026-01-10");
+    reportDate.push("2025-12-31");
+    form.push("6-K");
+    primaryDocument.push("fpi-6k.htm");
+  }
   return JSON.stringify({
     cik: "1046179",
     name: "Foreign Private Issuer Co",
     filings: {
       recent: {
-        accessionNumber: ["0001046179-26-000010", "0001046179-26-000005"],
-        filingDate: ["2026-04-15", "2026-01-10"],
-        reportDate: ["2025-12-31", "2025-12-31"],
-        form: ["20-F", "6-K"],
-        primaryDocument: ["fpi-20251231_20f.htm", "fpi-6k.htm"],
+        accessionNumber,
+        filingDate,
+        reportDate,
+        form,
+        primaryDocument,
       },
     },
   });
@@ -663,7 +676,7 @@ function syntheticTwentyFDoc(): string {
 }
 
 describe("degradation: foreign-private-issuer EDGAR coverage", () => {
-  it("uses a 20-F without an ADR profile flag, extracts its annual sections, and preserves a 6-K provenance gap", async () => {
+  it("marks a confirmed 6-K structural MD&A omission expected", async () => {
     const bundle = await buildDataBundle("FPI", {
       now,
       eodYears: 1,
@@ -704,7 +717,42 @@ describe("degradation: foreign-private-issuer EDGAR coverage", () => {
     if (bundle.edgar.latestTenQ.ok) expect(bundle.edgar.latestTenQ.value.data.form).toBe("6-K");
     if (!bundle.edgar.tenQMdna.ok) {
       expect(bundle.edgar.tenQMdna.gap.severity).toBe("info");
+      expect(bundle.edgar.tenQMdna.gap.expected).toBe(true);
       expect(bundle.edgar.tenQMdna.gap.reason).toMatch(/no standardized Part I Item 2 MD&A/i);
+      expect(buildDataCompleteness([bundle.edgar.tenQMdna.gap]).state).toBe("complete");
+    }
+  });
+
+  it("keeps an unexplained missing 10-Q actionable", async () => {
+    const bundle = await buildDataBundle("FPI", {
+      now,
+      eodYears: 1,
+      fmp: makeFmp((url) => {
+        if (fmpEndpoint(url) === "profile") {
+          return jsonResponse([
+            { symbol: "FPI", companyName: "Foreign Private Issuer Co", sector: "Technology", currency: "USD", country: "TW" },
+          ]);
+        }
+        return jsonResponse([]);
+      }),
+      edgar: createEdgarClient({
+        transport: edgarRouterTransport({
+          "company_tickers.json": { body: tickerMapBody("FPI", 1046179, "Foreign Private Issuer Co") },
+          "submissions/CIK0001046179.json": { body: foreignIssuerSubmissionsBody(false) },
+          "fpi-20251231_20f.htm": { body: syntheticTwentyFDoc() },
+        }),
+      }),
+      fred: fredUp(),
+      finra: finraUp(),
+      finnhub: finnhubNoKey(),
+    });
+
+    expect(bundle.edgar.latestTenQ.ok).toBe(false);
+    expect(bundle.edgar.tenQMdna.ok).toBe(false);
+    if (!bundle.edgar.tenQMdna.ok) {
+      expect(bundle.edgar.tenQMdna.gap.expected).not.toBe(true);
+      expect(bundle.edgar.tenQMdna.gap.severity).toBe("warn");
+      expect(buildDataCompleteness([bundle.edgar.tenQMdna.gap]).state).toBe("degraded");
     }
   });
 });

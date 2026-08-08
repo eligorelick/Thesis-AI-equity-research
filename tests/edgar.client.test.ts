@@ -477,6 +477,105 @@ describe("EdgarClient (fake transport)", () => {
 });
 
 describe("default transport (injected fetchFn — no network)", () => {
+  it("does not cache a blank HTTP-200 filing on a cold memory-cache miss", async () => {
+    let phase: "blank" | "valid" = "blank";
+    let hits = 0;
+    const fetchFn: typeof fetch = () => {
+      hits++;
+      return Promise.resolve(
+        new Response(
+          phase === "blank" ? " \r\n\t " : "<html><body>Valid annual filing disclosure</body></html>",
+          { status: 200 },
+        ),
+      );
+    };
+    const transport = createDefaultEdgarTransport({ fetchFn, maxRps: 1000 });
+    const url = "https://www.sec.gov/Archives/edgar/data/320193/cold.htm";
+
+    await expect(
+      transport.fetchText(url, { ttlMs: 60_000, validateBody: filingDocumentBodyProblem }),
+    ).rejects.toThrow(/empty/i);
+
+    phase = "valid";
+    const recovered = await transport.fetchText(url, {
+      ttlMs: 60_000,
+      validateBody: filingDocumentBodyProblem,
+    });
+    expect(recovered.body).toContain("Valid annual filing");
+    expect(recovered.fromCache).toBe(false);
+    expect(hits).toBe(2);
+  });
+
+  it("preserves last-good memory-cache filing when refresh is blank or implausible", async () => {
+    let body = "<html><body>GOOD annual filing disclosure</body></html>";
+    let hits = 0;
+    const fetchFn: typeof fetch = () => {
+      hits++;
+      return Promise.resolve(new Response(body, { status: 200 }));
+    };
+    const transport = createDefaultEdgarTransport({ fetchFn, maxRps: 1000 });
+    const url = "https://www.sec.gov/Archives/edgar/data/320193/refresh.htm";
+    const opts = { ttlMs: 1, validateBody: filingDocumentBodyProblem };
+
+    await transport.fetchText(url, opts);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    body = "<html><head><title>Page Not Found</title></head><body>File not found</body></html>";
+    const preserved = await transport.fetchText(url, opts);
+
+    expect(preserved.body).toContain("GOOD");
+    expect(preserved.stale).toBe(true);
+    expect(preserved.fromCache).toBe(true);
+    expect(hits).toBe(2);
+  });
+
+  it("accepts plausible SEC markup and plain text while rejecting implausible placeholders", () => {
+    expect(filingDocumentBodyProblem("<?xml version=\"1.0\"?><xbrli:xbrl></xbrli:xbrl>")).toBeNull();
+    expect(
+      filingDocumentBodyProblem(
+        "UNITED STATES SECURITIES AND EXCHANGE COMMISSION annual report filing disclosure.",
+      ),
+    ).toBeNull();
+    expect(filingDocumentBodyProblem("OK")).toMatch(/error|placeholder/i);
+    expect(filingDocumentBodyProblem("<html><title>Page Not Found</title><body>File not found</body></html>"))
+      .toMatch(/error|placeholder/i);
+  });
+
+  it("rejects an implausible index body before caching and falls back to the valid HTML index", async () => {
+    let headerHits = 0;
+    let fallbackHits = 0;
+    const fetchFn: typeof fetch = (input) => {
+      const url = String(input);
+      if (url.endsWith("-index-headers.html")) {
+        headerHits++;
+        return Promise.resolve(
+          new Response("<html><title>Page Not Found</title><body>File not found</body></html>", {
+            status: 200,
+          }),
+        );
+      }
+      fallbackHits++;
+      return Promise.resolve(
+        new Response(
+          '<html><table><tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>' +
+            '<tr><td>1</td><td>Annual report</td><td><a href="annual.htm">annual.htm</a></td><td>10-K</td><td>100</td></tr></table></html>',
+          { status: 200 },
+        ),
+      );
+    };
+    const client = new EdgarClient({
+      transport: createDefaultEdgarTransport({ fetchFn, maxRps: 1000 }),
+    });
+
+    const first = await client.filingIndexHeaders(320193, "0000320193-26-000001");
+    const second = await client.filingIndexHeaders(320193, "0000320193-26-000001");
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (first.ok) expect(first.value.data.typeByFilename["annual.htm"]).toBe("10-K");
+    expect(headerHits).toBe(2);
+    expect(fallbackHits).toBe(1);
+  });
+
   it("sends the declared User-Agent and caches 200s within TTL", async () => {
     let hits = 0;
     let seenUa = "";

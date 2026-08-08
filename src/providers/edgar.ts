@@ -322,6 +322,17 @@ export class EdgarHttpError extends Error {
   }
 }
 
+/** A successful HTTP response whose body is unsafe to admit to an EDGAR cache. */
+export class EdgarBodyValidationError extends Error {
+  constructor(
+    readonly url: string,
+    readonly problem: string,
+  ) {
+    super(`EDGAR response body rejected at ${url}: ${problem}`);
+    this.name = "EdgarBodyValidationError";
+  }
+}
+
 export interface EdgarTransportResponse {
   status: number;
   body: string;
@@ -333,7 +344,10 @@ export interface EdgarTransportResponse {
 }
 
 export interface EdgarTransport {
-  fetchText(url: string, opts: { ttlMs: number }): Promise<EdgarTransportResponse>;
+  fetchText(
+    url: string,
+    opts: { ttlMs: number; validateBody?: (body: string) => string | null },
+  ): Promise<EdgarTransportResponse>;
 }
 
 interface CacheEntry {
@@ -378,13 +392,19 @@ export function createDefaultEdgarTransport(opts?: {
   const cache = new Map<string, CacheEntry>();
 
   return {
-    async fetchText(url, { ttlMs }): Promise<EdgarTransportResponse> {
+    async fetchText(url, { ttlMs, validateBody }): Promise<EdgarTransportResponse> {
       if (!identityConfigured) {
         throw new EdgarIdentityError(
           "live EDGAR acquisition disabled until EDGAR_CONTACT contains a reachable name and email",
         );
       }
-      const hit = cache.get(url);
+      let hit = cache.get(url);
+      // Do not serve a body that entered this transport before a stricter,
+      // operation-specific validator was supplied.
+      if (hit !== undefined && validateBody !== undefined && validateBody(hit.body) !== null) {
+        cache.delete(url);
+        hit = undefined;
+      }
       if (hit !== undefined && Date.now() < hit.expiresAt) {
         return { status: hit.status, body: hit.body, fetchedAt: hit.fetchedAt, fromCache: true, stale: false };
       }
@@ -413,6 +433,21 @@ export function createDefaultEdgarTransport(opts?: {
       }
       const fetchedAt = new Date().toISOString();
       if (res.status === 200) {
+        const bodyProblem = validateBody?.(res.bodyText) ?? null;
+        if (bodyProblem !== null) {
+          // A semantically bad 200 is a failed refresh, not new truth. Keep the
+          // prior admitted body and its original timestamp/expiry untouched.
+          if (hit !== undefined) {
+            return {
+              status: hit.status,
+              body: hit.body,
+              fetchedAt: hit.fetchedAt,
+              fromCache: true,
+              stale: true,
+            };
+          }
+          throw new EdgarBodyValidationError(url, bodyProblem);
+        }
         if (cache.size >= maxCacheEntries) {
           const oldest = cache.keys().next();
           if (!oldest.done) cache.delete(oldest.value);
@@ -446,7 +481,7 @@ export function createDbCachedEdgarTransport(opts?: {
   }
 
   return {
-    async fetchText(url, { ttlMs }): Promise<EdgarTransportResponse> {
+    async fetchText(url, { ttlMs, validateBody }): Promise<EdgarTransportResponse> {
       cacheModule ??= import("@/cache/apiCache");
       const { cachedFetch } = await cacheModule;
       try {
@@ -457,8 +492,16 @@ export function createDbCachedEdgarTransport(opts?: {
           ttlSeconds: Math.floor(ttlMs / 1000),
           maxStaleSeconds: 7 * 86_400,
           fetcher: async () => {
-            const res = await inner.fetchText(url, { ttlMs: 0 });
+            const res = await inner.fetchText(url, { ttlMs: 0, validateBody });
             if (res.status !== 200) throw new NonOkStatus(res);
+            const bodyProblem = validateBody?.(res.body) ?? null;
+            if (bodyProblem !== null) throw new EdgarBodyValidationError(url, bodyProblem);
+            // The inner cache serves its last-good body when a refresh fails.
+            // That is safe to return to a direct caller but is not a successful
+            // durable-cache refresh and must not advance the SQLite timestamp.
+            if (res.stale) {
+              throw new EdgarHttpError(url, null, "EDGAR refresh failed; preserving last-good durable body");
+            }
             return { body: { status: res.status, body: res.body }, asOf: res.fetchedAt.slice(0, 10) };
           },
         });
@@ -544,9 +587,62 @@ function filingMetadataProblem(
   return null;
 }
 
+const EDGAR_ERROR_BODY_PATTERNS: readonly RegExp[] = [
+  /<title>\s*(?:page|file) not found\s*<\/title>/i,
+  /<title>\s*(?:access denied|request rate threshold exceeded|service unavailable)\s*<\/title>/i,
+  /your request originates from an undeclared automated tool/i,
+  /request rate threshold exceeded/i,
+  /^\s*(?:ok|not found|file not found|access denied|service unavailable|temporarily unavailable)\s*[.!]?\s*$/i,
+];
+
+function knownEdgarErrorBody(body: string): boolean {
+  return EDGAR_ERROR_BODY_PATTERNS.some((pattern) => pattern.test(body));
+}
+
 /** Return a semantic problem for a successful filing-document body, if any. */
 export function filingDocumentBodyProblem(body: string): string | null {
-  return body.trim() === "" ? "filing document response was empty" : null;
+  const trimmed = body.trim();
+  if (trimmed === "") return "filing document response was empty";
+  if (knownEdgarErrorBody(trimmed)) return "filing document response was an SEC error or placeholder page";
+
+  // SEC filing artifacts legitimately arrive as HTML/iXBRL, XML/XBRL, SGML,
+  // or plain text. Use narrow structural/filing signals rather than a length
+  // cutoff: short exhibits can be valid, while a large branded error page is
+  // still not filing content.
+  if (
+    /<!doctype\s+html\b|<html\b|<\?xml\b|<(?:body|table|div|section|p|h[1-6])\b|<(?:[a-z][\w.-]*:)?(?:xbrl|html)\b|<SEC-DOCUMENT\b|<DOCUMENT\b|<TEXT\b/i.test(
+      trimmed,
+    )
+  ) {
+    return null;
+  }
+  if (
+    /\b(?:united states securities and exchange commission|annual report|quarterly report|current report|registrant|form\s+(?:10-[KQ]|20-F|6-K|8-K)|accession number)\b/i.test(
+      trimmed,
+    )
+  ) {
+    return null;
+  }
+  return "filing document response was implausible SEC filing content";
+}
+
+/** Validate the two SEC Archives filing-index representations before caching. */
+function filingIndexBodyProblem(body: string): string | null {
+  const genericProblem = filingDocumentBodyProblem(body);
+  if (genericProblem !== null) return genericProblem.replace("filing document", "filing index");
+  const text = unescapeHtml(body);
+  const sgmlIndex = /<DOCUMENT>[\s\S]*?<TYPE>[^\r\n<]+[\s\S]*?<FILENAME>[^\r\n<]+/i.test(text);
+  const htmlIndex =
+    /<table\b/i.test(text) &&
+    /\b(?:document|document format files)\b/i.test(text) &&
+    /\btype\b/i.test(text) &&
+    /<a\b[^>]*href=/i.test(text);
+  const plainTextIndex =
+    /\baccession(?:-| )number\b/i.test(text) &&
+    /\b(?:filename|document|public document count)\b/i.test(text);
+  return sgmlIndex || htmlIndex || plainTextIndex
+    ? null
+    : "filing index response lacked SEC document-index structure";
 }
 
 const submissionsSchema = z.looseObject({
@@ -661,6 +757,7 @@ interface RequestOk {
 interface RequestGap {
   ok: false;
   status: number;
+  bodyProblem?: string;
 }
 
 export class EdgarClient {
@@ -682,10 +779,22 @@ export class EdgarClient {
     return Math.max(0, this.cooldownUntil - Date.now());
   }
 
-  private async request(url: string, ttlMs: number): Promise<RequestOk | RequestGap> {
+  private async request(
+    url: string,
+    ttlMs: number,
+    validateBody?: (body: string) => string | null,
+  ): Promise<RequestOk | RequestGap> {
     const remaining = this.cooldownRemainingMs();
     if (remaining > 0) throw new EdgarRateLimitError(url, remaining);
-    const res = await this.transport.fetchText(url, { ttlMs });
+    let res: EdgarTransportResponse;
+    try {
+      res = await this.transport.fetchText(url, { ttlMs, validateBody });
+    } catch (err) {
+      if (err instanceof EdgarBodyValidationError) {
+        return { ok: false, status: 200, bodyProblem: err.problem };
+      }
+      throw err;
+    }
     if (res.status === 200) {
       return { ok: true, body: res.body, fetchedAt: res.fetchedAt, stale: res.stale };
     }
@@ -893,8 +1002,15 @@ export class EdgarClient {
       throw new Error(`fetchFilingDoc: invalid URL "${url}"`);
     }
     if (!host.endsWith("sec.gov")) throw new Error(`fetchFilingDoc: refusing non-SEC host "${host}"`);
-    const res = await this.request(url, EDGAR_TTL.filing);
-    if (!res.ok) return this.gap(`edgar.fetchFilingDoc(${url})`, `document HTTP ${res.status}`, [url]);
+    const res = await this.request(url, EDGAR_TTL.filing, filingDocumentBodyProblem);
+    if (!res.ok) {
+      return this.gap(
+        `edgar.fetchFilingDoc(${url})`,
+        res.bodyProblem ?? `document HTTP ${res.status}`,
+        [url],
+        res.bodyProblem !== undefined ? "critical" : "warn",
+      );
+    }
     return { ok: true, value: this.sourced(res.body, url, opts?.asOf ?? res.fetchedAt.slice(0, 10), res.fetchedAt, res.stale) };
   }
 
@@ -948,7 +1064,7 @@ export class EdgarClient {
    */
   async filingIndexHeaders(cik: number | string, accession: string): Promise<FetchResult<FilingIndex>> {
     const url = indexHeadersUrl(cik, accession);
-    const res = await this.request(url, EDGAR_TTL.filing);
+    const res = await this.request(url, EDGAR_TTL.filing, filingIndexBodyProblem);
     if (res.ok) {
       const idx = parseIndexHeaders(res.body);
       if (idx.documents.length > 0) {
@@ -956,7 +1072,7 @@ export class EdgarClient {
       }
     }
     const fallbackUrl = indexHtmUrl(cik, accession);
-    const fb = await this.request(fallbackUrl, EDGAR_TTL.filing);
+    const fb = await this.request(fallbackUrl, EDGAR_TTL.filing, filingIndexBodyProblem);
     if (fb.ok) {
       const idx = parseIndexHtm(fb.body);
       if (idx.documents.length > 0) {

@@ -19,6 +19,7 @@
 
 import type { CompanyRoute, ManifestEntry, SectorRoute } from "@/types/core";
 import { deriveFcf } from "@/pipeline/stageB/financialValues";
+import { latestOnOrBeforeWithin } from "@/pipeline/stageB/asOfSelection";
 import { metricPolicy } from "@/pipeline/stageB/sectorRouting";
 import { linearRegressionSlope, yearsBetweenDates } from "@/pipeline/stageB/growth";
 import {
@@ -1279,23 +1280,7 @@ const DERIVED_HISTORY_KEYS: readonly MultipleKey[] = [
   "priceToFcf",
   "priceToBook",
 ];
-
-function strictHistoryDayMs(value: unknown): number | null {
-  if (typeof value !== "string") return null;
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (year < 1 || month < 1 || month > 12 || day < 1) return null;
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const monthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
-  if (day > monthDays[month - 1]) return null;
-  const parsed = new Date(0);
-  parsed.setUTCHours(0, 0, 0, 0);
-  parsed.setUTCFullYear(year, month - 1, day);
-  return parsed.getTime();
-}
+const OWN_HISTORY_EV_MAX_AGE_DAYS = 45;
 
 /** Rolling-4-quarter TTM multiples derived from raw statements + EV history. */
 function deriveOwnHistory(
@@ -1314,10 +1299,6 @@ function deriveOwnHistory(
       unusableWindows: [],
     };
   }
-  const evByTime = (evRows ?? []).flatMap((row) => {
-    const epochMs = strictHistoryDayMs(row.date);
-    return epochMs === null ? [] : [{ epochMs, row }];
-  });
   const unusableWindows: Array<{ anchor: string; reason: string }> = [];
   const push = (key: MultipleKey, value: number): void => {
     const values = (series[key] ??= []);
@@ -1325,22 +1306,16 @@ function deriveOwnHistory(
   };
   for (const window of candidates.windows) {
     if (DERIVED_HISTORY_KEYS.every((key) => (series[key]?.length ?? 0) >= FULL_OWN_HISTORY_OBS)) break;
-    const anchor = strictHistoryDayMs(window[0].date);
-    if (anchor === null) continue;
-    // Nearest EV row within 45 days of the quarter end.
-    let ev: EnterpriseValuesRow | null = null;
-    let best = Infinity;
-    for (const { epochMs, row } of evByTime) {
-      const d = Math.abs(epochMs - anchor);
-      if (d < best && d <= 45 * 86_400_000) {
-        best = d;
-        ev = row;
-      }
-    }
+    const ev = latestOnOrBeforeWithin(
+      evRows ?? [],
+      window[0].date,
+      OWN_HISTORY_EV_MAX_AGE_DAYS,
+    );
     if (!ev) {
       unusableWindows.push({
         anchor: window[0].date,
-        reason: "no enterprise-values history row within 45 days; historical multiple window unavailable",
+        reason:
+          "no enterprise-values history row on or before the TTM period end within 45 calendar days (future rows are ineligible); historical multiple window unavailable",
       });
       continue;
     }
@@ -1555,7 +1530,8 @@ export function multiplesFramework(
   if (windowGap) gaps.push(windowGap);
   const history: HistorySeries = {};
   const historyBasisByKey: Partial<Record<MultipleKey, string>> = {};
-  const derivedBasis = "per-quarter TTM multiples derived from four normalized contiguous fiscal quarters of raw statements + enterprise-values history";
+  const derivedBasis =
+    "per-quarter TTM multiples derived from four normalized contiguous fiscal quarters of raw statements + the latest enterprise value and market capitalization on or before each TTM period end (maximum age 45 calendar days; future observations are ineligible)";
   const vendorBasis = "vendor pre-baked ratio history (FMP key-metrics/ratios quarterly) — derivation from raw statements not possible for this multiple";
   const vendor = !currencyMismatch ? vendorHistory(inputs.keyMetricsHistory) : {};
   const historyKeys: readonly MultipleKey[] = [

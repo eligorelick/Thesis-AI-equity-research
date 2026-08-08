@@ -796,6 +796,10 @@ describe("multiplesFramework", () => {
     marketCapitalization: 400,
     enterpriseValue: 400,
   }));
+  const offsetHistoryDay = (date: string, days: number): string => {
+    const epochMs = Date.parse(`${date}T00:00:00Z`) + days * 86_400_000;
+    return new Date(epochMs).toISOString().slice(0, 10);
+  };
 
   it("computes current multiples from RAW fields (not vendor pre-baked)", () => {
     const r = multiplesFramework("general", baseInputs);
@@ -875,6 +879,102 @@ describe("multiplesFramework", () => {
     // tail percentiles aren't over-read.
     expect(history?.lowSample).toBe(true);
     expect(history?.basis).toMatch(/LOW SAMPLE/);
+  });
+
+  it("uses the latest enterprise value on or before each TTM end instead of a closer future row", () => {
+    const quarters = flatHistoryQuarters(12);
+    const anchors = quarters.slice(0, 9).map((quarter) => quarter.date);
+    const evRows = anchors.flatMap((anchor): EnterpriseValuesRow[] => [
+      {
+        date: offsetHistoryDay(anchor, 1),
+        marketCapitalization: 800,
+        enterpriseValue: 800,
+      },
+      {
+        date: offsetHistoryDay(anchor, -3),
+        marketCapitalization: 400,
+        enterpriseValue: 400,
+      },
+    ]);
+
+    const result = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: evRows,
+    });
+    const byKey = Object.fromEntries(result.multiples.map((multiple) => [multiple.key, multiple.ownHistory]));
+
+    expect(byKey.evToSales?.observations).toBe(9);
+    expect(byKey.evToSales?.p5).toBe(4); // 400 EV / (4 * 25 revenue)
+    expect(byKey.evToSales?.p50).toBe(4);
+    expect(byKey.evToSales?.p95).toBe(4);
+    expect(byKey.evToEbitda?.p50).toBeCloseTo(400 / 24, 10); // 4 * (5 EBIT + 1 D&A)
+    expect(byKey.peTtm?.p50).toBe(25); // 400 mcap / (4 * 4 net income)
+    expect(byKey.priceToFcf?.p50).toBe(20); // 400 mcap / (4 * (6 OCF - 1 capex))
+    expect(byKey.priceToBook?.p50).toBe(4); // 400 mcap / 100 quarter-end equity
+    expect(byKey.evToSales?.basis).toMatch(/four normalized contiguous fiscal quarters/i);
+    expect(byKey.evToSales?.basis).toMatch(/latest (enterprise value|EV).*market cap.*on or before.*TTM period end/i);
+    expect(byKey.evToSales?.basis).toMatch(/45 calendar days/i);
+    expect(byKey.evToSales?.basis).toMatch(/future.*ineligible/i);
+  });
+
+  it("suppresses raw own-history when every future EV row is ineligible", () => {
+    const quarters = flatHistoryQuarters(12);
+    const futureOnly = quarters.slice(0, 9).map((quarter): EnterpriseValuesRow => ({
+      date: offsetHistoryDay(quarter.date, 1),
+      marketCapitalization: 800,
+      enterpriseValue: 800,
+    }));
+
+    const result = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: futureOnly,
+    });
+
+    expect(result.multiples.every((multiple) => multiple.ownHistory === null)).toBe(true);
+    expect(result.gaps).toContainEqual(
+      expect.objectContaining({
+        field: "valuation.multiples.ownHistory",
+        reason: expect.stringMatching(/insufficient history|need.*8/i),
+      }),
+    );
+    expect(result.gaps).toContainEqual(
+      expect.objectContaining({
+        field: "valuation.multiples.ownHistory.windows",
+        reason: expect.stringMatching(/on or before.*45.*future.*ineligible/i),
+      }),
+    );
+  });
+
+  it("uses vendor fallback while disclosing future EV rows as ineligible", () => {
+    const quarters = flatHistoryQuarters(12);
+    const futureOnly = quarters.slice(0, 9).map((quarter): EnterpriseValuesRow => ({
+      date: offsetHistoryDay(quarter.date, 1),
+      marketCapitalization: 800,
+      enterpriseValue: 800,
+    }));
+
+    const result = multiplesFramework("general", {
+      ...baseInputs,
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: futureOnly,
+      keyMetricsHistory: Array.from({ length: 8 }, (_, index) => ({
+        date: `vendor-${index}`,
+        evToSales: 5,
+      })),
+    });
+    const evToSales = result.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory;
+
+    expect(evToSales?.observations).toBe(8);
+    expect(evToSales?.p50).toBe(5);
+    expect(evToSales?.basis).toMatch(/vendor pre-baked/i);
+    expect(result.gaps).toContainEqual(
+      expect.objectContaining({
+        field: "valuation.multiples.ownHistory.windows",
+        reason: expect.stringMatching(/on or before.*45.*future.*ineligible/i),
+      }),
+    );
   });
 
   it("suppresses own-history when a missing middle quarter leaves only five valid windows", () => {

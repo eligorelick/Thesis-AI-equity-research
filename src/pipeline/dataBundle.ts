@@ -102,8 +102,8 @@ import { mergeManifest } from "@/pipeline/stageA/manifest";
 export const BENCHMARK_SYMBOL = "SPY";
 /** Annual statement history requested (SPEC §4: up to 10y CAGRs). */
 export const ANNUAL_PERIODS = 10;
-/** Quarterly statement history requested (up to 8 quarters). */
-export const QUARTERLY_PERIODS = 8;
+/** Quarterly statement/EV history requested (20 rolling TTM windows + one headroom window). */
+export const QUARTERLY_PERIODS = 24;
 /** Daily price history window, years (SPEC §4 technicals). */
 export const EOD_YEARS = 5;
 
@@ -1254,7 +1254,10 @@ export async function buildDataBundle(
   const pRatiosTtm = settle(`fmp.ratiosTtm(${sym})`, fmp.ratiosTtm(sym));
   const pGrowth = settle(`fmp.financialGrowth(${sym})`, fmp.financialGrowth(sym, "annual", ANNUAL_PERIODS));
   const pScores = settle(`fmp.financialScores(${sym})`, fmp.financialScores(sym));
-  const pEv = settle(`fmp.enterpriseValues(${sym})`, fmp.enterpriseValues(sym, "annual", ANNUAL_PERIODS));
+  const pEv = settle(
+    `fmp.enterpriseValues(${sym},quarter)`,
+    fmp.enterpriseValues(sym, "quarter", QUARTERLY_PERIODS),
+  );
   const pEstimates = settle(`fmp.analystEstimates(${sym})`, fmp.analystEstimates(sym, "annual", 0, 10));
   const pPtConsensus = settle(`fmp.priceTargetConsensus(${sym})`, fmp.priceTargetConsensus(sym));
   const pPtSummary = settle(`fmp.priceTargetSummary(${sym})`, fmp.priceTargetSummary(sym));

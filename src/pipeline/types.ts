@@ -66,8 +66,8 @@ export type FmpFetch<TRow extends FmpRawRow> = FetchResult<FmpPayload<TRow>>;
 // ---------------------------------------------------------------------------
 
 /**
- * Statements: annual up to 10 fiscal years, quarterly up to 8 quarters
- * (the application contract §4 growth windows). Rows are sorted date DESC (deterministic).
+ * Statements: annual up to 10 fiscal years, quarterly up to 24 quarters
+ * (20 rolling TTM windows plus one headroom window). Rows are sorted date DESC (deterministic).
  */
 export interface StatementSet {
   incomeAnnual: FmpFetch<FmpIncomeStatementRow>;

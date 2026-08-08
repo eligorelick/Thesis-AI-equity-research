@@ -614,6 +614,119 @@ describe("default transport (injected fetchFn — no network)", () => {
     expect(filingDocumentBodyProblem(body)).toMatch(/implausible/i);
   });
 
+  it.each([
+    [
+      "xmlns text inside another attribute value",
+      '<html data-note="prefix xmlns:z=\'http://www.xbrl.org/2013/inlineXBRL\' suffix"><z:header/></html>',
+    ],
+    [
+      "uppercase XMLNS spelling",
+      '<html XMLNS:z="http://www.xbrl.org/2013/inlineXBRL"><z:header/></html>',
+    ],
+    [
+      "leading namespace URI whitespace",
+      '<html xmlns:z=" http://www.xbrl.org/2013/inlineXBRL"><z:header/></html>',
+    ],
+    [
+      "trailing namespace URI whitespace",
+      '<html xmlns:z="http://www.xbrl.org/2013/inlineXBRL "><z:header/></html>',
+    ],
+    [
+      "processing-instruction sample",
+      '<?sample value=\'<z:header xmlns:z="http://www.xbrl.org/2013/inlineXBRL"/>\'?><html><body>Hello world</body></html>',
+    ],
+    [
+      "DOCTYPE internal entity sample",
+      '<!DOCTYPE html [<!ENTITY sample \'<z:header xmlns:z="http://www.xbrl.org/2013/inlineXBRL"/>\'>]><html><body>Hello world</body></html>',
+    ],
+    [
+      "NBSP before a namespace equals sign",
+      '<html xmlns:z\u00a0="http://www.xbrl.org/2013/inlineXBRL"><z:header/></html>',
+    ],
+    [
+      "reserved xmlns prefix",
+      '<html xmlns:xmlns="http://www.xbrl.org/2013/inlineXBRL" xmlns:real="http://www.xbrl.org/2013/inlineXBRL"><real:header/></html>',
+    ],
+    [
+      "reserved xml prefix rebound",
+      '<html xmlns:xml="http://www.xbrl.org/2013/inlineXBRL" xmlns:real="http://www.xbrl.org/2013/inlineXBRL"><real:header/></html>',
+    ],
+    [
+      "XMLNS namespace URI binding",
+      '<html xmlns:bad="http://www.w3.org/2000/xmlns/" xmlns:real="http://www.xbrl.org/2013/inlineXBRL"><real:header/></html>',
+    ],
+    [
+      "DOCTYPE comment containing a fake subset terminator",
+      '<!DOCTYPE html [<!-- ]> --><z:header xmlns:z="http://www.xbrl.org/2013/inlineXBRL"/> ]><html><body>Hello world</body></html>',
+    ],
+    [
+      "DOCTYPE processing instruction containing a fake subset terminator",
+      '<!DOCTYPE html [<?sample ]> ?><z:header xmlns:z="http://www.xbrl.org/2013/inlineXBRL"/> ]><html><body>Hello world</body></html>',
+    ],
+    [
+      "prefixed script code sample",
+      '<html><h:script><z:header xmlns:z="http://www.xbrl.org/2013/inlineXBRL"/></h:script><body>Hello world</body></html>',
+    ],
+    [
+      "textarea code sample",
+      '<html><textarea><z:header xmlns:z="http://www.xbrl.org/2013/inlineXBRL"/></textarea><body>Hello world</body></html>',
+    ],
+  ])("namespace tokenizer rejects declaration confusion: %s", (_label, body) => {
+    expect(filingDocumentBodyProblem(body)).toMatch(/implausible|malformed/i);
+  });
+
+  it.each([
+    [
+      "comment",
+      '<html><body><!-- <z:header xmlns:z="http://www.xbrl.org/2013/inlineXBRL"><p>Annual filing disclosure</p></body></html>',
+    ],
+    [
+      "CDATA",
+      '<![CDATA[<z:header xmlns:z="http://www.xbrl.org/2013/inlineXBRL"><html><body>Annual filing disclosure</body></html>',
+    ],
+    [
+      "script",
+      '<html><script><z:header xmlns:z="http://www.xbrl.org/2013/inlineXBRL"></scriptless><body>Annual filing disclosure</body></html>',
+    ],
+    [
+      "style",
+      '<html><style><z:header xmlns:z="http://www.xbrl.org/2013/inlineXBRL"></styleless><body>Annual filing disclosure</body></html>',
+    ],
+    ["closing tag", "<html><body>Annual filing disclosure</body></"],
+  ])("namespace tokenizer rejects an unterminated ignored %s region", (_label, body) => {
+    expect(filingDocumentBodyProblem(body)).toMatch(/malformed/i);
+  });
+
+  it.each([
+    [
+      "quoted unrelated > and xmlns text",
+      '<html data-note="literal > xmlns:fake=\'not-a-declaration\' text" xmlns:real=\'http://www.xbrl.org/2013/inlineXBRL\'><real:header/></html>',
+    ],
+    [
+      "nested instance binding",
+      '<outer xmlns:inst="http://www.xbrl.org/2003/instance"><inner><inst:xbrl/></inner></outer>',
+    ],
+    [
+      "nested default binding",
+      '<outer><inner xmlns="http://www.xbrl.org/2003/instance"><xbrl/></inner></outer>',
+    ],
+    [
+      "nearest valid redeclaration",
+      '<outer xmlns:z="https://example.com/not-xbrl"><inner xmlns:z="http://www.xbrl.org/2013/inlineXBRL"><z:numerator/></inner></outer>',
+    ],
+    [
+      "Unicode namespace prefix",
+      '<html xmlns:δοκιμή="http://www.xbrl.org/2013/inlineXBRL"><δοκιμή:header/></html>',
+    ],
+  ])("namespace tokenizer accepts safe valid structure: %s", (_label, body) => {
+    expect(filingDocumentBodyProblem(body)).toBeNull();
+  });
+
+  it("namespace tokenizer honors a nearer non-XBRL redeclaration", () => {
+    const body = '<outer xmlns:z="http://www.xbrl.org/2013/inlineXBRL"><inner xmlns:z="https://example.com/not-xbrl"><z:header/></inner></outer>';
+    expect(filingDocumentBodyProblem(body)).toMatch(/implausible/i);
+  });
+
   it("rejects minimal arbitrary markup and branded SEC maintenance or XML error envelopes", () => {
     expect(filingDocumentBodyProblem("OK")).toMatch(/error|placeholder/i);
     expect(filingDocumentBodyProblem("<html><body>Hello world</body></html>")).toMatch(/implausible/i);

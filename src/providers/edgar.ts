@@ -673,51 +673,253 @@ const INLINE_XBRL_LOCAL_NAMES = new Set([
   "resources",
   "tuple",
 ]);
+const XML_NAMESPACE = "http://www.w3.org/XML/1998/namespace";
+const XMLNS_NAMESPACE = "http://www.w3.org/2000/xmlns/";
+
+interface XbrlMarkupScan {
+  found: boolean;
+  malformed: boolean;
+}
+
+interface ParsedName {
+  name: string;
+  end: number;
+}
+
+interface ParsedStartTag {
+  qName: string;
+  end: number;
+  selfClosing: boolean;
+  declarations: Map<string, string>;
+}
+
+const MARKUP_NAME_PATTERN = /[\p{L}_][\p{L}\p{N}\p{M}_.\-\u00B7\u203F\u2040]*(?::[\p{L}_][\p{L}\p{N}\p{M}_.\-\u00B7\u203F\u2040]*)?/uy;
+
+function readMarkupName(body: string, start: number): ParsedName | null {
+  // XML Names permit Unicode letters; prefix labels are non-normative and
+  // must not be constrained to ASCII spellings.
+  MARKUP_NAME_PATTERN.lastIndex = start;
+  const match = MARKUP_NAME_PATTERN.exec(body);
+  return match === null ? null : { name: match[0], end: MARKUP_NAME_PATTERN.lastIndex };
+}
+
+function isMarkupWhitespace(char: string | undefined): boolean {
+  return char === " " || char === "\t" || char === "\r" || char === "\n";
+}
+
+function skipWhitespace(body: string, start: number): number {
+  let cursor = start;
+  while (cursor < body.length && isMarkupWhitespace(body[cursor])) cursor++;
+  return cursor;
+}
+
+/** Find a quoted ignored-region terminator; optionally honor DOCTYPE [] depth. */
+function ignoredRegionEnd(
+  body: string,
+  start: number,
+  terminator: string,
+  bracketAware: boolean,
+): number | null {
+  let quote: "\"" | "'" | null = null;
+  let bracketDepth = 0;
+  for (let cursor = start; cursor < body.length; cursor++) {
+    const char = body[cursor];
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (bracketAware) {
+      if (body.startsWith("<!--", cursor)) {
+        const end = body.indexOf("-->", cursor + 4);
+        if (end < 0) return null;
+        cursor = end + 2;
+        continue;
+      }
+      if (body.startsWith("<?", cursor)) {
+        const end = ignoredRegionEnd(body, cursor + 2, "?>", false);
+        if (end === null) return null;
+        cursor = end - 1;
+        continue;
+      }
+      if (char === "[") {
+        bracketDepth++;
+        continue;
+      }
+      if (char === "]" && bracketDepth > 0) {
+        bracketDepth--;
+        continue;
+      }
+    }
+    if (bracketDepth === 0 && body.startsWith(terminator, cursor)) {
+      return cursor + terminator.length;
+    }
+  }
+  return null;
+}
+
+function parseStartTag(body: string, start: number): ParsedStartTag | null {
+  const parsedName = readMarkupName(body, start + 1);
+  if (parsedName === null) return null;
+  let cursor = parsedName.end;
+  const declarations = new Map<string, string>();
+  while (cursor < body.length) {
+    cursor = skipWhitespace(body, cursor);
+    if (body[cursor] === ">") {
+      return { qName: parsedName.name, end: cursor + 1, selfClosing: false, declarations };
+    }
+    if (body[cursor] === "/" && body[cursor + 1] === ">") {
+      return { qName: parsedName.name, end: cursor + 2, selfClosing: true, declarations };
+    }
+    const attribute = readMarkupName(body, cursor);
+    if (attribute === null) return null;
+    cursor = skipWhitespace(body, attribute.end);
+    let value: string | null = null;
+    let quoted = false;
+    if (body[cursor] === "=") {
+      cursor = skipWhitespace(body, cursor + 1);
+      const quote = body[cursor];
+      if (quote === "\"" || quote === "'") {
+        quoted = true;
+        const valueStart = cursor + 1;
+        const valueEnd = body.indexOf(quote, valueStart);
+        if (valueEnd < 0) return null;
+        value = body.slice(valueStart, valueEnd);
+        cursor = valueEnd + 1;
+      } else {
+        const valueStart = cursor;
+        while (cursor < body.length && !isMarkupWhitespace(body[cursor]) && body[cursor] !== ">") cursor++;
+        if (cursor === valueStart) return null;
+        value = body.slice(valueStart, cursor);
+      }
+    }
+
+    const namespacePrefix =
+      attribute.name === "xmlns"
+        ? ""
+        : attribute.name.startsWith("xmlns:")
+          ? attribute.name.slice("xmlns:".length)
+          : null;
+    if (namespacePrefix !== null) {
+      if (!quoted || value === null || declarations.has(namespacePrefix)) return null;
+      if (namespacePrefix === "xmlns") return null;
+      if (namespacePrefix === "xml" && value !== XML_NAMESPACE) return null;
+      if (namespacePrefix !== "xml" && value === XML_NAMESPACE) return null;
+      if (value === XMLNS_NAMESPACE) return null;
+      declarations.set(namespacePrefix, value);
+    }
+  }
+  return null;
+}
+
+function rawTextElementEnd(body: string, start: number, qName: string): number | null {
+  const lowerBody = body.toLowerCase();
+  const needle = `</${qName.toLowerCase()}`;
+  let cursor = start;
+  while (cursor < body.length) {
+    const candidate = lowerBody.indexOf(needle, cursor);
+    if (candidate < 0) return null;
+    const afterName = candidate + needle.length;
+    const boundary = body[afterName];
+    if (boundary !== ">" && !isMarkupWhitespace(boundary)) {
+      cursor = afterName;
+      continue;
+    }
+    const close = skipWhitespace(body, afterName);
+    return body[close] === ">" ? close + 1 : null;
+  }
+  return null;
+}
 
 /**
- * Recognize XBRL by namespace URI, never by a conventional prefix. The small
- * start-tag scanner tracks in-scope xmlns declarations sufficiently for cache
- * admission without attempting to parse or execute the filing document.
+ * Recognize XBRL by namespace URI, never by a conventional prefix. This
+ * quote-aware, non-executing tokenizer resolves actual xmlns attributes while
+ * skipping declarations and raw-text regions. Any unterminated ignored region
+ * or tag fails closed so later prose heuristics cannot admit malformed input.
  */
-function hasBoundXbrlStructure(body: string): boolean {
-  const structuralMarkup = body
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/gi, " ")
-    .replace(/<(?:script|style)\b[^>]*>[\s\S]*?<\/(?:script|style)\s*>/gi, " ");
+function scanBoundXbrlStructure(body: string): XbrlMarkupScan {
   const scopes: Array<{ qName: string; bindings: Map<string, string> }> = [];
   const voidElements = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
-  const tagPattern = /<\s*(\/)?\s*([A-Za-z_][\w.-]*(?::[A-Za-z_][\w.-]*)?)\b([^<>]*?)(\/?)>/g;
-  let match: RegExpExecArray | null;
-  while ((match = tagPattern.exec(structuralMarkup)) !== null) {
-    const closing = match[1] === "/";
-    const qName = match[2];
-    if (closing) {
-      const index = scopes.findLastIndex((scope) => scope.qName.toLowerCase() === qName.toLowerCase());
-      if (index >= 0) scopes.splice(index);
+  let found = false;
+  let cursor = 0;
+  while (cursor < body.length) {
+    const tagStart = body.indexOf("<", cursor);
+    if (tagStart < 0) break;
+
+    if (body.startsWith("<!--", tagStart)) {
+      const end = body.indexOf("-->", tagStart + 4);
+      if (end < 0) return { found: false, malformed: true };
+      cursor = end + 3;
+      continue;
+    }
+    if (body.startsWith("<![CDATA[", tagStart)) {
+      const end = body.indexOf("]]>", tagStart + 9);
+      if (end < 0) return { found: false, malformed: true };
+      cursor = end + 3;
+      continue;
+    }
+    if (body.startsWith("<?", tagStart)) {
+      const end = ignoredRegionEnd(body, tagStart + 2, "?>", false);
+      if (end === null) return { found: false, malformed: true };
+      cursor = end;
+      continue;
+    }
+    if (body.startsWith("<!", tagStart)) {
+      const end = ignoredRegionEnd(body, tagStart + 2, ">", true);
+      if (end === null) return { found: false, malformed: true };
+      cursor = end;
+      continue;
+    }
+
+    if (body.startsWith("</", tagStart)) {
+      const closingName = readMarkupName(body, tagStart + 2);
+      if (closingName === null) return { found: false, malformed: true };
+      const close = skipWhitespace(body, closingName.end);
+      if (body[close] !== ">") return { found: false, malformed: true };
+      const scopeIndex = scopes.findLastIndex(
+        (scope) => scope.qName.toLowerCase() === closingName.name.toLowerCase(),
+      );
+      if (scopeIndex >= 0) scopes.splice(scopeIndex);
+      cursor = close + 1;
+      continue;
+    }
+
+    const tag = parseStartTag(body, tagStart);
+    if (tag === null) {
+      // A name-looking opener is an unterminated/malformed tag. A lone '<'
+      // used as prose is ignored for compatibility with imperfect HTML/text.
+      if (readMarkupName(body, tagStart + 1) !== null) return { found: false, malformed: true };
+      cursor = tagStart + 1;
       continue;
     }
 
     const bindings = new Map(scopes.at(-1)?.bindings ?? []);
-    const attributes = match[3];
-    const namespacePattern = /(?:^|\s)xmlns(?::([A-Za-z_][\w.-]*))?\s*=\s*(["'])(.*?)\2/gi;
-    let declaration: RegExpExecArray | null;
-    while ((declaration = namespacePattern.exec(attributes)) !== null) {
-      bindings.set(declaration[1] ?? "", declaration[3].trim());
-    }
-
-    const colon = qName.indexOf(":");
-    const prefix = colon >= 0 ? qName.slice(0, colon) : "";
-    const localName = (colon >= 0 ? qName.slice(colon + 1) : qName).toLowerCase();
+    for (const [prefix, namespace] of tag.declarations) bindings.set(prefix, namespace);
+    const colon = tag.qName.indexOf(":");
+    const prefix = colon >= 0 ? tag.qName.slice(0, colon) : "";
+    const localName = (colon >= 0 ? tag.qName.slice(colon + 1) : tag.qName).toLowerCase();
     const namespace = bindings.get(prefix);
-    if (localName === "xbrl" && namespace === XBRL_INSTANCE_NAMESPACE) return true;
+    if (localName === "xbrl" && namespace === XBRL_INSTANCE_NAMESPACE) found = true;
     if (INLINE_XBRL_LOCAL_NAMES.has(localName) && namespace !== undefined && INLINE_XBRL_NAMESPACES.has(namespace)) {
-      return true;
+      found = true;
     }
 
-    const selfClosing = match[4] === "/" || voidElements.has(localName);
-    if (!selfClosing) scopes.push({ qName, bindings });
+    const rawTextElement =
+      localName === "script" || localName === "style" || localName === "title" || localName === "textarea";
+    if (rawTextElement && !tag.selfClosing) {
+      const end = rawTextElementEnd(body, tag.end, tag.qName);
+      if (end === null) return { found: false, malformed: true };
+      cursor = end;
+      continue;
+    }
+    const htmlVoid = prefix === "" && voidElements.has(localName);
+    if (!tag.selfClosing && !htmlVoid) scopes.push({ qName: tag.qName, bindings });
+    cursor = tag.end;
   }
-  return false;
+  return { found, malformed: false };
 }
 
 /** Return a semantic problem for a successful filing-document body, if any. */
@@ -725,12 +927,14 @@ export function filingDocumentBodyProblem(body: string): string | null {
   const trimmed = body.trim();
   if (trimmed === "") return "filing document response was empty";
   if (knownEdgarErrorBody(trimmed)) return "filing document response was an SEC error or placeholder page";
+  const xbrlScan = scanBoundXbrlStructure(trimmed);
+  if (xbrlScan.malformed) return "filing document response contained malformed or unterminated markup";
 
   // SEC filing artifacts legitimately arrive as HTML/iXBRL, XML/XBRL, SGML,
   // or plain text. Recognize filing structures/terms first, then fall back to
   // meaningful human prose. Markup or an XML declaration alone proves nothing.
   if (
-    hasBoundXbrlStructure(trimmed) ||
+    xbrlScan.found ||
     /<SEC-DOCUMENT\b|<DOCUMENT\b[\s\S]*?<TYPE>[\s\S]*?<TEXT\b/i.test(trimmed)
   ) {
     return null;

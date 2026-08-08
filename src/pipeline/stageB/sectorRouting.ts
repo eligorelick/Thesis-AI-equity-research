@@ -343,11 +343,11 @@ export function routeCompany(
   let revBasis: "ttm" | "annual" | null = null;
   let rev: number | null = null;
   let revRow: RoutingIncomeRow | null = null;
-  if (statements.incomeTtm && statements.incomeTtm.revenue !== null) {
+  if (statements.incomeTtm && isFiniteNumber(statements.incomeTtm.revenue)) {
     rev = statements.incomeTtm.revenue;
     revBasis = "ttm";
     revRow = statements.incomeTtm;
-  } else if (statements.incomeAnnual && statements.incomeAnnual.revenue !== null) {
+  } else if (statements.incomeAnnual && isFiniteNumber(statements.incomeAnnual.revenue)) {
     rev = statements.incomeAnnual.revenue;
     revBasis = "annual";
     revRow = statements.incomeAnnual;
@@ -356,7 +356,7 @@ export function routeCompany(
   if (rev === null) {
     gaps.push({
       field: "route.overlays.preRevenue",
-      reason: "revenue unavailable on both TTM and annual bases — pre-revenue overlay not evaluated",
+      reason: "revenue missing or non-finite on both TTM and annual bases — pre-revenue overlay not evaluated",
       severity: "warn",
       attemptedSources: ["fmp:/stable/income-statement(-ttm)"],
     });

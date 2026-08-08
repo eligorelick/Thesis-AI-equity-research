@@ -20,6 +20,7 @@ import {
   lookupSectorEtf,
   metricPolicy,
   routeCompany,
+  type RoutingIncomeRow,
   type RoutingProfile,
   type RoutingStatements,
   type RunwayBalanceInput,
@@ -67,6 +68,26 @@ function profitableStatements(over: Partial<RoutingStatements> = {}): RoutingSta
 
 function route(p: Partial<RoutingProfile> = {}, s: Partial<RoutingStatements> = {}) {
   return routeCompany(profile(p), profitableStatements(s), { today: TODAY });
+}
+
+const MALFORMED_REVENUES: ReadonlyArray<{ label: string; value: unknown }> = [
+  { label: "NaN", value: Number.NaN },
+  { label: "+Infinity", value: Number.POSITIVE_INFINITY },
+  { label: "-Infinity", value: Number.NEGATIVE_INFINITY },
+  { label: "undefined", value: undefined },
+  { label: "object", value: { amount: 1 } },
+  { label: "numeric string", value: "1" },
+  { label: "Symbol", value: Symbol("1") },
+];
+
+/** Deliberately violates the static type to pressure-test the exported runtime boundary. */
+function unsafeIncome(revenue: unknown, netIncome = 1, date = "2026-03-31"): RoutingIncomeRow {
+  return {
+    date,
+    revenue: revenue as number | null,
+    netIncome,
+    reportedCurrency: "USD",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -438,6 +459,93 @@ describe("routeCompany pre-revenue currency gate", () => {
     expect(r.overlays).not.toContain("pre-revenue");
     expect(r.gaps.filter((g) => g.field === "route.overlays.preRevenue")).toHaveLength(1);
     expect(r.gaps.filter((g) => g.field === "route.overlays.preRevenue.currency")).toHaveLength(0);
+  });
+});
+
+describe("routeCompany pre-revenue invalid revenue gate", () => {
+  it.each(MALFORMED_REVENUES)(
+    "treats malformed TTM and annual $label revenue as unavailable without throwing",
+    ({ value }) => {
+      let result!: ReturnType<typeof route>;
+
+      expect(() => {
+        result = route(
+          {},
+          {
+            incomeTtm: unsafeIncome(value, -1, "2026-03-31"),
+            incomeAnnual: unsafeIncome(value, -1, "2025-12-31"),
+            cashflowTtm: { date: "2026-03-31", operatingCashFlow: -1 },
+          },
+        );
+      }).not.toThrow();
+
+      expect(result.overlays).toEqual(["unprofitable"]);
+      expect(result.gaps).toHaveLength(1);
+      expect(result.gaps[0]).toEqual(
+        expect.objectContaining({
+          field: "route.overlays.preRevenue",
+          severity: "warn",
+          reason: expect.stringMatching(/missing or non-finite.*TTM and annual/i),
+        }),
+      );
+      expect(result.gaps.some((gap) => gap.field === "route.overlays.preRevenue.currency")).toBe(false);
+    },
+  );
+
+  it.each(MALFORMED_REVENUES)(
+    "treats malformed annual $label revenue as unavailable when no TTM row exists",
+    ({ value }) => {
+      let result!: ReturnType<typeof route>;
+
+      expect(() => {
+        result = route({}, {
+          incomeTtm: null,
+          incomeAnnual: unsafeIncome(value, 1, "2025-12-31"),
+        });
+      }).not.toThrow();
+
+      expect(result.overlays).not.toContain("pre-revenue");
+      expect(result.gaps).toHaveLength(1);
+      expect(result.gaps[0]).toEqual(
+        expect.objectContaining({
+          field: "route.overlays.preRevenue",
+          severity: "warn",
+        }),
+      );
+      expect(result.gaps.some((gap) => gap.field === "route.overlays.preRevenue.currency")).toBe(false);
+    },
+  );
+
+  it.each(MALFORMED_REVENUES)(
+    "falls back from malformed TTM $label revenue to a valid annual USD observation",
+    ({ value }) => {
+      let result!: ReturnType<typeof route>;
+
+      expect(() => {
+        result = route({}, {
+          incomeTtm: unsafeIncome(value, 1, "2026-03-31"),
+          incomeAnnual: unsafeIncome(9_999_999, 1, "2025-12-31"),
+        });
+      }).not.toThrow();
+
+      expect(result.overlays).toContain("pre-revenue");
+      expect(result.gaps.some((gap) => gap.field === "route.overlays.preRevenue")).toBe(false);
+      expect(result.gaps.some((gap) => gap.field === "route.overlays.preRevenue.currency")).toBe(false);
+      expect(result.notes.some((note) => /TTM revenue unavailable.*annual revenue/i.test(note))).toBe(true);
+      expect(result.notes.some((note) => /pre-revenue overlay.*annual revenue/i.test(note))).toBe(true);
+    },
+  );
+
+  it("keeps finite zero TTM revenue selected even when annual revenue is malformed", () => {
+    const result = route({}, {
+      incomeTtm: unsafeIncome(0, 1, "2026-03-31"),
+      incomeAnnual: unsafeIncome(Symbol("invalid annual"), 1, "2025-12-31"),
+    });
+
+    expect(result.overlays).toContain("pre-revenue");
+    expect(result.gaps.some((gap) => gap.field === "route.overlays.preRevenue")).toBe(false);
+    expect(result.gaps.some((gap) => gap.field === "route.overlays.preRevenue.currency")).toBe(false);
+    expect(result.notes.some((note) => /pre-revenue overlay.*ttm revenue 0/i.test(note))).toBe(true);
   });
 });
 

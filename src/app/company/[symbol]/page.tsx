@@ -32,6 +32,10 @@ import { validateBundle, type ValidationReport } from "@/pipeline/stageA/validat
 import { renderManifestSummary } from "@/pipeline/stageA/manifest";
 import { runStageB, sourcedOf, type ComputedMetrics } from "@/pipeline/compute";
 import type { AltmanZone } from "@/pipeline/stageB/forensics";
+import {
+  classifyInstrumentSupport,
+  type InstrumentSupport,
+} from "@/pipeline/stageB/instrumentSupport";
 
 import { SensitivityHeatmap, type SensitivityCell } from "@/components/charts/SensitivityHeatmap";
 import { FundamentalsChartGrid, TechnicalsChartPanel } from "@/components/charts/lazy";
@@ -61,17 +65,31 @@ export const maxDuration = 120;
 // Data loading
 // ---------------------------------------------------------------------------
 
-interface PageData {
+interface SupportedPageData {
+  status: "supported";
   bundle: DataBundle;
   validation: ValidationReport;
   computed: ComputedMetrics;
+  support: Extract<InstrumentSupport, { supported: true }>;
   /** Latest persisted `done` report for this symbol, if any (rendered in full). */
   latestReport: LatestReport | null;
 }
 
+interface UnsupportedPageData {
+  status: "unsupported";
+  bundle: DataBundle;
+  validation: ValidationReport;
+  support: Extract<InstrumentSupport, { supported: false }>;
+}
+
+type PageData = SupportedPageData | UnsupportedPageData;
+
 async function loadCompany(symbol: string): Promise<PageData> {
   const bundle = await buildDataBundle(symbol);
   const validation = validateBundle(bundle, { now: new Date(bundle.builtAt) });
+  const profileRow = bundle.profile.ok ? (bundle.profile.value.data.rows[0] ?? null) : null;
+  const support = classifyInstrumentSupport(profileRow);
+  if (!support.supported) return { status: "unsupported", bundle, validation, support };
   const computed = runStageB(bundle);
   // A malformed DB / query never fails the whole page — fall back to no report.
   let latestReport: LatestReport | null = null;
@@ -80,7 +98,7 @@ async function loadCompany(symbol: string): Promise<PageData> {
   } catch {
     latestReport = null;
   }
-  return { bundle, validation, computed, latestReport };
+  return { status: "supported", bundle, validation, computed, support, latestReport };
 }
 
 // ---------------------------------------------------------------------------
@@ -841,7 +859,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ symbol
  * Rendered inside CompanyPage's <Suspense> boundary so its await streams instead
  * of blocking the whole route — the fix for the "rendering…" stall.
  */
-async function CompanyBody({ symbol }: { symbol: string }) {
+export async function CompanyBody({ symbol }: { symbol: string }) {
   let data: PageData;
   try {
     data = await loadCompany(symbol);
@@ -856,7 +874,7 @@ async function CompanyBody({ symbol }: { symbol: string }) {
     );
   }
 
-  const { bundle, validation, computed } = data;
+  const { bundle } = data;
 
   // Unknown ticker: no profile row resolved.
   const profileRow = bundle.profile.ok ? bundle.profile.value.data.rows[0] : undefined;
@@ -864,6 +882,22 @@ async function CompanyBody({ symbol }: { symbol: string }) {
     const gap = bundle.profile.ok ? null : bundle.profile.gap;
     return <UnknownTicker symbol={symbol} gap={gap} />;
   }
+
+  if (data.status === "unsupported") {
+    return (
+      <div className="mx-auto max-w-2xl p-6">
+        <div className="border border-warn/40 bg-warn/10 px-4 py-3 text-[12px] text-warn">
+          <div className="mono font-semibold">company analysis unavailable for {symbol}</div>
+          <p className="mt-1 text-muted">{data.support.reason}</p>
+          <p className="mt-2 text-faint">
+            No company report was generated and no paid analysis was started for this instrument.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const { validation, computed } = data;
 
   // Build the heavy (~1260-bar) chart datasets ONCE and thread them through both
   // the analysis panels and the ReportView charts (both tab trees render on this

@@ -64,6 +64,15 @@ export async function POST(
       { status: 409 },
     );
   }
+  if (row.status === "unsupported") {
+    return NextResponse.json(
+      { error: "unsupported instruments cannot enter company-analysis retry" },
+      { status: 409 },
+    );
+  }
+  if (row.status !== "done" && row.status !== "error") {
+    return NextResponse.json({ error: `job status ${row.status} cannot be retried` }, { status: 409 });
+  }
   if (isSymbolJobActive(row.symbol)) {
     return NextResponse.json(
       { error: `another job for ${row.symbol} is already active` },

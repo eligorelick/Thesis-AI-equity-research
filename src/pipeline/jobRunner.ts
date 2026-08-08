@@ -66,6 +66,10 @@ import { validateBundle, type ValidationReport } from "@/pipeline/stageA/validat
 import { sourceManifestEntries, type DataBundle } from "@/pipeline/types";
 import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
 import { parseStepsJson, publishJobEvent, type JobEvent } from "@/pipeline/events";
+import {
+  classifyInstrumentSupport,
+  type InstrumentSupport,
+} from "@/pipeline/stageB/instrumentSupport";
 
 /* ------------------------------------------------------------------------ *
  * PipelinePasses — injected Stage C contract (loose/structural types)
@@ -322,7 +326,7 @@ export const DEFAULT_FETCH_DEADLINE_MS = 10 * 60 * 1000;
 export const DEFAULT_MODEL_STAGE_DEADLINE_MS = 45 * 60 * 1000;
 
 /** Job lifecycle statuses (owned by this module; jobs.status is free TEXT). */
-export type JobStatus = "queued" | "running" | "done" | "error";
+export type JobStatus = "queued" | "running" | "done" | "error" | "unsupported";
 
 /* ------------------------------------------------------------------------ *
  * Step-progress bookkeeping
@@ -365,7 +369,13 @@ function persistSteps(state: RunState, status?: JobStatus, error?: string | null
     stepsJson: JSON.stringify(state.steps),
     updatedAt: nowIso(),
   };
-  if (status !== undefined) set.status = status;
+  if (status !== undefined) {
+    set.status = status;
+    if (status !== "unsupported") {
+      set.unsupportedKind = null;
+      set.unsupportedMessage = null;
+    }
+  }
   if (error !== undefined) set.error = error;
   getDb().update(jobs).set(set).where(eq(jobs.id, state.jobId)).run();
 }
@@ -635,6 +645,8 @@ export function createJob(symbol: string): { jobId: string } {
       updatedAt: now,
       error: null,
       reportId: null,
+      unsupportedKind: null,
+      unsupportedMessage: null,
     })
     .run();
   return { jobId };
@@ -674,6 +686,8 @@ export function getOrCreateJobForSymbol(symbol: string):
           updatedAt: now,
           error: null,
           reportId: null,
+          unsupportedKind: null,
+          unsupportedMessage: null,
         })
         .run();
       return { jobId, existing: false };
@@ -732,15 +746,46 @@ export function getReusableActiveJobForSymbol(
       !isJobLiveInProcess(row.id) &&
       (!Number.isFinite(updatedMs) || nowMs - updatedMs > staleMs);
     if (stale) {
-      getDb()
+      const expired = getDb()
         .update(jobs)
         .set({
           status: "error",
           error: `stale active job expired after ${Math.round(staleMs / 60000)} minutes without progress`,
+          unsupportedKind: null,
+          unsupportedMessage: null,
           updatedAt: nowText,
         })
-        .where(eq(jobs.id, row.id))
+        .where(
+          and(
+            eq(jobs.id, row.id),
+            eq(jobs.status, row.status),
+            eq(jobs.updatedAt, row.updatedAt),
+          ),
+        )
         .run();
+      if (expired.changes === 0) {
+        // A heartbeat or terminal transition won after the SELECT. Re-read so
+        // a refreshed active job remains reusable while unsupported/done/error
+        // stays terminal; never clobber either with the stale decision.
+        const current = getDb()
+          .select({ id: jobs.id, status: jobs.status, updatedAt: jobs.updatedAt })
+          .from(jobs)
+          .where(eq(jobs.id, row.id))
+          .get();
+        if (current !== undefined && isReusableStatus(current.status)) {
+          const currentUpdatedMs = Date.parse(current.updatedAt);
+          const currentStale =
+            !isJobLiveInProcess(current.id) &&
+            (!Number.isFinite(currentUpdatedMs) || nowMs - currentUpdatedMs > staleMs);
+          if (!currentStale) {
+            reusable ??= {
+              jobId: current.id,
+              status: current.status,
+              updatedAt: current.updatedAt,
+            };
+          }
+        }
+      }
       continue;
     }
     reusable ??= { jobId: row.id, status: row.status, updatedAt: row.updatedAt };
@@ -905,10 +950,20 @@ export function snapshotsCoverResume(
  * same terminal row cannot both launch a paid continuation: only the first
  * transition to queued succeeds.
  */
-export function claimJobForResume(jobId: string, expectedTerminalStatus: string): boolean {
+export function claimJobForResume(
+  jobId: string,
+  expectedTerminalStatus: "done" | "error",
+): boolean {
   const result = getDb()
     .update(jobs)
-    .set({ status: "queued", error: null, reportId: null, updatedAt: nowIso() })
+    .set({
+      status: "queued",
+      error: null,
+      reportId: null,
+      unsupportedKind: null,
+      unsupportedMessage: null,
+      updatedAt: nowIso(),
+    })
     .where(and(eq(jobs.id, jobId), eq(jobs.status, expectedTerminalStatus)))
     .run();
   return result.changes === 1;
@@ -1057,7 +1112,13 @@ export function cancelJob(jobId: string): boolean {
   // detached runner has not registered its controller yet.
   const result = getDb()
     .update(jobs)
-    .set({ status: "error", error: JOB_CANCELED_ERROR, updatedAt: nowIso() })
+    .set({
+      status: "error",
+      error: JOB_CANCELED_ERROR,
+      unsupportedKind: null,
+      unsupportedMessage: null,
+      updatedAt: nowIso(),
+    })
     .where(and(eq(jobs.id, jobId), eq(jobs.status, "queued")))
     .run();
   return result.changes === 1;
@@ -1113,6 +1174,8 @@ export function sweepAbandonedJobs(
     const set: Record<string, unknown> = {
       status: "error",
       error: message,
+      unsupportedKind: null,
+      unsupportedMessage: null,
       updatedAt: now.toISOString(),
     };
     try {
@@ -1192,15 +1255,25 @@ export interface RunJobOptions<TPayload = unknown> {
   readonly _payload?: TPayload;
 }
 
-export interface RunJobResult {
+interface RunJobCommonResult {
   jobId: string;
-  status: JobStatus;
   reportId: number | null;
   verificationRate: number | null;
   totalCostUsd: number;
   /** True when the LLM steps were skipped (no key) → data-only report. */
   dataOnly: boolean;
 }
+
+export type RunJobResult =
+  | (RunJobCommonResult & { status: "done" | "error" })
+  | (RunJobCommonResult & {
+      status: "unsupported";
+      reportId: null;
+      verificationRate: null;
+      dataOnly: false;
+      kind: Extract<InstrumentSupport, { supported: false }>["kind"];
+      message: string;
+    });
 
 /**
  * Run the full pipeline for an already-created job. Deterministic step order,
@@ -1364,6 +1437,11 @@ export async function runJob<TPayload = unknown>(
       `${validation.checks.length} check(s), ${validation.flags.length} flag(s)`,
     );
 
+    const validatedSupport = classifyInstrumentSupport(
+      bundle.profile.ok ? (bundle.profile.value.data.rows[0] ?? null) : null,
+    );
+    if (!validatedSupport.supported) return finishUnsupported(state, validatedSupport);
+
     // -- compute --------------------------------------------------------------
     startStep(state, "compute");
     let computed: ComputedMetrics;
@@ -1383,6 +1461,14 @@ export async function runJob<TPayload = unknown>(
       "done",
       `route ${computed.route.base}${computed.route.overlays.length > 0 ? ` +${computed.route.overlays.join("/")}` : ""}, ${computed.gaps.length} gap(s)`,
     );
+
+    // Defense in depth at the Stage C boundary: no payload assembly, model
+    // resolution, or paid dispatch may proceed if a future caller bypasses the
+    // post-validation gate above.
+    const stageCSupport = classifyInstrumentSupport(
+      bundle.profile.ok ? (bundle.profile.value.data.rows[0] ?? null) : null,
+    );
+    if (!stageCSupport.supported) return finishUnsupported(state, stageCSupport);
 
     // -- no-key degraded path -------------------------------------------------
     if (!hasKey) {
@@ -1951,6 +2037,46 @@ function finishRun(
   };
 }
 
+function finishUnsupported(
+  state: RunState,
+  support: Extract<InstrumentSupport, { supported: false }>,
+): RunJobResult {
+  for (const step of state.steps) markSkipped(state, step.step, support.reason);
+
+  getDb()
+    .update(jobs)
+    .set({
+      status: "unsupported",
+      error: null,
+      reportId: null,
+      unsupportedKind: support.kind,
+      unsupportedMessage: support.reason,
+      stepsJson: JSON.stringify(state.steps),
+      updatedAt: nowIso(),
+    })
+    .where(eq(jobs.id, state.jobId))
+    .run();
+
+  const totalCostUsd = round4(state.totalCostUsd);
+  publish(state, {
+    type: "unsupported",
+    jobId: state.jobId,
+    kind: support.kind,
+    message: support.reason,
+    totalCostUsd,
+  });
+  return {
+    jobId: state.jobId,
+    status: "unsupported",
+    reportId: null,
+    verificationRate: null,
+    totalCostUsd,
+    dataOnly: false,
+    kind: support.kind,
+    message: support.reason,
+  };
+}
+
 /** Terminal failure that leaves nothing to persist (e.g. fetch hard-failed). */
 function failRun(state: RunState, step: PipelineStep, err: unknown): RunJobResult {
   finishStep(state, step, "error", errMessage(err));
@@ -2132,6 +2258,8 @@ function persistReport(
         reportId: inserted.id,
         status: "done",
         error: null,
+        unsupportedKind: null,
+        unsupportedMessage: null,
         stepsJson: JSON.stringify(state.steps),
         updatedAt: completedAt,
       })

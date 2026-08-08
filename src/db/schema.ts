@@ -100,6 +100,10 @@ export const jobs = sqliteTable(
     reportId: integer("reportId").references(() => reports.id, {
       onDelete: "set null",
     }),
+    /** Typed terminal reason when company analysis does not support the instrument. */
+    unsupportedKind: text("unsupportedKind"),
+    /** Human-readable explanation paired with unsupportedKind. */
+    unsupportedMessage: text("unsupportedMessage"),
     /**
      * Persisted bull/bear pass snapshots (serialized PassResultLike<AnalystCase>,
      * src/pipeline/jobRunner.ts) written as each side completes, so a failed

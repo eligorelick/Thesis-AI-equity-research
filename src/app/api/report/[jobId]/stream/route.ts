@@ -6,7 +6,7 @@
  *     refreshing client immediately catches up to where the pipeline is.
  *  2. Streams live events (step-update / cost-update / done / error) until a
  *     terminal event, then closes the stream.
- *  3. If the job is ALREADY terminal at connect time (done/error), it replays
+ *  3. If the job is ALREADY terminal at connect time (done/error/unsupported), it replays
  *     the snapshot, emits the terminal event, and closes — no hanging stream.
  *  4. Sends heartbeat comments so proxies don't idle-timeout the connection.
  *  5. Cleans up (unsubscribe + clear heartbeat) on client disconnect via the
@@ -45,6 +45,22 @@ function terminalEventFromSnapshot(snapshot: NonNullable<ReturnType<typeof getJo
   if (snapshot.status === "error") {
     return { type: "error", jobId: snapshot.jobId, message: snapshot.error ?? "job failed" };
   }
+  if (snapshot.status === "unsupported") {
+    if (snapshot.unsupported === null) {
+      return {
+        type: "error",
+        jobId: snapshot.jobId,
+        message: "unsupported instrument classification is unavailable",
+      };
+    }
+    return {
+      type: "unsupported",
+      jobId: snapshot.jobId,
+      kind: snapshot.unsupported.kind,
+      message: snapshot.unsupported.message,
+      totalCostUsd: snapshot.totalCostUsd,
+    };
+  }
   return {
     type: "done",
     jobId: snapshot.jobId,
@@ -73,7 +89,8 @@ export async function GET(
     });
   }
 
-  const alreadyTerminal = snapshot.status === "done" || snapshot.status === "error";
+  const alreadyTerminal =
+    snapshot.status === "done" || snapshot.status === "error" || snapshot.status === "unsupported";
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -132,7 +149,12 @@ export async function GET(
       // Guard against a race: the job may have finished between the snapshot
       // read and the subscription. Re-check and synthesize a terminal event.
       const recheck = getJobSnapshot(jobId);
-      if (recheck !== null && (recheck.status === "done" || recheck.status === "error")) {
+      if (
+        recheck !== null &&
+        (recheck.status === "done" ||
+          recheck.status === "error" ||
+          recheck.status === "unsupported")
+      ) {
         const terminal = terminalEventFromSnapshot(recheck);
         safeEnqueue(sseFrame(terminal.type, terminal));
         cleanup();

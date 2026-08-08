@@ -93,6 +93,10 @@ import { computeProjections, type ProjectionIncomeRow } from "@/pipeline/stageB/
 import { computeScenarioTargets } from "@/pipeline/stageB/scenarioTargets";
 import { computeFairValue } from "@/pipeline/stageB/fairValue";
 import { resolveNetDebt, type NetDebtResolution } from "@/pipeline/stageB/netDebt";
+import {
+  classifyInstrumentSupport,
+  UnsupportedInstrumentError,
+} from "@/pipeline/stageB/instrumentSupport";
 import { mergeManifest } from "@/pipeline/stageA/manifest";
 import type { Scoring, Projections, ScenarioTargets, FairValue } from "@/report/schema";
 
@@ -666,6 +670,8 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   const suppressed: SuppressedMetric[] = [];
 
   const profile = firstRow(bundle.profile);
+  const support = classifyInstrumentSupport(profile);
+  if (!support.supported) throw new UnsupportedInstrumentError(support);
   const quote = firstRow(bundle.quote);
 
   const incomeAnnual = rowsOf(bundle.statements.incomeAnnual);

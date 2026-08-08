@@ -132,6 +132,21 @@ function markTerminal(jobId: string, status: "done" | "error", error: string | n
     .run();
 }
 
+function markUnsupported(jobId: string, kind: "etf" | "fund" | "etf-fund", message: string): void {
+  handle.db
+    .update(jobs)
+    .set({
+      status: "unsupported",
+      error: null,
+      reportId: null,
+      unsupportedKind: kind,
+      unsupportedMessage: message,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(jobs.id, jobId))
+    .run();
+}
+
 /* ------------------------------------------------------------------------ *
  * 404
  * ------------------------------------------------------------------------ */
@@ -151,6 +166,79 @@ describe("GET /api/report/[jobId]/stream — unknown job", () => {
  * ------------------------------------------------------------------------ */
 
 describe("already-terminal job at connect", () => {
+  it("does not expose stale unsupported metadata from a done row", async () => {
+    const { jobId } = createJob("AAPL");
+    handle.db
+      .update(jobs)
+      .set({
+        status: "done",
+        unsupportedKind: "etf",
+        unsupportedMessage: "stale terminal metadata",
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    const res = await streamGET(...streamReq(jobId));
+    const { frames } = parseSse(await readBody(res));
+    expect(frames.map((frame) => frame.event)).toEqual(["snapshot", "done"]);
+    expect(frames[0].data).toMatchObject({ status: "done", unsupported: null });
+  });
+
+  it("replays exact unsupported kind/message, closes, and does not subscribe", async () => {
+    const { jobId } = createJob("SPY");
+    const message = "ETF analysis is not supported; this workflow analyzes companies only.";
+    markUnsupported(jobId, "etf", message);
+    const abort = new AbortController();
+
+    try {
+      const res = await streamGET(...streamReq(jobId, abort.signal));
+      await vi.waitFor(() => expect(subscriberCount(jobId)).toBe(0), { timeout: 100 });
+      const { frames } = parseSse(await readBody(res));
+
+      expect(frames.map((frame) => frame.event)).toEqual(["snapshot", "unsupported"]);
+      expect(frames[0].data).toMatchObject({
+        status: "unsupported",
+        unsupported: { kind: "etf", message },
+        reportId: null,
+        totalCostUsd: 0,
+      });
+      expect(frames[1].data).toEqual({
+        type: "unsupported",
+        jobId,
+        kind: "etf",
+        message,
+        totalCostUsd: 0,
+      });
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it("closes malformed persisted unsupported state as a terminal error instead of defaulting to done", async () => {
+    const { jobId } = createJob("BADFUND");
+    handle.db
+      .update(jobs)
+      .set({ status: "unsupported", unsupportedKind: "unknown", unsupportedMessage: "" })
+      .where(eq(jobs.id, jobId))
+      .run();
+    const abort = new AbortController();
+
+    try {
+      const res = await streamGET(...streamReq(jobId, abort.signal));
+      await vi.waitFor(() => expect(subscriberCount(jobId)).toBe(0), { timeout: 100 });
+      const { frames } = parseSse(await readBody(res));
+      expect(frames.map((frame) => frame.event)).toEqual(["snapshot", "error"]);
+      expect(frames[0].data).toMatchObject({ status: "unsupported", unsupported: null });
+      expect(frames[1].data).toMatchObject({
+        type: "error",
+        jobId,
+        message: expect.stringMatching(/classification.*unavailable/i),
+      });
+    } finally {
+      abort.abort();
+    }
+  });
+
   it("recognizes data-only reports saved with legacy as-of formats", () => {
     const raw = JSON.parse(
       readFileSync(path.join(process.cwd(), "fixtures", "report", "DEMO-sample.json"), "utf8"),
@@ -229,6 +317,25 @@ describe("already-terminal job at connect", () => {
  * ------------------------------------------------------------------------ */
 
 describe("subscribe/terminal race guard", () => {
+  it("re-checks a concurrent unsupported terminal transition and closes with its typed frame", async () => {
+    const { jobId } = createJob("SPY");
+    const message = "ETF analysis is not supported; companies only.";
+    let calls = 0;
+    snapshotHook.before = (id) => {
+      if (id !== jobId) return;
+      calls++;
+      if (calls === 2) markUnsupported(jobId, "etf", message);
+    };
+
+    const res = await streamGET(...streamReq(jobId));
+    const { frames } = parseSse(await readBody(res));
+
+    expect(frames.map((frame) => frame.event)).toEqual(["snapshot", "unsupported"]);
+    expect(frames[0].data.status).toBe("queued");
+    expect(frames[1].data).toMatchObject({ kind: "etf", message });
+    expect(subscriberCount(jobId)).toBe(0);
+  });
+
   it("re-checks after subscribing: a job that finished between the two reads gets a terminal frame + close + unsubscribe", async () => {
     const { jobId } = createJob("NVDA");
 
@@ -285,6 +392,25 @@ describe("client abort", () => {
  * ------------------------------------------------------------------------ */
 
 describe("running job — live events", () => {
+  it("closes after a live unsupported terminal event", async () => {
+    const { jobId } = createJob("QQQ");
+    const res = await streamGET(...streamReq(jobId));
+    const message = "Fund analysis is not supported; this workflow analyzes companies only.";
+
+    publishJobEvent({
+      type: "unsupported",
+      jobId,
+      kind: "fund",
+      message,
+      totalCostUsd: 0,
+    });
+
+    expect(subscriberCount(jobId)).toBe(0);
+    const { frames } = parseSse(await readBody(res));
+    expect(frames.map((frame) => frame.event)).toEqual(["snapshot", "unsupported"]);
+    expect(frames[1].data).toMatchObject({ kind: "fund", message, totalCostUsd: 0 });
+  });
+
   it("streams published events in order and closes on the terminal one", async () => {
     const { jobId } = createJob("AAPL");
     const res = await streamGET(...streamReq(jobId));

@@ -279,6 +279,32 @@ describe("POST /api/report/[jobId]/retry", () => {
     expect(runJobMock).not.toHaveBeenCalled();
   });
 
+  it("rejects unsupported before reusable snapshots can claim or dispatch paid retry work", async () => {
+    const jobId = seedResumableJob("SPY");
+    handle.db
+      .update(jobs)
+      .set({
+        status: "unsupported",
+        error: null,
+        unsupportedKind: "etf",
+        unsupportedMessage: "ETF analysis is not supported; companies only.",
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    const res = await retryPOST(...retryReq(jobId));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()) as { error: string }).toMatchObject({
+      error: expect.stringMatching(/unsupported/i),
+    });
+    expect(runJobMock).not.toHaveBeenCalled();
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "unsupported",
+      unsupportedKind: "etf",
+    });
+  });
+
   it("returns 409 for a terminal job that is NOT in the resumable shape (healthy synthesize)", async () => {
     const { jobId } = createJobReal("AAPL");
     const steps = initialSteps().map((s) => ({ step: s.step, status: "done" as const }));

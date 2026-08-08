@@ -6,7 +6,7 @@
  *
  * Server-only: getJobSnapshot() reads the jobs table (imports @/db). The SSE
  * route replays a snapshot to late/reconnecting clients, then streams live
- * events until a terminal ("done" | "error") event arrives.
+ * events until a terminal ("done" | "error" | "unsupported") event arrives.
  */
 
 import { eq } from "drizzle-orm";
@@ -14,6 +14,7 @@ import { getDb } from "@/db";
 import { costLog, jobs, reports } from "@/db/schema";
 import { ReportSchema, withLenientLegacyRead } from "@/report/schema";
 import type { StepProgress } from "@/types/core";
+import type { UnsupportedInstrumentKind } from "@/pipeline/stageB/instrumentSupport";
 
 /* ------------------------------------------------------------------------ *
  * Event types
@@ -64,11 +65,25 @@ export interface JobErrorEvent {
   message: string;
 }
 
-export type JobEvent = StepUpdateEvent | CostUpdateEvent | JobDoneEvent | JobErrorEvent;
+/** Terminal non-error outcome — company analysis does not support this instrument. */
+export interface JobUnsupportedEvent {
+  type: "unsupported";
+  jobId: string;
+  kind: UnsupportedInstrumentKind;
+  message: string;
+  totalCostUsd: number;
+}
 
-/** True for the two terminal event kinds (subscribers unsubscribe after these). */
+export type JobEvent =
+  | StepUpdateEvent
+  | CostUpdateEvent
+  | JobDoneEvent
+  | JobErrorEvent
+  | JobUnsupportedEvent;
+
+/** True for every terminal event kind (subscribers unsubscribe after these). */
 export function isTerminalEvent(event: JobEvent): boolean {
-  return event.type === "done" || event.type === "error";
+  return event.type === "done" || event.type === "error" || event.type === "unsupported";
 }
 
 export type JobEventCallback = (event: JobEvent) => void;
@@ -158,6 +173,7 @@ export interface JobSnapshot {
   verificationRate: number | null;
   totalCostUsd: number;
   dataOnly: boolean;
+  unsupported: { kind: UnsupportedInstrumentKind; message: string } | null;
 }
 
 /** Parse the persisted stepsJson defensively (never throw on a bad row). */
@@ -214,6 +230,15 @@ export function getJobSnapshot(jobId: string): JobSnapshot | null {
     verificationRate,
     totalCostUsd,
     dataOnly,
+    unsupported:
+      row.status === "unsupported" &&
+      (row.unsupportedKind === "etf" ||
+        row.unsupportedKind === "fund" ||
+        row.unsupportedKind === "etf-fund") &&
+      typeof row.unsupportedMessage === "string" &&
+      row.unsupportedMessage.trim().length > 0
+        ? { kind: row.unsupportedKind, message: row.unsupportedMessage }
+        : null,
   };
 }
 

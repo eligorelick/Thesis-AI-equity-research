@@ -62,6 +62,7 @@ interface SnapshotEvent {
   error: string | null;
   reportId: number | null;
   totalCostUsd: number;
+  unsupported: { kind: "etf" | "fund" | "etf-fund"; message: string } | null;
 }
 
 interface GradeStripCell {
@@ -82,7 +83,66 @@ interface ReportSummary {
   dataOnly: boolean;
 }
 
-type Phase = "idle" | "starting" | "running" | "done" | "error";
+type Phase = "idle" | "starting" | "running" | "done" | "error" | "unsupported";
+
+export interface ClientUnsupportedTerminal {
+  kind: "etf" | "fund" | "etf-fund" | null;
+  message: string;
+  totalCostUsd: number;
+}
+
+const CLIENT_UNSUPPORTED_MESSAGE = "This instrument is not supported for company analysis.";
+
+function decodedUnsupported(
+  input: unknown,
+  totalCostUsd: unknown,
+): ClientUnsupportedTerminal {
+  const cost = typeof totalCostUsd === "number" && Number.isFinite(totalCostUsd) ? totalCostUsd : 0;
+  if (input !== null && typeof input === "object") {
+    const candidate = input as { kind?: unknown; message?: unknown };
+    const kind = candidate.kind;
+    if (
+      (kind === "etf" || kind === "fund" || kind === "etf-fund") &&
+      typeof candidate.message === "string" &&
+      candidate.message.trim().length > 0
+    ) {
+      return { kind, message: candidate.message, totalCostUsd: cost };
+    }
+  }
+  return { kind: null, message: CLIENT_UNSUPPORTED_MESSAGE, totalCostUsd: cost };
+}
+
+export function unsupportedFromSnapshot(input: {
+  status: string;
+  totalCostUsd: number;
+  unsupported: unknown;
+}): ClientUnsupportedTerminal | null {
+  if (input.status !== "unsupported") return null;
+  return decodedUnsupported(input.unsupported, input.totalCostUsd);
+}
+
+export function unsupportedFromEvent(input: unknown): ClientUnsupportedTerminal {
+  if (input !== null && typeof input === "object") {
+    const candidate = input as { kind?: unknown; message?: unknown; totalCostUsd?: unknown };
+    return decodedUnsupported(candidate, candidate.totalCostUsd);
+  }
+  return decodedUnsupported(null, 0);
+}
+
+export function applyUnsupportedTerminal(
+  terminal: ClientUnsupportedTerminal,
+  actions: {
+    setPhase: (phase: "unsupported") => void;
+    setMessage: (message: string) => void;
+    setTotalCost: (cost: number) => void;
+    closeStream: () => void;
+  },
+): void {
+  actions.setPhase("unsupported");
+  actions.setMessage(terminal.message);
+  actions.setTotalCost(terminal.totalCostUsd);
+  actions.closeStream();
+}
 
 /* ------------------------------------------------------------------------ *
  * Small presentational helpers
@@ -152,6 +212,7 @@ export function GenerateReport({ symbol }: { symbol: string }) {
   const [summary, setSummary] = useState<ReportSummary | null>(null);
   const [dataOnly, setDataOnly] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [unsupportedMessage, setUnsupportedMessage] = useState<string | null>(null);
 
   const esRef = useRef<EventSource | null>(null);
 
@@ -188,6 +249,16 @@ export function GenerateReport({ symbol }: { symbol: string }) {
           // Adopted mid-flight/terminal jobs must show the true running cost,
           // not $0 — the snapshot carries the cost_log sum.
           if (typeof snap.totalCostUsd === "number") setTotalCost(snap.totalCostUsd);
+          const unsupported = unsupportedFromSnapshot(snap);
+          if (unsupported !== null) {
+            applyUnsupportedTerminal(unsupported, {
+              setPhase,
+              setMessage: setUnsupportedMessage,
+              setTotalCost,
+              closeStream,
+            });
+            return;
+          }
           if (snap.status === "running" || snap.status === "queued") setPhase("running");
         } catch {
           /* ignore malformed frame */
@@ -226,6 +297,22 @@ export function GenerateReport({ symbol }: { symbol: string }) {
         closeStream();
       });
 
+      es.addEventListener("unsupported", (ev) => {
+        let raw: unknown = null;
+        try {
+          raw = JSON.parse((ev as MessageEvent).data) as unknown;
+        } catch {
+          // The event kind itself is terminal; malformed data receives the
+          // same safe unsupported explanation and still closes the stream.
+        }
+        applyUnsupportedTerminal(unsupportedFromEvent(raw), {
+          setPhase,
+          setMessage: setUnsupportedMessage,
+          setTotalCost,
+          closeStream,
+        });
+      });
+
       es.addEventListener("error", (ev) => {
         // Two cases: a server-sent "error" event frame (has data) or a transport
         // error (no data). Only treat a data-bearing frame as terminal failure.
@@ -253,6 +340,7 @@ export function GenerateReport({ symbol }: { symbol: string }) {
     setJobId(null);
     setTotalCost(0);
     setDataOnly(false);
+    setUnsupportedMessage(null);
     setSteps(PIPELINE_STEPS.map((step) => ({ step, status: "pending" as const })));
 
     try {
@@ -292,6 +380,7 @@ export function GenerateReport({ symbol }: { symbol: string }) {
   }, [jobId, phase]);
 
   const busy = phase === "starting" || phase === "running";
+  const generationDisabled = busy || phase === "unsupported";
 
   // Resume-from-failure (2026-07 audit item 1 + partial shape 2026-07-10):
   // the runner persists every SUCCESSFUL analyst pass output the moment it
@@ -356,18 +445,20 @@ export function GenerateReport({ symbol }: { symbol: string }) {
         <button
           type="button"
           onClick={start}
-          disabled={busy}
+          disabled={generationDisabled}
           className={`mono border px-3 py-1 text-[11px] uppercase tracking-[0.1em] ${
-            busy
+            generationDisabled
               ? "cursor-not-allowed border-edge text-faint opacity-60"
               : "border-accent/50 text-accent hover:bg-accent/10"
           }`}
         >
-          {phase === "idle" || phase === "error"
-            ? "generate report ·"
-            : phase === "done"
-              ? "regenerate ·"
-              : "generating…"}
+          {phase === "unsupported"
+            ? "unsupported"
+            : phase === "idle" || phase === "error"
+              ? "generate report ·"
+              : phase === "done"
+                ? "regenerate ·"
+                : "generating…"}
         </button>
       </div>
 
@@ -414,6 +505,12 @@ export function GenerateReport({ symbol }: { symbol: string }) {
           {error ? (
             <div className="mt-2 border border-neg/40 bg-neg/10 px-2 py-1.5 text-[11px] text-neg">
               {error}
+            </div>
+          ) : null}
+
+          {unsupportedMessage ? (
+            <div className="mt-2 border border-warn/40 bg-warn/10 px-2 py-1.5 text-[11px] text-warn">
+              {unsupportedMessage} No company report was generated and no paid analysis was started.
             </div>
           ) : null}
 

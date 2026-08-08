@@ -16,6 +16,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
+import Database from "better-sqlite3";
 
 // Mock the Anthropic provider so the runner's model-resolution step is driven
 // by the test (no live network). By default resolveModel succeeds with a fixed
@@ -30,7 +31,7 @@ vi.mock("@/providers/anthropic", () => ({
 }));
 
 import { resolveModel } from "@/providers/anthropic";
-import { createDatabase, setDbForTests, type DatabaseHandle } from "@/db";
+import { bootstrapSchema, createDatabase, setDbForTests, type DatabaseHandle } from "@/db";
 import { costLog, jobs, reports } from "@/db/schema";
 import { setSetting } from "@/settings/settings";
 import {
@@ -38,6 +39,7 @@ import {
   cancelJob,
   claimJobForResume,
   createJob,
+  getOrCreateJobForSymbol,
   getReusableActiveJobForSymbol,
   isSymbolJobActive,
   JOB_CANCELED_ERROR,
@@ -105,13 +107,19 @@ afterEach(() => {
 });
 
 /** A minimal DataBundle stub sufficient for validate + compute + persistence. */
-function fakeBundle(symbol = "AAPL"): DataBundle {
+function fakeBundle(
+  symbol = "AAPL",
+  instrument: { isEtf?: boolean | null; isFund?: boolean | null } = {},
+): DataBundle {
   const builtAt = "2026-07-06T00:00:00.000Z";
   const gap = { ok: false as const, gap: { field: "x", reason: "fixture", severity: "info" as const } };
   const profile = {
     ok: true as const,
     value: {
-      data: { rows: [{ companyName: "Apple Inc.", sector: "Technology", price: 200 }], raw: {} },
+      data: {
+        rows: [{ companyName: "Apple Inc.", sector: "Technology", price: 200, ...instrument }],
+        raw: {},
+      },
       asOf: "2026-07-01",
       source: "fmp" as const,
       endpoint: "profile",
@@ -416,6 +424,284 @@ function mockPasses(over: Partial<{
 }
 
 const NOW = (): Date => new Date("2026-07-06T00:00:00.000Z");
+
+/* ------------------------------------------------------------------------ *
+ * Unsupported instrument terminal gate
+ * ------------------------------------------------------------------------ */
+
+describe("runJob — unsupported instruments", () => {
+  it("adds nullable unsupported columns to a legacy jobs table without changing existing rows", () => {
+    const sqlite = new Database(":memory:");
+    try {
+      sqlite.exec(`
+        CREATE TABLE jobs (
+          id TEXT PRIMARY KEY NOT NULL,
+          symbol TEXT NOT NULL,
+          status TEXT NOT NULL,
+          stepsJson TEXT NOT NULL,
+          createdAt TEXT NOT NULL,
+          updatedAt TEXT NOT NULL,
+          error TEXT,
+          reportId INTEGER,
+          bullJson TEXT,
+          bearJson TEXT,
+          payloadFingerprint TEXT
+        );
+        INSERT INTO jobs (id, symbol, status, stepsJson, createdAt, updatedAt)
+        VALUES ('legacy', 'AAPL', 'done', '[]', '2026-01-01', '2026-01-01');
+      `);
+
+      bootstrapSchema(sqlite);
+
+      const columns = sqlite.pragma("table_info(jobs)") as { name: string }[];
+      expect(columns.map((column) => column.name)).toEqual(
+        expect.arrayContaining(["unsupportedKind", "unsupportedMessage"]),
+      );
+      expect(
+        sqlite.prepare("SELECT unsupportedKind, unsupportedMessage FROM jobs WHERE id = ?").get("legacy"),
+      ).toEqual({ unsupportedKind: null, unsupportedMessage: null });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("terminalizes an ETF after validation with no company report, Stage C payload, or paid work", async () => {
+    const { jobId } = createJob("SPY");
+    const { passes, calls } = mockPasses();
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle("SPY", { isEtf: true, isFund: false }),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    unsubscribe();
+
+    expect(result).toMatchObject({
+      status: "unsupported",
+      reportId: null,
+      verificationRate: null,
+      totalCostUsd: 0,
+      dataOnly: false,
+      kind: "etf",
+    });
+    expect(result).toHaveProperty("message", expect.stringMatching(/not supported/i));
+    expect(calls).toEqual([]);
+    expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(handle.db.select().from(reports).all()).toHaveLength(0);
+    expect(handle.db.select().from(costLog).all()).toHaveLength(0);
+
+    const row = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
+    expect(row).toMatchObject({
+      status: "unsupported",
+      reportId: null,
+      error: null,
+      unsupportedKind: "etf",
+    });
+    expect(row?.unsupportedMessage).toMatch(/not supported/i);
+
+    const steps = JSON.parse(row?.stepsJson ?? "[]") as StepProgress[];
+    expect(steps.map(({ step, status }) => ({ step, status }))).toEqual([
+      { step: "fetch", status: "done" },
+      { step: "validate", status: "done" },
+      { step: "compute", status: "skipped" },
+      { step: "bull", status: "skipped" },
+      { step: "bear", status: "skipped" },
+      { step: "synthesize", status: "skipped" },
+      { step: "verify", status: "skipped" },
+    ]);
+    for (const step of steps.slice(2)) {
+      expect(step.detail).toBe(row?.unsupportedMessage);
+    }
+
+    expect(events.at(-1)).toEqual({
+      type: "unsupported",
+      jobId,
+      kind: "etf",
+      message: row?.unsupportedMessage,
+      totalCostUsd: 0,
+    });
+    expect(getJobSnapshot(jobId)).toMatchObject({
+      status: "unsupported",
+      reportId: null,
+      totalCostUsd: 0,
+      unsupported: { kind: "etf", message: row?.unsupportedMessage },
+    });
+  });
+
+  it("keeps unsupported terminal across cancel, stale sweep, and active-job dedup checks", () => {
+    const { jobId } = createJob("SPY");
+    handle.db
+      .update(jobs)
+      .set({
+        status: "unsupported",
+        unsupportedKind: "etf",
+        unsupportedMessage: "ETF analysis is not supported; companies only.",
+        updatedAt: "2020-01-01T00:00:00.000Z",
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    expect(cancelJob(jobId)).toBe(false);
+    expect(sweepAbandonedJobs(new Date("2026-08-07T00:00:00.000Z"), 1)).toBe(0);
+    expect(getReusableActiveJobForSymbol("SPY")).toBeNull();
+    expect(getOrCreateJobForSymbol("SPY")).toMatchObject({ existing: false });
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "unsupported",
+      unsupportedKind: "etf",
+    });
+  });
+
+  it("clears stale unsupported metadata when a queued job terminalizes as canceled error", () => {
+    const { jobId } = createJob("AAPL");
+    handle.db
+      .update(jobs)
+      .set({ unsupportedKind: "fund", unsupportedMessage: "stale" })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    expect(cancelJob(jobId)).toBe(true);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "error",
+      unsupportedKind: null,
+      unsupportedMessage: null,
+    });
+  });
+
+  it("clears stale unsupported metadata when a supported company finishes done", async () => {
+    const { jobId } = createJob("AAPL");
+    handle.db
+      .update(jobs)
+      .set({ unsupportedKind: "fund", unsupportedMessage: "stale" })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    const result = await runJob(jobId, mockPasses().passes, {
+      bundle: fakeBundle("AAPL", { isEtf: false, isFund: false }),
+      hasAnthropicKey: false,
+      now: NOW,
+    });
+
+    expect(result.status).toBe("done");
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "done",
+      unsupportedKind: null,
+      unsupportedMessage: null,
+    });
+  });
+
+  it("clears stale unsupported metadata on failRun and resume claim transitions", async () => {
+    const failed = createJob("FAIL").jobId;
+    handle.db
+      .update(jobs)
+      .set({ unsupportedKind: "fund", unsupportedMessage: "stale" })
+      .where(eq(jobs.id, failed))
+      .run();
+    const failingOptions = { hasAnthropicKey: true };
+    Object.defineProperty(failingOptions, "bundle", {
+      get() {
+        throw new Error("fixture fetch failed");
+      },
+    });
+
+    expect((await runJob(failed, mockPasses().passes, failingOptions)).status).toBe("error");
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, failed)).get()).toMatchObject({
+      status: "error",
+      unsupportedKind: null,
+      unsupportedMessage: null,
+    });
+
+    handle.db
+      .update(jobs)
+      .set({ unsupportedKind: "etf", unsupportedMessage: "stale" })
+      .where(eq(jobs.id, failed))
+      .run();
+    expect(claimJobForResume(failed, "error")).toBe(true);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, failed)).get()).toMatchObject({
+      status: "queued",
+      unsupportedKind: null,
+      unsupportedMessage: null,
+    });
+  });
+
+  it("does not let a stale-active expiry overwrite a concurrent unsupported terminal transition", () => {
+    const { jobId } = createJob("SPY");
+    const staleUpdatedAt = "2020-01-01T00:00:00.000Z";
+    handle.db.update(jobs).set({ updatedAt: staleUpdatedAt }).where(eq(jobs.id, jobId)).run();
+
+    const realUpdate = handle.db.update.bind(handle.db);
+    const updateSpy = vi.spyOn(
+      handle.db as unknown as { update: (table: unknown) => unknown },
+      "update",
+    );
+    updateSpy.mockImplementation((table: unknown) => {
+      const builder = realUpdate(table as typeof jobs);
+      const originalSet = builder.set.bind(builder);
+      builder.set = ((values: Record<string, unknown>) => {
+        const query = originalSet(values);
+        if (values.status === "error") {
+          const originalRun = query.run.bind(query);
+          query.run = (() => {
+            handle.sqlite
+              .prepare(
+                `UPDATE jobs
+                    SET status = 'unsupported', unsupportedKind = 'etf',
+                        unsupportedMessage = 'concurrent terminal transition',
+                        updatedAt = '2026-08-07T00:00:00.000Z'
+                  WHERE id = ?`,
+              )
+              .run(jobId);
+            return originalRun();
+          }) as typeof query.run;
+        }
+        return query;
+      }) as typeof builder.set;
+      return builder;
+    });
+
+    expect(getReusableActiveJobForSymbol("SPY", new Date("2026-08-07T00:00:00.000Z"), 1)).toBeNull();
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "unsupported",
+      unsupportedKind: "etf",
+      unsupportedMessage: "concurrent terminal transition",
+    });
+  });
+
+  it("reuses a stale row that a concurrent heartbeat refreshes before expiry CAS", () => {
+    const { jobId } = createJob("MSFT");
+    const staleUpdatedAt = "2020-01-01T00:00:00.000Z";
+    const refreshedAt = "2026-08-07T00:00:00.000Z";
+    handle.db.update(jobs).set({ updatedAt: staleUpdatedAt }).where(eq(jobs.id, jobId)).run();
+
+    const realUpdate = handle.db.update.bind(handle.db);
+    const updateSpy = vi.spyOn(
+      handle.db as unknown as { update: (table: unknown) => unknown },
+      "update",
+    );
+    updateSpy.mockImplementation((table: unknown) => {
+      const builder = realUpdate(table as typeof jobs);
+      const originalSet = builder.set.bind(builder);
+      builder.set = ((values: Record<string, unknown>) => {
+        const query = originalSet(values);
+        if (values.status === "error") {
+          const originalRun = query.run.bind(query);
+          query.run = (() => {
+            handle.sqlite.prepare("UPDATE jobs SET updatedAt = ? WHERE id = ?").run(refreshedAt, jobId);
+            return originalRun();
+          }) as typeof query.run;
+        }
+        return query;
+      }) as typeof builder.set;
+      return builder;
+    });
+
+    expect(
+      getReusableActiveJobForSymbol("MSFT", new Date("2026-08-07T00:00:01.000Z"), 60_000),
+    ).toEqual({ jobId, status: "queued", updatedAt: refreshedAt });
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.status).toBe("queued");
+  });
+});
 
 /* ------------------------------------------------------------------------ *
  * createJob
@@ -2138,7 +2424,8 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
 
     // 2) Resume that DEGRADES before the resume branch (no key): steps rewritten
     //    all-skipped, job finishes "done" — the step shape is now non-resumable.
-    claimJobForResume(jobId, afterFirst.status); // mirror the retry route's claim
+    expect(afterFirst.status).toBe("done");
+    claimJobForResume(jobId, "done"); // mirror the retry route's claim
     await runJob(jobId, mockPasses().passes, {
       bundle: fakeBundle("AAPL"),
       hasAnthropicKey: false,
@@ -2156,7 +2443,8 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
 
     // 3) Re-resume with a healthy judge: BOTH snapshots reused (analysts must
     //    NOT re-run), a real report is produced — nothing re-billed.
-    claimJobForResume(jobId, afterDegraded.status);
+    expect(afterDegraded.status).toBe("done");
+    claimJobForResume(jobId, "done");
     const healthy = mockPasses();
     const rebillGuard: PipelinePasses = {
       ...healthy.passes,

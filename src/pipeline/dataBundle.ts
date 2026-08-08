@@ -36,7 +36,6 @@ import {
   type FmpRawRow,
 } from "@/providers/fmp";
 import {
-  archivesUrl,
   createDbCachedEdgarTransport,
   createEdgarClient,
   findDocumentByType,
@@ -764,14 +763,18 @@ async function runExtraction(
         [documentUrl, idx.value.endpoint],
       );
     }
-    const exUrl = archivesUrl(cik, filing.accessionNumber, doc.filename);
-    const exDoc = await settle(field, edgar.fetchFilingDoc(exUrl, { asOf }));
+    const exDoc = await settle(
+      field,
+      edgar.fetchFilingDocument(cik, { ...filing, primaryDocument: doc.filename }, { asOf }),
+    );
     if (!exDoc.ok) {
+      const attempted = exDoc.gap.attemptedSources ?? [];
       return gapResult(field, `EX-13 exhibit fetch failed: ${exDoc.gap.reason}`, job.failSeverity, [
         documentUrl,
-        exUrl,
+        ...attempted,
       ]);
     }
+    const exUrl = exDoc.value.endpoint;
     const exRes = extractFromExhibit(exDoc.value.data, {
       section: err.exhibit.section,
       quotedTitles: err.exhibit.quotedTitles,
@@ -970,7 +973,6 @@ async function buildEdgarBundle(
     // ceiling.
     if (latestTenK.ok) {
       const filing = latestTenK.value.data;
-      const docUrl = edgar.filingDocUrl(cik, filing);
       const annualRiskJob: SectionJob =
         filing.form === "20-F"
           ? { member: "item1a", sectionName: "item1A", spec: { form: "20-F", item: "3D" }, failSeverity: "critical" }
@@ -982,9 +984,12 @@ async function buildEdgarBundle(
       progress(`EDGAR: extracting ${filing.form} Item ${annualRiskJob.spec.item} + Item ${annualMdnaJob.spec.item} (${filing.accessionNumber})`);
       const doc = await settle(
         `edgar.tenKDocument(${symbol})`,
-        edgar.fetchFilingDoc(docUrl, { asOf: filing.reportDate !== "" ? filing.reportDate : filing.filingDate }),
+        edgar.fetchFilingDocument(cik, filing, {
+          asOf: filing.reportDate !== "" ? filing.reportDate : filing.filingDate,
+        }),
       );
       if (doc.ok) {
+        const docUrl = doc.value.endpoint;
         const html = doc.value.data;
         const parsedDoc = parseDocument(html);
         const t0 = Date.now();
@@ -1023,8 +1028,19 @@ async function buildEdgarBundle(
           );
         }
       } else {
-        item1a = gapResult(`edgar.item1a(${symbol})`, `${filing.form} document fetch failed: ${doc.gap.reason}`, "critical", [docUrl]);
-        mdna = gapResult(`edgar.mdna(${symbol})`, `${filing.form} document fetch failed: ${doc.gap.reason}`, "critical", [docUrl]);
+        const attempted = doc.gap.attemptedSources;
+        item1a = gapResult(
+          `edgar.item1a(${symbol})`,
+          `${filing.form} document fetch failed: ${doc.gap.reason}`,
+          "critical",
+          attempted,
+        );
+        mdna = gapResult(
+          `edgar.mdna(${symbol})`,
+          `${filing.form} document fetch failed: ${doc.gap.reason}`,
+          "critical",
+          attempted,
+        );
       }
     } else {
       const reason = `no annual primary filing (10-K or 20-F) to extract from: ${latestTenK.gap.reason}`;
@@ -1035,13 +1051,15 @@ async function buildEdgarBundle(
     // 10-Q MD&A (Part I Item 2).
     if (latestTenQ.ok && latestTenQ.value.data.form === "10-Q") {
       const filing = latestTenQ.value.data;
-      const docUrl = edgar.filingDocUrl(cik, filing);
       progress(`EDGAR: extracting 10-Q MD&A (${filing.accessionNumber})`);
       const doc = await settle(
         `edgar.tenQDocument(${symbol})`,
-        edgar.fetchFilingDoc(docUrl, { asOf: filing.reportDate !== "" ? filing.reportDate : filing.filingDate }),
+        edgar.fetchFilingDocument(cik, filing, {
+          asOf: filing.reportDate !== "" ? filing.reportDate : filing.filingDate,
+        }),
       );
       if (doc.ok) {
+        const docUrl = doc.value.endpoint;
         tenQMdna = await runExtraction(
           edgar,
           cik,
@@ -1053,7 +1071,12 @@ async function buildEdgarBundle(
           symbol,
         );
       } else {
-        tenQMdna = gapResult(`edgar.tenQMdna(${symbol})`, `10-Q document fetch failed: ${doc.gap.reason}`, "warn", [docUrl]);
+        tenQMdna = gapResult(
+          `edgar.tenQMdna(${symbol})`,
+          `10-Q document fetch failed: ${doc.gap.reason}`,
+          "warn",
+          doc.gap.attemptedSources,
+        );
       }
     } else if (latestTenQ.ok) {
       tenQMdna = gapResult(

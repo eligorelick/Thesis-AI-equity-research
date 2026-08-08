@@ -509,6 +509,54 @@ const recentFilingsSchema = z.looseObject({
   acceptanceDateTime: z.array(z.string().nullable()).optional(),
 });
 
+const RECENT_FILING_PARALLEL_FIELDS = [
+  "filingDate",
+  "reportDate",
+  "form",
+  "primaryDocument",
+  "primaryDocDescription",
+  "isInlineXBRL",
+  "isXBRL",
+  "items",
+  "acceptanceDateTime",
+] as const;
+
+const ACCESSION_NUMBER = /^\d{10}-\d{2}-\d{6}$/;
+
+function isValidIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function filingMetadataProblem(cik: number | string, filing: EdgarFiling): string | null {
+  if (!ACCESSION_NUMBER.test(filing.accessionNumber)) {
+    return `malformed accession number "${filing.accessionNumber}"`;
+  }
+  if (!sameCik(cik, filing.accessionNumber.slice(0, 10))) {
+    return `accession ${filing.accessionNumber} is not owned by requested CIK ${padCik(cik)}`;
+  }
+  if (!isValidIsoDate(filing.filingDate)) {
+    return `invalid filing date "${filing.filingDate}"`;
+  }
+  const primaryDocument = filing.primaryDocument;
+  if (
+    primaryDocument.trim() === "" ||
+    primaryDocument === "." ||
+    primaryDocument === ".." ||
+    primaryDocument.includes("/") ||
+    primaryDocument.includes("\\")
+  ) {
+    return `unsafe primary document "${primaryDocument}"; expected a nonempty basename`;
+  }
+  return null;
+}
+
+/** Return a semantic problem for a successful filing-document body, if any. */
+export function filingDocumentBodyProblem(body: string): string | null {
+  return body.trim() === "" ? "filing document response was empty" : null;
+}
+
 const submissionsSchema = z.looseObject({
   cik: z.string(),
   name: z.string(),
@@ -748,6 +796,17 @@ export class EdgarClient {
     const d = parsed.data;
     const r = d.filings.recent;
     const n = r.accessionNumber.length;
+    for (const field of RECENT_FILING_PARALLEL_FIELDS) {
+      const values = r[field];
+      if (values !== undefined && values.length !== n) {
+        return this.gap(
+          `edgar.submissions(${cik})`,
+          `submissions parallel array ${field} had length ${values.length}; accessionNumber had length ${n}`,
+          [url],
+          "critical",
+        );
+      }
+    }
     const recentFilings: EdgarFiling[] = new Array<EdgarFiling>(n);
     for (let i = 0; i < n; i++) {
       const ix = r.isInlineXBRL?.[i];
@@ -815,6 +874,46 @@ export class EdgarClient {
     const res = await this.request(url, EDGAR_TTL.filing);
     if (!res.ok) return this.gap(`edgar.fetchFilingDoc(${url})`, `document HTTP ${res.status}`, [url]);
     return { ok: true, value: this.sourced(res.body, url, opts?.asOf ?? res.fetchedAt.slice(0, 10), res.fetchedAt, res.stale) };
+  }
+
+  /**
+   * Validate a submissions filing row before constructing or requesting its
+   * Archives URL. Provider metadata failures are data gaps, not exceptions.
+   */
+  async fetchFilingDocument(
+    cik: number | string,
+    filing: EdgarFiling,
+    opts?: { asOf?: string },
+  ): Promise<FetchResult<string>> {
+    let problem: string | null;
+    try {
+      problem = filingMetadataProblem(cik, filing);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      problem = `invalid filing metadata: ${reason}`;
+    }
+    if (problem !== null) {
+      return this.gap(
+        `edgar.fetchFilingDocument(${cik}, ${filing.accessionNumber})`,
+        problem,
+        [],
+        "critical",
+      );
+    }
+
+    const url = archivesUrl(cik, filing.accessionNumber, filing.primaryDocument);
+    const result = await this.fetchFilingDoc(url, opts);
+    if (!result.ok) return result;
+    const bodyProblem = filingDocumentBodyProblem(result.value.data);
+    if (bodyProblem !== null) {
+      return this.gap(
+        `edgar.fetchFilingDocument(${cik}, ${filing.accessionNumber})`,
+        bodyProblem,
+        [url],
+        "critical",
+      );
+    }
+    return result;
   }
 
   /**

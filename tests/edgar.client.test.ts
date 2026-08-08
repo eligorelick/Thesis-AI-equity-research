@@ -21,6 +21,7 @@ import {
   resolveEdgarUserAgent,
   createEdgarClient,
   dashAccession,
+  filingDocumentBodyProblem,
   findDocumentByType,
   indexHeadersUrl,
   isExhibitType,
@@ -28,6 +29,7 @@ import {
   parseIndexHeaders,
   stripAccessionDashes,
   unpadCik,
+  type EdgarFiling,
 } from "@/providers/edgar";
 
 const SAMPLES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "edgar");
@@ -171,6 +173,114 @@ describe("EdgarClient (fake transport)", () => {
     const result = await client.submissions(320193);
 
     expect(result.ok).toBe(false);
+  });
+
+  it.each([
+    "filingDate",
+    "reportDate",
+    "form",
+    "primaryDocument",
+    "primaryDocDescription",
+    "isInlineXBRL",
+    "isXBRL",
+    "items",
+    "acceptanceDateTime",
+  ])("submissions rejects unequal parallel arrays when %s is shorter", async (field) => {
+    const body = JSON.parse(sample("aapl_submissions_truncated.json")) as {
+      filings: { recent: Record<string, unknown[]> };
+    };
+    body.filings.recent[field] = body.filings.recent[field].slice(0, -1);
+    const { transport } = fakeTransport({
+      "submissions/CIK0000320193.json": { body: JSON.stringify(body) },
+    });
+    const client = new EdgarClient({ transport });
+
+    const result = await client.submissions(320193);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.gap.severity).toBe("critical");
+      expect(result.gap.reason).toMatch(/parallel array/i);
+      expect(result.gap.reason).toContain(field);
+    }
+  });
+
+  it.each([
+    ["malformed accession", { accessionNumber: "0000320193-26-00001" }, /malformed accession/i],
+    ["filing date", { filingDate: "2026-02-30" }, /invalid filing date/i],
+    ["primary document is empty", { primaryDocument: "" }, /unsafe primary document/i],
+    ["primary document is a path", { primaryDocument: "nested/annual.htm" }, /unsafe primary document/i],
+    ["primary document is a Windows path", { primaryDocument: "nested\\annual.htm" }, /unsafe primary document/i],
+    ["primary document is dot", { primaryDocument: "." }, /unsafe primary document/i],
+    ["primary document is dot-dot", { primaryDocument: ".." }, /unsafe primary document/i],
+    ["accession is owned by another CIK", { accessionNumber: "0000789019-26-000001" }, /not owned/i],
+  ])("fetchFilingDocument rejects $0 before transport", async (_label, override, reason) => {
+    const { transport, calls } = fakeTransport({});
+    const client = new EdgarClient({ transport });
+    const filing: EdgarFiling = {
+      accessionNumber: "0000320193-26-000001",
+      form: "10-K",
+      filingDate: "2026-03-01",
+      reportDate: "2025-12-31",
+      primaryDocument: "annual.htm",
+      ...override,
+    };
+
+    const result = await client.fetchFilingDocument(320193, filing);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.gap.severity).toBe("critical");
+      expect(result.gap.reason).toMatch(reason);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("fetchFilingDocument constructs the contained SEC Archives URL for valid metadata", async () => {
+    const { transport, calls } = fakeTransport({ "annual.htm": { body: "<html><body>Annual filing</body></html>" } });
+    const client = new EdgarClient({ transport });
+    const filing: EdgarFiling = {
+      accessionNumber: "0000320193-26-000001",
+      form: "10-K",
+      filingDate: "2026-03-01",
+      reportDate: "2025-12-31",
+      primaryDocument: "annual.htm",
+    };
+
+    const result = await client.fetchFilingDocument(320193, filing);
+
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(
+      "https://www.sec.gov/Archives/edgar/data/320193/000032019326000001/annual.htm",
+    );
+  });
+
+  it("filingDocumentBodyProblem rejects an empty 200 body without excluding valid text filings", () => {
+    expect(filingDocumentBodyProblem(" \r\n\t ")).toMatch(/empty/i);
+    expect(filingDocumentBodyProblem("<html><body>Annual filing</body></html>")).toBeNull();
+    expect(filingDocumentBodyProblem("<SEC-DOCUMENT>plain-text filing</SEC-DOCUMENT>")).toBeNull();
+  });
+
+  it("fetchFilingDocument turns an empty 200 body into a typed critical gap", async () => {
+    const { transport, calls } = fakeTransport({ "annual.htm": { body: " \n " } });
+    const client = new EdgarClient({ transport });
+    const filing: EdgarFiling = {
+      accessionNumber: "0000320193-26-000001",
+      form: "10-K",
+      filingDate: "2026-03-01",
+      reportDate: "2025-12-31",
+      primaryDocument: "annual.htm",
+    };
+
+    const result = await client.fetchFilingDocument(320193, filing);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.gap.severity).toBe("critical");
+      expect(result.gap.reason).toMatch(/empty/i);
+    }
+    expect(calls).toHaveLength(1);
   });
 
   it("companyFacts rejects a response for a different CIK", async () => {

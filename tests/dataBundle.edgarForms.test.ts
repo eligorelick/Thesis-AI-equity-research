@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Sourced } from "@/types/core";
-import type { EdgarFiling, EdgarSubmissions } from "@/providers/edgar";
-import { selectAnnualFiling, selectInterimFiling } from "@/pipeline/dataBundle";
+import {
+  createEdgarClient,
+  type EdgarFiling,
+  type EdgarSubmissions,
+  type EdgarTransport,
+  type EdgarTransportResponse,
+} from "@/providers/edgar";
+import { createFmpClient } from "@/providers/fmp";
+import { buildDataBundle, selectAnnualFiling, selectInterimFiling } from "@/pipeline/dataBundle";
 
 function filing(form: string): EdgarFiling {
   return {
@@ -65,5 +72,76 @@ describe("selectInterimFiling", () => {
     const result = selectInterimFiling(submissions(["6-K", "10-Q"]), "DUAL");
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.data.form).toBe("10-Q");
+  });
+});
+
+describe("buildDataBundle EDGAR filing boundary", () => {
+  it("contains a malformed selected filing as typed critical gaps without requesting its URL", async () => {
+    const calls: string[] = [];
+    const response = (body: string): EdgarTransportResponse => ({
+      status: 200,
+      body,
+      fetchedAt: "2026-07-06T00:00:00.000Z",
+      fromCache: false,
+      stale: false,
+    });
+    const submissionsBody = JSON.stringify({
+      cik: "0000000000",
+      name: "Thesis Example Systems",
+      sic: "7372",
+      sicDescription: "Prepackaged Software",
+      fiscalYearEnd: "1231",
+      stateOfIncorporation: "CA",
+      tickers: ["DEMO"],
+      exchanges: ["TEST"],
+      filings: {
+        files: [],
+        recent: {
+          accessionNumber: ["0000000000-26-000001"],
+          filingDate: ["2026-03-01"],
+          reportDate: ["2025-12-31"],
+          form: ["10-K"],
+          primaryDocument: ["../escape.htm"],
+        },
+      },
+    });
+    const transport: EdgarTransport = {
+      fetchText(url): Promise<EdgarTransportResponse> {
+        calls.push(url);
+        if (url.includes("company_tickers.json")) {
+          return Promise.resolve(response(JSON.stringify({ "0": { cik_str: 0, ticker: "DEMO", title: "Thesis Example Systems" } })));
+        }
+        if (url.includes("submissions/CIK0000000000.json")) return Promise.resolve(response(submissionsBody));
+        if (url.includes("companyfacts/CIK0000000000.json")) {
+          return Promise.resolve(response(JSON.stringify({ cik: 0, entityName: "Thesis Example Systems", facts: {} })));
+        }
+        throw new Error(`unexpected EDGAR transport call: ${url}`);
+      },
+    };
+    const noNetworkResponse = (): Promise<Response> =>
+      Promise.resolve(new Response("not available in test", { status: 404 }));
+
+    const bundle = await buildDataBundle("DEMO", {
+      now: () => new Date("2026-07-06T00:00:00.000Z"),
+      eodYears: 1,
+      fmp: createFmpClient({ apiKey: "" }),
+      edgar: createEdgarClient({ transport }),
+      fred: { fetchImpl: noNetworkResponse, retryDelaysMs: [], minRequestIntervalMs: 0 },
+      finnhub: { fetchImpl: noNetworkResponse, retryDelaysMs: [] },
+      finra: { fetchImpl: noNetworkResponse, retryDelaysMs: [], minRequestIntervalMs: 0 },
+    });
+
+    expect(bundle.edgar.latestTenK.ok).toBe(true);
+    expect(bundle.edgar.item1a.ok).toBe(false);
+    expect(bundle.edgar.mdna.ok).toBe(false);
+    if (!bundle.edgar.item1a.ok) {
+      expect(bundle.edgar.item1a.gap.severity).toBe("critical");
+      expect(bundle.edgar.item1a.gap.reason).toMatch(/unsafe primary document/i);
+    }
+    if (!bundle.edgar.mdna.ok) {
+      expect(bundle.edgar.mdna.gap.severity).toBe("critical");
+      expect(bundle.edgar.mdna.gap.reason).toMatch(/unsafe primary document/i);
+    }
+    expect(calls.some((url) => url.includes("Archives/edgar/data"))).toBe(false);
   });
 });

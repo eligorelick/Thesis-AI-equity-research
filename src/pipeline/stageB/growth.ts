@@ -15,6 +15,7 @@
  */
 
 import type { ManifestEntry } from "@/types/core";
+import { deriveFcf } from "@/pipeline/stageB/financialValues";
 
 // ---------------------------------------------------------------------------
 // Input interfaces — field names exactly as FMP returns them (the provider data contract §2.3)
@@ -323,10 +324,10 @@ export function computeGrowth(
   let fcfDerivedFromComponents = false;
   const fcfSeries: SeriesPoint[] = cf.map((r) => {
     if (isFiniteNumber(r.freeCashFlow)) return { date: r.date, value: r.freeCashFlow };
-    if (isFiniteNumber(r.operatingCashFlow) && isFiniteNumber(r.capitalExpenditure)) {
+    const derivedFcf = deriveFcf(r.operatingCashFlow, r.capitalExpenditure);
+    if (derivedFcf !== null) {
       fcfDerivedFromComponents = true;
-      // FMP capex is negative, so FCF = OCF + capex.
-      return { date: r.date, value: r.operatingCashFlow + r.capitalExpenditure };
+      return { date: r.date, value: derivedFcf };
     }
     return { date: r.date, value: null };
   });

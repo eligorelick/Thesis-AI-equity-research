@@ -320,9 +320,12 @@ describe("fcfRowsFromStatements", () => {
     expect(fcfRowsFromStatements(cashflow, income)[0].fcf).toBe(5000);
   });
 
-  it("treats missing capex as 0 in the OCF fallback (FCF = OCF)", () => {
+  it("maps derived FCF and conversion to null when capex is missing", () => {
     const cashflow: FmpCashFlowRow[] = [{ date: "2024-12-31", operatingCashFlow: 6000 }];
-    expect(fcfRowsFromStatements(cashflow, [])[0].fcf).toBe(6000);
+    const income: FmpIncomeStatementRow[] = [{ date: "2024-12-31", netIncome: 2500 }];
+    const out = fcfRowsFromStatements(cashflow, income);
+    expect(out[0].fcf).toBeNull();
+    expect(out[0].conversionPct).toBeNull();
   });
 
   it("maps FCF to null (not 0) when neither freeCashFlow nor operatingCashFlow is present", () => {

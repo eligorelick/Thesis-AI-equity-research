@@ -14,6 +14,7 @@
  */
 
 import type { ManifestEntry } from "@/types/core";
+import { deriveFcf } from "@/pipeline/stageB/financialValues";
 import {
   hasIrregularAnnualSpacing,
   isFiniteNumber,
@@ -277,9 +278,11 @@ export function computeCapital(
       let fcf: number | null = null;
       if (isFiniteNumber(r.freeCashFlow)) {
         fcf = r.freeCashFlow;
-      } else if (isFiniteNumber(r.operatingCashFlow) && isFiniteNumber(r.capitalExpenditure)) {
-        fcf = r.operatingCashFlow + r.capitalExpenditure; // capex negative
-        rowNotes.push("FCF derived as operatingCashFlow + capitalExpenditure");
+      } else {
+        fcf = deriveFcf(r.operatingCashFlow, r.capitalExpenditure);
+        if (fcf !== null) {
+          rowNotes.push("FCF derived as operatingCashFlow + capitalExpenditure");
+        }
       }
       const ni = isFiniteNumber(r.netIncome)
         ? r.netIncome

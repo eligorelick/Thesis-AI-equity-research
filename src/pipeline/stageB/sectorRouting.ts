@@ -28,6 +28,7 @@ import type {
   SectorOverlay,
   SectorRoute,
 } from "@/types/core";
+import { deriveFcf } from "@/pipeline/stageB/financialValues";
 
 // ---------------------------------------------------------------------------
 // House-rule constants (every one of these is annotated in returned notes)
@@ -141,8 +142,14 @@ function addMonthsUtc(ms: number, months: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + months, d.getUTCDate());
 }
 
-function isoDateFromMs(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
+function isoDateFromMs(ms: number): string | null {
+  if (!Number.isFinite(ms)) return null;
+  const date = new Date(ms);
+  return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null;
+}
+
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function normStr(v: string | null | undefined): string | null {
@@ -1009,22 +1016,30 @@ export function computeRunway(
   // ---- liquid assets
   let liquidAssets: number | null = null;
   let liquidAssetsBasis: RunwayResult["liquidAssetsBasis"] = null;
-  if (typeof balance.cashAndShortTermInvestments === "number") {
+  if (
+    isFiniteNumber(balance.cashAndShortTermInvestments) &&
+    balance.cashAndShortTermInvestments >= 0
+  ) {
     liquidAssets = balance.cashAndShortTermInvestments;
     liquidAssetsBasis = "cashAndShortTermInvestments";
-  } else if (balance.cashAndCashEquivalents !== null || balance.shortTermInvestments !== null) {
-    liquidAssets = (balance.cashAndCashEquivalents ?? 0) + (balance.shortTermInvestments ?? 0);
-    liquidAssetsBasis = "cash+shortTermInvestments";
-    if (balance.cashAndCashEquivalents === null) {
-      notes.push("cashAndCashEquivalents missing — treated as 0 in the liquidity sum.");
+  } else if (
+    isFiniteNumber(balance.cashAndCashEquivalents) &&
+    balance.cashAndCashEquivalents >= 0 &&
+    isFiniteNumber(balance.shortTermInvestments) &&
+    balance.shortTermInvestments >= 0
+  ) {
+    const componentSum = balance.cashAndCashEquivalents + balance.shortTermInvestments;
+    if (Number.isFinite(componentSum)) {
+      liquidAssets = componentSum;
+      liquidAssetsBasis = "cash+shortTermInvestments";
     }
-    if (balance.shortTermInvestments === null) {
-      notes.push("shortTermInvestments missing — treated as 0 in the liquidity sum.");
-    }
-  } else {
+  }
+  if (liquidAssets === null) {
     gaps.push({
       field: "runway.liquidAssets",
-      reason: "cashAndCashEquivalents, shortTermInvestments and cashAndShortTermInvestments all missing",
+      reason:
+        "cashAndShortTermInvestments unavailable/invalid and both cashAndCashEquivalents and " +
+        "shortTermInvestments were not finite non-negative values — combined liquidity suppressed; partial cash not used",
       severity: "warn",
       attemptedSources: ["fmp:/stable/balance-sheet-statement"],
     });
@@ -1040,25 +1055,65 @@ export function computeRunway(
   }
 
   const window: { date: string; fcf: number }[] = [];
+  const missingOperatingCashFlowDates: string[] = [];
+  const missingCapitalExpenditureDates: string[] = [];
+  const invalidDerivedFcfDates: string[] = [];
   for (const { row } of dated) {
     if (window.length >= BURN_WINDOW_MAX_QUARTERS) break;
     const ocf = row.operatingCashFlow;
     const capex = row.capitalExpenditure;
-    if (ocf === null) {
-      notes.push(`quarter ${row.date}: operatingCashFlow missing — excluded from the burn window.`);
+    const fcf = deriveFcf(ocf, capex);
+    if (fcf === null) {
+      if (!isFiniteNumber(ocf)) {
+        missingOperatingCashFlowDates.push(row.date);
+        notes.push(
+          `quarter ${row.date}: operatingCashFlow missing/non-finite — excluded from the burn window.`,
+        );
+      }
+      if (!isFiniteNumber(capex)) {
+        missingCapitalExpenditureDates.push(row.date);
+        notes.push(
+          `quarter ${row.date}: capitalExpenditure missing/non-finite — excluded from the burn window.`,
+        );
+      }
+      if (isFiniteNumber(ocf) && isFiniteNumber(capex)) {
+        invalidDerivedFcfDates.push(row.date);
+        notes.push(`quarter ${row.date}: derived FCF was non-finite — excluded from the burn window.`);
+      }
       continue;
     }
-    if (ocf === 0 && (capex === 0 || capex === null)) {
-      notes.push(
-        `quarter ${row.date}: operatingCashFlow and capitalExpenditure both 0 — treated as undisclosed ` +
-          "(FMP zero-for-undisclosed policy) and excluded from the burn window.",
-      );
-      continue;
-    }
-    if (capex === null) {
-      notes.push(`quarter ${row.date}: capitalExpenditure missing — treated as 0 for burn math.`);
-    }
-    window.push({ date: row.date, fcf: ocf + (capex ?? 0) });
+    window.push({ date: row.date, fcf });
+  }
+
+  if (missingOperatingCashFlowDates.length > 0) {
+    gaps.push({
+      field: "runway.operatingCashFlow",
+      reason:
+        `operatingCashFlow missing/non-finite for quarter(s) ${missingOperatingCashFlowDates.join(", ")} — ` +
+        "those rows were excluded from the burn window",
+      severity: "warn",
+      attemptedSources: ["fmp:/stable/cash-flow-statement?period=quarter"],
+    });
+  }
+  if (missingCapitalExpenditureDates.length > 0) {
+    gaps.push({
+      field: "runway.capitalExpenditure",
+      reason:
+        `capitalExpenditure missing/non-finite for quarter(s) ${missingCapitalExpenditureDates.join(", ")} — ` +
+        "those rows were excluded from the burn window",
+      severity: "warn",
+      attemptedSources: ["fmp:/stable/cash-flow-statement?period=quarter"],
+    });
+  }
+  if (invalidDerivedFcfDates.length > 0) {
+    gaps.push({
+      field: "runway.freeCashFlow",
+      reason:
+        `operatingCashFlow + capitalExpenditure was non-finite for quarter(s) ${invalidDerivedFcfDates.join(", ")} — ` +
+        "those rows were excluded from the burn window",
+      severity: "warn",
+      attemptedSources: ["fmp:/stable/cash-flow-statement?period=quarter"],
+    });
   }
 
   let burning: boolean | null = null;
@@ -1066,20 +1121,29 @@ export function computeRunway(
   let runwayQuarters: number | null = null;
   let estimatedExhaustionDate: string | null = null;
 
-  if (window.length === 0) {
+  if (
+    window.length === 0 &&
+    missingOperatingCashFlowDates.length === 0 &&
+    missingCapitalExpenditureDates.length === 0 &&
+    invalidDerivedFcfDates.length === 0
+  ) {
     gaps.push({
       field: "runway.avgQuarterlyBurn",
-      reason: "no usable quarterly cash-flow rows (operatingCashFlow missing or undisclosed on every row)",
+      reason: "no usable dated quarterly cash-flow rows provided",
       severity: "warn",
       attemptedSources: ["fmp:/stable/cash-flow-statement?period=quarter"],
     });
-  } else {
+  } else if (window.length > 0) {
     if (window.length < BURN_WINDOW_MAX_QUARTERS) {
       notes.push(
         `burn averaged over only ${window.length} quarter(s) — house rule prefers ${BURN_WINDOW_MAX_QUARTERS}.`,
       );
     }
-    const avgFcf = window.reduce((sum, w) => sum + w.fcf, 0) / window.length;
+    const fcfScale = window.reduce((scale, w) => Math.max(scale, Math.abs(w.fcf)), 0);
+    const avgFcf =
+      fcfScale === 0
+        ? 0
+        : (window.reduce((sum, w) => sum + w.fcf / fcfScale, 0) / window.length) * fcfScale;
     if (avgFcf >= 0) {
       burning = false;
       notes.push(
@@ -1090,14 +1154,29 @@ export function computeRunway(
       burning = true;
       avgQuarterlyBurn = -avgFcf;
       if (liquidAssets !== null) {
-        runwayQuarters = liquidAssets / avgQuarterlyBurn;
-        const balanceMs = parseIsoDateUtc(balance.date);
-        if (balanceMs === null) {
-          notes.push(`balance date "${balance.date}" unparseable — exhaustion date not estimated.`);
+        const computedRunwayQuarters = liquidAssets / avgQuarterlyBurn;
+        if (!Number.isFinite(computedRunwayQuarters)) {
+          gaps.push({
+            field: "runway.runwayQuarters",
+            reason:
+              "liquidAssets / avgQuarterlyBurn produced a non-finite result — runway and exhaustion date suppressed",
+            severity: "warn",
+          });
         } else {
-          estimatedExhaustionDate = isoDateFromMs(
-            balanceMs + runwayQuarters * DAYS_PER_QUARTER * MS_PER_DAY,
-          );
+          runwayQuarters = computedRunwayQuarters;
+          const balanceMs = parseIsoDateUtc(balance.date);
+          if (balanceMs === null) {
+            notes.push(`balance date "${balance.date}" unparseable — exhaustion date not estimated.`);
+          } else {
+            estimatedExhaustionDate = isoDateFromMs(
+              balanceMs + runwayQuarters * DAYS_PER_QUARTER * MS_PER_DAY,
+            );
+            if (estimatedExhaustionDate === null) {
+              notes.push(
+                "estimated exhaustion timestamp is outside the supported date range — exhaustion date not estimated.",
+              );
+            }
+          }
         }
       }
     }

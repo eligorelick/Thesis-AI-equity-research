@@ -18,6 +18,7 @@
  */
 
 import type { CompanyRoute, ManifestEntry, SectorRoute } from "@/types/core";
+import { deriveFcf } from "@/pipeline/stageB/financialValues";
 import { metricPolicy } from "@/pipeline/stageB/sectorRouting";
 import { linearRegressionSlope, yearsBetweenDates } from "@/pipeline/stageB/growth";
 
@@ -1308,11 +1309,7 @@ function deriveOwnHistory(
         : null,
     );
     const ttmNi = sum((r) => r.netIncome);
-    const ttmFcf = sum((r) =>
-      isNum(r.operatingCashFlow) && isNum(r.capitalExpenditure)
-        ? r.operatingCashFlow + r.capitalExpenditure // capex is negative in FMP
-        : null,
-    );
+    const ttmFcf = sum((r) => deriveFcf(r.operatingCashFlow, r.capitalExpenditure));
     const equity = qs[i].totalStockholdersEquity;
     let counted = false;
     const evVal = ev.enterpriseValue;
@@ -1423,10 +1420,7 @@ export function multiplesFramework(
   if (inc && !isNum(dAndA)) {
     gaps.push(gapEntry("valuation.multiples.ebitda", "depreciationAndAmortization missing — EBITDA (computed) unavailable", "info"));
   }
-  const fcf =
-    isNum(cf?.operatingCashFlow) && isNum(cf?.capitalExpenditure)
-      ? cf.operatingCashFlow + cf.capitalExpenditure // FMP capex is negative
-      : null;
+  const fcf = deriveFcf(cf?.operatingCashFlow, cf?.capitalExpenditure);
   const equity = bal?.totalStockholdersEquity ?? null;
   const tbv =
     isNum(equity) && isNum(bal?.goodwill) && isNum(bal?.intangibleAssets)

@@ -486,16 +486,113 @@ describe("computeRunway", () => {
     expect(r.notes.some((n) => n.includes("self-funding"))).toBe(true);
   });
 
-  it("liquidity fallback: sums cash + shortTermInvestments when combined field missing", () => {
+  it("suppresses combined liquidity and runway when short-term investments are missing", () => {
     const r = computeRunway(
       { date: "2026-03-31", cashAndCashEquivalents: 300_000_000, shortTermInvestments: null },
       goldenQuarters,
       [],
     );
-    expect(r.liquidAssets).toBe(300_000_000);
+    expect(r.liquidAssets).toBeNull();
+    expect(r.liquidAssetsBasis).toBeNull();
+    expect(r.liquidAssetsAsOf).toBeNull();
+    expect(r.runwayQuarters).toBeNull();
+    expect(r.gaps.filter((g) => g.field === "runway.liquidAssets")).toHaveLength(1);
+  });
+
+  it("uses a finite combined liquidity field even when separate components are absent", () => {
+    const r = computeRunway(
+      {
+        date: "2026-03-31",
+        cashAndCashEquivalents: null,
+        shortTermInvestments: null,
+        cashAndShortTermInvestments: 500_000_000,
+      },
+      goldenQuarters,
+      [],
+    );
+    expect(r.liquidAssets).toBe(500_000_000);
+    expect(r.liquidAssetsBasis).toBe("cashAndShortTermInvestments");
+    expect(r.runwayQuarters).toBe(10);
+    expect(r.gaps.some((g) => g.field === "runway.liquidAssets")).toBe(false);
+  });
+
+  it("falls back from an invalid combined field only when both components are finite", () => {
+    const r = computeRunway(
+      {
+        date: "2026-03-31",
+        cashAndCashEquivalents: 300_000_000,
+        shortTermInvestments: 200_000_000,
+        cashAndShortTermInvestments: Number.NaN,
+      },
+      goldenQuarters,
+      [],
+    );
+    expect(r.liquidAssets).toBe(500_000_000);
     expect(r.liquidAssetsBasis).toBe("cash+shortTermInvestments");
-    expect(r.notes.some((n) => n.includes("shortTermInvestments missing"))).toBe(true);
-    expect(r.runwayQuarters).toBe(6);
+    expect(r.runwayQuarters).toBe(10);
+  });
+
+  it("falls back from a negative combined field to non-negative finite components", () => {
+    const r = computeRunway(
+      {
+        date: "2026-03-31",
+        cashAndCashEquivalents: 300_000_000,
+        shortTermInvestments: 200_000_000,
+        cashAndShortTermInvestments: -1,
+      },
+      goldenQuarters,
+      [],
+    );
+    expect(r.liquidAssets).toBe(500_000_000);
+    expect(r.liquidAssetsBasis).toBe("cash+shortTermInvestments");
+    expect(r.runwayQuarters).toBe(10);
+  });
+
+  it("suppresses liquidity when either separate component is negative", () => {
+    const r = computeRunway(
+      {
+        date: "2026-03-31",
+        cashAndCashEquivalents: 300_000_000,
+        shortTermInvestments: -1,
+      },
+      goldenQuarters,
+      [],
+    );
+    expect(r.liquidAssets).toBeNull();
+    expect(r.runwayQuarters).toBeNull();
+    expect(r.gaps.filter((g) => g.field === "runway.liquidAssets")).toHaveLength(1);
+  });
+
+  it("preserves literal zero as valid combined liquidity", () => {
+    const r = computeRunway(
+      {
+        date: "2026-03-31",
+        cashAndCashEquivalents: null,
+        shortTermInvestments: null,
+        cashAndShortTermInvestments: 0,
+      },
+      goldenQuarters,
+      [],
+    );
+    expect(r.liquidAssets).toBe(0);
+    expect(r.liquidAssetsBasis).toBe("cashAndShortTermInvestments");
+    expect(r.runwayQuarters).toBe(0);
+    expect(r.gaps.some((g) => g.field === "runway.liquidAssets")).toBe(false);
+  });
+
+  it("suppresses a non-finite component liquidity sum", () => {
+    const r = computeRunway(
+      {
+        date: "2026-03-31",
+        cashAndCashEquivalents: Number.MAX_VALUE,
+        shortTermInvestments: Number.MAX_VALUE,
+      },
+      goldenQuarters,
+      [],
+    );
+    expect(r.liquidAssets).toBeNull();
+    expect(r.runwayQuarters).toBeNull();
+    expect(r.gaps.filter((g) => g.field === "runway.liquidAssets")).toHaveLength(1);
   });
 
   it("missing liquidity entirely -> gap, no throw, burn still computed", () => {
@@ -511,27 +608,150 @@ describe("computeRunway", () => {
     expect(r.runwayQuarters).toBeNull();
   });
 
-  it("skips all-zero quarters as undisclosed (FMP zero-for-undisclosed policy)", () => {
+  it("retains a finite zero OCF plus zero capex row as self-funding", () => {
     const r = computeRunway(
       goldenBalance,
-      [
-        { date: "2026-03-31", operatingCashFlow: 0, capitalExpenditure: 0 },
-        { date: "2025-12-31", operatingCashFlow: -50_000_000, capitalExpenditure: null },
-      ],
+      [{ date: "2026-03-31", operatingCashFlow: 0, capitalExpenditure: 0 }],
       [],
     );
     expect(r.burnWindowQuarters).toBe(1);
-    expect(r.burnWindowDates).toEqual(["2025-12-31"]);
-    expect(r.avgQuarterlyBurn).toBe(50_000_000);
-    expect(r.notes.some((n) => n.includes("undisclosed"))).toBe(true);
-    expect(r.notes.some((n) => n.includes("capitalExpenditure missing"))).toBe(true);
+    expect(r.burnWindowDates).toEqual(["2026-03-31"]);
+    expect(r.burning).toBe(false);
+    expect(r.avgQuarterlyBurn).toBeNull();
+    expect(r.runwayQuarters).toBeNull();
+    expect(r.notes.some((n) => n.includes("self-funding"))).toBe(true);
+    expect(r.gaps.some((g) => g.field === "runway.operatingCashFlow")).toBe(false);
+    expect(r.gaps.some((g) => g.field === "runway.capitalExpenditure")).toBe(false);
   });
 
-  it("no usable cash-flow rows -> gap + null burning", () => {
-    const r = computeRunway(goldenBalance, [{ date: "2026-03-31", operatingCashFlow: null, capitalExpenditure: null }], []);
+  it("missing capex suppresses burn and emits one precise input gap", () => {
+    const r = computeRunway(
+      goldenBalance,
+      [{ date: "2026-03-31", operatingCashFlow: -40_000_000, capitalExpenditure: null }],
+      [],
+    );
+    expect(r.burning).toBeNull();
+    expect(r.avgQuarterlyBurn).toBeNull();
+    expect(r.runwayQuarters).toBeNull();
+    expect(r.burnWindowQuarters).toBe(0);
+    expect(r.gaps.filter((g) => g.field === "runway.capitalExpenditure")).toHaveLength(1);
+    expect(r.gaps.some((g) => g.field === "runway.avgQuarterlyBurn")).toBe(false);
+  });
+
+  it("missing operating cash flow suppresses burn and emits one precise input gap", () => {
+    const r = computeRunway(
+      goldenBalance,
+      [{ date: "2026-03-31", operatingCashFlow: null, capitalExpenditure: -10_000_000 }],
+      [],
+    );
+    expect(r.burning).toBeNull();
+    expect(r.avgQuarterlyBurn).toBeNull();
+    expect(r.runwayQuarters).toBeNull();
+    expect(r.burnWindowQuarters).toBe(0);
+    expect(r.gaps.filter((g) => g.field === "runway.operatingCashFlow")).toHaveLength(1);
+    expect(r.gaps.some((g) => g.field === "runway.avgQuarterlyBurn")).toBe(false);
+  });
+
+  it("deduplicates repeated missing cash-flow inputs across the burn window", () => {
+    const r = computeRunway(
+      goldenBalance,
+      [
+        { date: "2026-03-31", operatingCashFlow: -40_000_000, capitalExpenditure: null },
+        { date: "2025-12-31", operatingCashFlow: -35_000_000, capitalExpenditure: null },
+      ],
+      [],
+    );
+    expect(r.gaps.filter((g) => g.field === "runway.capitalExpenditure")).toHaveLength(1);
+  });
+
+  it("computes 50M burn and 10-quarter runway from a complete FMP-sign pair", () => {
+    const r = computeRunway(
+      goldenBalance,
+      [{ date: "2026-03-31", operatingCashFlow: -40_000_000, capitalExpenditure: -10_000_000 }],
+      [],
+    );
+    expect(r.avgQuarterlyBurn).toBe(50_000_000);
+    expect(r.runwayQuarters).toBe(10);
+  });
+
+  it("averages finite FCF rows without overflowing the accumulator", () => {
+    const r = computeRunway(
+      {
+        date: "2026-03-31",
+        cashAndCashEquivalents: null,
+        shortTermInvestments: null,
+        cashAndShortTermInvestments: 500_000_000,
+      },
+      [
+        { date: "2026-03-31", operatingCashFlow: -Number.MAX_VALUE, capitalExpenditure: 0 },
+        { date: "2025-12-31", operatingCashFlow: -Number.MAX_VALUE, capitalExpenditure: 0 },
+      ],
+      [],
+    );
+    expect(r.avgQuarterlyBurn).toBe(Number.MAX_VALUE);
+    expect(Number.isFinite(r.avgQuarterlyBurn)).toBe(true);
+    expect(Number.isFinite(r.runwayQuarters)).toBe(true);
+    expect(r.notes.join(" ")).not.toMatch(/Infinity|NaN/);
+  });
+
+  it("averages multiple negative subnormal FCF rows without underflowing to zero", () => {
+    const r = computeRunway(
+      {
+        date: "2026-03-31",
+        cashAndCashEquivalents: null,
+        shortTermInvestments: null,
+        cashAndShortTermInvestments: 0,
+      },
+      [
+        { date: "2026-03-31", operatingCashFlow: -Number.MIN_VALUE, capitalExpenditure: 0 },
+        { date: "2025-12-31", operatingCashFlow: -Number.MIN_VALUE, capitalExpenditure: 0 },
+      ],
+      [],
+    );
+    expect(r.burning).toBe(true);
+    expect(r.avgQuarterlyBurn).toBe(Number.MIN_VALUE);
+    expect(r.runwayQuarters).toBe(0);
+  });
+
+  it("suppresses a non-finite runway result with one precise gap", () => {
+    const r = computeRunway(
+      {
+        date: "2026-03-31",
+        cashAndCashEquivalents: null,
+        shortTermInvestments: null,
+        cashAndShortTermInvestments: Number.MAX_VALUE,
+      },
+      [{ date: "2026-03-31", operatingCashFlow: -Number.MIN_VALUE, capitalExpenditure: 0 }],
+      [],
+    );
+    expect(r.burning).toBe(true);
+    expect(r.avgQuarterlyBurn).toBe(Number.MIN_VALUE);
+    expect(r.runwayQuarters).toBeNull();
+    expect(r.estimatedExhaustionDate).toBeNull();
+    expect(r.gaps.filter((g) => g.field === "runway.runwayQuarters")).toHaveLength(1);
+  });
+
+  it("omits an exhaustion date when a finite runway exceeds the supported Date range", () => {
+    const r = computeRunway(
+      {
+        date: "2026-03-31",
+        cashAndCashEquivalents: null,
+        shortTermInvestments: null,
+        cashAndShortTermInvestments: 1e308,
+      },
+      [{ date: "2026-03-31", operatingCashFlow: -1e300, capitalExpenditure: 0 }],
+      [],
+    );
+    expect(r.runwayQuarters).toBe(100_000_000);
+    expect(r.estimatedExhaustionDate).toBeNull();
+    expect(r.notes.some((n) => n.includes("supported date range"))).toBe(true);
+  });
+
+  it("uses the generic burn gap only when no quarterly cash-flow history exists", () => {
+    const r = computeRunway(goldenBalance, [], []);
     expect(r.burning).toBeNull();
     expect(r.burnWindowQuarters).toBe(0);
-    expect(r.gaps.some((g) => g.field === "runway.avgQuarterlyBurn")).toBe(true);
+    expect(r.gaps.filter((g) => g.field === "runway.avgQuarterlyBurn")).toHaveLength(1);
   });
 
   it("dilution gap paths: empty history and single point", () => {

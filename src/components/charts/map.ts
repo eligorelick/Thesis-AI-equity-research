@@ -14,6 +14,7 @@
 
 import type { DataBundle } from "@/pipeline/types";
 import type { ComputedMetrics } from "@/pipeline/compute";
+import { deriveFcf } from "@/pipeline/stageB/financialValues";
 import type { Report } from "@/report/schema";
 import type {
   FmpCashFlowRow,
@@ -222,10 +223,7 @@ export function fcfRowsFromStatements(
   return asc.map((r) => {
     const date = isoDay(r.date);
     const fcf =
-      num(r.freeCashFlow) ??
-      (num(r.operatingCashFlow) !== null
-        ? (num(r.operatingCashFlow) as number) + (num(r.capitalExpenditure) ?? 0)
-        : null);
+      num(r.freeCashFlow) ?? deriveFcf(r.operatingCashFlow, r.capitalExpenditure);
     const ni = netByDate.get(date) ?? null;
     const conversion =
       fcf !== null && ni !== null && ni !== 0 ? (fcf / ni) * 100 : null;

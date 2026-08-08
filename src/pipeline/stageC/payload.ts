@@ -33,6 +33,13 @@ import type { ValidationReport } from "@/pipeline/stageA/validate";
 import type { DegradationPlan } from "@/pipeline/stageB/sectorRouting";
 import type { TracedNumber } from "@/report/schema";
 import {
+  PROJECTION_PATH_ORDER,
+  SCORE_ASPECT_ORDER,
+  orderedProjectionSeries,
+  projectionCellPoint,
+  projectionPeriodRows,
+} from "@/report/surfaceManifest";
+import {
   canonicalizeTracedUnit,
   validateCitationRegistry,
   validateProvenanceRegistry,
@@ -500,7 +507,7 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
       { label: "COMPOSITE score", value: sc.composite.score, unit: "0-100", source: "computed.scores.composite", asOf: null },
       { label: "COMPOSITE grade", value: sc.composite.band, unit: "", source: "computed.scores.composite", asOf: null },
     ];
-    for (const key of Object.keys(sc.aspects) as (keyof typeof sc.aspects)[]) {
+    for (const key of SCORE_ASPECT_ORDER) {
       const a = sc.aspects[key];
       scoreFigures.push({
         label: `${key} score`,
@@ -521,10 +528,15 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
   if (computed.projections && computed.projections.series.length > 0) {
     const pr = computed.projections;
     const projFigures: PayloadFigureInput[] = [];
-    for (const s of pr.series) {
-      const w = s.weighted;
-      const bull = s.bull;
-      const bear = s.bear;
+    const projectionSeries = orderedProjectionSeries(pr.series);
+    for (const s of projectionSeries) {
+      const periodRows = projectionPeriodRows(s);
+      const pointsFor = (path: (typeof PROJECTION_PATH_ORDER)[number]) =>
+        periodRows.flatMap((row) => {
+          const point = projectionCellPoint(row, path, s.unit);
+          return point === null ? [] : [point];
+        });
+      const w = pointsFor("weighted");
       const at = (arr: typeof w, i: number) => arr[i];
       const y5 = w.length - 1;
       const idxs = [0, Math.min(2, y5), y5];
@@ -532,15 +544,22 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
         const pt = at(w, i);
         if (pt) projFigures.push({ label: `${s.metric} weighted ${pt.period}`, value: pt.value.value, unit: s.unit, currency: pt.value.currency, period: pt.period, source: `computed.projections.${s.metric}.weighted`, asOf: pt.value.asOf });
       }
-      const b5 = at(bull, y5);
-      const be5 = at(bear, y5);
+      const endpointRow = w[y5]
+        ? periodRows.find((row) => row.period === w[y5]!.period)
+        : undefined;
+      const b5 = endpointRow
+        ? projectionCellPoint(endpointRow, "bull", s.unit)
+        : null;
+      const be5 = endpointRow
+        ? projectionCellPoint(endpointRow, "bear", s.unit)
+        : null;
       if (b5) projFigures.push({ label: `${s.metric} bull ${b5.period}`, value: b5.value.value, unit: s.unit, currency: b5.value.currency, period: b5.period, source: `computed.projections.${s.metric}.bull`, asOf: b5.value.asOf });
       if (be5) projFigures.push({ label: `${s.metric} bear ${be5.period}`, value: be5.value.value, unit: s.unit, currency: be5.value.currency, period: be5.period, source: `computed.projections.${s.metric}.bear`, asOf: be5.value.asOf });
     }
     sections.push(payloadSection({
       title: `Weighted projections (computed — ${pr.horizonYears}y forward, prob-weighted ${pr.scenarioWeights.bull}/${pr.scenarioWeights.base}/${pr.scenarioWeights.bear} bull/base/bear; ESTIMATE, interpret — never restate as fact)`,
       figures: projFigures,
-      notes: pr.series[0]?.assumptions ?? [],
+      notes: projectionSeries[0]?.assumptions ?? [],
     }));
   } else if (computed.projections && computed.projections.notApplicableReason) {
     sections.push(payloadSection({
@@ -1202,16 +1221,19 @@ function attachProvenanceRegistry(
   // without exposing hundreds of duplicate rows in the prompt prefix.
   const projections = computed.projections;
   if (projections) {
-    const scenarios = ["historical", "bull", "base", "bear", "weighted"] as const;
-    for (const series of projections.series) {
-      for (const scenario of scenarios) {
-        for (const point of series[scenario]) {
-          registerStageBNumber(
-            projectionProvenanceId(series.metric, scenario, point.period),
-            point.value,
-            point.period,
-            projections.weightsVersion,
-          );
+    for (const series of orderedProjectionSeries(projections.series)) {
+      const periodRows = projectionPeriodRows(series);
+      for (const scenario of PROJECTION_PATH_ORDER) {
+        for (const row of periodRows) {
+          const point = projectionCellPoint(row, scenario, series.unit);
+          if (point !== null) {
+            registerStageBNumber(
+              projectionProvenanceId(series.metric, scenario, point.period),
+              point.value,
+              point.period,
+              projections.weightsVersion,
+            );
+          }
         }
       }
     }
@@ -1252,7 +1274,7 @@ function attachProvenanceRegistry(
   const scores = computed.scores;
   if (scores) {
     const takenIds = new Set(registry.map((record) => record.id));
-    for (const aspect of Object.keys(scores.aspects) as (keyof typeof scores.aspects)[]) {
+    for (const aspect of SCORE_ASPECT_ORDER) {
       for (const driver of scores.aspects[aspect].drivers) {
         if (takenIds.has(driver.source)) continue;
         const before = registry.length;

@@ -30,6 +30,11 @@ import { makeFmpCachedFetch } from "@/pipeline/dataBundle";
 import { createFmpClient, type FmpClient } from "@/providers/fmp";
 import { getLatestDoneReport } from "@/report/query";
 import { listRunRefsForSymbol, type RunRef } from "@/report/history";
+import {
+  gradeSurfaceEntries,
+  type GradeSurfaceKey,
+} from "@/report/surfaceManifest";
+import type { GradeStrip } from "@/report/schema";
 import { normalizeSymbol as normalizeTickerSymbol } from "@/symbol";
 import type { Grade } from "@/types/core";
 
@@ -39,11 +44,12 @@ import type { Grade } from "@/types/core";
 
 export type WatchlistEntry = WatchlistRow;
 
-/** The six graded sections of the verdict strip (the application contract §7.1). */
+/** The graded sections of the verdict strip (the application contract §7.1). */
 export interface WatchlistGrades {
   fundamentals: Grade;
   valuation: Grade;
   technicals: Grade;
+  balanceSheet?: Grade;
   quality: Grade;
   leadership: Grade;
   moat: Grade;
@@ -275,23 +281,13 @@ function loadReport(symbol: string, gaps: string[]): ReportEnrichment {
   }
 }
 
-/** Pull the six section grades out of a validated report's grade strip. */
-function extractGrades(strip: {
-  fundamentals: { grade: Grade };
-  valuation: { grade: Grade };
-  technicals: { grade: Grade };
-  quality: { grade: Grade };
-  leadership: { grade: Grade };
-  moat: { grade: Grade };
-}): WatchlistGrades {
-  return {
-    fundamentals: strip.fundamentals.grade,
-    valuation: strip.valuation.grade,
-    technicals: strip.technicals.grade,
-    quality: strip.quality.grade,
-    leadership: strip.leadership.grade,
-    moat: strip.moat.grade,
-  };
+/** Pull the present section grades out of a validated report's grade strip. */
+function extractGrades(strip: GradeStrip): WatchlistGrades {
+  const grades: Partial<Record<GradeSurfaceKey, Grade>> = {};
+  for (const { descriptor, block } of gradeSurfaceEntries(strip)) {
+    grades[descriptor.key] = block.grade;
+  }
+  return grades as WatchlistGrades;
 }
 
 /**

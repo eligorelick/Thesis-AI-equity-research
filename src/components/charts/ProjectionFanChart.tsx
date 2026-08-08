@@ -25,6 +25,13 @@ import {
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 
 import type { ProjectionSeries } from "@/report/schema";
+import {
+  PROJECTION_METRIC_BY_KEY,
+  PROJECTION_PATHS,
+  projectionCellPoint,
+  projectionPeriodRows,
+  type ProjectionPath,
+} from "@/report/surfaceManifest";
 
 const THEME = {
   border: "#1f2937",
@@ -41,13 +48,6 @@ const THEME = {
 const CHART_HEIGHT = 200;
 const AXIS_FONT = 10;
 const MONO = "ui-monospace, 'Cascadia Code', Consolas, monospace";
-
-const METRIC_LABEL: Record<ProjectionSeries["metric"], string> = {
-  revenue: "Revenue",
-  operatingMargin: "Operating margin",
-  fcf: "Free cash flow (FCFF)",
-  epsDiluted: "Diluted EPS",
-};
 
 /** Format a value by the series metric (compact currency, %, or plain). */
 function formatValue(metric: ProjectionSeries["metric"], v: number | null, digits = 2): string {
@@ -80,42 +80,54 @@ interface FanDatum {
 }
 
 function buildData(series: ProjectionSeries): { data: FanDatum[]; firstForward: string | null } {
-  const val = (pts: ProjectionSeries["historical"], i: number): number | null => pts[i]?.value.value ?? null;
-  const data: FanDatum[] = [];
-  for (const h of series.historical) {
-    data.push({ period: h.period, hist: h.value.value, band: null, base: null, weighted: null, bull: null, bear: null });
-  }
-  const firstForward = series.base[0]?.period ?? null;
+  const data = projectionPeriodRows(series).map((row): FanDatum => {
+    const value = (path: ProjectionPath): number | null =>
+      projectionCellPoint(row, path, series.unit)?.value.value ?? null;
+    const hist = value("historical");
+    const bull = value("bull");
+    const base = value("base");
+    const bear = value("bear");
+    const weighted = value("weighted");
+    const band: [number, number] | null = bull !== null && bear !== null
+      ? [Math.min(bull, bear), Math.max(bull, bear)]
+      : null;
+    return { period: row.period, hist, band, base, weighted, bull, bear };
+  }).filter((row) => row.hist !== null || row.bull !== null || row.base !== null
+    || row.bear !== null || row.weighted !== null);
+  const firstForwardIndex = data.findIndex((row) => row.bull !== null || row.base !== null
+    || row.bear !== null || row.weighted !== null);
+  const firstForward = firstForwardIndex < 0 ? null : data[firstForwardIndex]!.period;
   // Bridge: repeat the last historical point as the anchor of the forward lines
   // so the weighted/base lines connect visually to history.
-  const lastHist = series.historical.at(-1);
-  if (lastHist && series.base.length > 0) {
-    const anchor = data[data.length - 1];
-    anchor.base = lastHist.value.value;
-    anchor.weighted = lastHist.value.value;
-    anchor.band = [lastHist.value.value, lastHist.value.value];
-    anchor.bull = lastHist.value.value;
-    anchor.bear = lastHist.value.value;
+  let anchorIndex = -1;
+  for (let index = data.length - 1; index >= 0; index -= 1) {
+    if (data[index]!.hist !== null) {
+      anchorIndex = index;
+      break;
+    }
   }
-  for (let i = 0; i < series.base.length; i++) {
-    const bull = val(series.bull, i);
-    const bear = val(series.bear, i);
-    // Band is the scenario RANGE [min, max] — for FCF the higher-growth (bull)
-    // path can dip below the bear path near-term (more reinvestment), so we must
-    // not assume bull is the upper edge or the Area renders inverted/degenerate.
-    const band: [number, number] | null =
-      bull !== null && bear !== null ? [Math.min(bull, bear), Math.max(bull, bear)] : null;
-    data.push({
-      period: series.base[i].period,
-      hist: null,
-      band,
-      base: val(series.base, i),
-      weighted: val(series.weighted, i),
-      bull,
-      bear,
-    });
+  const anchor = anchorIndex < 0 ? null : data[anchorIndex]!;
+  if (anchor && firstForwardIndex >= 0 && anchorIndex < firstForwardIndex) {
+    const value = anchor.hist!;
+    anchor.base = value;
+    anchor.weighted = value;
+    anchor.band = [value, value];
+    anchor.bull = value;
+    anchor.bear = value;
   }
   return { data, firstForward };
+}
+
+function fanValue(data: FanDatum, path: ProjectionPath): number | null {
+  return path === "historical" ? data.hist : data[path];
+}
+
+function fanColor(path: ProjectionPath): string {
+  if (path === "bull") return THEME.pos;
+  if (path === "bear") return THEME.neg;
+  if (path === "weighted") return THEME.accent;
+  if (path === "base") return THEME.fgMuted;
+  return THEME.fg;
 }
 
 function tooltip(metric: ProjectionSeries["metric"]) {
@@ -123,19 +135,17 @@ function tooltip(metric: ProjectionSeries["metric"]) {
     if (!props.active || !props.payload || props.payload.length === 0) return null;
     const d = props.payload[0]?.payload as FanDatum | undefined;
     if (!d) return null;
-    const rows: { label: string; value: string; color: string }[] = [];
-    if (d.hist !== null) rows.push({ label: "actual", value: formatValue(metric, d.hist), color: THEME.fg });
-    if (d.bull !== null) rows.push({ label: "bull", value: formatValue(metric, d.bull), color: THEME.pos });
-    if (d.weighted !== null) rows.push({ label: "weighted", value: formatValue(metric, d.weighted), color: THEME.accent });
-    if (d.base !== null) rows.push({ label: "base", value: formatValue(metric, d.base), color: THEME.fgMuted });
-    if (d.bear !== null) rows.push({ label: "bear", value: formatValue(metric, d.bear), color: THEME.neg });
+    const rows = PROJECTION_PATHS.map((descriptor) => ({
+      descriptor,
+      value: fanValue(d, descriptor.key),
+    })).filter((row) => row.value !== null);
     return (
       <div style={{ background: THEME.bgRaised, border: `1px solid ${THEME.borderStrong}`, padding: "6px 8px", fontFamily: MONO, fontSize: 11 }}>
         <div style={{ color: THEME.fgFaint, marginBottom: 2 }}>{d.period}</div>
-        {rows.map((r) => (
-          <div key={r.label} style={{ color: r.color, display: "flex", gap: 8, justifyContent: "space-between" }}>
-            <span>{r.label}</span>
-            <span>{r.value}</span>
+        {rows.map((row) => (
+          <div key={row.descriptor.id} style={{ color: fanColor(row.descriptor.key), display: "flex", gap: 8, justifyContent: "space-between" }}>
+            <span>{row.descriptor.label.toLowerCase()}</span>
+            <span>{formatValue(metric, row.value)}</span>
           </div>
         ))}
       </div>
@@ -148,7 +158,7 @@ export function ProjectionFanChart({ series }: { series: ProjectionSeries }) {
   return (
     <div>
       <div className="mb-1 flex items-baseline justify-between">
-        <span className="text-[10px] uppercase tracking-[0.1em] text-faint">{METRIC_LABEL[series.metric]}</span>
+        <span className="text-[10px] uppercase tracking-[0.1em] text-faint">{PROJECTION_METRIC_BY_KEY[series.metric].label}</span>
         <span className="mono text-[9px] text-faint">{series.unit}</span>
       </div>
       <ResponsiveContainer width="100%" height={CHART_HEIGHT}>

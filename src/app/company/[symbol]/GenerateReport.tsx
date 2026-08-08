@@ -22,6 +22,12 @@ import Link from "next/link";
 
 import { Panel } from "@/components/ui";
 import { ExportButtons } from "@/components/report/ExportButtons";
+import {
+  GRADE_SURFACES,
+  GRADE_SURFACE_BY_KEY,
+  isCanonicalGradeSurfaceKeySequence,
+  type GradeSurfaceKey,
+} from "@/report/surfaceManifest";
 import { PIPELINE_STEPS, type StepProgress, type PipelineStep, type Grade } from "@/types/core";
 
 /* ------------------------------------------------------------------------ *
@@ -47,7 +53,7 @@ interface SnapshotEvent {
 }
 
 interface GradeStripCell {
-  key: string;
+  key: GradeSurfaceKey;
   grade: string;
   oneLineWhy: string;
 }
@@ -318,13 +324,24 @@ function decodeReportSummary(
     !Number.isFinite(summary.verificationRate) ||
     summary.verificationRate < 0 || summary.verificationRate > 1
   )) return null;
-  if (!Array.isArray(summary.grades) || !summary.grades.every((grade) => (
-    grade !== null &&
-    typeof grade === "object" &&
-    typeof grade.key === "string" &&
-    typeof grade.grade === "string" &&
-    typeof grade.oneLineWhy === "string"
-  ))) return null;
+  if (!Array.isArray(summary.grades)) return null;
+  const gradeKeys: string[] = [];
+  for (const grade of summary.grades) {
+    if (
+      grade === null ||
+      typeof grade !== "object" ||
+      typeof grade.key !== "string" ||
+      !Object.prototype.hasOwnProperty.call(GRADE_SURFACE_BY_KEY, grade.key) ||
+      typeof grade.grade !== "string" ||
+      typeof grade.oneLineWhy !== "string"
+    ) return null;
+    gradeKeys.push(grade.key);
+  }
+  if (gradeKeys.length === 0) {
+    if (!summary.dataOnly) return null;
+  } else if (!isCanonicalGradeSurfaceKeySequence(gradeKeys)) {
+    return null;
+  }
   return summary as ReportSummary;
 }
 
@@ -864,7 +881,7 @@ function dataOnlyBannerText(steps: StepProgress[]): string {
     : "LLM analysis did not run (no ANTHROPIC key, or the model could not be resolved). This is a data-only report — sections are ungraded; the fetched data + disclosed gaps are still available.";
 }
 
-function ReportReadyPanel({
+export function ReportReadyPanel({
   summary,
   dataOnly,
   totalCost,
@@ -927,13 +944,19 @@ function ReportReadyPanel({
 
           {/* grade strip */}
           {summary.grades.length > 0 ? (
-            <div className="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-6">
+            <div className={`mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3 ${
+              summary.grades.length === GRADE_SURFACES.length
+                ? "lg:grid-cols-7"
+                : "lg:grid-cols-6"
+            }`}>
               {summary.grades.map((g) => {
                 const gr = asGrade(g.grade);
                 const color = gr ? `var(--grade-${gr.toLowerCase()})` : "var(--color-faint)";
                 return (
                   <div key={g.key} className="flex flex-col gap-1 border border-edge px-2 py-1.5">
-                    <div className="text-[9px] uppercase tracking-[0.1em] text-faint">{g.key}</div>
+                    <div className="text-[9px] uppercase tracking-[0.1em] text-faint">
+                      {GRADE_SURFACE_BY_KEY[g.key].label}
+                    </div>
                     <div className="flex items-center gap-1.5">
                       <span
                         className="mono inline-flex h-5 w-5 items-center justify-center border text-[12px] font-semibold leading-none"

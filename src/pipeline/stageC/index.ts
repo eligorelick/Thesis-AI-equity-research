@@ -41,6 +41,7 @@ import type {
   VerificationLogEntry,
 } from "@/report/schema";
 import { ReportSchema } from "@/report/schema";
+import { PROJECTION_PATH_ORDER } from "@/report/surfaceManifest";
 import {
   runPass as providerRunPass,
   runPassStreaming as providerRunPassStreaming,
@@ -306,9 +307,8 @@ function bindDeterministicReportProvenance(
   };
 
   if (report.projections) {
-    const scenarios = ["historical", "bull", "base", "bear", "weighted"] as const;
     for (const series of report.projections.series) {
-      for (const scenario of scenarios) {
+      for (const scenario of PROJECTION_PATH_ORDER) {
         for (const point of series[scenario]) {
           bind(
             point.value,

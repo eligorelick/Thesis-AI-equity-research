@@ -43,7 +43,6 @@ import type {
   Projections,
   Quality,
   Report,
-  ScoreAspect,
   Scoring,
   SourcedClaim,
   FairValue,
@@ -60,6 +59,13 @@ import {
   roundedDisplayedCostTotal,
 } from "@/report/format";
 import type { Grade } from "@/types/core";
+import {
+  EXECUTIVE_EVIDENCE_GROUPS,
+  SCORE_SURFACES,
+  SCORE_SURFACE_BY_KEY,
+  gradeSurfaceEntries,
+  orderedProjectionSeries,
+} from "@/report/surfaceManifest";
 
 import { SensitivityHeatmap } from "@/components/charts/SensitivityHeatmap";
 import { ProjectionFanChart } from "@/components/charts/lazy";
@@ -144,29 +150,6 @@ function SubBlock({
  * §7.1 Verdict header + grade strip
  * ======================================================================== */
 
-export const GRADE_STRIP_KEYS = [
-  { key: "fundamentals", label: "Fundamentals" },
-  { key: "valuation", label: "Valuation" },
-  { key: "technicals", label: "Technicals" },
-  { key: "quality", label: "Quality / Red-Flags" },
-  { key: "leadership", label: "Leadership" },
-  { key: "moat", label: "Moat" },
-] as const satisfies ReadonlyArray<{
-  key: keyof Verdict["gradeStrip"];
-  label: string;
-}>;
-
-/** Maps a grade-strip key to the section anchor it deep-links to. */
-export const GRADE_TO_SECTION: Record<keyof Verdict["gradeStrip"], string> = {
-  fundamentals: "fundamentals",
-  valuation: "valuation",
-  technicals: "technicals",
-  quality: "quality",
-  leadership: "leadership",
-  moat: "competitive",
-  balanceSheet: "balanceSheet",
-};
-
 export function VerdictHeader({ verdict }: { verdict: Verdict }) {
   return (
     <div className="border border-edge-strong bg-panel">
@@ -194,23 +177,23 @@ export function GradeStripBar({
   gradeStrip: Verdict["gradeStrip"];
   compact?: boolean;
 }) {
+  const entries = gradeSurfaceEntries(gradeStrip);
   return (
     <div
-      className={`grid grid-cols-3 gap-1.5 lg:grid-cols-6 ${compact ? "" : ""}`}
+      className={`grid grid-cols-3 gap-1.5 ${entries.length === 7 ? "lg:grid-cols-7" : "lg:grid-cols-6"} ${compact ? "" : ""}`}
     >
-      {GRADE_STRIP_KEYS.map(({ key, label }) => {
-        const block = gradeStrip[key];
-        const anchor = sectionAnchorId(GRADE_TO_SECTION[key]);
+      {entries.map(({ descriptor, block }) => {
+        const anchor = sectionAnchorId(descriptor.sectionKey);
         return (
           <a
-            key={key}
+            key={descriptor.id}
             href={`#${anchor}`}
             className="group flex flex-col gap-1 border border-edge bg-panel px-2 py-1.5 transition-colors hover:border-accent/50 hover:bg-raised"
             title={block.oneLineWhy}
           >
             <div className="flex items-center justify-between gap-1">
               <span className="text-[9px] uppercase tracking-[0.09em] text-faint group-hover:text-muted">
-                {label}
+                {descriptor.label}
               </span>
               <GradeChip grade={block.grade} />
             </div>
@@ -230,16 +213,6 @@ export function GradeStripBar({
  * §7.1b Composite scorecard (deterministic 0–100 per aspect + composite)
  * ======================================================================== */
 
-const SCORE_ASPECTS: { key: ScoreAspect; label: string }[] = [
-  { key: "fundamentals", label: "Fundamentals" },
-  { key: "valuation", label: "Valuation" },
-  { key: "quality", label: "Quality" },
-  { key: "balanceSheet", label: "Balance Sheet" },
-  { key: "moat", label: "Moat" },
-  { key: "leadership", label: "Leadership" },
-  { key: "technicals", label: "Technicals" },
-];
-
 /**
  * The deterministic scorecard: the weighted composite (big) plus a clickable
  * 0–100 score pill per aspect, each deep-linking to its section. Sub-100 data
@@ -256,7 +229,9 @@ export function CompositeScorecard({ scores }: { scores: Scoring }) {
       <div className="flex flex-col gap-3 px-3 py-3 lg:flex-row lg:items-center">
         <div className="flex shrink-0 items-center gap-3 border-b border-edge pb-3 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4">
           <div className="flex flex-col">
-            <span className="text-[9px] uppercase tracking-[0.1em] text-faint">composite</span>
+            <span className="text-[9px] uppercase tracking-[0.1em] text-faint">
+              {SCORE_SURFACE_BY_KEY.composite.label.toLowerCase()}
+            </span>
             <span className="mono text-[30px] leading-none text-fg">
               {c.score === null ? "n/a" : Math.round(c.score)}
             </span>
@@ -264,16 +239,17 @@ export function CompositeScorecard({ scores }: { scores: Scoring }) {
           {c.band && <GradeChip grade={c.band} />}
         </div>
         <div className="grid flex-1 grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-7">
-          {SCORE_ASPECTS.map(({ key, label }) => {
-            const a = scores.aspects[key];
+          {SCORE_SURFACES.map((descriptor) => {
+            if (descriptor.kind !== "aspect") return null;
+            const a = scores.aspects[descriptor.key];
             return (
               <a
-                key={key}
-                href={`#${sectionAnchorId(GRADE_TO_SECTION[key])}`}
+                key={descriptor.id}
+                href={`#${sectionAnchorId(descriptor.sectionKey)}`}
                 className="flex flex-col gap-1 border border-edge bg-raised px-2 py-1.5 transition-colors hover:border-accent/50"
                 title={a.notApplicableReason ?? a.note}
               >
-                <span className="text-[9px] uppercase tracking-[0.09em] text-faint">{label}</span>
+                <span className="text-[9px] uppercase tracking-[0.09em] text-faint">{descriptor.label}</span>
                 <div className="flex items-center justify-between gap-1">
                   <ScorePill score={a.score} band={a.band} />
                   {a.score !== null && a.dataCompleteness < 1 && (
@@ -337,7 +313,8 @@ export function ProjectionsSection({
     );
   }
   const weights = projections.scenarioWeights;
-  const disclosures = projections.series.flatMap((s) => s.disclosures);
+  const series = orderedProjectionSeries(projections.series);
+  const disclosures = series.flatMap((s) => s.disclosures);
   return (
     <SectionFrame
       id="projections"
@@ -351,16 +328,16 @@ export function ProjectionsSection({
       }
     >
       <div className="grid gap-4 lg:grid-cols-2">
-        {projections.series.map((s) => (
-          <div key={s.metric} className="border border-edge bg-bg p-2">
+        {series.map((s, index) => (
+          <div key={`${s.metric}:${index}`} className="border border-edge bg-bg p-2">
             <ProjectionFanChart series={s} />
           </div>
         ))}
       </div>
-      {projections.series[0] && projections.series[0].assumptions.length > 0 && (
+      {series[0] && series[0].assumptions.length > 0 && (
         <SubBlock label="method & assumptions">
           <ul className="flex flex-col gap-0.5">
-            {projections.series[0].assumptions.map((a, i) => (
+            {series[0].assumptions.map((a, i) => (
               <li key={i} className="text-[11px] leading-snug text-muted">· {a}</li>
             ))}
           </ul>
@@ -1072,13 +1049,6 @@ export function TechnicalsSection({
  * ======================================================================== */
 
 function ExecutiveCard({ exec }: { exec: Executive }) {
-  const evidenceGroups: Array<{ label: string; claims?: readonly SourcedClaim[] }> = [
-    { label: "guidance vs actuals", claims: exec.evidence.guidanceVsActuals },
-    { label: "capital allocation", claims: exec.evidence.capitalAllocation },
-    { label: "insider activity", claims: exec.evidence.insiderActivity },
-    { label: "compensation", claims: exec.evidence.compensation },
-  ].filter((g) => g.claims && g.claims.length > 0);
-
   return (
     <div className="flex flex-col border border-edge bg-raised">
       <div className="flex items-center justify-between gap-2 border-b border-edge px-2.5 py-1.5">
@@ -1110,9 +1080,12 @@ function ExecutiveCard({ exec }: { exec: Executive }) {
       </div>
       <div className="flex flex-col gap-2 px-2.5 py-2">
         <ClaimList claims={exec.reasoning} />
-        {evidenceGroups.map((g) => (
-          <SubBlock key={g.label} label={g.label}>
-            <ClaimList claims={g.claims ?? []} />
+        {EXECUTIVE_EVIDENCE_GROUPS.map((descriptor) => ({
+          descriptor,
+          claims: exec.evidence[descriptor.key],
+        })).filter((group) => group.claims && group.claims.length > 0).map((group) => (
+          <SubBlock key={group.descriptor.id} label={group.descriptor.label.toLowerCase()}>
+            <ClaimList claims={group.claims ?? []} />
           </SubBlock>
         ))}
       </div>

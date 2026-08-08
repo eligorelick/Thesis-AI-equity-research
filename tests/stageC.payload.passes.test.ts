@@ -24,6 +24,7 @@ import {
   serializePayloadForPrompt,
   payloadFingerprint,
   fnv1a32,
+  projectionProvenanceId,
   truncateWithDisclosure,
   provenanceTag,
   PAYLOAD_BUDGETS,
@@ -443,6 +444,167 @@ describe("payload determinism + provenance", () => {
     const b = buildInputs();
     expect(payloadFingerprint(a.payload)).toBe(payloadFingerprint(b.payload));
     expect(payloadFingerprint(a.payload).startsWith(`${PAYLOAD_VERSION}:`)).toBe(true);
+  });
+
+  it("pins the complete pre-manifest Stage C serialized payload, registries, and finance order byte-for-byte", () => {
+    const { computed, payload } = buildInputs();
+    const paths = ["historical", "bull", "base", "bear", "weighted"] as const;
+    const prompt = serializePayloadForPrompt(payload);
+    const computedFigureLabelMatrix = payload.computed.map((section) =>
+      section.figures.map((figure) => figure.label));
+    const projectionPathPeriodMatrix = computed.projections.series.flatMap((series) =>
+      paths.map((path) => ({
+        metric: series.metric,
+        path,
+        periods: series[path].map((point) => point.period),
+      })));
+    expect(fnv1a32(JSON.stringify(projectionPathPeriodMatrix))).toBe("45ce96a4");
+    const finance = {
+      scores: computed.scores,
+      projections: computed.projections,
+      valuation: computed.valuation,
+      fairValue: computed.fairValue,
+      scenarioTargets: computed.scenarioTargets,
+    };
+    expect({
+      fingerprint: payloadFingerprint(payload),
+      promptBytes: Buffer.byteLength(prompt, "utf8"),
+      provenanceCount: (payload.provenanceRegistry ?? []).length,
+      provenanceHash: fnv1a32(JSON.stringify(payload.provenanceRegistry ?? [])),
+      provenanceIdsHash: fnv1a32(JSON.stringify(
+        (payload.provenanceRegistry ?? []).map((entry) => entry.id),
+      )),
+      citationCount: (payload.citationRegistry ?? []).length,
+      citationHash: fnv1a32(JSON.stringify(payload.citationRegistry ?? [])),
+      computedFigureLabelHash: fnv1a32(JSON.stringify(computedFigureLabelMatrix)),
+      projectionPathPeriodHash: fnv1a32(JSON.stringify(projectionPathPeriodMatrix)),
+      financeHash: fnv1a32(JSON.stringify(finance)),
+    }).toEqual({
+      fingerprint: "1.3.0:4fd05db1",
+      promptBytes: 82_306,
+      provenanceCount: 306,
+      provenanceHash: "e02408ee",
+      provenanceIdsHash: "1e316594",
+      citationCount: 11,
+      citationHash: "7ebe5276",
+      computedFigureLabelHash: "2162c1ed",
+      projectionPathPeriodHash: "45ce96a4",
+      financeHash: "b421c36e",
+    });
+  });
+
+  it("uses canonical manifest orders in the real Stage C adapter despite reversed input insertion order", () => {
+    const { bundle, computed } = buildInputs();
+    const aspects = [
+      "fundamentals", "valuation", "quality", "balanceSheet",
+      "moat", "leadership", "technicals",
+    ] as const;
+    const metrics = ["revenue", "operatingMargin", "fcf", "epsDiluted"] as const;
+    const paths = ["historical", "bull", "base", "bear", "weighted"] as const;
+    computed.scores!.aspects = Object.fromEntries(
+      Object.entries(computed.scores!.aspects).reverse(),
+    ) as typeof computed.scores.aspects;
+    computed.scores!.composite.weights = Object.fromEntries(
+      Object.entries(computed.scores!.composite.weights).reverse(),
+    ) as typeof computed.scores.composite.weights;
+    computed.projections.series.reverse();
+    for (const series of computed.projections.series) {
+      for (const path of paths) series[path].reverse();
+    }
+    const reversedInputBytes = JSON.stringify(computed);
+    const canonical = buildInputs();
+    const canonicalPayload = canonical.payload;
+
+    const validation = validateBundle(bundle, { now: new Date("2026-07-06T00:00:00Z") });
+    const payload = pipelinePasses.assembleContextPayload(bundle, computed, validation);
+    expect(JSON.stringify(computed)).toBe(reversedInputBytes);
+    expect(serializePayloadForPrompt(payload)).toBe(serializePayloadForPrompt(canonicalPayload));
+    expect(payload.provenanceRegistry).toEqual(canonicalPayload.provenanceRegistry);
+    expect(payload.citationRegistry).toEqual(canonicalPayload.citationRegistry);
+    const scoreSection = payload.computed.find((section) =>
+      section.title.startsWith("Deterministic aspect scores"));
+    expect(scoreSection?.figures.slice(2).map((figure) => figure.label)).toEqual(
+      aspects.map((aspect) => `${aspect} score`),
+    );
+
+    const driverIds = aspects.flatMap((aspect) =>
+      canonical.computed.scores!.aspects[aspect].drivers.map((driver) => driver.source));
+    const driverIdSet = new Set(driverIds);
+    expect((payload.provenanceRegistry ?? [])
+      .map((entry) => entry.id)
+      .filter((id) => driverIdSet.has(id))).toEqual(driverIds);
+
+    const projectionIds = metrics.flatMap((metric) => {
+      const series = canonical.computed.projections.series.find(
+        (candidate) => candidate.metric === metric,
+      )!;
+      return paths.flatMap((path) =>
+        series[path].map((point) => projectionProvenanceId(metric, path, point.period)));
+    });
+    const projectionIdSet = new Set(projectionIds);
+    expect((payload.provenanceRegistry ?? [])
+      .map((entry) => entry.id)
+      .filter((id) => projectionIdSet.has(id))).toEqual(projectionIds);
+  });
+
+  it("joins sampled bull and bear projection figures to the weighted endpoint period and fails closed on ambiguity", () => {
+    const { bundle, computed } = buildInputs();
+    const revenue = computed.projections.series.find((series) => series.metric === "revenue")!;
+    const endpointPeriod = revenue.weighted.at(-1)!.period;
+    const endpointBull = revenue.bull.find((point) => point.period === endpointPeriod)!;
+    endpointBull.value.value = 91_001;
+    const rolledBull = structuredClone(endpointBull);
+    rolledBull.period = "FY2099";
+    rolledBull.value.period = "FY2099";
+    rolledBull.value.value = 99_999;
+    revenue.bull = [...revenue.bull.slice(1), rolledBull];
+
+    const endpointBear = revenue.bear.find((point) => point.period === endpointPeriod)!;
+    revenue.bear.push(structuredClone(endpointBear));
+
+    const margin = computed.projections.series.find(
+      (series) => series.metric === "operatingMargin",
+    )!;
+    margin.bull.find((point) => point.period === endpointPeriod)!.value.period = "FY2098";
+    const inputBytes = JSON.stringify(computed);
+    const validation = validateBundle(bundle, { now: new Date("2026-07-06T00:00:00Z") });
+
+    const payload = pipelinePasses.assembleContextPayload(bundle, computed, validation);
+    expect(JSON.stringify(computed)).toBe(inputBytes);
+    const projectionSection = payload.computed.find((section) =>
+      section.title.startsWith("Weighted projections"))!;
+    const bullFigures = projectionSection.figures.filter((figure) =>
+      figure.label.startsWith("revenue bull "));
+    expect(bullFigures).toEqual([
+      expect.objectContaining({
+        label: `revenue bull ${endpointPeriod}`,
+        value: 91_001,
+        period: endpointPeriod,
+      }),
+    ]);
+    expect(projectionSection.figures).not.toContainEqual(
+      expect.objectContaining({ label: "revenue bull FY2099" }),
+    );
+    expect(projectionSection.figures.some((figure) =>
+      figure.label.startsWith("revenue bear "))).toBe(false);
+    expect(projectionSection.figures.some((figure) =>
+      figure.label.startsWith("operatingMargin bull "))).toBe(false);
+
+    const registryIds = new Set(
+      (payload.provenanceRegistry ?? []).map((entry) => entry.id),
+    );
+    expect(registryIds).toContain(
+      projectionProvenanceId("revenue", "bull", endpointPeriod),
+    );
+    expect(registryIds).toContain(
+      projectionProvenanceId("revenue", "bull", "FY2099"),
+    );
+    expect(registryIds).not.toContain(
+      projectionProvenanceId("revenue", "bear", endpointPeriod),
+    );
+    expect(registryIds).not.toContain(
+      projectionProvenanceId("operatingMargin", "bull", endpointPeriod),
+    );
   });
 
   it("emits a deterministic registry with unique semantic IDs", () => {
@@ -1257,6 +1419,7 @@ describe("final assembled report verification", () => {
   it("verifies the complete report after deterministic Stage B values are injected", async () => {
     const bundle = fixtureBundle();
     const computed = runStageB(bundle);
+    const computedBytes = JSON.stringify(computed);
     const validation = validateBundle(bundle, { now: new Date("2026-07-06T00:00:00Z") });
     const payload = pipelinePasses.assembleContextPayload(bundle, computed, validation);
 
@@ -1273,6 +1436,30 @@ describe("final assembled report verification", () => {
     expect(result.coverage?.numeric.total).toBe(numbers.length);
     expect(report.meta.provenanceCoverage).toEqual(result.coverage);
     expect(report.appendix.provenanceCoverage).toEqual(result.coverage);
+    expect(JSON.stringify(computed)).toBe(computedBytes);
+
+    const projectionMetrics = ["revenue", "operatingMargin", "fcf", "epsDiluted"] as const;
+    const projectionPaths = ["historical", "bull", "base", "bear", "weighted"] as const;
+    expect(report.projections?.series.map((series) => series.metric)).toEqual(projectionMetrics);
+    for (const metric of projectionMetrics) {
+      const inputSeries = computed.projections.series.find(
+        (series) => series.metric === metric,
+      )!;
+      const persistedSeries = report.projections!.series.find(
+        (series) => series.metric === metric,
+      )!;
+      for (const path of projectionPaths) {
+        expect(persistedSeries[path]).toHaveLength(inputSeries[path].length);
+        expect(persistedSeries[path].map((point) => point.value.source)).toEqual(
+          inputSeries[path].map((point) =>
+            projectionProvenanceId(metric, path, point.period)),
+        );
+        expect(persistedSeries[path].map((point) => point.value.sourceId)).toEqual(
+          inputSeries[path].map((point) =>
+            projectionProvenanceId(metric, path, point.period)),
+        );
+      }
+    }
 
     // The deterministic aspect-score DRIVERS are pipeline-COMPUTED TracedNumbers
     // (source "computed.scores.<aspect>.<signal>"); they are registered in the

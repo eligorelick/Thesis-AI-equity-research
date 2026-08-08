@@ -24,6 +24,11 @@ import { reports, type ReportRow } from "@/db/schema";
 import { parseStoredReportWithSafety } from "@/report/legacyEntitySafety";
 import type { Report } from "@/report/schema";
 import {
+  GRADE_SURFACE_ORDER,
+  gradeSurfaceEntries,
+  type GradeSurfaceKey,
+} from "@/report/surfaceManifest";
+import {
   canonicalEntitySymbol,
   normalizeSymbol,
   sameEntitySymbol,
@@ -34,17 +39,9 @@ import type { Grade } from "@/types/core";
  * Grade extraction — one compact strip summary per graded section.
  * ------------------------------------------------------------------------ */
 
-/** The six graded sections of the strip, in SPEC §7.1 order. */
-export const GRADE_STRIP_KEYS = [
-  "fundamentals",
-  "valuation",
-  "technicals",
-  "quality",
-  "leadership",
-  "moat",
-] as const;
-
-export type GradeStripKey = (typeof GRADE_STRIP_KEYS)[number];
+/** The graded sections of the strip, in canonical surface order. */
+export { GRADE_SURFACE_ORDER as GRADE_STRIP_KEYS };
+export type GradeStripKey = GradeSurfaceKey;
 
 /** One cell of the compact grade strip shown in the history table. */
 export interface GradeStripCell {
@@ -53,12 +50,14 @@ export interface GradeStripCell {
 }
 
 /**
- * Pull the six section grades off a parsed {@link Report}, in a fixed order.
+ * Pull the present section grades off a parsed {@link Report}, in a fixed order.
  * Exported so the history page and diff page share one extraction path.
  */
 export function extractGradeStrip(report: Report): GradeStripCell[] {
-  const strip = report.verdict.gradeStrip;
-  return GRADE_STRIP_KEYS.map((key) => ({ key, grade: strip[key].grade }));
+  return gradeSurfaceEntries(report.verdict.gradeStrip).map(({ descriptor, block }) => ({
+    key: descriptor.key,
+    grade: block.grade,
+  }));
 }
 
 /* ------------------------------------------------------------------------ *
@@ -90,7 +89,7 @@ export interface ReportSummary {
    */
   dataOnly: boolean | null;
   /**
-   * The six section grades for the compact strip, or null when the report
+   * The present section grades for the compact strip, or null when the report
    * content is unparseable (a row with no/invalid reportJson).
    */
   gradeStrip: GradeStripCell[] | null;

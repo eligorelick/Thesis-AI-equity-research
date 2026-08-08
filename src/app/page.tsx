@@ -9,6 +9,7 @@ import {
   type WatchlistGrades,
 } from "@/watchlist/watchlist";
 import { AddTicker } from "@/components/watchlist/AddTicker";
+import { GRADE_SURFACES } from "@/report/surfaceManifest";
 
 // Key presence is read from process.env at request time — never bake it into
 // the build output. The dashboard also loads the watchlist view (DB + network).
@@ -52,17 +53,8 @@ function KeylessRow({ name, detail }: { name: string; detail: string }) {
 
 /* ------------------------------------------------------------------------ *
  * Home watchlist panel — the same enriched view the sidebar renders, but as a
- * prominent dashboard card with a wider 6-grade strip and a quick add control.
+ * prominent dashboard card with a wider grade strip and a quick add control.
  * ------------------------------------------------------------------------ */
-
-const HOME_GRADE_ORDER: ReadonlyArray<{ key: keyof WatchlistGrades; label: string }> = [
-  { key: "fundamentals", label: "F" },
-  { key: "valuation", label: "V" },
-  { key: "technicals", label: "T" },
-  { key: "quality", label: "Q" },
-  { key: "leadership", label: "L" },
-  { key: "moat", label: "M" },
-];
 
 function fmtPrice(v: number): string {
   return v.toLocaleString("en-US", {
@@ -77,12 +69,15 @@ function HomeGradeStrip({ grades }: { grades: WatchlistGrades | null | undefined
   }
   return (
     <div className="flex items-center gap-1" aria-label="section grades">
-      {HOME_GRADE_ORDER.map(({ key, label }) => (
-        <span key={key} className="flex flex-col items-center gap-px" title={`${label}: ${grades[key]}`}>
-          <span className="text-[7px] leading-none text-faint">{label}</span>
-          <GradeChip grade={grades[key]} />
-        </span>
-      ))}
+      {GRADE_SURFACES.map((descriptor) => {
+        const grade = grades[descriptor.key];
+        return grade === undefined ? null : (
+          <span key={descriptor.id} className="flex flex-col items-center gap-px" title={`${descriptor.shortLabel}: ${grade}`}>
+            <span className="text-[7px] leading-none text-faint">{descriptor.shortLabel}</span>
+            <GradeChip grade={grade} />
+          </span>
+        );
+      })}
     </div>
   );
 }

@@ -2,7 +2,8 @@
  * /company/[symbol]/history — report history for a ticker (the application contract §8).
  *
  * Server component. Lists every persisted report for the symbol newest-first in
- * a dense, terminal-grade table: date, model, the six-grade strip, verification
+ * a dense, terminal-grade table: date, model, the current seven-grade (or
+ * legacy six-grade) strip, verification
  * rate, cost, and a data-only badge; each row links to view the report and to
  * export it (MD / PDF). A two-select "compare" control (report A older + B
  * newer) links to the diff route.
@@ -22,6 +23,10 @@ import {
   type ReportSummary,
   type GradeStripCell,
 } from "@/report/history";
+import {
+  GRADE_SURFACES,
+  GRADE_SURFACE_BY_KEY,
+} from "@/report/surfaceManifest";
 import { normalizeRouteSymbol } from "@/symbol";
 
 import { HistoryCompare, type CompareOption } from "./HistoryCompare";
@@ -64,17 +69,33 @@ function Sidebar({ symbol }: { symbol: string }) {
  * Grade strip (compact, in-table)
  * ------------------------------------------------------------------------ */
 
-function GradeStripInline({ cells }: { cells: GradeStripCell[] | null }) {
+function GradeStripInline({
+  cells,
+  displayedGradeSurfaces,
+}: {
+  cells: GradeStripCell[] | null;
+  displayedGradeSurfaces: readonly (typeof GRADE_SURFACES)[number][];
+}) {
   if (cells === null) {
     return <span className="mono text-[11px] text-faint">—</span>;
   }
+  const cellsByKey = new Map(cells.map((cell) => [cell.key, cell]));
   return (
     <div className="flex items-center gap-1">
-      {cells.map((c) => (
-        <span key={c.key} title={c.key}>
-          <GradeChip grade={c.grade} />
-        </span>
-      ))}
+      {displayedGradeSurfaces.map((descriptor) => {
+        const cell = cellsByKey.get(descriptor.key);
+        return (
+          <span
+            key={descriptor.key}
+            data-grade-slot={descriptor.key}
+            data-grade-present={cell !== undefined}
+            title={cell === undefined ? undefined : GRADE_SURFACE_BY_KEY[cell.key].label}
+            className="inline-flex h-5 w-5 items-center justify-center"
+          >
+            {cell === undefined ? null : <GradeChip grade={cell.grade} />}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -91,9 +112,11 @@ function shortModel(model: string): string {
 function ReportRow({
   symbol,
   r,
+  displayedGradeSurfaces,
 }: {
   symbol: string;
   r: ReportSummary;
+  displayedGradeSurfaces: readonly (typeof GRADE_SURFACES)[number][];
 }) {
   const date = r.createdAt.slice(0, 10);
   const time = r.createdAt.slice(11, 16);
@@ -106,7 +129,10 @@ function ReportRow({
     r.status === "done" ? "pos" : r.status === "error" ? "neg" : "muted";
 
   return (
-    <tr className="border-b border-edge align-middle last:border-b-0 hover:bg-raised">
+    <tr
+      data-report-id={r.id}
+      className="border-b border-edge align-middle last:border-b-0 hover:bg-raised"
+    >
       <td className="px-2 py-1.5">
         <div className="mono text-[12px] text-fg">{date}</div>
         <div className="mono text-[9px] text-faint">
@@ -117,7 +143,10 @@ function ReportRow({
         <span className="mono text-[11px] text-muted">{shortModel(r.model)}</span>
       </td>
       <td className="px-2 py-1.5">
-        <GradeStripInline cells={r.gradeStrip} />
+        <GradeStripInline
+          cells={r.gradeStrip}
+          displayedGradeSurfaces={displayedGradeSurfaces}
+        />
       </td>
       <td className="px-2 py-1.5 text-right">
         <span className="mono text-[11px]">{vr}</span>
@@ -174,6 +203,8 @@ export default async function HistoryPage({
     id: r.id,
     label: `#${r.id} · ${r.createdAt.slice(0, 10)} · ${shortModel(r.model)}`,
   }));
+  const displayedGradeSurfaces = GRADE_SURFACES.filter((descriptor) =>
+    reports.some((report) => report.gradeStrip?.some((cell) => cell.key === descriptor.key)));
 
   return (
     <AppShell sidebar={<Sidebar symbol={symbol} />}>
@@ -229,7 +260,11 @@ export default async function HistoryPage({
                     <tr className="border-b border-edge-strong">
                       <Th>date</Th>
                       <Th>model</Th>
-                      <Th>grades · fund/val/tech/qual/lead/moat</Th>
+                      <Th>
+                        grades {displayedGradeSurfaces.length > 0
+                          ? `· ${displayedGradeSurfaces.map((descriptor) => descriptor.shortLabel).join("/")}`
+                          : ""}
+                      </Th>
                       <Th align="right">cited</Th>
                       <Th align="right">cost</Th>
                       <Th>status</Th>
@@ -238,7 +273,12 @@ export default async function HistoryPage({
                   </thead>
                   <tbody>
                     {reports.map((r) => (
-                      <ReportRow key={r.id} symbol={symbol} r={r} />
+                      <ReportRow
+                        key={r.id}
+                        symbol={symbol}
+                        r={r}
+                        displayedGradeSurfaces={displayedGradeSurfaces}
+                      />
                     ))}
                   </tbody>
                 </table>

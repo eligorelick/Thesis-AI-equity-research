@@ -16,13 +16,17 @@
 import { NextResponse } from "next/server";
 import { getReportRecordById, parseReportId } from "@/report/history";
 import type { Report } from "@/report/schema";
+import {
+  gradeSurfaceEntries,
+  type GradeSurfaceKey,
+} from "@/report/surfaceManifest";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** A single grade in the compact strip. */
 export interface GradeStripCell {
-  key: string;
+  key: GradeSurfaceKey;
   grade: string;
   oneLineWhy: string;
 }
@@ -43,15 +47,6 @@ export interface ReportSummary {
   /** Sanitized missing-data disclosures needed by compact consumers. */
   missingData: Report["appendix"]["missingData"];
 }
-
-const GRADE_KEYS = [
-  "fundamentals",
-  "valuation",
-  "technicals",
-  "quality",
-  "leadership",
-  "moat",
-] as const;
 
 export async function GET(
   _request: Request,
@@ -78,10 +73,11 @@ export async function GET(
   const report: Report | null = record.kind === "ok" ? record.report : null;
 
   const grades: GradeStripCell[] = report
-    ? GRADE_KEYS.map((key) => {
-        const cell = report.verdict.gradeStrip[key];
-        return { key, grade: cell.grade, oneLineWhy: cell.oneLineWhy };
-      })
+    ? gradeSurfaceEntries(report.verdict.gradeStrip).map(({ descriptor, block }) => ({
+        key: descriptor.key,
+        grade: block.grade,
+        oneLineWhy: block.oneLineWhy,
+      }))
     : [];
 
   const dataOnly =

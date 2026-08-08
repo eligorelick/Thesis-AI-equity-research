@@ -43,6 +43,15 @@ import type {
   TracedNumber,
   Valuation,
 } from "@/report/schema";
+import {
+  PROJECTION_METRIC_BY_KEY,
+  PROJECTION_PATHS,
+  SCORE_SURFACES,
+  gradeSurfaceEntries,
+  orderedProjectionSeries,
+  projectionCellPoint,
+  projectionPeriodRows,
+} from "@/report/surfaceManifest";
 import { DISCLAIMER_TEXT, FRED_ATTRIBUTION_TEXT, citationOutcomeLabel } from "@/report/schema";
 
 /* ======================================================================== *
@@ -254,19 +263,14 @@ function segmentTable(rows: readonly SegmentRow[]): string {
 
 function renderVerdict(report: Report): string {
   const v = report.verdict;
-  const s = v.gradeStrip;
-  const stripRows: string[][] = [
-    ["Fundamentals", s.fundamentals.grade, s.fundamentals.oneLineWhy],
-    ["Valuation", s.valuation.grade, s.valuation.oneLineWhy],
-    ["Technicals", s.technicals.grade, s.technicals.oneLineWhy],
-    ["Quality / Red-Flags", s.quality.grade, s.quality.oneLineWhy],
-    ["Leadership", s.leadership.grade, s.leadership.oneLineWhy],
-    ["Moat", s.moat.grade, s.moat.oneLineWhy],
-  ];
-  if (s.balanceSheet) {
-    stripRows.splice(3, 0, ["Balance Sheet", s.balanceSheet.grade, s.balanceSheet.oneLineWhy]);
-  }
-  const strip = table(["Section", "Grade", "Why"], stripRows);
+  const strip = table(
+    ["Section", "Grade", "Why"],
+    gradeSurfaceEntries(v.gradeStrip).map(({ descriptor, block }) => [
+      descriptor.label,
+      block.grade,
+      block.oneLineWhy,
+    ]),
+  );
   const lines: string[] = ["## 1. Verdict", "", v.synthesis, ""];
   if (v.executiveSummary && v.executiveSummary.length > 0) {
     lines.push("### Executive summary", "", claimList(v.executiveSummary), "");
@@ -275,26 +279,19 @@ function renderVerdict(report: Report): string {
   return lines.join("\n");
 }
 
-const SCORE_ROWS: { key: keyof Scoring["aspects"]; label: string }[] = [
-  { key: "fundamentals", label: "Fundamentals" },
-  { key: "valuation", label: "Valuation" },
-  { key: "quality", label: "Quality" },
-  { key: "balanceSheet", label: "Balance Sheet" },
-  { key: "moat", label: "Moat" },
-  { key: "leadership", label: "Leadership" },
-  { key: "technicals", label: "Technicals" },
-];
-
 function renderScores(scores: Scoring): string {
   const c = scores.composite;
-  const rows = SCORE_ROWS.map(({ key, label }) => {
-    const a = scores.aspects[key];
+  const rows = SCORE_SURFACES.flatMap((descriptor) => {
+    if (descriptor.kind !== "aspect") return [];
+    const a = scores.aspects[descriptor.key];
     return [
-      label,
-      a.score === null ? DASH : String(Math.round(a.score)),
-      a.band ?? DASH,
-      `${Math.round(a.dataCompleteness * 100)}%`,
-      a.notApplicableReason ?? a.note,
+      [
+        descriptor.label,
+        a.score === null ? DASH : String(Math.round(a.score)),
+        a.band ?? DASH,
+        `${Math.round(a.dataCompleteness * 100)}%`,
+        a.notApplicableReason ?? a.note,
+      ],
     ];
   });
   return [
@@ -310,13 +307,6 @@ function renderScores(scores: Scoring): string {
   ].join("\n");
 }
 
-const PROJECTION_METRIC_LABEL: Record<Projections["series"][number]["metric"], string> = {
-  revenue: "Revenue",
-  operatingMargin: "Operating margin",
-  fcf: "Free cash flow (FCFF)",
-  epsDiluted: "Diluted EPS",
-};
-
 function renderProjections(p: Projections): string {
   if (p.series.length === 0) {
     return [
@@ -331,17 +321,19 @@ function renderProjections(p: Projections): string {
     `Horizon ${p.horizonYears}y · unbacktested display-prior weights ${p.scenarioWeights.bull}/${p.scenarioWeights.base}/${p.scenarioWeights.bear} (bull/base/bear). Forward figures are ESTIMATEs, not facts or empirically calibrated odds.`,
     "",
   ];
-  for (const s of p.series) {
-    lines.push(`### ${PROJECTION_METRIC_LABEL[s.metric]} (${s.unit})`, "");
-    const horizon = Math.min(s.base.length, s.bull.length, s.weighted.length, s.bear.length);
-    const rows = s.base.slice(0, horizon).map((_, i) => [
-      s.base[i].period,
-      tracedValue(s.bull[i].value),
-      tracedValue(s.base[i].value),
-      tracedValue(s.weighted[i].value),
-      tracedValue(s.bear[i].value),
-    ]);
-    lines.push(table(["Period", "Bull", "Base", "Weighted", "Bear"], rows), "");
+  const forwardPaths = PROJECTION_PATHS.filter((descriptor) => descriptor.kind !== "historical");
+  for (const s of orderedProjectionSeries(p.series)) {
+    lines.push(`### ${PROJECTION_METRIC_BY_KEY[s.metric].label} (${s.unit})`, "");
+    const rows = projectionPeriodRows(s).flatMap((row) => {
+      const points = forwardPaths.map((descriptor) =>
+        projectionCellPoint(row, descriptor.key, s.unit));
+      if (points.every((point) => point === null)) return [];
+      return [[
+        row.period,
+        ...points.map((point) => point === null ? DASH : tracedValue(point.value)),
+      ]];
+    });
+    lines.push(table(["Period", ...forwardPaths.map((descriptor) => descriptor.label)], rows), "");
     if (s.assumptions.length > 0) {
       lines.push("Assumptions:", "", s.assumptions.map((a) => `- ${a}`).join("\n"), "");
     }

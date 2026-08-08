@@ -90,8 +90,8 @@ function loadFixtureReport(): Report {
 }
 
 /** Structured clone via JSON so mutations never touch the shared fixture. */
-function clone(report: Report): Report {
-  return JSON.parse(JSON.stringify(report)) as Report;
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function persistedVersions(
@@ -445,8 +445,244 @@ describe("reportToMarkdown", () => {
     expect(md).toMatch(/### Revenue \(USD\)/);
     // Balance sheet is now a graded aspect.
     expect(md).toContain("Balance Sheet & Capital — Grade");
-    // The forward-values table has the four scenario columns.
-    expect(md).toContain("| Period | Bull | Base | Weighted | Bear |");
+    // The forward-values table follows the shared canonical path order.
+    expect(md).toContain("| Period | Bull | Base | Bear | Weighted |");
+  });
+
+  it("renders current and legacy verdict grade strips with optional balance present exactly once or omitted", () => {
+    const labels = [
+      "Fundamentals", "Valuation", "Technicals", "Balance Sheet",
+      "Quality / Red-Flags", "Leadership", "Moat",
+    ];
+    const assertOrder = (text: string, expected: readonly string[]) => {
+      let cursor = -1;
+      for (const label of expected) {
+        const next = text.indexOf(label, cursor + 1);
+        expect(next, label).toBeGreaterThan(cursor);
+        cursor = next;
+      }
+    };
+
+    const currentMarkdown = reportToMarkdown(clone(report));
+    const currentMarkdownStrip = currentMarkdown.slice(
+      currentMarkdown.indexOf("### Grade strip"),
+      currentMarkdown.indexOf("## 1b. Scorecard"),
+    );
+    assertOrder(currentMarkdownStrip, labels);
+    expect(currentMarkdownStrip.match(/\| Balance Sheet \|/g)).toHaveLength(1);
+
+    const legacy = clone(report);
+    delete legacy.verdict.gradeStrip.balanceSheet;
+    const legacyMarkdown = reportToMarkdown(legacy);
+    const legacyMarkdownStrip = legacyMarkdown.slice(
+      legacyMarkdown.indexOf("### Grade strip"),
+      legacyMarkdown.indexOf("## 1b. Scorecard"),
+    );
+    assertOrder(legacyMarkdownStrip, labels.filter((label) => label !== "Balance Sheet"));
+    expect(legacyMarkdownStrip).not.toContain("Balance Sheet");
+
+    const currentPrint = reportToPrintHtml(clone(report));
+    const currentPrintStrip = currentPrint.slice(
+      currentPrint.indexOf('<p class="synthesis">'),
+      currentPrint.indexOf(">Scorecard (deterministic)</h3>"),
+    );
+    assertOrder(currentPrintStrip, labels);
+    expect(currentPrintStrip.match(/>Balance Sheet<\/td>/g)).toHaveLength(1);
+
+    const legacyPrint = reportToPrintHtml(legacy);
+    const legacyPrintStrip = legacyPrint.slice(
+      legacyPrint.indexOf('<p class="synthesis">'),
+      legacyPrint.indexOf(">Scorecard (deterministic)</h3>"),
+    );
+    assertOrder(legacyPrintStrip, labels.filter((label) => label !== "Balance Sheet"));
+    expect(legacyPrintStrip).not.toContain("Balance Sheet");
+  });
+
+  it("keeps composite plus seven aspect score sentinels in canonical export order", () => {
+    const scored = clone(report);
+    const aspectOrder = [
+      "fundamentals", "valuation", "quality", "balanceSheet",
+      "moat", "leadership", "technicals",
+    ] as const;
+    const values = [0, 11.25, 22.5, 33.75, 44.125, 55.5, 66.875] as const;
+    scored.scores!.composite.score = 63.75;
+    aspectOrder.forEach((aspect, index) => {
+      scored.scores!.aspects[aspect].score = values[index]!;
+    });
+    scored.scores!.aspects = Object.fromEntries(
+      Object.entries(scored.scores!.aspects).reverse(),
+    ) as NonNullable<typeof scored.scores>["aspects"];
+
+    const markdown = reportToMarkdown(scored);
+    const scoreBlock = markdown.slice(
+      markdown.indexOf("## 1b. Scorecard (deterministic)"),
+      markdown.indexOf("## 2. Business & Segments"),
+    );
+    expect(scoreBlock).toContain("**Composite: 64 / 100");
+    const labels = [
+      "Fundamentals", "Valuation", "Quality", "Balance Sheet",
+      "Moat", "Leadership", "Technicals",
+    ];
+    let cursor = -1;
+    for (const [index, label] of labels.entries()) {
+      const row = `| ${label} | ${Math.round(values[index]!)} |`;
+      const next = scoreBlock.indexOf(row);
+      expect(next, row).toBeGreaterThan(cursor);
+      cursor = next;
+    }
+
+    const printed = reportToPrintHtml(scored);
+    const printBlock = printed.slice(
+      printed.indexOf(">Scorecard (deterministic)</h3>"),
+      printed.indexOf(">Business &amp; Segments</h2>"),
+    );
+    expect(printBlock).toContain("<strong class=\"mono\">64 / 100</strong>");
+    cursor = -1;
+    for (const label of labels) {
+      const next = printBlock.indexOf(`>${label}</td>`, cursor + 1);
+      expect(next, label).toBeGreaterThan(cursor);
+      cursor = next;
+    }
+  });
+
+  it("orders projection metrics and joins forward paths by period instead of array index", () => {
+    const reordered = clone(report);
+    const revenue = reordered.projections!.series.find((series) => series.metric === "revenue")!;
+    const duplicateRevenue = clone(revenue);
+    duplicateRevenue.unit = "USD duplicate metric";
+    const operatingMargin = reordered.projections!.series.find((series) => series.metric === "operatingMargin")!;
+    const fcf = reordered.projections!.series.find((series) => series.metric === "fcf")!;
+    const eps = reordered.projections!.series.find((series) => series.metric === "epsDiluted")!;
+    reordered.projections!.series = [eps, revenue, fcf, duplicateRevenue, operatingMargin];
+    const paths = ["bull", "base", "bear", "weighted"] as const;
+    const fmt = (value: number) => `$${value.toFixed(2)}`;
+    const expectedByPath = Object.fromEntries(paths.map((projectionPath, pathIndex) => {
+      const byPeriod = new Map<string, string>();
+      revenue[projectionPath].forEach((point, index) => {
+        point.value.value = (pathIndex + 1) * 10_000 + index + 1;
+        byPeriod.set(point.period, fmt(point.value.value));
+      });
+      revenue[projectionPath].reverse();
+      return [projectionPath, byPeriod];
+    })) as Record<(typeof paths)[number], Map<string, string>>;
+    const rolling = clone(revenue.weighted.at(-1)!);
+    rolling.period = "FY2099";
+    rolling.value.period = "FY2099";
+    rolling.value.value = 2_099;
+    revenue.weighted.push(rolling);
+    const reorderedBytes = JSON.stringify(reordered);
+
+    const rendered = reportToMarkdown(reordered);
+    expect(JSON.stringify(reordered)).toBe(reorderedBytes);
+    const headings = [
+      "### Revenue (USD)",
+      "### Revenue (USD duplicate metric)",
+      "### Operating margin (%)",
+      "### Free cash flow (FCFF) (USD)",
+      "### Diluted EPS (USD/share)",
+    ];
+    let headingCursor = -1;
+    for (const heading of headings) {
+      const next = rendered.indexOf(heading);
+      expect(next, heading).toBeGreaterThan(headingCursor);
+      headingCursor = next;
+    }
+    const revenueStart = rendered.indexOf("### Revenue (USD)");
+    const revenueEnd = rendered.indexOf("### Revenue (USD duplicate metric)", revenueStart);
+    const revenueBlock = rendered.slice(revenueStart, revenueEnd);
+    for (const period of [...expectedByPath.base.keys()].sort()) {
+      const line = revenueBlock.split("\n").find((candidate) => candidate.startsWith(`| ${period} |`));
+      expect(line, period).toBe([
+        "", period,
+        expectedByPath.bull.get(period),
+        expectedByPath.base.get(period),
+        expectedByPath.bear.get(period),
+        expectedByPath.weighted.get(period),
+        "",
+      ].join(" | ").trim());
+    }
+    expect(revenueBlock.split("\n").find((line) => line.startsWith("| FY2099 |"))).toBe(
+      ["", "FY2099", "\u2014", "\u2014", "\u2014", "$2099.00", ""].join(" | ").trim(),
+    );
+
+    const printed = reportToPrintHtml(reordered);
+    expect(JSON.stringify(reordered)).toBe(reorderedBytes);
+    let printCursor = -1;
+    for (const label of [
+      "Revenue (USD)",
+      "Revenue (USD duplicate metric)",
+      "Operating margin (%)",
+      "Free cash flow (FCFF) (USD)",
+      "Diluted EPS (USD/share)",
+    ]) {
+      const next = printed.indexOf(`>${label}</h3>`);
+      expect(next, label).toBeGreaterThan(printCursor);
+      printCursor = next;
+    }
+    expect(printed).toContain("<th>Bull</th><th>Base</th><th>Bear</th><th>Weighted</th>");
+    expect(printed).toContain("FY2099");
+    expect(printed).toContain("$2,099.00");
+    const printFmt = (value: string | undefined) => value === undefined
+      ? undefined
+      : `$${Number(value.slice(1)).toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+    for (const period of [...expectedByPath.base.keys()].sort()) {
+      const row = printed.match(new RegExp(`<tr>(?:(?!</tr>)[\\s\\S])*?${period}(?:(?!</tr>)[\\s\\S])*?</tr>`))?.[0];
+      expect(row, period).toBeDefined();
+      const cells = [...row!.matchAll(/<td>([\s\S]*?)<\/td>/g)]
+        .map((match) => match[1]!.replace(/<[^>]+>/g, ""));
+      expect(cells).toEqual([
+        period,
+        printFmt(expectedByPath.bull.get(period)),
+        printFmt(expectedByPath.base.get(period)),
+        printFmt(expectedByPath.bear.get(period)),
+        printFmt(expectedByPath.weighted.get(period)),
+      ]);
+    }
+  });
+
+  it("fails closed for duplicate and inner-period-conflicted projection cells in Markdown and print", () => {
+    const malformed = clone(report);
+    const revenue = malformed.projections!.series.find((series) => series.metric === "revenue")!;
+    const ambiguousPeriod = revenue.bull[0]!.period;
+    const originalAmbiguousValue = revenue.bull[0]!.value.value;
+    const duplicate = clone(revenue.bull[0]!);
+    duplicate.value.value = 999_001;
+    revenue.bull.push(duplicate);
+    const conflictedPeriod = revenue.base[1]!.period;
+    const conflictedValue = revenue.base[1]!.value.value;
+    revenue.base[1]!.value.period = "FY1900";
+
+    const markdown = reportToMarkdown(malformed);
+    const revenueStart = markdown.indexOf("### Revenue (USD)");
+    const revenueEnd = markdown.indexOf("### Operating margin (%)", revenueStart);
+    const revenueBlock = markdown.slice(revenueStart, revenueEnd);
+    const markdownCells = (period: string) => revenueBlock.split("\n")
+      .find((line) => line.startsWith(`| ${period} |`))!
+      .split("|").slice(1, -1).map((cell) => cell.trim());
+    expect(markdownCells(ambiguousPeriod)[1]).toBe("\u2014");
+    expect(markdownCells(conflictedPeriod)[2]).toBe("\u2014");
+    expect(revenueBlock).not.toContain("FY1900");
+    expect(revenueBlock).not.toContain(originalAmbiguousValue.toLocaleString("en-US"));
+    expect(revenueBlock).not.toContain("999,001");
+    expect(markdownCells(conflictedPeriod)[2]).not.toContain(conflictedValue.toLocaleString("en-US"));
+
+    const printed = reportToPrintHtml(malformed);
+    const printedBlock = printed.slice(
+      printed.indexOf(">Revenue (USD)</h3>"),
+      printed.indexOf(">Operating margin (%)</h3>"),
+    );
+    const printCells = (period: string) => {
+      const row = printedBlock.match(new RegExp(`<tr>(?:(?!</tr>)[\\s\\S])*?${period}(?:(?!</tr>)[\\s\\S])*?</tr>`))?.[0];
+      return [...(row ?? "").matchAll(/<td>([\s\S]*?)<\/td>/g)]
+        .map((match) => match[1]!.replace(/<[^>]+>/g, ""));
+    };
+    expect(printCells(ambiguousPeriod)[1]).toBe("\u2014");
+    expect(printCells(conflictedPeriod)[2]).toBe("\u2014");
+    expect(printedBlock).not.toContain("FY1900");
+    expect(printedBlock).not.toContain("999,001");
   });
 
   it("does not crash when an in-memory projection has unequal scenario arrays", () => {
@@ -491,15 +727,39 @@ describe("reportToMarkdown", () => {
 describe("grade extraction + data-only detection", () => {
   const report = loadFixtureReport();
 
-  it("extractGradeStrip returns the six sections in fixed order", () => {
+  it("extractGradeStrip returns all seven present sections in canonical order", () => {
     const strip = extractGradeStrip(report);
+    expect([...GRADE_STRIP_KEYS]).toEqual([
+      "fundamentals",
+      "valuation",
+      "technicals",
+      "balanceSheet",
+      "quality",
+      "leadership",
+      "moat",
+    ]);
     expect(strip.map((c) => c.key)).toEqual([...GRADE_STRIP_KEYS]);
     // Grades match the fixture's strip.
     const byKey = Object.fromEntries(strip.map((c) => [c.key, c.grade]));
     expect(byKey.fundamentals).toBe("A");
     expect(byKey.valuation).toBe("C");
     expect(byKey.technicals).toBe("B");
+    expect(byKey.balanceSheet).toBe("B");
     expect(byKey.moat).toBe("A");
+  });
+
+  it("extractGradeStrip omits a legacy missing balance grade without fabricating it", () => {
+    const legacy = clone(report);
+    delete legacy.verdict.gradeStrip.balanceSheet;
+    expect(extractGradeStrip(legacy).map((cell) => cell.key)).toEqual([
+      "fundamentals",
+      "valuation",
+      "technicals",
+      "quality",
+      "leadership",
+      "moat",
+    ]);
+    expect(legacy.verdict.gradeStrip.balanceSheet).toBeUndefined();
   });
 
   it("isDataOnly is false for a full report, true once analysis.llm is missing", () => {
@@ -599,6 +859,97 @@ describe("listReportsForSymbol", () => {
 
     expect(byDate["2026-07-02"].gradeStrip).toBeNull();
     expect(byDate["2026-07-02"].dataOnly).toBeNull();
+  });
+});
+
+describe("history page manifest grade strip", () => {
+  async function renderHistory(): Promise<string> {
+    const { default: HistoryPage } = await import("@/app/company/[symbol]/history/page");
+    const tree = await HistoryPage({ params: Promise.resolve({ symbol: "AAPL" }) });
+    return renderToStaticMarkup(tree as ReactElement);
+  }
+
+  it("renders all seven present grades with manifest labels and short-label header order", async () => {
+    seedReport({
+      symbol: "AAPL",
+      createdAt: "2026-08-08T12:00:00.000Z",
+      report: loadFixtureReport(),
+    });
+    const html = await renderHistory();
+    expect(html).toMatch(/grades\s+[^A-Za-z0-9]\s+F\/V\/T\/BS\/Q\/L\/M/);
+    const labels = [
+      "Fundamentals",
+      "Valuation",
+      "Technicals",
+      "Balance Sheet",
+      "Quality / Red-Flags",
+      "Leadership",
+      "Moat",
+    ];
+    let cursor = -1;
+    for (const label of labels) {
+      const next = html.indexOf(`title=\"${label}\"`, cursor + 1);
+      expect(next, label).toBeGreaterThan(cursor);
+      cursor = next;
+    }
+  });
+
+  it("keeps a legacy missing balance grade absent instead of adding a placeholder", async () => {
+    const legacy = loadFixtureReport();
+    delete legacy.verdict.gradeStrip.balanceSheet;
+    seedReport({
+      symbol: "AAPL",
+      createdAt: "2026-08-08T12:00:00.000Z",
+      report: legacy,
+    });
+    const html = await renderHistory();
+    expect(html).toMatch(/grades\s+[^A-Za-z0-9]\s+F\/V\/T\/Q\/L\/M/);
+    expect(html).not.toContain("F/V/T/BS/Q/L/M");
+    expect(html).not.toContain('title="Balance Sheet"');
+    expect(html).not.toContain("balance grade unavailable");
+  });
+
+  it("keeps mixed current and legacy rows aligned to the shared canonical grade columns", async () => {
+    const current = loadFixtureReport();
+    const legacy = loadFixtureReport();
+    delete legacy.verdict.gradeStrip.balanceSheet;
+
+    const currentId = seedReport({
+      symbol: "AAPL",
+      createdAt: "2026-08-08T12:00:00.000Z",
+      report: current,
+    });
+    const legacyId = seedReport({
+      symbol: "AAPL",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      report: legacy,
+    });
+
+    const html = await renderHistory();
+    const rowFor = (id: number): string => {
+      const row = html.match(new RegExp(`<tr[^>]*data-report-id="${id}"[\\s\\S]*?<\\/tr>`));
+      expect(row, `report row ${id}`).not.toBeNull();
+      return row![0];
+    };
+    const slots = (row: string) =>
+      [...row.matchAll(/data-grade-slot="([^"]+)"[^>]*data-grade-present="([^"]+)"/g)]
+        .map((match) => [match[1], match[2]]);
+
+    const expectedKeys = [
+      "fundamentals",
+      "valuation",
+      "technicals",
+      "balanceSheet",
+      "quality",
+      "leadership",
+      "moat",
+    ];
+    expect(slots(rowFor(currentId))).toEqual(expectedKeys.map((key) => [key, "true"]));
+    expect(slots(rowFor(legacyId))).toEqual(expectedKeys.map((key) => [
+      key,
+      key === "balanceSheet" ? "false" : "true",
+    ]));
+    expect(rowFor(legacyId)).not.toContain("grade undefined");
   });
 });
 
@@ -1080,6 +1431,70 @@ describe("diffReports smoke on tweaked fixtures", () => {
  * ======================================================================== */
 
 describe("diffReports complete versioned transitions", () => {
+  it("orders all seven changed grade identities by the canonical surface manifest", () => {
+    const older = loadFixtureReport();
+    const newer = clone(older);
+    const sections = [
+      "fundamentals",
+      "valuation",
+      "technicals",
+      "balanceSheet",
+      "quality",
+      "leadership",
+      "moat",
+    ] as const;
+    const pairs = [
+      ["A", "B"], ["A", "C"], ["A", "D"], ["A", "F"],
+      ["B", "A"], ["B", "C"], ["B", "D"],
+    ] as const;
+    sections.forEach((section, index) => {
+      older.verdict.gradeStrip[section]!.grade = pairs[index]![0];
+      newer.verdict.gradeStrip[section]!.grade = pairs[index]![1];
+    });
+
+    const diff = diffReports(older, newer, persistedVersions(older, newer));
+    expect(diff.gradeChanges.map(({ section, from, to }) => [section, from, to])).toEqual([
+      ["fundamentals", "A", "B"],
+      ["valuation", "A", "C"],
+      ["technicals", "A", "D"],
+      ["balanceSheet", "A", "F"],
+      ["quality", "B", "A"],
+      ["leadership", "B", "C"],
+      ["moat", "B", "D"],
+    ]);
+  });
+
+  it("orders all seven reversed-insertion composite weights without coercing zero or fractions", () => {
+    const older = loadFixtureReport();
+    const newer = clone(older);
+    const aspects = [
+      "fundamentals", "valuation", "quality", "balanceSheet",
+      "moat", "leadership", "technicals",
+    ] as const;
+    const fromValues = [0, 0.0125, 0.0375, 0.125, 0.1875, 0.2625, 0.375] as const;
+    const toValues = [0.001, 0.025, 0.05, 0.15, 0.2, 0.3, 0] as const;
+    older.scores!.composite.weights = Object.fromEntries(
+      aspects.map((aspect, index) => [aspect, fromValues[index]!]).reverse(),
+    ) as NonNullable<typeof older.scores>["composite"]["weights"];
+    newer.scores!.composite.weights = Object.fromEntries(
+      aspects.map((aspect, index) => [aspect, toValues[index]!]).reverse(),
+    ) as NonNullable<typeof newer.scores>["composite"]["weights"];
+    const olderBytes = JSON.stringify(older);
+    const newerBytes = JSON.stringify(newer);
+
+    const diff = diffReports(older, newer, persistedVersions(older, newer));
+    expect(diff.weightChanges.map(({ aspect, fromValue, toValue, transition }) => ({
+      aspect, fromValue, toValue, transition,
+    }))).toEqual(aspects.map((aspect, index) => ({
+      aspect,
+      fromValue: fromValues[index],
+      toValue: toValues[index],
+      transition: "changed",
+    })));
+    expect(JSON.stringify(older)).toBe(olderBytes);
+    expect(JSON.stringify(newer)).toBe(newerBytes);
+  });
+
   it("reports added and removed optional grades with explicit endpoints", () => {
     const withBalance = loadFixtureReport();
     const withoutBalance = clone(withBalance);
@@ -2252,6 +2667,51 @@ describe("history diff route-used SSR renderer", () => {
     return renderToStaticMarkup(createElement(Renderer!, { diff }));
   }
 
+  it("renders canonical manifest grade labels in order through the route-used DiffBody", async () => {
+    const older = loadFixtureReport();
+    const newer = clone(older);
+    const sections = [
+      "fundamentals", "valuation", "technicals", "balanceSheet",
+      "quality", "leadership", "moat",
+    ] as const;
+    sections.forEach((section) => {
+      older.verdict.gradeStrip[section]!.grade = "A";
+      newer.verdict.gradeStrip[section]!.grade = "B";
+    });
+    const html = await renderDiffBody(
+      diffReports(older, newer, persistedVersions(older, newer)),
+    );
+    const labels = [
+      "Fundamentals", "Valuation", "Technicals", "Balance Sheet",
+      "Quality / Red-Flags", "Leadership", "Moat",
+    ];
+    let cursor = html.indexOf("grade changes");
+    for (const label of labels) {
+      const next = html.indexOf(label, cursor + 1);
+      expect(next, label).toBeGreaterThan(cursor);
+      cursor = next;
+    }
+  });
+
+  it("renders all four projection metric descriptors through the route-used DiffBody", async () => {
+    const older = loadFixtureReport();
+    const newer = clone(older);
+    for (const [index, series] of newer.projections!.series.entries()) {
+      series.weighted[0]!.value.value += index + 1;
+    }
+    const html = await renderDiffBody(
+      diffReports(older, newer, persistedVersions(older, newer)),
+    );
+    const projectionStart = html.indexOf("projection changes");
+    const labels = ["Revenue", "Operating margin", "Free cash flow (FCFF)", "Diluted EPS"];
+    let cursor = projectionStart;
+    for (const label of labels) {
+      const next = html.indexOf(label, cursor + 1);
+      expect(next, label).toBeGreaterThan(cursor);
+      cursor = next;
+    }
+  });
+
   it("renders every transition kind, complete counts, paths, provenance, versions, and freshness", async () => {
     const older = loadFixtureReport();
     const newer = clone(older);
@@ -2353,8 +2813,12 @@ describe("history diff route-used SSR renderer", () => {
     for (const label of ["changed", "added", "removed", "became available", "became unavailable"]) {
       expect(html).toContain(label);
     }
-    for (const path of ["historical", "bull", "base", "bear", "weighted"]) {
-      expect(html).toContain(path);
+    const projectionPanel = html.slice(
+      html.indexOf('data-family="projection changes"'),
+      html.indexOf('data-family="catalyst changes"'),
+    );
+    for (const pathLabel of ["Historical", "Bull", "Base", "Bear", "Weighted"]) {
+      expect(projectionPanel).toContain(`>${pathLabel} | `);
     }
     for (const field of [
       "driver-ui-stable",

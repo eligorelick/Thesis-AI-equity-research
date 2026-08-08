@@ -45,6 +45,15 @@ import type {
   TracedNumber,
   Valuation,
 } from "@/report/schema";
+import {
+  PROJECTION_METRIC_BY_KEY,
+  PROJECTION_PATHS,
+  SCORE_SURFACES,
+  gradeSurfaceEntries,
+  orderedProjectionSeries,
+  projectionCellPoint,
+  projectionPeriodRows,
+} from "@/report/surfaceManifest";
 import { citationOutcomeLabel } from "@/report/schema";
 import {
   formatCostUsd,
@@ -269,20 +278,10 @@ function numbersTable(numbers: readonly TracedNumber[]): string {
 
 function sectionVerdict(report: Report): string {
   const v = report.verdict;
-  const s = v.gradeStrip;
-  const stripRows: [string, GradeBlock][] = [
-    ["Fundamentals", s.fundamentals],
-    ["Valuation", s.valuation],
-    ["Technicals", s.technicals],
-    ["Quality / Red-Flags", s.quality],
-    ["Leadership", s.leadership],
-    ["Moat", s.moat],
-  ];
-  if (s.balanceSheet) stripRows.splice(3, 0, ["Balance Sheet", s.balanceSheet]);
   const strip = table(
     ["Section", "Grade", "Why"],
-    stripRows.map(([label, block]) => [
-      esc(label),
+    gradeSurfaceEntries(v.gradeStrip).map(({ descriptor, block }) => [
+      esc(descriptor.label),
       `<span class="chip ${gradeClass(block.grade)}">${esc(block.grade)}</span>`,
       esc(block.oneLineWhy),
     ]),
@@ -296,30 +295,21 @@ function sectionVerdict(report: Report): string {
   )}</p>${execSummary}${strip}</section>`;
 }
 
-const SCORE_ROWS: { key: keyof Scoring["aspects"]; label: string }[] = [
-  { key: "fundamentals", label: "Fundamentals" },
-  { key: "valuation", label: "Valuation" },
-  { key: "quality", label: "Quality" },
-  { key: "balanceSheet", label: "Balance Sheet" },
-  { key: "moat", label: "Moat" },
-  { key: "leadership", label: "Leadership" },
-  { key: "technicals", label: "Technicals" },
-];
-
 function sectionScores(scores: Scoring): string {
   const c = scores.composite;
-  const rows = SCORE_ROWS.map(({ key, label }) => {
-    const a = scores.aspects[key];
+  const rows = SCORE_SURFACES.flatMap((descriptor) => {
+    if (descriptor.kind !== "aspect") return [];
+    const a = scores.aspects[descriptor.key];
     const bandChip = a.band
       ? `<span class="chip ${gradeClass(a.band)}">${esc(a.band)}</span>`
       : DASH;
-    return [
-      esc(label),
+    return [[
+      esc(descriptor.label),
       a.score === null ? DASH : `<span class="mono">${Math.round(a.score)}</span>`,
       bandChip,
       `<span class="mono">${Math.round(a.dataCompleteness * 100)}%</span>`,
       esc(a.notApplicableReason ?? a.note),
-    ];
+    ]];
   });
   const compositeChip = c.band
     ? `<span class="chip ${gradeClass(c.band)}">${esc(c.band)}</span>`
@@ -332,35 +322,32 @@ function sectionScores(scores: Scoring): string {
     <p class="faint">${esc(c.methodology)} <em>(bands ${esc(scores.bandsVersion)})</em></p></section>`;
 }
 
-const PROJECTION_METRIC_LABEL: Record<Projections["series"][number]["metric"], string> = {
-  revenue: "Revenue",
-  operatingMargin: "Operating margin",
-  fcf: "Free cash flow (FCFF)",
-  epsDiluted: "Diluted EPS",
-};
-
 function sectionProjections(p: Projections): string {
   if (p.series.length === 0) {
     return `<section class="block">${sectionHeading("projections")}<p class="faint">Not applicable${
       p.notApplicableReason ? `: ${esc(p.notApplicableReason)}` : "."
     }</p></section>`;
   }
-  const blocks = p.series
+  const forwardPaths = PROJECTION_PATHS.filter((descriptor) => descriptor.kind !== "historical");
+  const blocks = orderedProjectionSeries(p.series)
     .map((s) => {
-      const horizon = Math.min(s.base.length, s.bull.length, s.weighted.length, s.bear.length);
-      const rows = s.base.slice(0, horizon).map((_, i) => [
-        esc(s.base[i].period),
-        `<span class="mono">${esc(tracedValue(s.bull[i].value))}</span>`,
-        `<span class="mono">${esc(tracedValue(s.base[i].value))}</span>`,
-        `<span class="mono">${esc(tracedValue(s.weighted[i].value))}</span>`,
-        `<span class="mono">${esc(tracedValue(s.bear[i].value))}</span>`,
-      ]);
+      const rows = projectionPeriodRows(s).flatMap((row) => {
+        const points = forwardPaths.map((descriptor) =>
+          projectionCellPoint(row, descriptor.key, s.unit));
+        if (points.every((point) => point === null)) return [];
+        return [[
+          esc(row.period),
+          ...points.map((point) => `<span class="mono">${
+            point === null ? DASH : esc(tracedValue(point.value))
+          }</span>`),
+        ]];
+      });
       const assumptions =
         s.assumptions.length > 0
           ? `<ul class="claims">${s.assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>`
           : "";
-      return `<h3>${esc(PROJECTION_METRIC_LABEL[s.metric])} (${esc(s.unit)})</h3>${table(
-        ["Period", "Bull", "Base", "Weighted", "Bear"],
+      return `<h3>${esc(PROJECTION_METRIC_BY_KEY[s.metric].label)} (${esc(s.unit)})</h3>${table(
+        ["Period", ...forwardPaths.map((descriptor) => descriptor.label)],
         rows,
       )}${assumptions}`;
     })

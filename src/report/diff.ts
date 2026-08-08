@@ -8,6 +8,19 @@
 
 import type { Grade } from "@/types/core";
 import { normalizeSymbol, sameEntitySymbol } from "@/symbol";
+import {
+  GRADE_SURFACES,
+  PROJECTION_PATH_ORDER,
+  PROJECTION_SCENARIO_WEIGHT_ORDER,
+  SCORE_ASPECT_ORDER,
+  SCORE_SURFACE_ORDER,
+  orderedProjectionSeries,
+  projectionPointIdentity,
+  scoreDriverIdentity,
+  type GradeSurfaceKey,
+  type ProjectionPath as SurfaceProjectionPath,
+  type ScoreSurfaceKey,
+} from "@/report/surfaceManifest";
 import type {
   ProjectionMetric,
   Report,
@@ -121,17 +134,10 @@ export type TransitionKind =
 export type ComparisonState = "comparable" | "not-comparable";
 export type ComparisonStatus = "changed" | "unchanged" | "not-comparable";
 export type SourceFreshness = "fresh" | "stale" | "unknown";
-export type ProjectionPath = "historical" | "bull" | "base" | "bear" | "weighted";
-export type GradeSection =
-  | "fundamentals"
-  | "valuation"
-  | "technicals"
-  | "quality"
-  | "leadership"
-  | "moat"
-  | "balanceSheet";
-export type ScoreIdentity = "composite" | ScoreAspect;
-export type TargetScenario = "bull" | "base" | "bear";
+export type ProjectionPath = SurfaceProjectionPath;
+export type GradeSection = GradeSurfaceKey;
+export type ScoreIdentity = ScoreSurfaceKey;
+export type TargetScenario = (typeof PROJECTION_SCENARIO_WEIGHT_ORDER)[number];
 
 export type DiffReasonCode =
   | "invalid-entity"
@@ -299,42 +305,6 @@ export interface ReportDiff {
 /* ------------------------------------------------------------------------ *
  * Normalization and comparison helpers
  * ------------------------------------------------------------------------ */
-
-const GRADE_SECTIONS: {
-  section: GradeSection;
-  get: (report: Report) => Grade | null;
-}[] = [
-  { section: "fundamentals", get: (report) => report.verdict.gradeStrip.fundamentals.grade },
-  { section: "valuation", get: (report) => report.verdict.gradeStrip.valuation.grade },
-  { section: "technicals", get: (report) => report.verdict.gradeStrip.technicals.grade },
-  { section: "quality", get: (report) => report.verdict.gradeStrip.quality.grade },
-  { section: "leadership", get: (report) => report.verdict.gradeStrip.leadership.grade },
-  { section: "moat", get: (report) => report.verdict.gradeStrip.moat.grade },
-  {
-    section: "balanceSheet",
-    get: (report) => report.verdict.gradeStrip.balanceSheet?.grade ?? null,
-  },
-];
-
-const SCORE_KEYS = [
-  "composite",
-  "fundamentals",
-  "valuation",
-  "quality",
-  "balanceSheet",
-  "moat",
-  "leadership",
-  "technicals",
-] as const;
-
-const ASPECT_KEYS = SCORE_KEYS.filter((key) => key !== "composite");
-const PROJECTION_PATHS: ProjectionPath[] = [
-  "historical",
-  "bull",
-  "base",
-  "bear",
-  "weighted",
-];
 
 type RuntimeTrace = Omit<TracedNumber, "value"> & { value: number | null };
 type RuntimeScore = {
@@ -616,11 +586,11 @@ function indexDrivers(scoring: RuntimeScoring | undefined): DriverIndex {
   const order: string[] = [];
   const duplicates = new Set<string>();
   if (scoring) {
-    for (const aspect of ASPECT_KEYS) {
+    for (const aspect of SCORE_ASPECT_ORDER) {
       for (const trace of scoring.aspects[aspect]?.drivers ?? []) {
         const sourceKey = trace.sourceId ?? trace.source;
         const period = trace.period ?? "";
-        const key = JSON.stringify([aspect, sourceKey, trace.unit, period]);
+        const key = scoreDriverIdentity(aspect, trace);
         if (entries.has(key)) {
           duplicates.add(key);
           continue;
@@ -701,18 +671,19 @@ function indexProjections(report: Report): ProjectionIndex {
     | { series: RuntimeProjectionSeries[] }
     | undefined;
 
-  for (const series of projections?.series ?? []) {
+  const projectionSeries = orderedProjectionSeries(projections?.series ?? []);
+  for (const series of projectionSeries) {
     seriesSeen.set(series.metric, (seriesSeen.get(series.metric) ?? 0) + 1);
   }
   for (const [metric, count] of seriesSeen) {
     if (count > 1) duplicateMetrics.add(metric);
   }
-  for (const series of projections?.series ?? []) {
+  for (const series of projectionSeries) {
     const duplicateSeries = (seriesSeen.get(series.metric) ?? 0) > 1;
-    for (const path of PROJECTION_PATHS) {
+    for (const path of PROJECTION_PATH_ORDER) {
       if (duplicateSeries) duplicatePaths.add(path);
       for (const point of series[path] ?? []) {
-        const key = JSON.stringify([path, series.metric, point.period]);
+        const key = projectionPointIdentity(series.metric, path, point.period);
         const periodConflict =
           point.value.period !== null &&
           point.value.period !== undefined &&
@@ -776,14 +747,14 @@ export function diffReports(
   }
 
   const gradeChanges: GradeChange[] = [];
-  for (const section of GRADE_SECTIONS) {
-    const from = section.get(fromReport);
-    const to = section.get(toReport);
+  for (const descriptor of GRADE_SURFACES) {
+    const from = fromReport.verdict.gradeStrip[descriptor.key]?.grade ?? null;
+    const to = toReport.verdict.gradeStrip[descriptor.key]?.grade ?? null;
     if (from === to) continue;
     const transition =
       from === null ? "added" : to === null ? "removed" : "changed";
     gradeChanges.push({
-      section: section.section,
+      section: descriptor.key,
       from,
       to,
       ...transitionComparison(transition, globalReasons),
@@ -793,7 +764,7 @@ export function diffReports(
   const fromScoring = fromReport.scores as RuntimeScoring | undefined;
   const toScoring = toReport.scores as RuntimeScoring | undefined;
   const scoreChanges: ScoreChange[] = [];
-  for (const aspect of SCORE_KEYS) {
+  for (const aspect of SCORE_SURFACE_ORDER) {
     const fromScore =
       aspect === "composite"
         ? fromScoring?.composite
@@ -833,10 +804,16 @@ export function diffReports(
 
   const fromWeights = fromScoring?.composite.weights;
   const toWeights = toScoring?.composite.weights;
-  const weightKeys = orderedUnion(
+  const runtimeWeightKeys = orderedUnion(
     fromWeights ? (Object.keys(fromWeights) as ScoreAspect[]) : [],
     toWeights ? (Object.keys(toWeights) as ScoreAspect[]) : [],
   );
+  const weightKeys = orderedUnion<ScoreAspect>(
+    SCORE_ASPECT_ORDER,
+    runtimeWeightKeys,
+  ).filter((aspect) =>
+    (fromWeights !== undefined && hasOwn(fromWeights, aspect)) ||
+    (toWeights !== undefined && hasOwn(toWeights, aspect)));
   const weightChanges: CompositeWeightChange[] = [];
   for (const aspect of weightKeys) {
     const fromPresent = fromWeights !== undefined && hasOwn(fromWeights, aspect);
@@ -906,7 +883,7 @@ export function diffReports(
       : []),
   ];
   const targetOrder = orderedUnion<TargetScenario>(
-    ["bull", "base", "bear"],
+    PROJECTION_SCENARIO_WEIGHT_ORDER,
     orderedUnion(fromTargets.order, toTargets.order),
   ).filter(
     (scenario) =>
@@ -966,7 +943,7 @@ export function diffReports(
     bear: [],
     weighted: [],
   };
-  for (const path of PROJECTION_PATHS) {
+  for (const path of PROJECTION_PATH_ORDER) {
     if (
       fromProjections.duplicatePaths.has(path) ||
       toProjections.duplicatePaths.has(path)
@@ -1173,7 +1150,7 @@ export function diffReports(
     ...globalReasons,
     ...driverFamilyReasons,
     ...targetFamilyReasons,
-    ...PROJECTION_PATHS.flatMap((path) => projectionFamilyReasons[path]),
+    ...PROJECTION_PATH_ORDER.flatMap((path) => projectionFamilyReasons[path]),
     ...driverChanges.flatMap((change) => change.reasons),
     ...targetChanges.flatMap((change) => change.reasons),
     ...projectionChanges.flatMap((change) => change.reasons),

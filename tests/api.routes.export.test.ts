@@ -380,12 +380,31 @@ describe("GET /api/report/view/[reportId]", () => {
       "fundamentals",
       "valuation",
       "technicals",
+      "balanceSheet",
       "quality",
       "leadership",
       "moat",
     ]);
     expect(body.synthesis.length).toBeGreaterThan(0);
     expect(body.dataOnly).toBe(false);
+  });
+
+  it("omits optional balance only for a legacy report and preserves canonical grade order", async () => {
+    const legacy = clone(loadFixtureReport());
+    delete legacy.verdict.gradeStrip.balanceSheet;
+    const id = seedReport(ReportSchema.parse(legacy));
+    const res = await viewGET(...viewReq(String(id)));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { grades: Array<{ key: string }> };
+    expect(body.grades.map((grade) => grade.key)).toEqual([
+      "fundamentals",
+      "valuation",
+      "technicals",
+      "quality",
+      "leadership",
+      "moat",
+    ]);
+    expect(body.grades.some((grade) => grade.key === "balanceSheet")).toBe(false);
   });
 
   it("degrades to a friendly payload (no throw) when the stored JSON is malformed", async () => {

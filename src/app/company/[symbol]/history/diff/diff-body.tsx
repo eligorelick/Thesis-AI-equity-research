@@ -17,24 +17,13 @@ import type {
   TransitionKind,
   VerdictChange,
 } from "@/report/diff";
-
-const SECTION_LABELS: Record<string, string> = {
-  composite: "Composite",
-  fundamentals: "Fundamentals",
-  valuation: "Valuation",
-  technicals: "Technicals",
-  quality: "Quality",
-  balanceSheet: "Balance Sheet",
-  leadership: "Leadership",
-  moat: "Moat",
-};
-
-const METRIC_LABELS: Record<string, string> = {
-  revenue: "Revenue",
-  operatingMargin: "Operating margin",
-  fcf: "FCF",
-  epsDiluted: "EPS diluted",
-};
+import {
+  GRADE_SURFACE_BY_KEY,
+  PROJECTION_METRIC_BY_KEY,
+  PROJECTION_PATH_BY_KEY,
+  SCORE_SURFACE_BY_KEY,
+  SCORE_WEIGHT_BY_ASPECT,
+} from "@/report/surfaceManifest";
 
 const REASON_LABELS: Record<DiffReasonCode, string> = {
   "invalid-entity": "A report entity identifier is invalid",
@@ -261,7 +250,7 @@ function gradeRow(change: GradeChange) {
       key={change.section}
       transition={change.transition}
       comparison={change.comparison}
-      identity={SECTION_LABELS[change.section]}
+      identity={GRADE_SURFACE_BY_KEY[change.section].label}
       from={change.from ?? missingEndpoint("from", change.transition)}
       to={change.to ?? missingEndpoint("to", change.transition)}
       direction={gradeDirection(change)}
@@ -285,7 +274,7 @@ function scoreRow(change: ScoreChange) {
       key={change.aspect}
       transition={change.transition}
       comparison={change.comparison}
-      identity={SECTION_LABELS[change.aspect]}
+      identity={SCORE_SURFACE_BY_KEY[change.aspect].label}
       from={from}
       to={to}
       direction={scoreDirection(change)}
@@ -299,7 +288,7 @@ function weightRow(change: CompositeWeightChange) {
       key={change.aspect}
       transition={change.transition}
       comparison={change.comparison}
-      identity={SECTION_LABELS[change.aspect]}
+      identity={SCORE_WEIGHT_BY_ASPECT[change.aspect].label}
       from={
         change.fromValue === null
           ? missingEndpoint("from", change.transition)
@@ -331,7 +320,7 @@ function driverRow(change: DriverChange, index: number) {
       transition={change.transition}
       comparison={change.comparison}
       identity={
-        SECTION_LABELS[change.aspect] +
+        SCORE_SURFACE_BY_KEY[change.aspect].label +
         " | " +
         change.sourceKey +
         " | " +
@@ -379,9 +368,9 @@ function projectionRow(change: ProjectionChange) {
       transition={change.transition}
       comparison={change.comparison}
       identity={
-        change.path +
+        PROJECTION_PATH_BY_KEY[change.path].label +
         " | " +
-        (METRIC_LABELS[change.metric] ?? change.metric) +
+        PROJECTION_METRIC_BY_KEY[change.metric].label +
         " | " +
         change.period
       }

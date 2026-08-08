@@ -54,7 +54,15 @@ function reportSummary(over: Record<string, unknown> = {}) {
     costUsd: 1.25,
     verificationRate: 0.8,
     synthesis: "current synthesis",
-    grades: [{ key: "quality", grade: "A", oneLineWhy: "strong evidence" }],
+    grades: [
+      { key: "fundamentals", grade: "A", oneLineWhy: "fundamentals sentinel" },
+      { key: "valuation", grade: "B", oneLineWhy: "valuation sentinel" },
+      { key: "technicals", grade: "C", oneLineWhy: "technicals sentinel" },
+      { key: "balanceSheet", grade: "D", oneLineWhy: "balance sentinel" },
+      { key: "quality", grade: "F", oneLineWhy: "quality sentinel" },
+      { key: "leadership", grade: "A", oneLineWhy: "leadership sentinel" },
+      { key: "moat", grade: "B", oneLineWhy: "moat sentinel" },
+    ],
     dataOnly: false,
     ...over,
   };
@@ -320,6 +328,55 @@ describe("GenerateReport — revisioned snapshot stream fence", () => {
       async () => new Response(JSON.stringify(reportSummary()), { status: 200 }),
     );
     expect(installed).toEqual([expect.objectContaining({ reportId: 11, symbol: "AAPL" })]);
+  });
+
+  it("accepts exactly the canonical required grade sequence plus optional balance and rejects malformed sequences", async () => {
+    const fence = createJobStreamSnapshotFence();
+    const source = {};
+    fence.activate(source, "job-A", "AAPL");
+    fence.accept(source, snapshot({ revision: 1, status: "done", reportId: 11 }));
+    const token = fence.token(source, "job-A")!;
+    const canonical = reportSummary().grades as Array<Record<string, unknown>>;
+    const withoutBalance = canonical.filter((grade) => grade.key !== "balanceSheet");
+    const malformed = [
+      [...canonical, { key: "mystery", grade: "A", oneLineWhy: "unknown" }],
+      [...canonical, canonical[0]],
+      [canonical[1], canonical[0], ...canonical.slice(2)],
+      canonical.filter((grade) => grade.key !== "quality"),
+      [canonical[0], canonical[1], canonical[2], ...canonical.slice(4), canonical[3]],
+      [],
+    ];
+    const installed: unknown[] = [];
+    for (const grades of malformed) {
+      await fetchReportSummaryForSnapshot(
+        11,
+        token,
+        fence,
+        (summary) => installed.push(summary),
+        async () => new Response(JSON.stringify(reportSummary({ grades })), { status: 200 }),
+      );
+    }
+    expect(installed).toEqual([]);
+
+    for (const value of [
+      reportSummary({ grades: canonical }),
+      reportSummary({ grades: withoutBalance }),
+      reportSummary({ grades: [], dataOnly: true }),
+    ]) {
+      await fetchReportSummaryForSnapshot(
+        11,
+        token,
+        fence,
+        (summary) => installed.push(summary),
+        async () => new Response(JSON.stringify(value), { status: 200 }),
+      );
+    }
+    expect(installed).toHaveLength(3);
+    expect(installed).toEqual([
+      expect.objectContaining({ grades: canonical }),
+      expect.objectContaining({ grades: withoutBalance }),
+      expect.objectContaining({ grades: [] }),
+    ]);
   });
 
   it("closes only the matching source and derives every terminal phase from snapshots", () => {

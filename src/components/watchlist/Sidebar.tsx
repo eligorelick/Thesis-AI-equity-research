@@ -1,7 +1,7 @@
 /**
  * Watchlist sidebar (the application contract §8): the app-wide left rail. Renders, per watched
  * symbol, a dense scannable row — ticker (mono, links to /company/SYMBOL),
- * price + colored change%, a compact 6-grade chip strip (n/a when no report),
+ * price + colored change%, a compact grade chip strip (n/a when no report),
  * last-report date, and next-earnings date. An AddTicker control sits at the
  * top and a per-row remove (×) at the right.
  *
@@ -20,6 +20,7 @@
 import Link from "next/link";
 
 import { GradeChip } from "@/components/ui";
+import { GRADE_SURFACES } from "@/report/surfaceManifest";
 import type { Grade } from "@/types/core";
 import { getWatchlistView, type WatchlistRowView, type WatchlistGrades } from "@/watchlist/watchlist";
 
@@ -49,15 +50,6 @@ export async function WatchlistSidebar({ activeSymbol }: { activeSymbol?: string
 /* ------------------------------------------------------------------------ *
  * Presentational body
  * ------------------------------------------------------------------------ */
-
-const GRADE_ORDER: ReadonlyArray<{ key: keyof WatchlistGrades; label: string }> = [
-  { key: "fundamentals", label: "F" },
-  { key: "valuation", label: "V" },
-  { key: "technicals", label: "T" },
-  { key: "quality", label: "Q" },
-  { key: "leadership", label: "L" },
-  { key: "moat", label: "M" },
-];
 
 export function Sidebar({
   rows,
@@ -163,16 +155,19 @@ function WatchRow({ row, active }: { row: WatchlistRowView; active: boolean }) {
   );
 }
 
-/** Compact 6-grade strip; a plain "n/a" placeholder when no report exists. */
+/** Compact grade strip; a plain "n/a" placeholder when no report exists. */
 function GradeStrip({ grades }: { grades: WatchlistGrades | null }) {
   if (grades === null) {
     return <span className="mono text-[10px] text-faint">grades n/a</span>;
   }
   return (
     <div className="flex items-center gap-0.5" aria-label="section grades">
-      {GRADE_ORDER.map(({ key, label }) => (
-        <MiniGrade key={key} label={label} grade={grades[key]} />
-      ))}
+      {GRADE_SURFACES.map((descriptor) => {
+        const grade = grades[descriptor.key];
+        return grade === undefined
+          ? null
+          : <MiniGrade key={descriptor.id} label={descriptor.shortLabel} grade={grade} />;
+      })}
     </div>
   );
 }

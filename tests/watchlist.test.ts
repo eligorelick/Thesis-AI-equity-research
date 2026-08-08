@@ -220,6 +220,7 @@ describe("getWatchlistView", () => {
       fundamentals: "A",
       valuation: "C",
       technicals: "B",
+      balanceSheet: "B",
       quality: "A",
       leadership: "A",
       moat: "A",
@@ -229,6 +230,42 @@ describe("getWatchlistView", () => {
     expect(row?.nextEarnings).toBe("2026-07-31"); // earliest on/after today
     expect(row?.companyName).toBe("Apple Inc.");
     expect(row?.gaps).toEqual([]);
+  });
+
+  it("extracts a persisted legacy grade strip without fabricating optional balance", async () => {
+    addToWatchlist("DEMO");
+    const legacy = JSON.parse(readFileSync(
+      path.join(process.cwd(), "fixtures", "report", "DEMO-sample.json"),
+      "utf8",
+    )) as { meta: { generatedAt: string; model: string }; verdict: { gradeStrip: { balanceSheet?: unknown } } };
+    delete legacy.verdict.gradeStrip.balanceSheet;
+    handle.db.insert(reports).values({
+      symbol: "DEMO",
+      createdAt: legacy.meta.generatedAt,
+      model: legacy.meta.model,
+      status: "done",
+      reportJson: JSON.stringify(legacy),
+      verificationRate: 0.5,
+      costUsd: 1,
+      specVersion: REPORT_SPEC_VERSION,
+    }).run();
+
+    const [row] = await getWatchlistView({
+      fmp: stubFmp({
+        quote: () => Promise.resolve(gapResult("quote", "not needed")),
+        earnings: () => Promise.resolve(gapResult("earnings", "not needed")),
+      }),
+      now: NOW,
+    });
+    expect(row?.grades).toEqual({
+      fundamentals: "A",
+      valuation: "C",
+      technicals: "B",
+      quality: "A",
+      leadership: "A",
+      moat: "A",
+    });
+    expect(row?.grades).not.toHaveProperty("balanceSheet");
   });
 
   it("degrades gracefully when quote and earnings are gaps (fixture-mode analog)", async () => {

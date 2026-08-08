@@ -3,9 +3,10 @@
  * (src/report/schema.ts). Renders the full report (the application contract §7 sections 1–13)
  * as a dense, navigable, terminal-grade page:
  *
- *   - a sticky top bar holding the 6-grade strip (Fundamentals, Valuation,
- *     Technicals, Quality/Red-Flags, Leadership, Moat) — each a clickable
- *     GradeChip that scroll-anchors to that section's full GradeReasoning;
+ *   - a sticky top bar holding the current 7-grade strip (Fundamentals,
+ *     Valuation, Technicals, Balance Sheet, Quality/Red-Flags, Leadership,
+ *     Moat), while legacy reports omit only Balance Sheet — each present grade
+ *     is a clickable GradeChip that scroll-anchors to its full GradeReasoning;
  *   - the verdict synthesis, prominently, right under the grades;
  *   - the Catalysts & Risks panel PINNED near the top with strong visual weight
  *     (SPEC §8) — accent-bordered, above the numbered deep-dive sections;

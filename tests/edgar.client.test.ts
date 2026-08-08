@@ -27,6 +27,7 @@ import {
   isExhibitType,
   padCik,
   parseIndexHeaders,
+  parseIndexHtm,
   stripAccessionDashes,
   unpadCik,
   type EdgarFiling,
@@ -34,6 +35,18 @@ import {
 
 const SAMPLES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "edgar");
 const sample = (name: string): string => readFileSync(path.join(SAMPLES, name), "utf8");
+
+const HIDDEN_MARKUP_CASES: ReadonlyArray<readonly [string, (content: string) => string]> = [
+  ["comment", (content) => `<html><body><!--${content}--><p>Hello world</p></body></html>`],
+  ["CDATA", (content) => `<![CDATA[${content}]]><html><body>Hello world</body></html>`],
+  ["processing instruction", (content) => `<?sample ${content}?><html><body>Hello world</body></html>`],
+  ["DOCTYPE entity", (content) => `<!DOCTYPE html [<!ENTITY sample '${content}'>]><html><body>Hello world</body></html>`],
+  ["script", (content) => `<html><script>${content}</script><body>Hello world</body></html>`],
+  ["style", (content) => `<html><style>${content}</style><body>Hello world</body></html>`],
+  ["title", (content) => `<html><title>${content}</title><body>Hello world</body></html>`],
+  ["textarea", (content) => `<html><textarea>${content}</textarea><body>Hello world</body></html>`],
+  ["prefixed script", (content) => `<html><h:script>${content}</h:script><body>Hello world</body></html>`],
+];
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -586,6 +599,209 @@ describe("default transport (injected fetchFn — no network)", () => {
       '<html xmlns:report="http://www.xbrl.org/2013/inlineXBRL"><report:tuple name="example"></report:tuple></html>',
     ],
   ])("accepts bound XBRL namespaces with a non-normative %s", (_label, body) => {
+    expect(filingDocumentBodyProblem(body)).toBeNull();
+  });
+
+  it.each(HIDDEN_MARKUP_CASES)(
+    "sanitized semantic admission ignores a filing keyword hidden in %s",
+    (_label, wrap) => {
+      expect(filingDocumentBodyProblem(wrap("Annual filing disclosure"))).toMatch(/implausible/i);
+    },
+  );
+
+  it.each(HIDDEN_MARKUP_CASES)(
+    "sanitized semantic admission ignores SGML filing structure hidden in %s",
+    (_label, wrap) => {
+      const hiddenSgml = "<DOCUMENT>\n<TYPE>10-K\n<SEQUENCE>1\n<FILENAME>hidden.htm\n<TEXT>";
+      expect(filingDocumentBodyProblem(wrap(hiddenSgml))).toMatch(/implausible/i);
+    },
+  );
+
+  it.each(HIDDEN_MARKUP_CASES)(
+    "sanitized index parsing ignores an SGML document hidden in %s",
+    (_label, wrap) => {
+      const hiddenSgml = "<DOCUMENT>\n<TYPE>10-K\n<SEQUENCE>1\n<FILENAME>hidden.htm\n<TEXT>";
+      expect(parseIndexHeaders(wrap(hiddenSgml)).documents).toEqual([]);
+    },
+  );
+
+  it("sanitized semantic admission ignores hidden SEC errors without rejecting visible filing prose", () => {
+    const body = [
+      "<html><body>",
+      "<!-- EDGAR is currently unavailable. Page Not Found. -->",
+      "<script>Temporarily unavailable. Please try again later.</script>",
+      "<p>The registrant reported durable customer demand, improving operating margins, and disciplined capital allocation while management monitored principal market risks.</p>",
+      "</body></html>",
+    ].join("");
+
+    expect(filingDocumentBodyProblem(body)).toBeNull();
+  });
+
+  it.each([
+    "Your request originates from an undeclared automated tool",
+    "OK",
+  ])("sanitized semantic admission applies known SEC error patterns to actual titles: %s", (title) => {
+    const body = [
+      `<html><head><title>${title}</title></head><body>`,
+      "<p>This site provides public company filing information, investor education resources, policy materials, and additional guidance for market participants.</p>",
+      "</body></html>",
+    ].join("");
+    expect(filingDocumentBodyProblem(body)).toMatch(/error|placeholder/i);
+  });
+
+  it("sanitized semantic admission does not synthesize a filing identifier across an omitted region", () => {
+    expect(filingDocumentBodyProblem("<html><body>10-<!-- hidden -->K</body></html>"))
+      .toMatch(/implausible/i);
+  });
+
+  it("sanitized semantic admission preserves word boundaries across ordinary tags", () => {
+    expect(filingDocumentBodyProblem("<html><body><span>Annual</span><span>filing</span></body></html>"))
+      .toBeNull();
+  });
+
+  it("sanitized semantic admission and index parsers ignore fake markup inside quoted attributes", () => {
+    const hiddenSgml = "<DOCUMENT><TYPE>10-K<SEQUENCE>1<FILENAME>hidden.htm<TEXT>";
+    const body = `<html data-sample="${hiddenSgml}"><body>Hello world</body></html>`;
+    expect(filingDocumentBodyProblem(body)).toMatch(/implausible/i);
+    expect(parseIndexHeaders(body).documents).toEqual([]);
+    const escapedBody = `<html data-sample="${hiddenSgml.replaceAll("<", "&lt;").replaceAll(">", "&gt;")}"><body>Hello world</body></html>`;
+    expect(filingDocumentBodyProblem(escapedBody)).toMatch(/implausible/i);
+    expect(parseIndexHeaders(escapedBody).documents).toEqual([]);
+    for (const hrefSample of [hiddenSgml, hiddenSgml.replaceAll("<", "&lt;").replaceAll(">", "&gt;")]) {
+      const hrefBody = `<html><body><a href='${hrefSample}'>Hello world</a></body></html>`;
+      expect(filingDocumentBodyProblem(hrefBody)).toMatch(/implausible/i);
+      expect(parseIndexHeaders(hrefBody).documents).toEqual([]);
+    }
+
+    const hiddenRow =
+      '<tr><td>9</td><td>Hidden</td><td><a href="hidden.htm">hidden.htm</a></td><td>EX-99</td><td>9</td></tr>';
+    expect(parseIndexHtm(`<html><body><div data-sample='${hiddenRow}'>Hello world</div></body></html>`).documents)
+      .toEqual([]);
+    const escapedRow = hiddenRow.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    expect(parseIndexHtm(`<html><body><div data-sample='${escapedRow}'>Hello world</div></body></html>`).documents)
+      .toEqual([]);
+  });
+
+  it.each([
+    '<Error><Code>AccessDenied</Code></Error>',
+    '&lt;Error&gt;&lt;Code&gt;AccessDenied&lt;/Code&gt;&lt;/Error&gt;',
+    "Your request originates from an undeclared automated tool",
+  ])("sanitized semantic admission ignores an error sample in a quoted attribute: %s", (sampleText) => {
+    const visibleProse =
+      "The registrant described durable demand, improving margins, disciplined investment, and principal risks that could affect future operating results.";
+    expect(filingDocumentBodyProblem(`<html data-sample="${sampleText}"><body>${visibleProse}</body></html>`))
+      .toBeNull();
+  });
+
+  it("sanitized index parsers retain visible rows and discard earlier hidden rows", () => {
+    const hiddenSgml = "&lt;DOCUMENT&gt;\n&lt;TYPE&gt;EX-99\n&lt;SEQUENCE&gt;9\n&lt;FILENAME&gt;hidden.htm\n&lt;TEXT&gt;";
+    const visibleSgml = "&lt;DOCUMENT&gt;\n&lt;TYPE&gt;10-K\n&lt;SEQUENCE&gt;1\n&lt;FILENAME&gt;annual.htm\n&lt;TEXT&gt;";
+    const headers = parseIndexHeaders(
+      `<html><body><!--${hiddenSgml}--><pre>${visibleSgml}</pre></body></html>`,
+    );
+    expect(headers.documents).toEqual([
+      { type: "10-K", sequence: "1", filename: "annual.htm", description: undefined },
+    ]);
+
+    const html = parseIndexHtm(
+      '<html><body><script><table><tr><td>9</td><td>Hidden</td><td><a href="hidden.htm">hidden.htm</a></td><td>EX-99</td><td>9</td></tr></table></script>' +
+        '<table><tr><td>1</td><td>Annual report</td><td><a href="annual.htm">annual.htm</a></td><td>10-K</td><td>100</td></tr></table></body></html>',
+    );
+    expect(html.documents).toEqual([
+      { type: "10-K", sequence: "1", filename: "annual.htm", description: "Annual report" },
+    ]);
+  });
+
+  it("sanitized HTML index parsing preserves a safe href outside admission content", () => {
+    const html = parseIndexHtm(
+      '<html><body><table><tr><td>1</td><td>Annual report</td><td><a href="/Archives/edgar/data/320193/annual.htm">Inline XBRL Viewer</a></td><td>10-K</td><td>100</td></tr></table></body></html>',
+    );
+    expect(html.documents).toEqual([
+      { type: "10-K", sequence: "1", filename: "annual.htm", description: "Annual report" },
+    ]);
+  });
+
+  it("sanitized index admission does not cache a hidden-only fake index", async () => {
+    const hiddenSgml = "<DOCUMENT>\n<TYPE>10-K\n<SEQUENCE>1\n<FILENAME>hidden.htm\n<TEXT>";
+    let headerHits = 0;
+    let fallbackHits = 0;
+    const fetchFn: typeof fetch = (input) => {
+      if (String(input).endsWith("-index-headers.html")) {
+        headerHits++;
+        return Promise.resolve(new Response(`<html><body><!--${hiddenSgml}--></body></html>`, { status: 200 }));
+      }
+      fallbackHits++;
+      return Promise.resolve(new Response("<html><body>Hello world</body></html>", { status: 200 }));
+    };
+    const client = new EdgarClient({
+      transport: createDefaultEdgarTransport({ fetchFn, maxRps: 1000 }),
+    });
+
+    const first = await client.filingIndexHeaders(320193, "0000320193-26-000001");
+    const second = await client.filingIndexHeaders(320193, "0000320193-26-000001");
+
+    expect(first.ok).toBe(false);
+    expect(second.ok).toBe(false);
+    expect(headerHits).toBe(2);
+    expect(fallbackHits).toBe(2);
+  });
+
+  it.each([
+    [
+      "HTML table",
+      '<script><table><tr><th>Document</th><th>Type</th></tr><tr><td><a href="hidden.htm">hidden.htm</a></td><td>10-K</td></tr></table></script>',
+    ],
+    [
+      "plain-text index",
+      "<!-- ACCESSION NUMBER 0000320193-26-000001 PUBLIC DOCUMENT COUNT 1 FILENAME hidden.htm -->",
+    ],
+    [
+      "quoted-attribute plain-text index",
+      '<div data-sample="ACCESSION NUMBER 0000320193-26-000001 PUBLIC DOCUMENT COUNT 1 FILENAME hidden.htm"></div>',
+    ],
+    [
+      "href-attribute plain-text index",
+      '<a href="ACCESSION NUMBER 0000320193-26-000001 PUBLIC DOCUMENT COUNT 1 FILENAME hidden.htm">details</a>',
+    ],
+    [
+      "href-attribute SGML index",
+      "<a href='<DOCUMENT><TYPE>10-K<SEQUENCE>1<FILENAME>hidden.htm<TEXT>'>details</a>",
+    ],
+  ])("sanitized index admission ignores a hidden-only %s shape", async (_label, hiddenIndex) => {
+    const visibleProse =
+      "<p>Management described durable demand, improving margins, disciplined investment, and principal risks that could affect future operating results.</p>";
+    let fallbackHits = 0;
+    const fetchFn: typeof fetch = (input) => {
+      if (String(input).endsWith("-index-headers.html")) {
+        return Promise.resolve(new Response("<html><body>Hello world</body></html>", { status: 200 }));
+      }
+      fallbackHits++;
+      return Promise.resolve(
+        new Response(`<html><body>${hiddenIndex}${visibleProse}</body></html>`, { status: 200 }),
+      );
+    };
+    const client = new EdgarClient({
+      transport: createDefaultEdgarTransport({ fetchFn, maxRps: 1000 }),
+    });
+
+    const first = await client.filingIndexHeaders(320193, "0000320193-26-000001");
+    const second = await client.filingIndexHeaders(320193, "0000320193-26-000001");
+
+    expect(first.ok).toBe(false);
+    expect(second.ok).toBe(false);
+    expect(fallbackHits).toBe(2);
+  });
+
+  it("treats a self-closing script token as raw text under HTML semantics", () => {
+    const body = '<html><script/><z:header xmlns:z="http://www.xbrl.org/2013/inlineXBRL"></script><body>Hello world</body></html>';
+    expect(filingDocumentBodyProblem(body)).toMatch(/implausible/i);
+  });
+
+  it.each([
+    ["U+200C", "\u200Csample"],
+    ["U+2163", "\u2163sample"],
+  ])("accepts XML 1.0 NameStart prefixes beginning with %s", (_label, prefix) => {
+    const body = `<html xmlns:${prefix}="http://www.xbrl.org/2013/inlineXBRL"><${prefix}:header/></html>`;
     expect(filingDocumentBodyProblem(body)).toBeNull();
   });
 

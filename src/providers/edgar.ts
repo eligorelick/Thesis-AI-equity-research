@@ -204,7 +204,8 @@ function yyyymmddToIso(s: string | undefined): string | undefined {
  * DESCRIPTION is optional (absent on some GRAPHIC entries).
  */
 export function parseIndexHeaders(html: string): FilingIndex {
-  const text = unescapeHtml(html);
+  const semantic = scanFilingMarkup(html);
+  const text = semantic.malformed ? "" : unescapeHtml(semantic.admissionContent);
   const documents: FilingDocumentEntry[] = [];
   const re =
     /<DOCUMENT>\s*<TYPE>([^\n<]+)\s*<SEQUENCE>([^\n<]+)\s*<FILENAME>([^\n<]+?)\s*(?:<DESCRIPTION>([^\n<]+?)\s*)?<TEXT>/gi;
@@ -234,10 +235,12 @@ export function parseIndexHeaders(html: string): FilingIndex {
  * (tables with columns Seq | Description | Document | Type | Size).
  */
 export function parseIndexHtm(html: string): FilingIndex {
+  const semantic = scanFilingMarkup(html);
+  const sanitizedHtml = semantic.malformed ? "" : semantic.admissionContent;
   const documents: FilingDocumentEntry[] = [];
   const rowRe = /<tr\b[\s\S]*?<\/tr>/gi;
   let row: RegExpExecArray | null;
-  while ((row = rowRe.exec(html)) !== null) {
+  while ((row = rowRe.exec(sanitizedHtml)) !== null) {
     const cells: string[] = [];
     const cellRe = /<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi;
     let c: RegExpExecArray | null;
@@ -245,7 +248,10 @@ export function parseIndexHtm(html: string): FilingIndex {
     while ((c = cellRe.exec(row[0])) !== null) {
       const inner = c[1];
       const a = /<a\b[^>]*href="([^"]+)"[^>]*>/i.exec(inner);
-      if (a !== null && href === "") href = a[1];
+      if (a !== null && href === "") {
+        const marker = /^__EDGAR_HREF_(\d+)__$/.exec(a[1]);
+        if (marker !== null) href = semantic.hrefs[Number(marker[1])] ?? "";
+      }
       cells.push(
         unescapeHtml(inner.replace(/<[^>]*>/g, " "))
           .replace(/&nbsp;| /g, " ")
@@ -604,44 +610,45 @@ const EDGAR_ERROR_BODY_PATTERNS: readonly RegExp[] = [
   /^\s*(?:ok|not found|file not found|access denied|service unavailable|temporarily unavailable)\s*[.!]?\s*$/i,
 ];
 
-function knownEdgarErrorBody(body: string): boolean {
-  if (EDGAR_ERROR_BODY_PATTERNS.some((pattern) => pattern.test(body))) return true;
-  const title = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(body)?.[1]
-    ?.replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const secSiteBranding = title !== undefined && /\bsec\.gov\b/i.test(title);
-  const maintenanceTitleSignal =
-    title !== undefined && /\b(?:scheduled )?maintenance\b|\b(?:temporarily )?unavailable\b/i.test(title);
-  // SEC's site-shell maintenance page contains enough legitimate prose to
-  // look meaningful. Require both the operational signal and SEC.gov title
-  // branding so issuer disclosures that discuss maintenance remain valid.
-  if (secSiteBranding && maintenanceTitleSignal) return true;
+function knownEdgarErrorBody(semantic: FilingMarkupScan): boolean {
+  const titles = semantic.titles.map((title) =>
+    unescapeHtml(title)
+      .replace(/\s+/g, " ")
+      .trim(),
+  );
+  const errorSurfaces = [semantic.visibleText, ...titles];
   if (
-    title !== undefined &&
-    /(?:page|file) not found\b|access denied\b|request rate threshold exceeded\b|service unavailable\b|temporarily unavailable\b|edgar (?:maintenance|unavailable)\b/i.test(
-      title,
+    EDGAR_ERROR_BODY_PATTERNS.some((pattern) =>
+      errorSurfaces.some((surface) => pattern.test(surface)),
     )
   ) {
     return true;
   }
-  return /<(?:[a-z][\w.-]*:)?(?:error|errorresponse|exceptionreport)\b/i.test(body) ||
+  const brandedMaintenanceTitle = titles.some(
+    (title) =>
+      /\bsec\.gov\b/i.test(title) &&
+      /\b(?:scheduled )?maintenance\b|\b(?:temporarily )?unavailable\b/i.test(title),
+  );
+  // SEC's site-shell maintenance page contains enough legitimate prose to
+  // look meaningful. Require both the operational signal and SEC.gov title
+  // branding so issuer disclosures that discuss maintenance remain valid.
+  if (brandedMaintenanceTitle) return true;
+  if (
+    titles.some((title) =>
+      /(?:page|file) not found\b|access denied\b|request rate threshold exceeded\b|service unavailable\b|temporarily unavailable\b|edgar (?:maintenance|unavailable)\b/i.test(
+        title,
+      ),
+    )
+  ) {
+    return true;
+  }
+  return /<(?:[a-z][\w.-]*:)?(?:error|errorresponse|exceptionreport)\b/i.test(semantic.admissionContent) ||
     /<(?:[a-z][\w.-]*:)?code\b[^>]*>\s*(?:accessdenied|nosuchkey|requesttimeout|serviceunavailable)\s*</i.test(
-      body,
+      semantic.admissionContent,
     );
 }
 
-function textContent(body: string): string {
-  return unescapeHtml(body)
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<(?:script|style)\b[^>]*>[\s\S]*?<\/(?:script|style)>/gi, " ")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function hasMeaningfulHumanContent(body: string): boolean {
-  const text = textContent(body);
+function hasMeaningfulHumanContent(text: string): boolean {
   const words = text.match(/[A-Za-z][A-Za-z'’-]{2,}/g) ?? [];
   const uniqueWords = new Set(words.map((word) => word.toLowerCase()));
   // Lexical diversity plus sentence/connective structure admits substantive
@@ -676,9 +683,13 @@ const INLINE_XBRL_LOCAL_NAMES = new Set([
 const XML_NAMESPACE = "http://www.w3.org/XML/1998/namespace";
 const XMLNS_NAMESPACE = "http://www.w3.org/2000/xmlns/";
 
-interface XbrlMarkupScan {
+interface FilingMarkupScan {
   found: boolean;
   malformed: boolean;
+  admissionContent: string;
+  visibleText: string;
+  titles: string[];
+  hrefs: string[];
 }
 
 interface ParsedName {
@@ -691,9 +702,12 @@ interface ParsedStartTag {
   end: number;
   selfClosing: boolean;
   declarations: Map<string, string>;
+  href: string | null;
 }
 
-const MARKUP_NAME_PATTERN = /[\p{L}_][\p{L}\p{N}\p{M}_.\-\u00B7\u203F\u2040]*(?::[\p{L}_][\p{L}\p{N}\p{M}_.\-\u00B7\u203F\u2040]*)?/uy;
+// XML 1.0 (Fifth Edition) NameStartChar/NameChar ranges, with ':' kept out
+// of each component so QName structure remains exactly prefix?:local.
+const MARKUP_NAME_PATTERN = /[A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\u{10000}-\u{EFFFF}][A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\u{10000}-\u{EFFFF}0-9.\-\u00B7\u0300-\u036F\u203F-\u2040]*(?::[A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\u{10000}-\u{EFFFF}][A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\u{10000}-\u{EFFFF}0-9.\-\u00B7\u0300-\u036F\u203F-\u2040]*)?/uy;
 
 function readMarkupName(body: string, start: number): ParsedName | null {
   // XML Names permit Unicode letters; prefix labels are non-normative and
@@ -766,13 +780,14 @@ function parseStartTag(body: string, start: number): ParsedStartTag | null {
   if (parsedName === null) return null;
   let cursor = parsedName.end;
   const declarations = new Map<string, string>();
+  let href: string | null = null;
   while (cursor < body.length) {
     cursor = skipWhitespace(body, cursor);
     if (body[cursor] === ">") {
-      return { qName: parsedName.name, end: cursor + 1, selfClosing: false, declarations };
+      return { qName: parsedName.name, end: cursor + 1, selfClosing: false, declarations, href };
     }
     if (body[cursor] === "/" && body[cursor + 1] === ">") {
-      return { qName: parsedName.name, end: cursor + 2, selfClosing: true, declarations };
+      return { qName: parsedName.name, end: cursor + 2, selfClosing: true, declarations, href };
     }
     const attribute = readMarkupName(body, cursor);
     if (attribute === null) return null;
@@ -811,11 +826,28 @@ function parseStartTag(body: string, start: number): ParsedStartTag | null {
       if (value === XMLNS_NAMESPACE) return null;
       declarations.set(namespacePrefix, value);
     }
+    if (href === null && attribute.name.toLowerCase() === "href" && value !== null) href = value;
   }
   return null;
 }
 
-function rawTextElementEnd(body: string, start: number, qName: string): number | null {
+/** Emit only structure needed by admission/index parsing, never sample attrs. */
+function admissionStartTag(tag: ParsedStartTag, hrefs: string[]): string {
+  let href = "";
+  if (tag.qName.toLowerCase() === "a" && tag.href !== null) {
+    const marker = `__EDGAR_HREF_${hrefs.length}__`;
+    hrefs.push(tag.href);
+    href = ` href="${marker}"`;
+  }
+  return `<${tag.qName}${href}${tag.selfClosing ? "/>" : ">"}`;
+}
+
+interface RawTextElementEnd {
+  contentEnd: number;
+  end: number;
+}
+
+function rawTextElementEnd(body: string, start: number, qName: string): RawTextElementEnd | null {
   const lowerBody = body.toLowerCase();
   const needle = `</${qName.toLowerCase()}`;
   let cursor = start;
@@ -829,60 +861,94 @@ function rawTextElementEnd(body: string, start: number, qName: string): number |
       continue;
     }
     const close = skipWhitespace(body, afterName);
-    return body[close] === ">" ? close + 1 : null;
+    return body[close] === ">" ? { contentEnd: candidate, end: close + 1 } : null;
   }
   return null;
 }
 
 /**
- * Recognize XBRL by namespace URI, never by a conventional prefix. This
- * quote-aware, non-executing tokenizer resolves actual xmlns attributes while
- * skipping declarations and raw-text regions. Any unterminated ignored region
- * or tag fails closed so later prose heuristics cannot admit malformed input.
+ * Build one non-executing semantic view for admission and index parsing while
+ * recognizing XBRL by namespace URI, never by a conventional prefix. Hidden
+ * markup is replaced with a separator so removal cannot synthesize a token.
  */
-function scanBoundXbrlStructure(body: string): XbrlMarkupScan {
+function scanFilingMarkup(body: string): FilingMarkupScan {
   const scopes: Array<{ qName: string; bindings: Map<string, string> }> = [];
   const voidElements = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+  const admissionParts: string[] = [];
+  const visibleParts: string[] = [];
+  const titles: string[] = [];
+  const hrefs: string[] = [];
   let found = false;
   let cursor = 0;
+
+  const finish = (malformed: boolean): FilingMarkupScan => ({
+    found: malformed ? false : found,
+    malformed,
+    admissionContent: admissionParts.join(""),
+    visibleText: unescapeHtml(visibleParts.join(""))
+      .replace(/\s+/g, " ")
+      .trim(),
+    titles,
+    hrefs,
+  });
+  const omitRegion = (): void => {
+    admissionParts.push(" ");
+    visibleParts.push(" ");
+  };
+
   while (cursor < body.length) {
     const tagStart = body.indexOf("<", cursor);
-    if (tagStart < 0) break;
+    if (tagStart < 0) {
+      const tail = body.slice(cursor);
+      admissionParts.push(tail);
+      visibleParts.push(tail);
+      cursor = body.length;
+      break;
+    }
+    const visible = body.slice(cursor, tagStart);
+    admissionParts.push(visible);
+    visibleParts.push(visible);
 
     if (body.startsWith("<!--", tagStart)) {
       const end = body.indexOf("-->", tagStart + 4);
-      if (end < 0) return { found: false, malformed: true };
+      if (end < 0) return finish(true);
+      omitRegion();
       cursor = end + 3;
       continue;
     }
     if (body.startsWith("<![CDATA[", tagStart)) {
       const end = body.indexOf("]]>", tagStart + 9);
-      if (end < 0) return { found: false, malformed: true };
+      if (end < 0) return finish(true);
+      omitRegion();
       cursor = end + 3;
       continue;
     }
     if (body.startsWith("<?", tagStart)) {
       const end = ignoredRegionEnd(body, tagStart + 2, "?>", false);
-      if (end === null) return { found: false, malformed: true };
+      if (end === null) return finish(true);
+      omitRegion();
       cursor = end;
       continue;
     }
     if (body.startsWith("<!", tagStart)) {
       const end = ignoredRegionEnd(body, tagStart + 2, ">", true);
-      if (end === null) return { found: false, malformed: true };
+      if (end === null) return finish(true);
+      omitRegion();
       cursor = end;
       continue;
     }
 
     if (body.startsWith("</", tagStart)) {
       const closingName = readMarkupName(body, tagStart + 2);
-      if (closingName === null) return { found: false, malformed: true };
+      if (closingName === null) return finish(true);
       const close = skipWhitespace(body, closingName.end);
-      if (body[close] !== ">") return { found: false, malformed: true };
+      if (body[close] !== ">") return finish(true);
       const scopeIndex = scopes.findLastIndex(
         (scope) => scope.qName.toLowerCase() === closingName.name.toLowerCase(),
       );
       if (scopeIndex >= 0) scopes.splice(scopeIndex);
+      admissionParts.push(body.slice(tagStart, close + 1));
+      visibleParts.push(" ");
       cursor = close + 1;
       continue;
     }
@@ -891,79 +957,92 @@ function scanBoundXbrlStructure(body: string): XbrlMarkupScan {
     if (tag === null) {
       // A name-looking opener is an unterminated/malformed tag. A lone '<'
       // used as prose is ignored for compatibility with imperfect HTML/text.
-      if (readMarkupName(body, tagStart + 1) !== null) return { found: false, malformed: true };
+      if (readMarkupName(body, tagStart + 1) !== null) return finish(true);
+      admissionParts.push("<");
+      visibleParts.push("<");
       cursor = tagStart + 1;
       continue;
     }
 
-    const bindings = new Map(scopes.at(-1)?.bindings ?? []);
-    for (const [prefix, namespace] of tag.declarations) bindings.set(prefix, namespace);
     const colon = tag.qName.indexOf(":");
     const prefix = colon >= 0 ? tag.qName.slice(0, colon) : "";
     const localName = (colon >= 0 ? tag.qName.slice(colon + 1) : tag.qName).toLowerCase();
+    const rawTextElement =
+      localName === "script" || localName === "style" || localName === "title" || localName === "textarea";
+    if (rawTextElement) {
+      const end = rawTextElementEnd(body, tag.end, tag.qName);
+      if (end === null) return finish(true);
+      if (localName === "title") titles.push(body.slice(tag.end, end.contentEnd));
+      omitRegion();
+      cursor = end.end;
+      continue;
+    }
+
+    const bindings = new Map(scopes.at(-1)?.bindings ?? []);
+    for (const [bindingPrefix, namespace] of tag.declarations) bindings.set(bindingPrefix, namespace);
     const namespace = bindings.get(prefix);
     if (localName === "xbrl" && namespace === XBRL_INSTANCE_NAMESPACE) found = true;
     if (INLINE_XBRL_LOCAL_NAMES.has(localName) && namespace !== undefined && INLINE_XBRL_NAMESPACES.has(namespace)) {
       found = true;
     }
 
-    const rawTextElement =
-      localName === "script" || localName === "style" || localName === "title" || localName === "textarea";
-    if (rawTextElement && !tag.selfClosing) {
-      const end = rawTextElementEnd(body, tag.end, tag.qName);
-      if (end === null) return { found: false, malformed: true };
-      cursor = end;
-      continue;
-    }
+    admissionParts.push(admissionStartTag(tag, hrefs));
+    visibleParts.push(" ");
     const htmlVoid = prefix === "" && voidElements.has(localName);
     if (!tag.selfClosing && !htmlVoid) scopes.push({ qName: tag.qName, bindings });
     cursor = tag.end;
   }
-  return { found, malformed: false };
+  return finish(false);
+}
+
+function filingDocumentProblemFromSemantic(semantic: FilingMarkupScan): string | null {
+  if (semantic.malformed) return "filing document response contained malformed or unterminated markup";
+  if (knownEdgarErrorBody(semantic)) return "filing document response was an SEC error or placeholder page";
+
+  // SEC filing artifacts legitimately arrive as HTML/iXBRL, XML/XBRL, SGML,
+  // or plain text. Recognize filing structures/terms first, then fall back to
+  // meaningful human prose. Markup or an XML declaration alone proves nothing.
+  if (
+    semantic.found ||
+    /<SEC-DOCUMENT\b|<DOCUMENT\b[\s\S]*?<TYPE>[\s\S]*?<TEXT\b/i.test(semantic.admissionContent)
+  ) {
+    return null;
+  }
+  if (
+    /\b(?:united states securities and exchange commission|annual (?:report|filing)|quarterly (?:report|filing)|current report|filing disclosure|registrant|exhibit\s+(?:\d+(?:\.\d+)?|[A-Z]\b)|(?:form\s+)?(?:10-[KQ]|20-F|6-K|8-K)|accession number)\b/i.test(
+      semantic.visibleText,
+    )
+  ) {
+    return null;
+  }
+  if (hasMeaningfulHumanContent(semantic.visibleText)) return null;
+  return "filing document response was implausible SEC filing content";
 }
 
 /** Return a semantic problem for a successful filing-document body, if any. */
 export function filingDocumentBodyProblem(body: string): string | null {
   const trimmed = body.trim();
   if (trimmed === "") return "filing document response was empty";
-  if (knownEdgarErrorBody(trimmed)) return "filing document response was an SEC error or placeholder page";
-  const xbrlScan = scanBoundXbrlStructure(trimmed);
-  if (xbrlScan.malformed) return "filing document response contained malformed or unterminated markup";
-
-  // SEC filing artifacts legitimately arrive as HTML/iXBRL, XML/XBRL, SGML,
-  // or plain text. Recognize filing structures/terms first, then fall back to
-  // meaningful human prose. Markup or an XML declaration alone proves nothing.
-  if (
-    xbrlScan.found ||
-    /<SEC-DOCUMENT\b|<DOCUMENT\b[\s\S]*?<TYPE>[\s\S]*?<TEXT\b/i.test(trimmed)
-  ) {
-    return null;
-  }
-  if (
-    /\b(?:united states securities and exchange commission|annual (?:report|filing)|quarterly (?:report|filing)|current report|filing disclosure|registrant|exhibit\s+(?:\d+(?:\.\d+)?|[A-Z]\b)|(?:form\s+)?(?:10-[KQ]|20-F|6-K|8-K)|accession number)\b/i.test(
-      trimmed,
-    )
-  ) {
-    return null;
-  }
-  if (hasMeaningfulHumanContent(trimmed)) return null;
-  return "filing document response was implausible SEC filing content";
+  return filingDocumentProblemFromSemantic(scanFilingMarkup(trimmed));
 }
 
 /** Validate the two SEC Archives filing-index representations before caching. */
 function filingIndexBodyProblem(body: string): string | null {
-  const genericProblem = filingDocumentBodyProblem(body);
+  const trimmed = body.trim();
+  if (trimmed === "") return "filing index response was empty";
+  const semantic = scanFilingMarkup(trimmed);
+  const genericProblem = filingDocumentProblemFromSemantic(semantic);
   if (genericProblem !== null) return genericProblem.replace("filing document", "filing index");
-  const text = unescapeHtml(body);
+  const text = unescapeHtml(semantic.admissionContent);
   const sgmlIndex = /<DOCUMENT>[\s\S]*?<TYPE>[^\r\n<]+[\s\S]*?<FILENAME>[^\r\n<]+/i.test(text);
   const htmlIndex =
     /<table\b/i.test(text) &&
-    /\b(?:document|document format files)\b/i.test(text) &&
-    /\btype\b/i.test(text) &&
+    /\b(?:document|document format files)\b/i.test(semantic.visibleText) &&
+    /\btype\b/i.test(semantic.visibleText) &&
     /<a\b[^>]*href=/i.test(text);
   const plainTextIndex =
-    /\baccession(?:-| )number\b/i.test(text) &&
-    /\b(?:filename|document|public document count)\b/i.test(text);
+    /\baccession(?:-| )number\b/i.test(semantic.visibleText) &&
+    /\b(?:filename|document|public document count)\b/i.test(semantic.visibleText);
   return sgmlIndex || htmlIndex || plainTextIndex
     ? null
     : "filing index response lacked SEC document-index structure";

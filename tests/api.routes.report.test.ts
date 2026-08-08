@@ -5,11 +5,9 @@
  * against an in-memory better-sqlite3 database (setDbForTests) — the same DB
  * setup jobRunner.test.ts uses.
  *
- * The pass runner is stubbed: runJob is mocked to a no-op so NOTHING hits the
- * network or an LLM. createJob / getReusableActiveJobForSymbol / the resume
- * helpers / sweepAbandonedJobs are kept REAL (they only touch the DB) via
- * importOriginal, so the route's own control flow (dedup, 404/409 guards,
- * atomic claim) is exercised for real.
+ * The durable scheduler kick and legacy pass runner are both stubbed so
+ * NOTHING hits the network or an LLM. Route handlers may enqueue and kick,
+ * but must never own a detached runJob promise.
  *
  * Coverage:
  *   POST /api/report               — symbol validation (regex/length),
@@ -32,7 +30,12 @@ vi.mock("server-only", () => ({}));
 // the routes' guards run against a real DB. runJob is fire-and-forget in the
 // routes; the stub resolves instantly and never touches providers or an LLM.
 // vi.hoisted so the mock fn exists when the hoisted vi.mock factory runs.
-const { runJobMock } = vi.hoisted(() => ({
+const {
+  runJobMock,
+  kickJobSchedulerMock,
+  reconcileExpiredJobClaimsMock,
+  reconcileExpiredSchedulerStateInTransactionMock,
+} = vi.hoisted(() => ({
   runJobMock: vi.fn(async () => ({
     status: "done" as const,
     reportId: null,
@@ -40,16 +43,30 @@ const { runJobMock } = vi.hoisted(() => ({
     verificationRate: null,
     totalCostUsd: 0,
   })),
+  kickJobSchedulerMock: vi.fn(),
+  reconcileExpiredJobClaimsMock: vi.fn(() => 0),
+  reconcileExpiredSchedulerStateInTransactionMock: vi
+    .fn<(db: unknown, now: Date) => number>()
+    .mockReturnValue(0),
 }));
 
-/** The recorded runJob call args (the no-arg mock signature erases them). */
-function runJobCalls(): unknown[][] {
-  return runJobMock.mock.calls as unknown as unknown[][];
-}
 vi.mock("@/pipeline/jobRunner", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/pipeline/jobRunner")>();
   return { ...actual, runJob: runJobMock };
 });
+vi.mock("@/pipeline/jobScheduler", () => ({
+  kickJobScheduler: kickJobSchedulerMock,
+  reconcileExpiredJobClaims: reconcileExpiredJobClaimsMock,
+  reconcileExpiredSchedulerStateInTransaction: reconcileExpiredSchedulerStateInTransactionMock,
+  configuredSchedulerLimits: vi.fn(() => ({
+    maxActiveJobs: 1,
+    maxActiveLlmCalls: 2,
+    maxRollingCostUsd: null,
+    rollingCostWindowMs: 86_400_000,
+    paidPassLeaseTtlMs: 900_000,
+    jobLeaseTtlMs: 900_000,
+  })),
+}));
 
 import {
   createDatabase,
@@ -78,9 +95,54 @@ beforeEach(() => {
   handle = createDatabase(":memory:");
   setDbForTests(handle.db);
   runJobMock.mockClear();
+  kickJobSchedulerMock.mockClear();
+  reconcileExpiredSchedulerStateInTransactionMock.mockReset();
+  reconcileExpiredSchedulerStateInTransactionMock.mockImplementation((db, now) => {
+    const target = db as DatabaseHandle["db"];
+    const at = now.toISOString();
+    let changed = 0;
+    for (const row of target.select().from(jobs).all()) {
+      if (row.status !== "running" || (row.leaseExpiresAt !== null && row.leaseExpiresAt > at)) continue;
+      changed += target.update(jobs).set({
+        status: "error",
+        error: "job lease expired before completion",
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        updatedAt: at,
+        revision: row.revision + 1,
+      }).where(eq(jobs.id, row.id)).run().changes;
+    }
+    return changed;
+  });
+  reconcileExpiredJobClaimsMock.mockReset();
+  reconcileExpiredJobClaimsMock.mockImplementation(() => {
+    const at = new Date().toISOString();
+    let changed = 0;
+    for (const row of handle.db.select().from(jobs).all()) {
+      if (row.status !== "running" || (row.leaseExpiresAt !== null && row.leaseExpiresAt > at)) continue;
+      changed += handle.db.update(jobs).set({
+        status: "error",
+        error: "job lease expired before completion",
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        updatedAt: at,
+        revision: row.revision + 1,
+      }).where(eq(jobs.id, row.id)).run().changes;
+    }
+    return changed;
+  });
 });
 
 afterEach(() => {
+  // vitest currently reuses module registries across files in a worker. Do not
+  // leak this file's DB-closing reconciliation fixture into same-origin route
+  // tests that import the shared mocked scheduler later in the same worker.
+  reconcileExpiredJobClaimsMock.mockReset();
+  reconcileExpiredJobClaimsMock.mockReturnValue(0);
+  reconcileExpiredSchedulerStateInTransactionMock.mockReset();
+  reconcileExpiredSchedulerStateInTransactionMock.mockReturnValue(0);
   setDbForTests(null);
   handle.sqlite.close();
 });
@@ -180,7 +242,7 @@ describe("POST /api/report", () => {
     expect(handle.db.select().from(jobs).all()).toHaveLength(0);
   });
 
-  it("accepts a valid symbol, creates a queued job, and dispatches runJob (202)", async () => {
+  it("accepts a valid symbol, creates a queued job, and kicks the durable scheduler (202)", async () => {
     const res = await reportPOST(reportRequest({ symbol: "aapl" }));
     expect(res.status).toBe(202);
     const body = (await res.json()) as { jobId: string; existing?: boolean };
@@ -192,11 +254,9 @@ describe("POST /api/report", () => {
     expect(row?.symbol).toBe("AAPL");
     expect(row?.status).toBe("queued");
 
-    // Background dispatch reached the (stubbed) runJob for this job id.
-    await vi.waitFor(() => {
-      expect(runJobMock).toHaveBeenCalledTimes(1);
-      expect(runJobCalls()[0]?.[0]).toBe(body.jobId);
-    });
+    expect(kickJobSchedulerMock).toHaveBeenCalledTimes(1);
+    expect(kickJobSchedulerMock.mock.calls[0]?.[0]).toEqual(expect.any(Function));
+    expect(runJobMock).not.toHaveBeenCalled();
   });
 
   it("returns the SAME job with existing:true on a duplicate POST for an active symbol", async () => {
@@ -212,6 +272,36 @@ describe("POST /api/report", () => {
     expect(
       handle.db.select().from(jobs).where(eq(jobs.symbol, "MSFT")).all(),
     ).toHaveLength(1);
+    expect(kickJobSchedulerMock).toHaveBeenCalledTimes(2);
+    expect(runJobMock).not.toHaveBeenCalled();
+  });
+
+  it("atomically replaces an expired same-symbol owner instead of returning it as existing", async () => {
+    const first = (await (await reportPOST(reportRequest({ symbol: "NVDA" }))).json()) as {
+      jobId: string;
+    };
+    handle.db.update(jobs).set({
+      status: "running",
+      leaseOwner: "expired-post-owner",
+      heartbeatAt: "2000-01-01T00:00:00.000Z",
+      leaseExpiresAt: "2000-01-01T00:00:01.000Z",
+    }).where(eq(jobs.id, first.jobId)).run();
+
+    const response = await reportPOST(reportRequest({ symbol: "nvda" }));
+    const body = (await response.json()) as { jobId: string; existing?: boolean };
+
+    expect(response.status).toBe(202);
+    expect(body.existing).toBeUndefined();
+    expect(body.jobId).not.toBe(first.jobId);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, first.jobId)).get()).toMatchObject({
+      status: "error",
+      leaseOwner: null,
+    });
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, body.jobId)).get()).toMatchObject({
+      status: "queued",
+      symbol: "NVDA",
+    });
+    expect(kickJobSchedulerMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -253,6 +343,28 @@ describe("GET /api/report/[jobId]", () => {
     expect(snap.reportId).toBeNull();
     expect(snap.totalCostUsd).toBe(0);
     expect(snap.resumable).toBe(false);
+  });
+
+  it("does not use updatedAt as write authority while polling a running job", async () => {
+    const { jobId } = createJobReal("AAPL");
+    handle.db.update(jobs).set({
+      status: "running",
+      updatedAt: "2000-01-01T00:00:00.000Z",
+      leaseOwner: "live:owner",
+      heartbeatAt: "2026-08-08T12:00:00.000Z",
+      leaseExpiresAt: "2999-01-01T00:00:00.000Z",
+      revision: 7,
+    }).where(eq(jobs.id, jobId)).run();
+
+    expect((await reportGET(new Request(`http://localhost/api/report/${jobId}`), {
+      params: Promise.resolve({ jobId }),
+    })).status).toBe(200);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "running",
+      revision: 7,
+      leaseOwner: "live:owner",
+      updatedAt: "2000-01-01T00:00:00.000Z",
+    });
   });
 
   it("exposes authoritative resumable true even when synthesize steps lie done", async () => {
@@ -423,6 +535,47 @@ describe("POST /api/report/[jobId]/retry", () => {
     expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.status).toBe("done");
   });
 
+  it("reconciles an expired same-symbol owner before enqueueing a resumable retry", async () => {
+    const target = seedResumableJob("AAPL");
+    const { jobId: expired } = createJobReal("AAPL");
+    handle.db.update(jobs).set({
+      status: "running",
+      revision: 1,
+      leaseOwner: "expired:nonce",
+      heartbeatAt: new Date(Date.now() - 2_000).toISOString(),
+      leaseExpiresAt: new Date(Date.now() - 1_000).toISOString(),
+    }).where(eq(jobs.id, expired)).run();
+
+    const res = await retryPOST(...retryReq(target));
+
+    const body = await res.clone().json();
+    expect(res.status, JSON.stringify({ body, rows: handle.db.select().from(jobs).all() })).toBe(202);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, expired)).get())
+      .toMatchObject({ status: "error", leaseOwner: null, revision: 2 });
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, target)).get())
+      .toMatchObject({ status: "queued", runGeneration: 1 });
+    expect(kickJobSchedulerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a live same-symbol owner as a retry conflict", async () => {
+    const target = seedResumableJob("AAPL");
+    const { jobId: live } = createJobReal("AAPL");
+    handle.db.update(jobs).set({
+      status: "running",
+      revision: 1,
+      leaseOwner: "live:nonce",
+      heartbeatAt: new Date().toISOString(),
+      leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }).where(eq(jobs.id, live)).run();
+
+    const res = await retryPOST(...retryReq(target));
+
+    expect(res.status).toBe(409);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, live)).get()?.status).toBe("running");
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, target)).get()?.status).toBe("error");
+    expect(kickJobSchedulerMock).not.toHaveBeenCalled();
+  });
+
   it("retries from durable legacy analysts even when synthesize steps lie done", async () => {
     const jobId = seedResumableJob("AAPL");
     handle.db
@@ -441,7 +594,8 @@ describe("POST /api/report/[jobId]/retry", () => {
     const res = await retryPOST(...retryReq(jobId));
 
     expect(res.status).toBe(202);
-    await vi.waitFor(() => expect(runJobMock).toHaveBeenCalledTimes(1));
+    expect(kickJobSchedulerMock).toHaveBeenCalledTimes(1);
+    expect(runJobMock).not.toHaveBeenCalled();
   });
 
   it("does not retry a job whose reportId names an existing report row", async () => {
@@ -507,37 +661,31 @@ describe("POST /api/report/[jobId]/retry", () => {
     expect(claimed?.error).toBeNull();
     expect(claimed?.reportId).toBeNull();
 
-    // A resume dispatch reached the stubbed runJob with the resume flag.
-    await vi.waitFor(() => {
-      expect(runJobMock).toHaveBeenCalledTimes(1);
-      expect(runJobCalls()[0]?.[0]).toBe(jobId);
-      expect(runJobCalls()[0]?.[2]).toMatchObject({ resume: true });
-    });
+    // Route ownership ends after durable enqueue + scheduler notification.
+    expect(kickJobSchedulerMock).toHaveBeenCalledTimes(1);
+    expect(runJobMock).not.toHaveBeenCalled();
 
     // A second retry now sees a queued job → 409 (atomic single-claim), and does
     // NOT dispatch runJob again.
     const second = await retryPOST(...retryReq(jobId));
     expect(second.status).toBe(409);
-    expect(runJobMock).toHaveBeenCalledTimes(1);
+    expect(kickJobSchedulerMock).toHaveBeenCalledTimes(1);
+    expect(runJobMock).not.toHaveBeenCalled();
   });
 
-  it("terminalizes a detached pre-run failure without leaking its raw detail or stranding queued", async () => {
+  it("leaves execution ownership to the scheduler after an accepted retry", async () => {
     const jobId = seedResumableJob("AAPL");
-    runJobMock.mockRejectedValueOnce(new Error("raw provider payload: secret-response-body"));
 
     const res = await retryPOST(...retryReq(jobId));
 
     expect(res.status).toBe(202);
-    await vi.waitFor(() => {
-      expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
-        status: "error",
-        runGeneration: 1,
-        error: "runJob: queued retry dispatch failed before execution",
-      });
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "queued",
+      runGeneration: 1,
+      error: null,
     });
-    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.error).not.toContain(
-      "secret-response-body",
-    );
+    expect(kickJobSchedulerMock).toHaveBeenCalledTimes(1);
+    expect(runJobMock).not.toHaveBeenCalled();
   });
 });
 
@@ -559,6 +707,8 @@ describe("POST /api/report/[jobId]/cancel", () => {
     const row = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
     expect(row?.status).toBe("error");
     expect(row?.error).toContain("canceled by user");
+    expect(kickJobSchedulerMock).toHaveBeenCalledTimes(1);
+    expect(runJobMock).not.toHaveBeenCalled();
 
     expect((await cancelPOST(...cancelReq(jobId))).status).toBe(409);
   });

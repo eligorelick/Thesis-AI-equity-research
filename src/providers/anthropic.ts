@@ -97,6 +97,9 @@ export const STREAMING_THRESHOLD_TOKENS = 16_000;
 /** "auto" model resolution is cached for one hour. */
 export const MODEL_RESOLUTION_TTL_MS = 60 * 60 * 1000;
 
+/** Hard timeout for one provider HTTP request. Durable paid leases default to 15 minutes. */
+export const ANTHROPIC_REQUEST_TIMEOUT_MS = 600_000;
+
 /* ------------------------------------------------------------------------ *
  * Pricing (verified against live docs 2026-07-05 — the cost model §1)
  * ------------------------------------------------------------------------ */
@@ -115,6 +118,9 @@ export const CACHE_READ_MULTIPLIER = 0.1;
 /** Web search: $10 per 1,000 searches, on top of token costs. */
 export const WEB_SEARCH_USD_PER_SEARCH = 10 / 1000;
 
+/** Scheduler reservation and provider-boundary cap for one analyst request. */
+export const MAX_PROVIDER_WEB_SEARCHES = 8;
+
 export const SONNET_5_INTRO_PRICING_END_EXCLUSIVE_MS = Date.UTC(2026, 8, 1);
 export const SONNET_5_INTRO_PRICING: ModelPricing = { inputPerMTok: 2, outputPerMTok: 10 };
 
@@ -127,15 +133,39 @@ export const PRICING: Record<string, ModelPricing> = {
   "claude-haiku-4-5": { inputPerMTok: 1, outputPerMTok: 5 },
 };
 
+export const PRICED_MODEL_ALIASES = [
+  "claude-haiku-4-5",
+  "claude-sonnet-5",
+  "claude-opus-4-8",
+  "claude-fable-5",
+] as const;
+export type PricedModelAlias = (typeof PRICED_MODEL_ALIASES)[number];
+
+/** Return the exact priced family for an alias or an eight-digit dated snapshot. */
+export function pricedModelAlias(model: string): PricedModelAlias | null {
+  for (const alias of PRICED_MODEL_ALIASES) {
+    if (model === alias || new RegExp(`^${alias}-\\d{8}$`).test(model)) return alias;
+  }
+  return null;
+}
+
+export function assertPricedModel(model: string): PricedModelAlias {
+  const alias = pricedModelAlias(model);
+  if (alias === null) {
+    throw new Error(
+      `unsupported model "${model}": expected a priced model alias or eight-digit dated snapshot`,
+    );
+  }
+  return alias;
+}
+
 /**
  * Look up pricing for a model id, tolerating dated snapshot ids
  * (e.g. "claude-haiku-4-5-20251001" matches "claude-haiku-4-5").
  */
 export function findPricing(model: string): ModelPricing | undefined {
-  const exact = PRICING[model];
-  if (exact) return exact;
-  const key = Object.keys(PRICING).find((k) => model.startsWith(`${k}-`));
-  return key ? PRICING[key] : undefined;
+  const alias = pricedModelAlias(model);
+  return alias === null ? undefined : PRICING[alias];
 }
 
 function isSonnet5(model: string): boolean {
@@ -181,6 +211,93 @@ export function computeCostUsd(usage: UsageLike, model: string, webSearches = 0,
     (cacheReadTokens / M) * pricing.inputPerMTok * CACHE_READ_MULTIPLIER +
     webSearches * WEB_SEARCH_USD_PER_SEARCH
   );
+}
+
+/** Provider context cap used by the reservation proof. */
+export function modelContextTokenLimit(model: string): number {
+  return assertPricedModel(model) === "claude-haiku-4-5" ? 200_000 : 1_000_000;
+}
+
+export type ReservationPass = "bull" | "bear" | "synthesize" | "verify";
+
+export type VerifyReservationCapability =
+  | { billable: false }
+  | {
+      billable: true;
+      maxInputTokens: number;
+      maxOutputTokens: number;
+      maxWebSearches: number;
+    };
+
+function boundedInteger(value: number, label: string, maximum: number): number {
+  if (!Number.isSafeInteger(value) || value < 0 || value > maximum) {
+    throw new Error(`maximum pass cost: invalid ${label} cap`);
+  }
+  return value;
+}
+
+/**
+ * Conservative standard-price upper bound for every request that one durable
+ * attempt can expose. It covers all six SDK executions, all three transport
+ * executions, and all six pause/resumption executions (108 total).
+ */
+export function maximumPassCostUsd(
+  selectedModel: string,
+  pass: ReservationPass,
+  verifyCapability?: VerifyReservationCapability,
+): number {
+  if (pass === "verify") {
+    if (verifyCapability?.billable === false) return 0;
+    if (verifyCapability?.billable !== true) {
+      throw new Error("maximum pass cost: verify requires explicit billable capability metadata");
+    }
+  }
+
+  const requestedAlias = assertPricedModel(selectedModel);
+  const effectiveModel =
+    pass === "synthesize" && requestedAlias === "claude-haiku-4-5"
+      ? "claude-sonnet-5"
+      : selectedModel;
+  const effectiveAlias = assertPricedModel(effectiveModel);
+  const pricing = PRICING[effectiveAlias];
+  const contextCap = modelContextTokenLimit(effectiveModel);
+
+  const inputTokens = pass === "verify"
+    ? boundedInteger(
+        (verifyCapability as Extract<VerifyReservationCapability, { billable: true }>).maxInputTokens,
+        "verify input",
+        contextCap,
+      )
+    : contextCap;
+  const outputTokens = pass === "verify"
+    ? boundedInteger(
+        (verifyCapability as Extract<VerifyReservationCapability, { billable: true }>).maxOutputTokens,
+        "verify output",
+        effectiveAlias === "claude-haiku-4-5" ? 64_000 : 128_000,
+      )
+    : pass === "synthesize"
+      ? 96_000
+      : 64_000;
+  const searches = pass === "verify"
+    ? boundedInteger(
+        (verifyCapability as Extract<VerifyReservationCapability, { billable: true }>).maxWebSearches,
+        "verify web-search",
+        MAX_PROVIDER_WEB_SEARCHES,
+      )
+    : pass === "synthesize"
+      ? 0
+      : MAX_PROVIDER_WEB_SEARCHES;
+
+  // Work in quarter-micro-USD so the 1.25 cache multiplier and cap comparison
+  // never acquire a binary-floating-point extra micro-dollar.
+  const quarterMicroUsdPerExecution =
+    inputTokens * pricing.inputPerMTok * 5 +
+    outputTokens * pricing.outputPerMTok * 4 +
+    searches * 40_000;
+  const microUsd = Math.ceil(
+    (quarterMicroUsdPerExecution * PASS_BILLING_EXPOSURE_MULTIPLIER) / 4,
+  );
+  return microUsd / 1_000_000;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -302,7 +419,13 @@ async function transportRetrySleepWithSignal(ms: number, signal?: AbortSignal): 
 export function getClient(): Anthropic | null {
   if (clientSingleton === undefined) {
     const key = process.env.ANTHROPIC_API_KEY?.trim();
-    clientSingleton = key ? new Anthropic({ apiKey: key, maxRetries: CLIENT_MAX_RETRIES }) : null;
+    clientSingleton = key
+      ? new Anthropic({
+          apiKey: key,
+          maxRetries: CLIENT_MAX_RETRIES,
+          timeout: ANTHROPIC_REQUEST_TIMEOUT_MS,
+        })
+      : null;
   }
   return clientSingleton;
 }
@@ -330,17 +453,18 @@ let autoResolution: { model: string; resolvedAt: number } | null = null;
 
 /**
  * Pure preference selection: first PREFERENCE_ORDER entry present in the
- * available id list (dated snapshot ids match their alias). Falls back to the
- * first listed model (the API lists newest first); throws only when the list
- * is empty (hard environment failure).
+ * available id list (dated snapshot ids match their alias). Unknown models are
+ * rejected because the scheduler cannot prove a spend bound for them.
  */
 export function pickPreferredModel(availableIds: readonly string[]): string {
   for (const preferred of PREFERENCE_ORDER) {
-    const match = availableIds.find((id) => id === preferred || id.startsWith(`${preferred}-`));
+    const match = availableIds.find((id) => pricedModelAlias(id) === preferred);
     if (match) return match;
   }
-  if (availableIds.length > 0) return availableIds[0];
-  throw new Error("pickPreferredModel: models.list() returned no models");
+  if (availableIds.length === 0) {
+    throw new Error("pickPreferredModel: models.list() returned no models");
+  }
+  throw new Error("pickPreferredModel: models.list() returned no supported priced model");
 }
 
 /**
@@ -353,6 +477,7 @@ export function pickPreferredModel(availableIds: readonly string[]): string {
  */
 export async function resolveModel(setting: string): Promise<ResolvedModel> {
   if (setting !== "auto") {
+    assertPricedModel(setting);
     return { model: setting, resolvedFrom: "explicit" };
   }
 
@@ -403,6 +528,92 @@ export interface RunPassOptions {
   signal?: AbortSignal;
 }
 
+/** Output ceilings used by the durable reservation proof. */
+export const ANALYST_PROVIDER_MAX_OUTPUT_TOKENS = 64_000;
+export const JUDGE_PROVIDER_MAX_OUTPUT_TOKENS = 96_000;
+export const DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS = 128_000;
+
+function requestOutputTokenLimit(opts: RunPassOptions): number {
+  const alias = assertPricedModel(opts.model);
+  if (opts.field === "llm.bull" || opts.field === "llm.bear") {
+    return ANALYST_PROVIDER_MAX_OUTPUT_TOKENS;
+  }
+  if (opts.field === "llm.judge" || opts.field === "llm.synthesize") {
+    return JUDGE_PROVIDER_MAX_OUTPUT_TOKENS;
+  }
+  return alias === "claude-haiku-4-5"
+    ? ANALYST_PROVIDER_MAX_OUTPUT_TOKENS
+    : DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS;
+}
+
+/**
+ * Offline, deterministic upper bound for request-input tokens. Anthropic's
+ * tokenizer is not available locally; every text token represents at least one
+ * UTF-8 byte, while serializing the complete input also counts JSON framing.
+ * Therefore serialized UTF-8 bytes are a deliberately conservative token
+ * ceiling. It includes cache-controlled blocks, tools, and output schemas.
+ */
+export function requestInputTokenUpperBound(opts: RunPassOptions): number {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify({
+      system: opts.system,
+      messages: opts.messages,
+      tools: opts.tools,
+      outputSchema: opts.outputSchema,
+    });
+  } catch (error) {
+    throw new Error(`provider request input is not serializable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return new TextEncoder().encode(serialized).byteLength;
+}
+
+function boundedWebSearchUses(tools: RunPassOptions["tools"]): number {
+  let total = 0;
+  let count = 0;
+  for (const tool of tools ?? []) {
+    if (tool === null || typeof tool !== "object") continue;
+    const candidate = tool as unknown as Record<string, unknown>;
+    const isWebSearch = candidate.name === "web_search" ||
+      (typeof candidate.type === "string" && candidate.type.startsWith("web_search_"));
+    if (!isWebSearch) continue;
+    count += 1;
+    const maxUses = candidate.max_uses;
+    if (!Number.isSafeInteger(maxUses) || (maxUses as number) <= 0) {
+      throw new Error("provider request web-search max_uses must be a positive integer");
+    }
+    total += maxUses as number;
+  }
+  if (count > 1 || total > MAX_PROVIDER_WEB_SEARCHES) {
+    throw new Error(
+      `provider request web-search exposure exceeds the ${MAX_PROVIDER_WEB_SEARCHES}-use cap`,
+    );
+  }
+  return total;
+}
+
+/** Fail closed before any Anthropic request is launched. */
+export function validateRunPassOptions(opts: RunPassOptions): void {
+  assertPricedModel(opts.model);
+  const outputLimit = requestOutputTokenLimit(opts);
+  if (!Number.isSafeInteger(opts.maxTokens) || opts.maxTokens <= 0 || opts.maxTokens > outputLimit) {
+    throw new Error(
+      `provider request max_tokens must be a positive integer no greater than ${outputLimit.toLocaleString("en-US")}`,
+    );
+  }
+  const inputLimit = modelContextTokenLimit(opts.model);
+  const inputUpperBound = requestInputTokenUpperBound(opts);
+  if (inputUpperBound > inputLimit) {
+    throw new Error(
+      `provider request input upper bound ${inputUpperBound.toLocaleString("en-US")} exceeds the ${inputLimit.toLocaleString("en-US")}-token model context cap`,
+    );
+  }
+  const searchUses = boundedWebSearchUses(opts.tools);
+  if ((opts.field === "llm.judge" || opts.field === "llm.synthesize") && searchUses > 0) {
+    throw new Error("provider judge request cannot enable web search");
+  }
+}
+
 /**
  * Thinking config per model family:
  * - fable-5: OMIT the param entirely (always-on; any explicit config is a 400).
@@ -441,6 +652,7 @@ export interface BuiltPassRequest {
  * `fallbacks: [{model: FABLE_FALLBACK_MODEL}]`; sampling params are never sent.
  */
 export function buildPassParams(opts: RunPassOptions): BuiltPassRequest {
+  validateRunPassOptions(opts);
   const isFable = opts.model === "claude-fable-5" || opts.model.startsWith("claude-fable-5-");
 
   const params: MessageCreateParamsNonStreaming = {
@@ -482,7 +694,13 @@ export function webSearchTool(
   maxUses: number,
   model?: string,
 ): BetaWebSearchTool20260318 | BetaWebSearchTool20250305 {
-  if (model?.startsWith("claude-haiku-")) {
+  if (!Number.isSafeInteger(maxUses) || maxUses <= 0 || maxUses > MAX_PROVIDER_WEB_SEARCHES) {
+    throw new Error(
+      `web-search max_uses must be a positive integer no greater than ${MAX_PROVIDER_WEB_SEARCHES}`,
+    );
+  }
+  const alias = model === undefined ? undefined : assertPricedModel(model);
+  if (alias === "claude-haiku-4-5") {
     return { type: WEB_SEARCH_TOOL_TYPE_BASIC, name: "web_search", max_uses: maxUses };
   }
   return {
@@ -619,6 +837,10 @@ export type PassErrorKind =
  * + output) for nothing. See resumeIfPaused.
  */
 export const MAX_PAUSE_RESUMPTIONS = 5;
+
+/** Six SDK executions × three transport executions × six pause executions. */
+export const PASS_BILLING_EXPOSURE_MULTIPLIER =
+  (CLIENT_MAX_RETRIES + 1) * PASS_TRANSPORT_MAX_ATTEMPTS * (MAX_PAUSE_RESUMPTIONS + 1);
 
 export interface PassError {
   kind: PassErrorKind;
@@ -862,7 +1084,10 @@ async function resumeIfPausedWithUsage(
       messages: [...current.messages, { role: "assistant", content: msg.content }],
     };
     try {
-      msg = await client.beta.messages.create(current, { signal });
+      msg = await client.beta.messages.create(current, {
+        signal,
+        timeout: ANTHROPIC_REQUEST_TIMEOUT_MS,
+      });
     } catch (err) {
       throw new ResumptionFailedError(err, billableMessages);
     }
@@ -1031,6 +1256,7 @@ function transportFailureResult(
  * the reported cost so cost_log reflects true spend.
  */
 export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
+  const { params } = buildPassParams(opts);
   const client = getClient();
   if (!client) {
     return {
@@ -1038,8 +1264,6 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
       result: Promise.resolve(noKeyResult(opts)),
     };
   }
-
-  const { params } = buildPassParams(opts);
 
   let firstSettled = false;
   let signalFirst!: (event: "streamEvent" | "error" | "abort" | "end") => void;
@@ -1054,7 +1278,10 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
   const result = (async (): Promise<RunPassResult> => {
     const billedFailedAttempts: BetaMessage[] = [];
     for (let attempt = 1; attempt <= PASS_TRANSPORT_MAX_ATTEMPTS; attempt++) {
-      const stream = client.beta.messages.stream(params, { signal: opts.signal });
+      const stream = client.beta.messages.stream(params, {
+        signal: opts.signal,
+        timeout: ANTHROPIC_REQUEST_TIMEOUT_MS,
+      });
       const snapshot = trackStreamedUsage(stream);
       stream.once("streamEvent", () => signalFirst("streamEvent"));
       try {
@@ -1123,12 +1350,14 @@ export async function runPass(opts: RunPassOptions): Promise<RunPassResult> {
     return runPassStreaming(opts).result;
   }
 
+  const { params } = buildPassParams(opts);
   const client = getClient();
   if (!client) return noKeyResult(opts);
-
-  const { params } = buildPassParams(opts);
   try {
-    const message = await client.beta.messages.create(params, { signal: opts.signal });
+    const message = await client.beta.messages.create(params, {
+      signal: opts.signal,
+      timeout: ANTHROPIC_REQUEST_TIMEOUT_MS,
+    });
     const { final, billableMessages } = await resumeIfPausedWithUsage(
       client,
       params,

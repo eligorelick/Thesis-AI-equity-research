@@ -30,6 +30,69 @@ const optionalSecret = z
     return trimmed ? trimmed : undefined;
   });
 
+function blank(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+const MAX_NODE_TIMER_SECONDS = 2_147_483;
+const MAX_ROLLING_WINDOW_MINUTES = 52_560_000; // 100 years; safely inside the JS Date range.
+const MAX_EXACT_MICRO_USD = BigInt(Number.MAX_SAFE_INTEGER);
+
+function positiveIntegerEnv(
+  defaultValue: number,
+  minimumExclusive = 0,
+  maximumInclusive = Number.MAX_SAFE_INTEGER,
+) {
+  return z.string().optional().transform((raw, ctx) => {
+    const value = blank(raw);
+    if (value === undefined) return defaultValue;
+    if (!/^\d+$/.test(value)) {
+      ctx.addIssue({ code: "custom", message: "must be a positive base-10 integer" });
+      return z.NEVER;
+    }
+    const parsed = Number(value);
+    if (
+      !Number.isSafeInteger(parsed) ||
+      parsed <= minimumExclusive ||
+      parsed > maximumInclusive
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: `must be a safe integer greater than ${minimumExclusive} and at most ${maximumInclusive}`,
+      });
+      return z.NEVER;
+    }
+    return parsed;
+  });
+}
+
+function optionalUsdCapEnv() {
+  return z.string().optional().transform((raw, ctx) => {
+    const value = blank(raw);
+    if (value === undefined) return null;
+    const match = /^(\d+)(?:\.(\d{1,6}))?$/.exec(value);
+    if (match === null) {
+      ctx.addIssue({ code: "custom", message: "must be a nonnegative ordinary decimal with at most six places" });
+      return z.NEVER;
+    }
+    const whole = BigInt(match[1]);
+    const fraction = (match[2] ?? "").padEnd(6, "0");
+    const microUsd = whole * 1_000_000n + BigInt(fraction);
+    if (microUsd > MAX_EXACT_MICRO_USD) {
+      ctx.addIssue({ code: "custom", message: "USD cap exceeds exact micro-USD range" });
+      return z.NEVER;
+    }
+    const parsed = Number(value);
+    const canonical = `${whole.toString()}.${fraction}`;
+    if (!Number.isFinite(parsed) || parsed.toFixed(6) !== canonical) {
+      ctx.addIssue({ code: "custom", message: "USD cap cannot be represented as exact micro-USD" });
+      return z.NEVER;
+    }
+    return parsed;
+  });
+}
+
 const envSchema = z.object({
   FMP_API_KEY: optionalSecret,
   FINNHUB_API_KEY: optionalSecret,
@@ -43,6 +106,18 @@ const envSchema = z.object({
       const trimmed = v?.trim();
       return trimmed ? trimmed : "auto";
     }),
+  THESIS_MAX_ACTIVE_JOBS: positiveIntegerEnv(1),
+  THESIS_MAX_ACTIVE_LLM_CALLS: positiveIntegerEnv(2),
+  THESIS_MAX_JOB_COST_USD: optionalUsdCapEnv(),
+  THESIS_MAX_ROLLING_COST_USD: optionalUsdCapEnv(),
+  THESIS_ROLLING_COST_WINDOW_MINUTES: positiveIntegerEnv(
+    1_440,
+    0,
+    MAX_ROLLING_WINDOW_MINUTES,
+  ),
+  // Strictly greater than the provider's 600-second hard request timeout.
+  THESIS_PAID_PASS_LEASE_SECONDS: positiveIntegerEnv(900, 600, MAX_NODE_TIMER_SECONDS),
+  THESIS_JOB_LEASE_SECONDS: positiveIntegerEnv(900, 0, MAX_NODE_TIMER_SECONDS),
   // VERIFY_MODEL was removed (SPEC §12): verification is deterministic
   // numeric-source tracing and never calls a model. A leftover env var is
   // simply ignored.
@@ -63,6 +138,13 @@ export interface ThesisConfig {
   hasAnthropicKey: boolean;
   /** True when no FMP key is configured — FMP clients serve fixtures/gaps. */
   fixtureMode: boolean;
+  maxActiveJobs: number;
+  maxActiveLlmCalls: number;
+  maxJobCostUsd: number | null;
+  maxRollingCostUsd: number | null;
+  rollingCostWindowMs: number;
+  paidPassLeaseTtlMs: number;
+  jobLeaseTtlMs: number;
 }
 
 /**
@@ -84,6 +166,13 @@ export function parseEnv(
     hasFredKey: parsed.FRED_API_KEY !== undefined,
     hasAnthropicKey: parsed.ANTHROPIC_API_KEY !== undefined,
     fixtureMode: parsed.FMP_API_KEY === undefined,
+    maxActiveJobs: parsed.THESIS_MAX_ACTIVE_JOBS,
+    maxActiveLlmCalls: parsed.THESIS_MAX_ACTIVE_LLM_CALLS,
+    maxJobCostUsd: parsed.THESIS_MAX_JOB_COST_USD,
+    maxRollingCostUsd: parsed.THESIS_MAX_ROLLING_COST_USD,
+    rollingCostWindowMs: parsed.THESIS_ROLLING_COST_WINDOW_MINUTES * 60_000,
+    paidPassLeaseTtlMs: parsed.THESIS_PAID_PASS_LEASE_SECONDS * 1_000,
+    jobLeaseTtlMs: parsed.THESIS_JOB_LEASE_SECONDS * 1_000,
   };
   return Object.freeze(config);
 }

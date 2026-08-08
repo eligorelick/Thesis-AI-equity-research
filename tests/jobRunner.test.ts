@@ -15,8 +15,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { eq } from "drizzle-orm";
 import Database from "better-sqlite3";
+import type { ThesisConfig } from "@/config/env";
 
 const providerBoundaryMocks = vi.hoisted(() => ({
   runPass: vi.fn(async () => {
@@ -30,7 +35,7 @@ const providerBoundaryMocks = vi.hoisted(() => ({
   }),
 }));
 const configMocks = vi.hoisted(() => ({
-  getConfig: vi.fn(() => ({
+  getConfig: vi.fn<() => ThesisConfig>(() => ({
     fmpApiKey: undefined,
     finnhubApiKey: undefined,
     fredApiKey: undefined,
@@ -41,6 +46,13 @@ const configMocks = vi.hoisted(() => ({
     hasFredKey: false,
     hasAnthropicKey: false,
     fixtureMode: true,
+    maxActiveJobs: 1,
+    maxActiveLlmCalls: 2,
+    maxJobCostUsd: null,
+    maxRollingCostUsd: null,
+    rollingCostWindowMs: 86_400_000,
+    paidPassLeaseTtlMs: 900_000,
+    jobLeaseTtlMs: 900_000,
   })),
 }));
 
@@ -54,6 +66,8 @@ vi.mock("@/config/env", () => ({
 // (e.g. to throw for the model-resolution-failure case). Provider pass boundaries
 // fail loudly so the real Stage C facade remains network-free in recovery tests.
 vi.mock("@/providers/anthropic", () => ({
+  maximumPassCostUsd: vi.fn((_model: string, pass: string, capability?: { billable?: boolean }) =>
+    pass === "verify" && capability?.billable === false ? 0 : 100),
   resolveModel: vi.fn(async (setting: string) => ({
     model: setting === "auto" || setting === "" ? "claude-opus-4-8" : setting,
     resolvedFrom: setting === "auto" ? ("auto" as const) : ("explicit" as const),
@@ -65,7 +79,7 @@ vi.mock("@/providers/anthropic", () => ({
 
 import { resolveModel } from "@/providers/anthropic";
 import { bootstrapSchema, createDatabase, setDbForTests, type DatabaseHandle } from "@/db";
-import { costLog, jobPassArtifacts, jobs, reports } from "@/db/schema";
+import { costLog, jobLlmLeases, jobPassArtifacts, jobs, reports } from "@/db/schema";
 import { setSetting } from "@/settings/settings";
 import {
   ACTIVE_JOB_STALE_MS,
@@ -84,6 +98,7 @@ import {
   prepareQueuedJobResume,
   runJob,
   sweepAbandonedJobs,
+  DURABLE_LAUNCH_AUTHORITY_CAPABILITY,
   initialSteps,
   LLM_STEPS,
   NO_KEY_SKIP_REASON,
@@ -102,6 +117,7 @@ import {
   readCurrentGenerationPassArtifacts,
 } from "@/pipeline/jobArtifacts";
 import { readJobResumeState } from "@/pipeline/jobStore";
+import { claimNextQueuedJob, configuredSchedulerLimits } from "@/pipeline/jobScheduler";
 import {
   _clearJobSubscribers,
   subscribeJob,
@@ -125,6 +141,7 @@ import { PIPELINE_STEPS, type StepProgress } from "@/types/core";
  * ------------------------------------------------------------------------ */
 
 let handle: DatabaseHandle;
+let tempDirectory: string | null;
 
 /** Typed handle to the mocked resolveModel (see vi.mock at the top of file). */
 const resolveModelMock = vi.mocked(resolveModel);
@@ -138,6 +155,7 @@ function defaultResolveModel(setting: string): Promise<{ model: string; resolved
 }
 
 beforeEach(() => {
+  tempDirectory = null;
   handle = createDatabase(":memory:");
   setDbForTests(handle.db);
   _clearJobSubscribers();
@@ -155,6 +173,7 @@ afterEach(() => {
   vi.useRealTimers();
   setDbForTests(null);
   handle.sqlite.close();
+  if (tempDirectory !== null) rmSync(tempDirectory, { recursive: true, force: true });
   _clearJobSubscribers();
   vi.restoreAllMocks();
 });
@@ -449,6 +468,14 @@ function mockPasses(over: Partial<{
   };
 
   const passes: PipelinePasses = {
+    launchAuthorityCapability: DURABLE_LAUNCH_AUTHORITY_CAPABILITY,
+    verifyCapability: {
+      billable: true,
+      maxInputTokens: 12_000,
+      maxOutputTokens: 4_000,
+      maxWebSearches: 0,
+    },
+    preflightPass: () => {},
     assembleContextPayload: (b, c, v) => {
       calls.push("assembleContextPayload");
       void b;
@@ -456,15 +483,41 @@ function mockPasses(over: Partial<{
       void v;
       return { payload: true };
     },
-    runBullThenBear: async () => {
+    runBullThenBear: async (_deps, hooks, settlements) => {
       calls.push("runBullThenBear");
+      await hooks?.beforePass?.("bull");
+      hooks?.onPassStart?.("bull");
+      await hooks?.beforeProviderLaunch?.("bull");
+      let bullSettlementError: unknown;
+      try {
+        await settlements?.bull?.(testSuccessSettlement(bull));
+      } catch (error) {
+        bullSettlementError = error;
+      }
+      hooks?.onPassFinish?.("bull");
+      await hooks?.beforePass?.("bear");
+      hooks?.onPassStart?.("bear");
+      await hooks?.beforeProviderLaunch?.("bear");
+      let bearSettlementError: unknown;
+      try {
+        await settlements?.bear?.(testSuccessSettlement(bear));
+      } catch (error) {
+        bearSettlementError = error;
+      }
+      hooks?.onPassFinish?.("bear");
+      if (bullSettlementError !== undefined) throw bullSettlementError;
+      if (bearSettlementError !== undefined) throw bearSettlementError;
       return { bull, bear };
     },
-    runJudgePass: async () => {
+    runJudgePass: async (...raw: unknown[]) => {
+      const beforeProviderLaunch = raw[5] as (() => void | Promise<void>) | undefined;
+      await beforeProviderLaunch?.();
       calls.push("runJudgePass");
       return judgeResult;
     },
-    runVerifyPass: async () => {
+    runVerifyPass: async (...raw: unknown[]) => {
+      const beforeProviderLaunch = raw[4] as (() => void | Promise<void>) | undefined;
+      await beforeProviderLaunch?.();
       calls.push("runVerifyPass");
       return verify;
     },
@@ -500,6 +553,32 @@ type TestSettlementHook<T> = (settlement: TestSettlement<T>) => void | Promise<v
 interface TestAnalystSettlementHooks {
   bull?: TestSettlementHook<AnalystCase>;
   bear?: TestSettlementHook<AnalystCase>;
+}
+
+interface TestAnalystPassHooks {
+  beforePass?: (side: "bull" | "bear") => void | Promise<void>;
+  beforeProviderLaunch?: (side: "bull" | "bear") => void | Promise<void>;
+  onPassStart?: (side: "bull" | "bear") => void;
+  onPassFinish?: (side: "bull" | "bear") => void;
+}
+
+function testAnalystHooks(raw: unknown[]): {
+  lifecycle: TestAnalystPassHooks | undefined;
+  settlements: TestAnalystSettlementHooks | undefined;
+} {
+  return {
+    lifecycle: raw[1] as TestAnalystPassHooks | undefined,
+    settlements: raw[2] as TestAnalystSettlementHooks | undefined,
+  };
+}
+
+async function launchTestAnalystSide(
+  hooks: TestAnalystPassHooks | undefined,
+  side: "bull" | "bear",
+): Promise<void> {
+  await hooks?.beforePass?.(side);
+  hooks?.onPassStart?.(side);
+  await hooks?.beforeProviderLaunch?.(side);
 }
 
 function testTelemetry<T>(pass: PassResultLike<T>, billable = true): TestTelemetry {
@@ -816,41 +895,17 @@ describe("runJob — unsupported instruments", () => {
     });
   });
 
-  it("does not let a stale-active expiry overwrite a concurrent unsupported terminal transition", () => {
+  it("never lets an updatedAt read turn a queued or unsupported row terminal", () => {
     const { jobId } = createJob("SPY");
     const staleUpdatedAt = "2020-01-01T00:00:00.000Z";
     handle.db.update(jobs).set({ updatedAt: staleUpdatedAt }).where(eq(jobs.id, jobId)).run();
-
-    const realUpdate = handle.db.update.bind(handle.db);
-    const updateSpy = vi.spyOn(
-      handle.db as unknown as { update: (table: unknown) => unknown },
-      "update",
-    );
-    updateSpy.mockImplementation((table: unknown) => {
-      const builder = realUpdate(table as typeof jobs);
-      const originalSet = builder.set.bind(builder);
-      builder.set = ((values: Record<string, unknown>) => {
-        const query = originalSet(values);
-        if (values.status === "error") {
-          const originalRun = query.run.bind(query);
-          query.run = (() => {
-            handle.sqlite
-              .prepare(
-                `UPDATE jobs
-                    SET status = 'unsupported', unsupportedKind = 'etf',
-                        unsupportedMessage = 'concurrent terminal transition',
-                        updatedAt = '2026-08-07T00:00:00.000Z'
-                  WHERE id = ?`,
-              )
-              .run(jobId);
-            return originalRun();
-          }) as typeof query.run;
-        }
-        return query;
-      }) as typeof builder.set;
-      return builder;
-    });
-
+    expect(getReusableActiveJobForSymbol("SPY", new Date("2026-08-07T00:00:00.000Z"), 1))
+      .toMatchObject({ jobId, status: "queued", updatedAt: staleUpdatedAt });
+    handle.db.update(jobs).set({
+      status: "unsupported",
+      unsupportedKind: "etf",
+      unsupportedMessage: "concurrent terminal transition",
+    }).where(eq(jobs.id, jobId)).run();
     expect(getReusableActiveJobForSymbol("SPY", new Date("2026-08-07T00:00:00.000Z"), 1)).toBeNull();
     expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
       status: "unsupported",
@@ -859,38 +914,23 @@ describe("runJob — unsupported instruments", () => {
     });
   });
 
-  it("reuses a stale row that a concurrent heartbeat refreshes before expiry CAS", () => {
+  it("uses the durable lease rather than updatedAt when reusing a running row", () => {
     const { jobId } = createJob("MSFT");
     const staleUpdatedAt = "2020-01-01T00:00:00.000Z";
-    const refreshedAt = "2026-08-07T00:00:00.000Z";
-    handle.db.update(jobs).set({ updatedAt: staleUpdatedAt }).where(eq(jobs.id, jobId)).run();
-
-    const realUpdate = handle.db.update.bind(handle.db);
-    const updateSpy = vi.spyOn(
-      handle.db as unknown as { update: (table: unknown) => unknown },
-      "update",
-    );
-    updateSpy.mockImplementation((table: unknown) => {
-      const builder = realUpdate(table as typeof jobs);
-      const originalSet = builder.set.bind(builder);
-      builder.set = ((values: Record<string, unknown>) => {
-        const query = originalSet(values);
-        if (values.status === "error") {
-          const originalRun = query.run.bind(query);
-          query.run = (() => {
-            handle.sqlite.prepare("UPDATE jobs SET updatedAt = ? WHERE id = ?").run(refreshedAt, jobId);
-            return originalRun();
-          }) as typeof query.run;
-        }
-        return query;
-      }) as typeof builder.set;
-      return builder;
-    });
+    const leaseExpiresAt = "2026-08-07T00:10:00.000Z";
+    handle.db.update(jobs).set({
+      status: "running",
+      updatedAt: staleUpdatedAt,
+      leaseOwner: "worker:nonce",
+      heartbeatAt: "2026-08-07T00:00:00.000Z",
+      leaseExpiresAt,
+    }).where(eq(jobs.id, jobId)).run();
 
     expect(
       getReusableActiveJobForSymbol("MSFT", new Date("2026-08-07T00:00:01.000Z"), 60_000),
-    ).toEqual({ jobId, status: "queued", updatedAt: refreshedAt });
-    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.status).toBe("queued");
+    ).toEqual({ jobId, status: "running", updatedAt: staleUpdatedAt });
+    expect(getReusableActiveJobForSymbol("MSFT", new Date(leaseExpiresAt), 60_000)).toBeNull();
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.status).toBe("running");
   });
 });
 
@@ -899,6 +939,844 @@ describe("runJob — unsupported instruments", () => {
  * ------------------------------------------------------------------------ */
 
 describe("runJob - durable paid-pass settlements", () => {
+  it("uses a supplied durable claim without invoking a second queued claimant", async () => {
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 2,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 900_000,
+      jobLeaseTtlMs: 900_000,
+    };
+    const claim = scheduler.claimQueuedJobById(
+      jobId,
+      "preclaimed-test",
+      new Date(),
+      limits,
+    );
+    expect(claim).toMatchObject({ jobId, runGeneration: 0, revision: 1 });
+    const duplicateClaim = vi.spyOn(scheduler, "claimQueuedJobById");
+
+    const result = await runJob(jobId, mockPasses().passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim: claim!,
+      schedulerLimits: limits,
+    });
+
+    expect(result.status).toBe("done");
+    expect(duplicateClaim).not.toHaveBeenCalled();
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(0);
+  });
+
+  it("rejects an expired supplied claim before any pass adapter can launch", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-08T12:00:00.000Z"));
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 1,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60_000,
+      paidPassLeaseTtlMs: 200,
+      jobLeaseTtlMs: 100,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "expired-preclaim", new Date(), limits)!;
+    const base = mockPasses();
+    await vi.advanceTimersByTimeAsync(101);
+
+    await expect(runJob(jobId, base.passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    })).rejects.toThrow(/expired|authority|live preclaim/i);
+    expect(base.calls).not.toContain("runBullThenBear");
+    expect(handle.db.select().from(jobPassArtifacts).all()).toEqual([]);
+    expect(handle.db.select().from(costLog).all()).toEqual([]);
+  });
+
+  it("clears the overall timer and external abort listener when initial persistence loses authority", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW());
+    const { jobId } = createJob("AAPL");
+    const claim = claimNextQueuedJob(
+      "initial-persist-cleanup",
+      undefined,
+      configuredSchedulerLimits(),
+      handle.db,
+    );
+    if (claim === null) throw new Error("fixture job was not claimed");
+    const base = mockPasses();
+    const initialTimerCount = vi.getTimerCount();
+    const addEventListener = vi.fn(() => {
+      handle.db.update(jobs)
+        .set({ revision: claim.revision + 1 })
+        .where(eq(jobs.id, jobId))
+        .run();
+    });
+    const removeEventListener = vi.fn();
+    const signal = {
+      aborted: false,
+      reason: undefined,
+      addEventListener,
+      removeEventListener,
+    } as unknown as AbortSignal;
+
+    await expect(runJob(jobId, base.passes, {
+      bundle: fakeBundle(),
+      claim,
+      hasAnthropicKey: true,
+      now: NOW,
+      signal,
+    })).rejects.toThrow(/superseded/i);
+
+    expect(addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(vi.getTimerCount()).toBe(initialTimerCount);
+    expect(base.calls).toEqual([]);
+  });
+
+  it("rejects provider-cap preflight before acquiring a paid lease or launching an adapter", async () => {
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 2,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60_000,
+      paidPassLeaseTtlMs: 900_000,
+      jobLeaseTtlMs: 900_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "preflight-cap", new Date(), limits)!;
+    const base = mockPasses();
+    const providerLaunch = vi.fn(base.passes.runBullThenBear);
+    const passes: PipelinePasses = {
+      ...base.passes,
+      preflightPass: (_deps, request) => {
+        if (request.pass === "bull") throw new Error("request exceeds finite provider cap");
+      },
+      runBullThenBear: providerLaunch,
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: true });
+    expect(providerLaunch).not.toHaveBeenCalled();
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+    expect(handle.db.select().from(jobPassArtifacts).all()).toEqual([]);
+    expect(handle.db.select().from(costLog).all()).toEqual([]);
+  });
+
+  it("fails closed before paid work when an injected adapter cannot prove awaited launch authority", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const providerLaunch = vi.fn(base.passes.runBullThenBear);
+    const unsafe = { ...base.passes, runBullThenBear: providerLaunch };
+    delete (unsafe as PipelinePasses & { launchAuthorityCapability?: unknown })
+      .launchAuthorityCapability;
+
+    const result = await runJob(jobId, unsafe, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: true });
+    expect(providerLaunch).not.toHaveBeenCalled();
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+    expect(handle.db.select().from(jobPassArtifacts).all()).toEqual([]);
+    expect(handle.db.select().from(costLog).all()).toEqual([]);
+  });
+
+  it.each(["bull", "bear"] as const)(
+    "fences a canceled %s after permit acquisition but before the provider boundary",
+    async (targetSide) => {
+      const { jobId } = createJob("AAPL");
+      const base = mockPasses();
+      let targetProviderCalls = 0;
+      const passes: PipelinePasses = {
+        ...base.passes,
+        runBullThenBear: async (...raw: unknown[]) => {
+          const { lifecycle, settlements } = testAnalystHooks(raw);
+          if (targetSide === "bear") {
+            await launchTestAnalystSide(lifecycle, "bull");
+            await settlements?.bull?.(testSuccessSettlement(testAnalystPass("bull")));
+            lifecycle?.onPassFinish?.("bull");
+          }
+          await lifecycle?.beforePass?.(targetSide);
+          expect(handle.db.select().from(jobLlmLeases).all()).toEqual([
+            expect.objectContaining({ jobId, pass: targetSide }),
+          ]);
+          expect(cancelJob(jobId)).toBe(true);
+          try {
+            lifecycle?.onPassStart?.(targetSide);
+          } catch {
+            // Production Stage C intentionally isolates timing telemetry.
+          }
+          await lifecycle?.beforeProviderLaunch?.(targetSide);
+          targetProviderCalls += 1;
+          throw new Error(`${targetSide} provider must not launch after cancel`);
+        },
+      };
+
+      expect(await runJob(jobId, passes, {
+        bundle: fakeBundle(),
+        hasAnthropicKey: true,
+        now: NOW,
+      })).toMatchObject({ status: "error", reportId: null });
+      expect(targetProviderCalls).toBe(0);
+      expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+      expect(
+        handle.db.select().from(jobPassArtifacts).all().filter((row) => row.pass === targetSide),
+      ).toEqual([]);
+      expect(handle.db.select().from(costLog).all().filter((row) => row.step === targetSide))
+        .toEqual([]);
+    },
+  );
+
+  it("does not launch or mutate after the exact job lease expires between permit and boundary", async () => {
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 2,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60_000,
+      paidPassLeaseTtlMs: 900_000,
+      jobLeaseTtlMs: 900_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "expiry-boundary", new Date(), limits)!;
+    const base = mockPasses();
+    let providerCalls = 0;
+    let revisionAtExpiry = -1;
+    let stepsAtExpiry = "";
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (...raw: unknown[]) => {
+        const { lifecycle } = testAnalystHooks(raw);
+        await lifecycle?.beforePass?.("bull");
+        const row = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+        revisionAtExpiry = row.revision;
+        stepsAtExpiry = row.stepsJson;
+        handle.db.update(jobs).set({
+          leaseExpiresAt: new Date(Date.now() - 1).toISOString(),
+        }).where(eq(jobs.id, jobId)).run();
+        lifecycle?.onPassStart?.("bull");
+        await lifecycle?.beforeProviderLaunch?.("bull");
+        providerCalls += 1;
+        throw new Error("provider must not launch through an expired job claim");
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    });
+
+    expect(result).toMatchObject({ status: "error", reportId: null });
+    expect(providerCalls).toBe(0);
+    expect(handle.db.select().from(jobPassArtifacts).all()).toEqual([]);
+    expect(handle.db.select().from(costLog).all()).toEqual([]);
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "running",
+      revision: revisionAtExpiry,
+      stepsJson: stepsAtExpiry,
+    });
+  });
+
+  it("preserves a deferred bull's exact settlement when external cancel fences bear", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const bull = testAnalystPass("bull", 0.41);
+    const bullResultGate = deferred<void>();
+    const bearPermitAcquired = deferred<void>();
+    const continueToBearFence = deferred<void>();
+    let bullProviderCalls = 0;
+    let bearProviderCalls = 0;
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (...raw: unknown[]) => {
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        await launchTestAnalystSide(lifecycle, "bull");
+        bullProviderCalls += 1;
+        const settledBull = bullResultGate.promise.then(async () => {
+          await settlements?.bull?.(testSuccessSettlement(bull));
+          lifecycle?.onPassFinish?.("bull");
+          return bull;
+        });
+
+        await lifecycle?.beforePass?.("bear");
+        bearPermitAcquired.resolve();
+        await continueToBearFence.promise;
+        try {
+          lifecycle?.onPassStart?.("bear");
+          await lifecycle?.beforeProviderLaunch?.("bear");
+          bearProviderCalls += 1;
+          throw new Error("bear provider must remain fenced");
+        } catch (error) {
+          const settled = await settledBull;
+          throw new BullBearPassFailure("bear launch lost after bull started", {
+            bull: settled,
+            bullLaunched: true,
+            bearLaunched: false,
+            bearError: error instanceof Error ? error.message : String(error),
+          });
+        }
+      },
+    };
+
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    await bearPermitAcquired.promise;
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([
+      expect.objectContaining({ jobId, pass: "bull" }),
+      expect.objectContaining({ jobId, pass: "bear" }),
+    ]);
+
+    // Simulate another process's cancellation: mutate durable authority but do
+    // not signal this process's controller.
+    const current = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    handle.db.update(jobs).set({
+      status: "error",
+      error: JOB_CANCELED_ERROR,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      heartbeatAt: null,
+      revision: current.revision + 1,
+      updatedAt: NOW().toISOString(),
+    }).where(eq(jobs.id, jobId)).run();
+    continueToBearFence.resolve();
+    await Promise.resolve();
+    expect(bearProviderCalls).toBe(0);
+    expect(handle.db.select().from(jobPassArtifacts).all()).toEqual([]);
+
+    bullResultGate.resolve();
+    await expect(running).resolves.toMatchObject({ status: "error", reportId: null });
+    expect(bullProviderCalls).toBe(1);
+    expect(bearProviderCalls).toBe(0);
+    expect(handle.db.select().from(jobPassArtifacts).all()).toEqual([
+      expect.objectContaining({ jobId, pass: "bull", attemptId: expect.any(String) }),
+    ]);
+    expect(handle.db.select().from(costLog).all()).toEqual([
+      expect.objectContaining({ jobId, step: "bull", costUsd: 0.41 }),
+    ]);
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "error",
+      bullJson: null,
+      bearJson: null,
+      leaseOwner: null,
+    });
+  });
+
+  it.each(["synthesize", "verify"] as const)(
+    "fences a canceled %s attempt at the adapter's immediate launch boundary",
+    async (targetPass) => {
+      const { jobId } = createJob("AAPL");
+      const base = mockPasses();
+      let targetProviderCalls = 0;
+      const passes: PipelinePasses = {
+        ...base.passes,
+        ...(targetPass === "synthesize"
+          ? {
+              runJudgePass: async (...raw: unknown[]) => {
+                const beforeProviderLaunch = raw[5] as (() => void | Promise<void>) | undefined;
+                expect(cancelJob(jobId)).toBe(true);
+                await beforeProviderLaunch?.();
+                targetProviderCalls += 1;
+                throw new Error("judge provider must not launch after cancel");
+              },
+            }
+          : {
+              runVerifyPass: async (...raw: unknown[]) => {
+                const beforeProviderLaunch = raw[4] as (() => void | Promise<void>) | undefined;
+                expect(cancelJob(jobId)).toBe(true);
+                await beforeProviderLaunch?.();
+                targetProviderCalls += 1;
+                throw new Error("verify provider must not launch after cancel");
+              },
+            }),
+      };
+
+      expect(await runJob(jobId, passes, {
+        bundle: fakeBundle(),
+        hasAnthropicKey: true,
+        now: NOW,
+      })).toMatchObject({ status: "error", reportId: null });
+      expect(targetProviderCalls).toBe(0);
+      expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+      expect(
+        handle.db.select().from(jobPassArtifacts).all().filter((row) => row.pass === targetPass),
+      ).toEqual([]);
+      expect(handle.db.select().from(costLog).all().filter((row) => row.step === targetPass))
+        .toEqual([]);
+    },
+  );
+
+  it("fences a canceled single-side resume immediately before its provider boundary", async () => {
+    const { jobId } = createJob("AAPL");
+    const fingerprint = "1.3.0:single-side-launch";
+    seedResumableLegacyJob(jobId, "error", fingerprint);
+    handle.db.update(jobs).set({
+      bearJson: null,
+      stepsJson: JSON.stringify([
+        { step: "bull", status: "done" },
+        { step: "bear", status: "error" },
+        { step: "synthesize", status: "skipped" },
+      ] satisfies StepProgress[]),
+    }).where(eq(jobs.id, jobId)).run();
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    const base = mockPasses();
+    let targetProviderCalls = 0;
+    const passes: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: () => fingerprint,
+      runAnalystPass: async (...raw: unknown[]) => {
+        const beforeProviderLaunch = raw[3] as (() => void | Promise<void>) | undefined;
+        expect(cancelJob(jobId)).toBe(true);
+        await beforeProviderLaunch?.();
+        targetProviderCalls += 1;
+        throw new Error("single-side provider must not launch after cancel");
+      },
+    };
+
+    expect(await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      resume: true,
+    })).toMatchObject({ status: "error", reportId: null });
+    expect(targetProviderCalls).toBe(0);
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+    expect(handle.db.select().from(jobPassArtifacts).all().filter((row) => row.pass === "bear"))
+      .toEqual([]);
+    expect(handle.db.select().from(costLog).all().filter((row) => row.step === "bear"))
+      .toEqual([]);
+  });
+
+  it.each(["bull", "bear"] as const)(
+    "releases a single-side %s permit when the adapter exits before its launch callback",
+    async (side) => {
+      const { jobId } = createJob("AAPL");
+      const fingerprint = `1.3.0:prelaunch-single-${side}`;
+      seedResumableLegacyJob(jobId, "error", fingerprint);
+      handle.db.update(jobs).set({
+        ...(side === "bull" ? { bullJson: null } : { bearJson: null }),
+      }).where(eq(jobs.id, jobId)).run();
+      expect(claimJobForResume(jobId, "error")).toBe(true);
+      const base = mockPasses();
+      const providerBoundary = vi.fn();
+      const result = await runJob(jobId, {
+        ...base.passes,
+        fingerprintPayload: () => fingerprint,
+        runAnalystPass: async () => {
+          // The adapter exits after the runner's paid gate but before invoking
+          // beforeProviderLaunch, so this is not a provider attempt.
+          throw new Error(`${side} adapter rejected before provider launch`);
+        },
+      }, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true });
+
+      expect(result).toMatchObject({ status: "done", dataOnly: true });
+      expect(providerBoundary).not.toHaveBeenCalled();
+      expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+      expect(handle.db.select().from(jobPassArtifacts).all().filter((row) => row.pass === side))
+        .toEqual([]);
+      expect(handle.db.select().from(costLog).all().filter((row) => row.step === side))
+        .toEqual([]);
+      const report = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+      const parsed = ReportSchema.parse(JSON.parse(report.reportJson!));
+      expect(parsed.appendix.missingData).toEqual(expect.arrayContaining([
+        expect.objectContaining({ field: `llm.${side}`, attemptedSources: [] }),
+      ]));
+    },
+  );
+
+  it.each(["synthesize", "verify"] as const)(
+    "releases a %s permit when the adapter exits before its launch callback",
+    async (targetPass) => {
+      const { jobId } = createJob("AAPL");
+      const base = mockPasses();
+      const providerBoundary = vi.fn();
+      const passes: PipelinePasses = {
+        ...base.passes,
+        ...(targetPass === "synthesize"
+          ? {
+              runJudgePass: async () => {
+                throw new Error("judge adapter rejected before provider launch");
+              },
+            }
+          : {
+              runVerifyPass: async () => {
+                throw new Error("verify adapter rejected before provider launch");
+              },
+            }),
+      };
+      const result = await runJob(jobId, passes, {
+        bundle: fakeBundle(),
+        hasAnthropicKey: true,
+        now: NOW,
+        maxJudgeRetries: 0,
+      });
+
+      expect(result.status).toBe("done");
+      expect(providerBoundary).not.toHaveBeenCalled();
+      expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+      expect(
+        handle.db.select().from(jobPassArtifacts).all().filter((row) => row.pass === targetPass),
+      ).toEqual([]);
+      expect(handle.db.select().from(costLog).all().filter((row) => row.step === targetPass))
+        .toEqual([]);
+      if (targetPass === "synthesize") {
+        const report = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+        const parsed = ReportSchema.parse(JSON.parse(report.reportJson!));
+        expect(parsed.appendix.missingData).toEqual(expect.arrayContaining([
+          expect.objectContaining({ field: "llm.judge", attemptedSources: [] }),
+        ]));
+      }
+    },
+  );
+
+  it("preserves concrete billed telemetry even when an adapter omits its launch callback", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const billedAttempt = {
+      model: "claude-opus-4-8",
+      costUsd: 0.123456,
+      fallbackUsed: false,
+      usage: { input_tokens: 100, output_tokens: 50 },
+      webSearches: 0,
+    };
+    const result = await runJob(jobId, {
+      ...base.passes,
+      runJudgePass: async () => {
+        throw Object.assign(new Error("provider returned billing before adapter failed"), {
+          billedAttempt,
+        });
+      },
+    }, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      maxJudgeRetries: 0,
+    });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: true });
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+    expect(handle.db.select().from(jobPassArtifacts).all().filter((row) => row.pass === "synthesize"))
+      .toEqual([expect.objectContaining({ pass: "synthesize" })]);
+    expect(handle.db.select().from(costLog).all().filter((row) => row.step === "synthesize"))
+      .toEqual([expect.objectContaining({ costUsd: 0.123456 })]);
+  });
+
+  it("holds bear at the independent paid gate until bull settles when global capacity is one", async () => {
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 1,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 900_000,
+      jobLeaseTtlMs: 900_000,
+    };
+    const claim = scheduler.claimQueuedJobById(
+      jobId,
+      "capacity-test",
+      new Date(),
+      limits,
+    )!;
+    const base = mockPasses();
+    const bull = testAnalystPass("bull");
+    const bear = testAnalystPass("bear");
+    const bullAcquired = deferred();
+    const releaseBull = deferred();
+    const bearAcquired = deferred();
+    const releaseBear = deferred();
+    let bearStarted = false;
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (...raw: unknown[]) => {
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        if (!settlements?.bull || !settlements.bear) {
+          throw new Error("missing analyst settlement hooks");
+        }
+        await launchTestAnalystSide(lifecycle, "bull");
+        bullAcquired.resolve(undefined);
+        const bearLaunch = (async () => {
+          await launchTestAnalystSide(lifecycle, "bear");
+          bearStarted = true;
+          bearAcquired.resolve(undefined);
+          await releaseBear.promise;
+          await settlements.bear!(testSuccessSettlement(bear));
+          lifecycle?.onPassFinish?.("bear");
+        })();
+        await releaseBull.promise;
+        await settlements.bull(testSuccessSettlement(bull));
+        lifecycle?.onPassFinish?.("bull");
+        await bearLaunch;
+        return { bull, bear };
+      },
+    };
+
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    });
+    await bullAcquired.promise;
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([
+      expect.objectContaining({ pass: "bull" }),
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(bearStarted).toBe(false);
+
+    releaseBull.resolve(undefined);
+    await bearAcquired.promise;
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([
+      expect.objectContaining({ pass: "bear" }),
+    ]);
+    releaseBear.resolve(undefined);
+    expect((await running).status).toBe("done");
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+  });
+
+  it("waits for a conservative live reservation to settle before declaring the job budget exhausted", async () => {
+    const { jobId } = createJob("AAPL");
+    handle.db.update(jobs).set({ maxCostUsd: 150 }).where(eq(jobs.id, jobId)).run();
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 2,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 900_000,
+      jobLeaseTtlMs: 900_000,
+    };
+    const claim = claimNextQueuedJob("budget-wait", undefined, limits, handle.db)!;
+    const base = mockPasses();
+    const bull = testAnalystPass("bull", 0.9);
+    const bear = testAnalystPass("bear", 0.47);
+    const bullAcquired = deferred();
+    const releaseBull = deferred();
+    const bearAcquired = deferred();
+    const releaseBear = deferred();
+    let bearStarted = false;
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (...raw: unknown[]) => {
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        if (!settlements?.bull || !settlements.bear) {
+          throw new Error("missing analyst settlement hooks");
+        }
+        await launchTestAnalystSide(lifecycle, "bull");
+        bullAcquired.resolve(undefined);
+        const bearLaunch = (async () => {
+          await launchTestAnalystSide(lifecycle, "bear");
+          bearStarted = true;
+          bearAcquired.resolve(undefined);
+          await releaseBear.promise;
+          await settlements.bear!(testSuccessSettlement(bear));
+        })();
+        await releaseBull.promise;
+        await settlements.bull(testSuccessSettlement(bull));
+        await bearLaunch;
+        return { bull, bear };
+      },
+    };
+
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      claim,
+      hasAnthropicKey: true,
+      now: NOW,
+      schedulerLimits: limits,
+    });
+    await bullAcquired.promise;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(bearStarted).toBe(false);
+
+    releaseBull.resolve(undefined);
+    await bearAcquired.promise;
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([
+      expect.objectContaining({ pass: "bear", reservedCostUsd: 100 }),
+    ]);
+    releaseBear.resolve(undefined);
+    expect((await running).status).toBe("done");
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+  });
+
+  it("renews a long paid attempt before lease expiry and settles through the same owner", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T00:00:00.000Z"));
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 1,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 200,
+      jobLeaseTtlMs: 1_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "renew-test", new Date(), limits)!;
+    const base = mockPasses();
+    const acquired = deferred();
+    const release = deferred();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (...raw: unknown[]) => {
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        await launchTestAnalystSide(lifecycle, "bull");
+        acquired.resolve(undefined);
+        await release.promise;
+        await settlements?.bull?.(testSuccessSettlement(testAnalystPass("bull")));
+        lifecycle?.onPassFinish?.("bull");
+        throw new BullBearPassFailure("bear was not launched", {
+          bullLaunched: true,
+          bearLaunched: false,
+          bearError: "not launched",
+        });
+      },
+    };
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    });
+    await acquired.promise;
+    const originalExpiry = handle.db.select().from(jobLlmLeases).get()!.leaseExpiresAt;
+
+    await vi.advanceTimersByTimeAsync(150);
+    expect(handle.db.select().from(jobLlmLeases).get()!.leaseExpiresAt > originalExpiry).toBe(true);
+    release.resolve(undefined);
+    expect((await running).status).toBe("done");
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+  });
+
+  it("aborts the runner when a paid-attempt renewal loses its exact owner", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T00:00:00.000Z"));
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 1,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 200,
+      jobLeaseTtlMs: 1_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "lost-renewal-test", new Date(), limits)!;
+    const base = mockPasses();
+    const acquired = deferred();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (deps, lifecycle) => {
+        await launchTestAnalystSide(lifecycle, "bull");
+        acquired.resolve(undefined);
+        await new Promise<never>((_resolve, reject) => {
+          deps.signal?.addEventListener(
+            "abort",
+            () => reject(deps.signal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        });
+        throw new Error("unreachable after lease loss");
+      },
+    };
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    });
+    await acquired.promise;
+    handle.db.update(jobLlmLeases).set({ leaseOwner: "stolen:owner" }).run();
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await running).toMatchObject({ status: "error", reportId: null });
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "error",
+      error: expect.stringMatching(/renewal lost authority/i),
+      leaseOwner: null,
+    });
+    expect(handle.db.select().from(reports).all()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retains an in-flight reservation but clears its local renewal timer after external abort", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T00:00:00.000Z"));
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 1,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 200,
+      jobLeaseTtlMs: 1_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "external-abort-test", new Date(), limits)!;
+    const base = mockPasses();
+    const acquired = deferred();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (deps, lifecycle) => {
+        await launchTestAnalystSide(lifecycle, "bull");
+        acquired.resolve(undefined);
+        await new Promise<never>((_resolve, reject) => {
+          deps.signal?.addEventListener(
+            "abort",
+            () => reject(deps.signal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        });
+        throw new Error("unreachable after external abort");
+      },
+    };
+    const external = new AbortController();
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+      signal: external.signal,
+    });
+    await acquired.promise;
+
+    external.abort(new Error("test external abort"));
+    expect(await running).toMatchObject({ status: "error", reportId: null });
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([
+      expect.objectContaining({ jobId, pass: "bull" }),
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("analyst finish lifecycle stays local until the durable settlement commits", async () => {
     const { jobId } = createJob("AAPL");
     const base = mockPasses();
@@ -911,13 +1789,13 @@ describe("runJob - durable paid-pass settlements", () => {
     const passes: PipelinePasses = {
       ...base.passes,
       runBullThenBear: async (deps, hooks) => {
-        hooks?.onPassStart?.("bull");
+        await launchTestAnalystSide(hooks, "bull");
         started.resolve(undefined);
         await allowFinish.promise;
         hooks?.onPassFinish?.("bull");
         finished.resolve(undefined);
         await releaseResult.promise;
-        return base.passes.runBullThenBear(deps);
+        return base.passes.runBullThenBear(deps, hooks);
       },
     };
     const running = runJob(jobId, passes, {
@@ -959,7 +1837,7 @@ describe("runJob - durable paid-pass settlements", () => {
     const passes: PipelinePasses = {
       ...base.passes,
       runBullThenBear: async (_deps, hooks) => {
-        hooks?.onPassStart?.("bull");
+        await launchTestAnalystSide(hooks, "bull");
         finishOldBull = () => hooks?.onPassFinish?.("bull");
         entered.resolve(undefined);
         return oldAnalysts;
@@ -1024,12 +1902,9 @@ describe("runJob - durable paid-pass settlements", () => {
     const passes: PipelinePasses = {
       ...base.passes,
       runBullThenBear: async (...raw: unknown[]) => {
-        const hooks = raw[1] as {
-          onPassStart?: (side: "bull" | "bear") => void;
-          onPassFinish?: (side: "bull" | "bear") => void;
-        } | undefined;
-        const bull = (raw[2] as TestAnalystSettlementHooks | undefined)?.bull;
-        hooks?.onPassStart?.("bull");
+        const { lifecycle: hooks, settlements } = testAnalystHooks(raw);
+        const bull = settlements?.bull;
+        await launchTestAnalystSide(hooks, "bull");
         if (!bull) throw new Error("missing bull settlement hook");
         await bull({
           outcome: "failure",
@@ -1126,6 +2001,29 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(analysisGaps.flatMap((gap) => gap.attemptedSources ?? [])).toEqual([]);
   });
 
+  it("releases a permit acquired by the adapter when it exits before provider launch", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (_deps, hooks) => {
+        await hooks?.beforePass?.("bull");
+        throw new Error("adapter stopped after gate but before provider dispatch");
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: true });
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
+    expect(handle.db.select().from(jobPassArtifacts).all()).toEqual([]);
+    expect(handle.db.select().from(costLog).all()).toEqual([]);
+  });
+
   it("persists bull artifact and cost before unresolved bear settles", async () => {
     const { jobId } = createJob("AAPL");
     const base = mockPasses();
@@ -1139,7 +2037,8 @@ describe("runJob - durable paid-pass settlements", () => {
       ...base.passes,
       fingerprintPayload: () => "1.3.0:aaaabbbb",
       runBullThenBear: async (...raw: unknown[]) => {
-        const settlements = raw[2] as TestAnalystSettlementHooks | undefined;
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        await launchTestAnalystSide(lifecycle, "bull");
         entered.resolve(undefined);
         if (settlements?.bull) {
           await settlements.bull(testSuccessSettlement(bull));
@@ -1187,7 +2086,7 @@ describe("runJob - durable paid-pass settlements", () => {
     }
   });
 
-  it("late settlement after cancellation cannot mutate a newer generation", async () => {
+  it("late settlement after cancellation only invalidates a newer queued generation", async () => {
     const { jobId } = createJob("AAPL");
     const base = mockPasses();
     const entered = deferred();
@@ -1196,7 +2095,9 @@ describe("runJob - durable paid-pass settlements", () => {
       ...base.passes,
       fingerprintPayload: () => "1.3.0:old00000",
       runBullThenBear: async (...raw: unknown[]) => {
-        lateBull = (raw[2] as TestAnalystSettlementHooks | undefined)?.bull;
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        await launchTestAnalystSide(lifecycle, "bull");
+        lateBull = settlements?.bull;
         entered.resolve(undefined);
         return new Promise<never>(() => {});
       },
@@ -1257,11 +2158,16 @@ describe("runJob - durable paid-pass settlements", () => {
     const after = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
     expect({
       stepsJson: after.stepsJson,
-      revision: after.revision,
       bullJson: after.bullJson,
       bearJson: after.bearJson,
       payloadFingerprint: after.payloadFingerprint,
-    }).toEqual(immutableNewerState);
+    }).toEqual({
+      stepsJson: immutableNewerState.stepsJson,
+      bullJson: immutableNewerState.bullJson,
+      bearJson: immutableNewerState.bearJson,
+      payloadFingerprint: immutableNewerState.payloadFingerprint,
+    });
+    expect(after.revision).toBe(immutableNewerState.revision + 1);
     expect(events).toEqual([]);
     expect(
       handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all(),
@@ -1343,6 +2249,100 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(events).toEqual([]);
   });
 
+  it("rolls back report persistence when its writer-lock wait crosses job-lease expiry", async () => {
+    handle.sqlite.close();
+    tempDirectory = mkdtempSync(join(tmpdir(), "thesis-runner-report-lock-"));
+    const file = join(tempDirectory, "runner.db");
+    handle = createDatabase(file);
+    setDbForTests(handle.db);
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const limits = {
+      ...configuredSchedulerLimits(),
+      jobLeaseTtlMs: 400,
+      paidPassLeaseTtlMs: 2_000,
+    };
+    const writers: Worker[] = [];
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+    const passes: PipelinePasses = {
+      ...base.passes,
+      verifyCapability: { billable: false },
+      runVerifyPass: async (...args: Parameters<PipelinePasses["runVerifyPass"]>) => {
+        const verified = await base.passes.runVerifyPass(...args);
+        const settlement = args[3] as TestSettlementHook<Report> | undefined;
+        if (settlement === undefined) throw new Error("missing verify settlement hook");
+        await settlement({
+          outcome: "success",
+          data: verified.verifiedReport,
+          telemetry: {
+            model: "deterministic",
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            webSearches: 0,
+            costUsd: 0,
+            fallbackUsed: false,
+            billable: false,
+            fetchedUrls: [],
+          },
+        });
+        const writer = new Worker(new URL("./fixtures/sqliteWriteLockWorker.mjs", import.meta.url), {
+          workerData: { file, holdMs: 750 },
+        });
+        writers.push(writer);
+        await new Promise<void>((resolve, reject) => {
+          const sentinel = setTimeout(
+            () => reject(new Error("report writer did not acquire its lock")),
+            10_000,
+          );
+          sentinel.unref();
+          writer.on("message", (message: { state?: string; error?: string }) => {
+            if (message.state === "locked") {
+              clearTimeout(sentinel);
+              resolve();
+            } else if (message.error) {
+              clearTimeout(sentinel);
+              reject(new Error(message.error));
+            }
+          });
+          writer.on("error", (error) => {
+            clearTimeout(sentinel);
+            reject(error);
+          });
+        });
+        return {
+          ...verified,
+          costUsd: undefined,
+          model: undefined,
+          usage: undefined,
+        };
+      },
+    };
+
+    try {
+      const result = await runJob(jobId, passes, {
+        bundle: fakeBundle(),
+        hasAnthropicKey: true,
+        now: NOW,
+        schedulerLimits: limits,
+      });
+
+      expect(result).toMatchObject({ status: "error", reportId: null });
+      expect(handle.db.select().from(reports).all()).toEqual([]);
+      expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+        status: "running",
+        reportId: null,
+      });
+      expect(events.filter((event) => event.type === "done" || event.type === "error"))
+        .toEqual([]);
+    } finally {
+      unsubscribe();
+      await Promise.all(writers.map((writer) => writer.terminate()));
+    }
+  });
+
   it("duplicate settlement callback bills exactly once", async () => {
     const { jobId } = createJob("AAPL");
     const base = mockPasses({ verifyCostUsd: 0 });
@@ -1352,11 +2352,13 @@ describe("runJob - durable paid-pass settlements", () => {
       ...base.passes,
       fingerprintPayload: () => "1.3.0:aaaabbbb",
       runBullThenBear: async (...raw: unknown[]) => {
-        const settlements = raw[2] as TestAnalystSettlementHooks | undefined;
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        await launchTestAnalystSide(lifecycle, "bull");
         if (settlements?.bull) {
           await settlements.bull(testSuccessSettlement(bull));
           await settlements.bull(testSuccessSettlement(bull));
         }
+        await launchTestAnalystSide(lifecycle, "bear");
         if (settlements?.bear) await settlements.bear(testSuccessSettlement(bear));
         return { bull, bear };
       },
@@ -1467,7 +2469,9 @@ describe("runJob - durable paid-pass settlements", () => {
       ...base.passes,
       fingerprintPayload: () => "1.3.0:aaaabbbb",
       runBullThenBear: async (...raw: unknown[]) => {
-        const settlement = (raw[2] as TestAnalystSettlementHooks | undefined)?.bull;
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        await launchTestAnalystSide(lifecycle, "bull");
+        const settlement = settlements?.bull;
         if (!settlement) throw new Error("missing durable bull settlement hook");
         await settlement(testSuccessSettlement(testAnalystPass("bull")));
         throw new Error("unreachable after injected persistence rejection");
@@ -1495,7 +2499,7 @@ describe("runJob - durable paid-pass settlements", () => {
     ).toBe(false);
   });
 
-  it("hook-less analyst fallback still checkpoints the sibling after persistence rejection", async () => {
+  it("aborts a not-yet-launched sibling after analyst settlement persistence rejects", async () => {
     const { jobId } = createJob("AAPL");
     handle.sqlite.exec(`
       CREATE TRIGGER reject_task20_bull_artifact
@@ -1512,21 +2516,11 @@ describe("runJob - durable paid-pass settlements", () => {
     })).rejects.toThrow(/injected bull artifact failure/i);
 
     expect(
-      handle.db
-        .select()
-        .from(jobPassArtifacts)
-        .where(eq(jobPassArtifacts.jobId, jobId))
-        .all()
-        .map((artifact) => artifact.pass),
-    ).toEqual(["bear"]);
+      handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all(),
+    ).toHaveLength(0);
     expect(
-      handle.db
-        .select()
-        .from(costLog)
-        .where(eq(costLog.jobId, jobId))
-        .all()
-        .map((cost) => cost.step),
-    ).toEqual(["bear"]);
+      handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all(),
+    ).toHaveLength(0);
   });
 
   it("conflicting duplicate settlement rejects without mutating the first checkpoint", async () => {
@@ -1537,7 +2531,9 @@ describe("runJob - durable paid-pass settlements", () => {
       ...base.passes,
       fingerprintPayload: () => "1.3.0:aaaabbbb",
       runBullThenBear: async (...raw: unknown[]) => {
-        const settlement = (raw[2] as TestAnalystSettlementHooks | undefined)?.bull;
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        await launchTestAnalystSide(lifecycle, "bull");
+        const settlement = settlements?.bull;
         if (!settlement) throw new Error("missing durable bull settlement hook");
         await settlement(testSuccessSettlement(bull));
         await settlement(testSuccessSettlement({ ...bull, costUsd: 9.99 }));
@@ -1616,7 +2612,7 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(verify).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses durable synthesize and verifies without a key or model-resolution prerequisite", async () => {
+  it("reuses durable synthesize and runs deterministic verify after spend caps are exhausted", async () => {
     const { jobId } = createJob("AAPL");
     persistPassSettlement({
       jobId,
@@ -1634,7 +2630,12 @@ describe("runJob - durable paid-pass settlements", () => {
     });
     handle.db
       .update(jobs)
-      .set({ status: "error", error: "worker stopped before verify", reportId: null })
+      .set({
+        status: "error",
+        error: "worker stopped before verify",
+        reportId: null,
+        maxCostUsd: 0.2,
+      })
       .where(eq(jobs.id, jobId))
       .run();
     expect(claimJobForResume(jobId, "error")).toBe(true);
@@ -1651,19 +2652,34 @@ describe("runJob - durable paid-pass settlements", () => {
     const judge = vi.fn(async () => {
       throw new Error("durable synthesize must not launch judge");
     });
-    const verify = vi.fn(base.passes.runVerifyPass);
+    const verify = vi.fn(async (...args: Parameters<PipelinePasses["runVerifyPass"]>) => ({
+      ...await base.passes.runVerifyPass(...args),
+      costUsd: undefined,
+      model: undefined,
+      usage: undefined,
+    }));
 
     const result = await runJob(
       jobId,
       {
         ...base.passes,
+        verifyCapability: { billable: false },
         fingerprintPayload: () => "1.3.0:synthesize-no-key",
         runBullThenBear: analysts,
         runAnalystPass: oneAnalyst,
         runJudgePass: judge,
         runVerifyPass: verify,
       },
-      { bundle: fakeBundle(), hasAnthropicKey: false, now: NOW, resume: true },
+      {
+        bundle: fakeBundle(),
+        hasAnthropicKey: false,
+        now: NOW,
+        resume: true,
+        schedulerLimits: {
+          ...configuredSchedulerLimits(),
+          maxRollingCostUsd: 0.2,
+        },
+      },
     );
 
     expect(result).toMatchObject({ status: "done", dataOnly: false });
@@ -1673,6 +2689,10 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(oneAnalyst).not.toHaveBeenCalled();
     expect(judge).not.toHaveBeenCalled();
     expect(verify).toHaveBeenCalledTimes(1);
+    expect(
+      handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all()
+        .map((row) => [row.step, row.costUsd]),
+    ).toEqual([["synthesize", 0.4]]);
   });
 
   it("queued resume re-derives a source verify artifact and persists it without paid work", async () => {
@@ -1724,6 +2744,144 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(
       handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()?.model,
     ).toBe("claude-opus-4-8");
+  });
+
+  it("keeps a generation-zero synthesize lineage through queued and claimed cancellation", async () => {
+    const { jobId } = createJob("AAPL");
+    const fingerprint = "1.3.0:chained-synthesize";
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "lineage-source-synthesize",
+      pass: "synthesize",
+      settlement: testSuccessSettlement({
+        data: fakeJudgeOutput(),
+        model: "claude-opus-4-8",
+        costUsd: 0.4,
+        fallbackUsed: false,
+      }),
+      payloadFingerprint: fingerprint,
+      settledAt: NOW().toISOString(),
+    });
+    handle.db.update(jobs).set({
+      status: "error",
+      error: "stopped after synthesize",
+      reportId: null,
+    }).where(eq(jobs.id, jobId)).run();
+
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    expect(cancelJob(jobId)).toBe(true);
+    expect(readJobResumeState(jobId)).toMatchObject({
+      resumable: true,
+      reusablePasses: ["synthesize"],
+      rerunPasses: ["verify"],
+    });
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    clearPreparedResumeProcessCache();
+
+    const base = mockPasses();
+    const analysts = vi.fn(async () => {
+      throw new Error("ancestor synthesize must suppress analyst work");
+    });
+    const oneAnalyst = vi.fn(async () => {
+      throw new Error("ancestor synthesize must suppress one-sided analyst work");
+    });
+    const judge = vi.fn(async () => {
+      throw new Error("ancestor synthesize must not be re-billed");
+    });
+    const verify = vi.fn(base.passes.runVerifyPass);
+    const result = await runJob(jobId, {
+      ...base.passes,
+      fingerprintPayload: () => fingerprint,
+      runBullThenBear: analysts,
+      runAnalystPass: oneAnalyst,
+      runJudgePass: judge,
+      runVerifyPass: verify,
+    }, { bundle: fakeBundle(), hasAnthropicKey: false, now: NOW, resume: true });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: false });
+    expect(analysts).not.toHaveBeenCalled();
+    expect(oneAnalyst).not.toHaveBeenCalled();
+    expect(judge).not.toHaveBeenCalled();
+    expect(verify).toHaveBeenCalledTimes(1);
+    const row = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(row).toMatchObject({ runGeneration: 2, resumeSourceGeneration: 0 });
+    const synthesize = (JSON.parse(row.stepsJson) as StepProgress[])
+      .find((step) => step.step === "synthesize");
+    expect(synthesize?.detail).toContain("generation 0");
+  });
+
+  it("keeps a generation-zero verify lineage through two canceled retries with no paid tail", async () => {
+    const { claimQueuedJobById } = await import("@/pipeline/jobScheduler");
+    const { jobId } = createJob("AAPL");
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "lineage-source-verify",
+      pass: "verify",
+      settlement: testSuccessSettlement({
+        data: fakeReport(fakeJudgeOutput()),
+        model: "deterministic",
+        costUsd: 0,
+        fallbackUsed: false,
+      }, false),
+      payloadFingerprint: "1.3.0:chained-verify",
+      settledAt: NOW().toISOString(),
+    });
+    handle.db.update(jobs).set({
+      status: "error",
+      error: "stopped before report link",
+      reportId: null,
+    }).where(eq(jobs.id, jobId)).run();
+
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    // Exercise the claimed-then-canceled path rather than only a queued cancel.
+    const firstClaim = claimQueuedJobById(jobId, "lineage-canceled-worker", new Date(), {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 2,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 900_000,
+      jobLeaseTtlMs: 900_000,
+    });
+    expect(firstClaim).not.toBeNull();
+    expect(cancelJob(jobId)).toBe(true);
+    expect(readJobResumeState(jobId)).toMatchObject({
+      resumable: true,
+      reusablePasses: ["verify"],
+      rerunPasses: [],
+    });
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    clearPreparedResumeProcessCache();
+
+    const base = mockPasses();
+    const analysts = vi.fn(base.passes.runBullThenBear);
+    const oneAnalyst = vi.fn(async () => {
+      throw new Error("verified ancestor must suppress one-sided analyst work");
+    });
+    const judge = vi.fn(base.passes.runJudgePass);
+    const verify = vi.fn(base.passes.runVerifyPass);
+    const result = await runJob(jobId, {
+      ...base.passes,
+      runBullThenBear: analysts,
+      runAnalystPass: oneAnalyst,
+      runJudgePass: judge,
+      runVerifyPass: verify,
+    }, { resume: true, now: NOW });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: false });
+    expect(analysts).not.toHaveBeenCalled();
+    expect(oneAnalyst).not.toHaveBeenCalled();
+    expect(judge).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+    const row = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(row).toMatchObject({ runGeneration: 2, resumeSourceGeneration: 0 });
+    const verifyStep = (JSON.parse(row.stepsJson) as StepProgress[])
+      .find((step) => step.step === "verify");
+    expect(verifyStep?.detail).toContain("generation 0");
+    expect(handle.db.select().from(jobPassArtifacts)
+      .where(eq(jobPassArtifacts.jobId, jobId)).all())
+      .toEqual([expect.objectContaining({ runGeneration: 0, attemptId: "lineage-source-verify" })]);
   });
 
   it.each([null, "1.3.0:verified-final"])(
@@ -1908,7 +3066,10 @@ describe("runJob - durable paid-pass settlements", () => {
 
     expect(result).toMatchObject({ status: "done", dataOnly: false });
     expect(fetchPrerequisite).not.toHaveBeenCalled();
-    expect(configMocks.getConfig).not.toHaveBeenCalled();
+    // A direct invocation must read only local scheduler limits before taking
+    // its durable claim; durable recovery still avoids every provider/model
+    // boundary and never fetches the data prerequisite.
+    expect(configMocks.getConfig).toHaveBeenCalledTimes(2);
     expect(resolveModelMock).not.toHaveBeenCalled();
     expect(providerBoundaryMocks.runPass).not.toHaveBeenCalled();
     expect(providerBoundaryMocks.runPassStreaming).not.toHaveBeenCalled();
@@ -2192,6 +3353,43 @@ describe("runJob - durable paid-pass settlements", () => {
     ).toEqual([]);
   });
 
+  it("rolls back a claim trigger that mutates the queued legacy reuse projection", async () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error", "1.3.0:legacy-race");
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    const queued = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    const originalBull = queued.bullJson;
+    clearPreparedResumeProcessCache();
+    handle.sqlite.exec(`
+      CREATE TRIGGER mutate_legacy_projection_during_scheduler_claim
+      BEFORE UPDATE OF status ON jobs
+      WHEN OLD.status = 'queued' AND NEW.status = 'running' AND OLD.runGeneration = 1
+      BEGIN
+        UPDATE jobs SET bullJson = '{"tampered":true}' WHERE id = OLD.id;
+      END;
+    `);
+    const base = mockPasses();
+    const paidJudge = vi.fn(base.passes.runJudgePass);
+
+    await expect(runJob(
+      jobId,
+      {
+        ...base.passes,
+        fingerprintPayload: () => "1.3.0:legacy-race",
+        runJudgePass: paidJudge,
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    )).rejects.toThrow(/source artifact|source state|digest/i);
+
+    expect(paidJudge).not.toHaveBeenCalled();
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "error",
+      runGeneration: 1,
+      bullJson: originalBull,
+      error: expect.stringMatching(/source artifact|source state|digest/i),
+    });
+  });
+
   it("two queued-resume workers launch the reusable tail exactly once", async () => {
     const { jobId } = createJob("AAPL");
     seedResumableLegacyJob(jobId, "error", "1.3.0:two-workers");
@@ -2408,8 +3606,12 @@ describe("runJob - durable paid-pass settlements", () => {
       ...base.passes,
       fingerprintPayload: () => "1.3.0:parallel",
       runBullThenBear: async (...raw: unknown[]) => {
-        const hooks = raw[2] as TestAnalystSettlementHooks | undefined;
+        const { lifecycle, settlements: hooks } = testAnalystHooks(raw);
         if (!hooks?.bull || !hooks.bear) throw new Error("missing analyst settlement hooks");
+        await Promise.all([
+          launchTestAnalystSide(lifecycle, "bull"),
+          launchTestAnalystSide(lifecycle, "bear"),
+        ]);
         await Promise.all([
           hooks.bull(testSuccessSettlement(bull)),
           hooks.bear(testSuccessSettlement(bear)),
@@ -2567,7 +3769,9 @@ describe("runJob - durable paid-pass settlements", () => {
       ...base.passes,
       fingerprintPayload: () => "1.3.0:fpB",
       runBullThenBear: async (...raw: unknown[]) => {
-        const bear = (raw[2] as TestAnalystSettlementHooks | undefined)?.bear;
+        const { lifecycle, settlements } = testAnalystHooks(raw);
+        await launchTestAnalystSide(lifecycle, "bear");
+        const bear = settlements?.bear;
         if (!bear) throw new Error("missing bear settlement hook");
         await bear(testSuccessSettlement(testAnalystPass("bear")));
         bearSettled.resolve(undefined);
@@ -2823,12 +4027,21 @@ describe("runJob - durable paid-pass settlements", () => {
     });
   });
 
-  it("post-claim caller mutation cannot alter the cached reusable analyst plan", async () => {
+  it("scheduler-preclaimed retry rederives durable analysts without retaining a strong process cache", async () => {
     const { jobId } = createJob("AAPL");
     seedResumableLegacyJob(jobId, "error", "1.3.0:immutable");
     const prepared = prepareJobResume(jobId, "error");
     expect(prepared).not.toBeNull();
     expect(claimPreparedJobResume(prepared!)).toBe(true);
+    const claim = claimNextQueuedJob(
+      "production-shaped-retry",
+      undefined,
+      configuredSchedulerLimits(),
+      handle.db,
+    );
+    expect(claim).not.toBeNull();
+    expect((globalThis as typeof globalThis & { __thesisPreparedJobResumes?: unknown })
+      .__thesisPreparedJobResumes).toBeUndefined();
 
     prepared!.bull!.data.thesis[0]!.text = "MUTATED AFTER CLAIM";
     prepared!.payloadFingerprint = null;
@@ -2847,7 +4060,7 @@ describe("runJob - durable paid-pass settlements", () => {
           return base.passes.runJudgePass(deps, bull, bear, feedback, settlement);
         },
       },
-      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+      { bundle: fakeBundle(), claim: claim!, hasAnthropicKey: true, now: NOW, resume: true },
     );
 
     expect(result.status).toBe("done");
@@ -3089,9 +4302,81 @@ describe("createJob", () => {
     expect(row?.symbol).toBe("AAPL"); // uppercased
     expect(row?.status).toBe("queued");
     expect(row?.reportId).toBeNull();
+    expect(row?.queuedAt).toBe(row?.createdAt);
+    expect(row?.maxCostUsd).toBeNull();
     const steps = JSON.parse(row?.stepsJson ?? "[]") as StepProgress[];
     expect(steps.map((s) => s.step)).toEqual([...PIPELINE_STEPS]);
     expect(steps.every((s) => s.status === "pending")).toBe(true);
+  });
+
+  it("snapshots the configured per-job cost cap when the fresh enqueue commits", () => {
+    const current = configMocks.getConfig();
+    configMocks.getConfig.mockReturnValueOnce({ ...current, maxJobCostUsd: 12.345678 });
+
+    const { jobId } = createJob("COST");
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "queued",
+      maxCostUsd: 12.345678,
+    });
+  });
+
+  it("reconciles an expired same-symbol claim and enqueues its successor in one writer transaction", () => {
+    vi.useFakeTimers();
+    const beforeExpiry = new Date("2026-08-08T12:00:00.000Z");
+    const afterExpiry = new Date("2026-08-08T12:00:01.000Z");
+    vi.setSystemTime(beforeExpiry);
+    const { jobId: expiredJobId } = createJob("AAPL");
+    handle.db
+      .update(jobs)
+      .set({
+        status: "running",
+        leaseOwner: "expiring-post-owner",
+        heartbeatAt: beforeExpiry.toISOString(),
+        leaseExpiresAt: new Date(beforeExpiry.getTime() + 500).toISOString(),
+      })
+      .where(eq(jobs.id, expiredJobId))
+      .run();
+    const transactionSpy = vi.spyOn(handle.db, "transaction");
+
+    const admitted = getOrCreateJobForSymbol("AAPL", { now: () => afterExpiry });
+
+    expect(admitted).toMatchObject({ existing: false });
+    expect(transactionSpy).toHaveBeenCalledTimes(1);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, expiredJobId)).get()).toMatchObject({
+      status: "error",
+      leaseOwner: null,
+      error: expect.stringMatching(/lease expired/i),
+    });
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, admitted.jobId)).get()).toMatchObject({
+      status: "queued",
+      symbol: "AAPL",
+    });
+  });
+
+  it("reuses an exact-live same-symbol claim from the atomic admission transaction", () => {
+    vi.useFakeTimers();
+    const authority = new Date("2026-08-08T12:00:00.000Z");
+    vi.setSystemTime(authority);
+    const { jobId } = createJob("AAPL");
+    handle.db
+      .update(jobs)
+      .set({
+        status: "running",
+        leaseOwner: "live-post-owner",
+        heartbeatAt: authority.toISOString(),
+        leaseExpiresAt: new Date(authority.getTime() + 60_000).toISOString(),
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+    const transactionSpy = vi.spyOn(handle.db, "transaction");
+
+    expect(getOrCreateJobForSymbol("AAPL", { now: () => authority })).toEqual({
+      jobId,
+      existing: true,
+      status: "running",
+      updatedAt: authority.toISOString(),
+    });
+    expect(transactionSpy).toHaveBeenCalledTimes(1);
   });
 
   it("isSymbolJobActive detects a queued/running job and clears when done", async () => {
@@ -3102,7 +4387,7 @@ describe("createJob", () => {
     expect(isSymbolJobActive("AAPL")).toBe(false);
   });
 
-  it("returns a reusable active job id for fresh jobs but expires stale active jobs", () => {
+  it("returns queued jobs regardless of age and reconciles only expired running leases", () => {
     const { jobId } = createJob("AAPL");
     const row = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
     expect(row).toBeDefined();
@@ -3117,41 +4402,62 @@ describe("createJob", () => {
     const staleUpdatedAt = new Date(freshNow.getTime() - ACTIVE_JOB_STALE_MS - 1000).toISOString();
     handle.db
       .update(jobs)
-      .set({ status: "running", updatedAt: staleUpdatedAt, error: null })
+      .set({
+        status: "running",
+        updatedAt: staleUpdatedAt,
+        error: null,
+        leaseOwner: "expired:owner",
+        heartbeatAt: staleUpdatedAt,
+        leaseExpiresAt: freshNow.toISOString(),
+      })
       .where(eq(jobs.id, jobId))
       .run();
 
     expect(getReusableActiveJobForSymbol("AAPL", freshNow)).toBeNull();
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.status).toBe("running");
+    expect(sweepAbandonedJobs(freshNow)).toBe(1);
     const expired = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
     expect(expired?.status).toBe("error");
-    expect(expired?.error).toContain("stale active job expired");
+    expect(expired?.error).toContain("durable job lease expired");
   });
 
-  it("sweepAbandonedJobs terminal-izes stale queued/running jobs across ALL symbols", () => {
+  it("sweepAbandonedJobs ignores queued age and reconciles expired running leases across symbols", () => {
     const now = new Date("2026-07-09T12:00:00.000Z");
     const staleIso = new Date(now.getTime() - ACTIVE_JOB_STALE_MS - 1000).toISOString();
     const freshIso = new Date(now.getTime() - 60_000).toISOString();
 
     // Orphaned running job for a symbol nobody re-runs (the audit's PYPL case).
     const { jobId: orphan } = createJob("PYPL");
-    handle.db.update(jobs).set({ status: "running", updatedAt: staleIso }).where(eq(jobs.id, orphan)).run();
+    handle.db.update(jobs).set({
+      status: "running",
+      updatedAt: freshIso,
+      leaseOwner: "expired:owner",
+      heartbeatAt: freshIso,
+      leaseExpiresAt: now.toISOString(),
+    }).where(eq(jobs.id, orphan)).run();
     // Stale queued job for another symbol.
     const { jobId: staleQueued } = createJob("MSFT");
     handle.db.update(jobs).set({ updatedAt: staleIso }).where(eq(jobs.id, staleQueued)).run();
     // Fresh running job — must NOT be touched.
     const { jobId: live } = createJob("AAPL");
-    handle.db.update(jobs).set({ status: "running", updatedAt: freshIso }).where(eq(jobs.id, live)).run();
+    handle.db.update(jobs).set({
+      status: "running",
+      updatedAt: staleIso,
+      leaseOwner: "live:owner",
+      heartbeatAt: freshIso,
+      leaseExpiresAt: new Date(now.getTime() + 60_000).toISOString(),
+    }).where(eq(jobs.id, live)).run();
     // Terminal job — must NOT be touched.
     const { jobId: done } = createJob("INTU");
     handle.db.update(jobs).set({ status: "done", updatedAt: staleIso }).where(eq(jobs.id, done)).run();
 
     const changed = sweepAbandonedJobs(now);
-    expect(changed).toBe(2);
+    expect(changed).toBe(1);
 
     const orphanRow = handle.db.select().from(jobs).where(eq(jobs.id, orphan)).get();
     expect(orphanRow?.status).toBe("error");
-    expect(orphanRow?.error).toContain("abandoned: no progress for 30 minutes");
-    expect(handle.db.select().from(jobs).where(eq(jobs.id, staleQueued)).get()?.status).toBe("error");
+    expect(orphanRow?.error).toContain("durable job lease expired");
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, staleQueued)).get()?.status).toBe("queued");
     expect(handle.db.select().from(jobs).where(eq(jobs.id, live)).get()?.status).toBe("running");
     expect(handle.db.select().from(jobs).where(eq(jobs.id, done)).get()?.status).toBe("done");
   });
@@ -3176,6 +4482,9 @@ describe("createJob", () => {
       .set({
         status: "running",
         updatedAt: staleIso,
+        leaseOwner: "expired:owner",
+        heartbeatAt: staleIso,
+        leaseExpiresAt: now.toISOString(),
         stepsJson: JSON.stringify(crashedSteps),
         bullJson: JSON.stringify({ ok: true }),
         bearJson: JSON.stringify({ ok: true }),
@@ -3202,7 +4511,14 @@ describe("createJob", () => {
     const { jobId } = createJob("CORRUPT");
     handle.db
       .update(jobs)
-      .set({ status: "running", updatedAt: staleIso, stepsJson: "{not json" })
+      .set({
+        status: "running",
+        updatedAt: staleIso,
+        leaseOwner: "expired:owner",
+        heartbeatAt: staleIso,
+        leaseExpiresAt: now.toISOString(),
+        stepsJson: "{not json",
+      })
       .where(eq(jobs.id, jobId))
       .run();
 
@@ -3571,8 +4887,8 @@ describe("runJob — LLM pass failure", () => {
     const { passes } = mockPasses();
     // Make the adversarial passes throw.
     passes.runBullThenBear = async (_deps, hooks) => {
-      hooks?.onPassStart?.("bull");
-      hooks?.onPassStart?.("bear");
+      await launchTestAnalystSide(hooks, "bull");
+      await launchTestAnalystSide(hooks, "bear");
       throw new Error("boom in bull/bear");
     };
 
@@ -3645,7 +4961,9 @@ describe("runJob — LLM pass failure", () => {
         webSearches: 6,
       },
     });
-    passes.runBullThenBear = async () => {
+    passes.runBullThenBear = async (_deps, hooks) => {
+      await launchTestAnalystSide(hooks, "bull");
+      await launchTestAnalystSide(hooks, "bear");
       throw error;
     };
 
@@ -3711,6 +5029,10 @@ describe("runJob — LLM pass failure", () => {
     // Bull/bear/synthesize costs still logged (3 rows, verify never logged).
     const costRows = handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all();
     expect(costRows.map((r) => r.step).sort()).toEqual(["bear", "bull", "synthesize"]);
+    expect(
+      handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all()
+        .filter((row) => row.pass === "verify"),
+    ).toEqual([]);
   });
 });
 
@@ -4182,10 +5504,10 @@ describe("runJob — per-pass timing", () => {
     const passes: PipelinePasses = {
       ...base.passes,
       runBullThenBear: async (deps, hooks) => {
-        hooks?.onPassStart?.("bull");
+        await launchTestAnalystSide(hooks, "bull");
         await sleep(5);
         hooks?.onPassFinish?.("bull");
-        hooks?.onPassStart?.("bear");
+        await launchTestAnalystSide(hooks, "bear");
         await sleep(5);
         hooks?.onPassFinish?.("bear");
         return base.passes.runBullThenBear(deps);
@@ -4482,7 +5804,9 @@ describe("runJob — resume from persisted analyst snapshots", () => {
       {
         ...first.passes,
         fingerprintPayload: () => "fp-v1",
-        runBullThenBear: async () => {
+        runBullThenBear: async (_deps, hooks) => {
+          await launchTestAnalystSide(hooks, "bull");
+          await launchTestAnalystSide(hooks, "bear");
           throw firstError;
         },
       },
@@ -4559,7 +5883,9 @@ describe("runJob — resume from persisted analyst snapshots", () => {
       {
         ...first.passes,
         fingerprintPayload: () => "fp-v1",
-        runBullThenBear: async () => {
+        runBullThenBear: async (_deps, hooks) => {
+          await launchTestAnalystSide(hooks, "bull");
+          await launchTestAnalystSide(hooks, "bear");
           throw Object.assign(new Error("bull/bear pass failed"), {
             bull: {
               data: fakeAnalystCase(),
@@ -5082,7 +6408,7 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
     },
   );
 
-  it("ignores stale-generation successes when deciding whether the terminal generation can resume", () => {
+  it("folds a pre-lineage-column terminal generation over its prior paid cohort", () => {
     const { jobId } = createJob("AAPL");
     for (const side of ["bull", "bear"] as const) {
       persistPassSettlement({
@@ -5112,7 +6438,72 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
       .where(eq(jobs.id, jobId))
       .run();
 
-    expect(prepareJobResume(jobId, "error")).toBeNull();
+    expect(readJobResumeState(jobId)).toMatchObject({
+      resumable: true,
+      reusablePasses: ["bull", "bear"],
+      rerunPasses: ["synthesize", "verify"],
+    });
+    expect(prepareJobResume(jobId, "error")).toMatchObject({
+      sourceGeneration: 0,
+      claimGeneration: 1,
+      targetGeneration: 2,
+      bull: expect.any(Object),
+      bear: expect.any(Object),
+    });
+  });
+
+  it("keeps an older synthesize success authoritative after a newer verify failure", () => {
+    const { jobId } = createJob("AAPL");
+    const fingerprint = "1.3.0:mixed-lineage";
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "mixed-source-synthesize",
+      pass: "synthesize",
+      settlement: testSuccessSettlement({
+        data: fakeJudgeOutput(),
+        model: "claude-opus-4-8",
+        costUsd: 0.4,
+        fallbackUsed: false,
+      }),
+      payloadFingerprint: fingerprint,
+      settledAt: NOW().toISOString(),
+    });
+    handle.db.update(jobs).set({ status: "error", error: "verify pending" })
+      .where(eq(jobs.id, jobId)).run();
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    persistPassSettlement({
+      jobId,
+      runGeneration: 1,
+      attemptId: "mixed-newer-verify-failure",
+      pass: "verify",
+      settlement: {
+        outcome: "failure",
+        failure: { name: "ProviderError", message: "newer verify failed" },
+        telemetry: testTelemetry({
+          data: fakeReport(fakeJudgeOutput()),
+          model: "deterministic",
+          costUsd: 0,
+          fallbackUsed: false,
+        }, false),
+      },
+      payloadFingerprint: fingerprint,
+      settledAt: NOW().toISOString(),
+    });
+    handle.db.update(jobs).set({ status: "error", error: "verify failed" })
+      .where(eq(jobs.id, jobId)).run();
+
+    expect(readJobResumeState(jobId)).toMatchObject({
+      resumable: true,
+      reusablePasses: ["synthesize"],
+      rerunPasses: ["verify"],
+    });
+    expect(prepareJobResume(jobId, "error")).toMatchObject({
+      sourceGeneration: 0,
+      claimGeneration: 1,
+      synthesize: expect.any(Object),
+      verify: null,
+    });
   });
 
   it("rejects a direct resume of a healthy completed job", async () => {
@@ -5330,38 +6721,31 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
   // stale-status predicate (a TOCTOU widening vs the prior atomic UPDATE). A row
   // that flips live between the sweep's SELECT and its per-row write must not be
   // clobbered back to error.
-  it("sweepAbandonedJobs re-checks staleness on the write (row that goes live mid-sweep is not clobbered)", () => {
-    const now = new Date("2026-07-09T12:00:00.000Z");
-    const staleIso = new Date(now.getTime() - ACTIVE_JOB_STALE_MS - 1000).toISOString();
-    const { jobId } = createJob("RACE");
-    handle.db.update(jobs).set({ status: "running", updatedAt: staleIso }).where(eq(jobs.id, jobId)).run();
-
-    // Simulate a concurrent claim landing in the SELECT→UPDATE window: on the
-    // sweep's first per-row UPDATE call, flip the row fresh-running (as a
-    // resume/heartbeat would) BEFORE the guarded write commits. Shadow the
-    // instance method directly (robust whether it lives on the instance or the
-    // Drizzle prototype); delete restores the original.
-    const shadow = handle.db as unknown as { update: (table: unknown) => unknown };
-    const realUpdate = handle.db.update.bind(handle.db);
-    let interleaved = false;
-    shadow.update = (table: unknown) => {
-      if (!interleaved) {
-        interleaved = true;
-        realUpdate(jobs).set({ updatedAt: now.toISOString() }).where(eq(jobs.id, jobId)).run();
-      }
-      return realUpdate(table as typeof jobs);
+  it("lease reconciliation respects an exact renewal even when updatedAt is ancient", async () => {
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const claimedAt = new Date("2026-07-09T12:00:00.000Z");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 1,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60_000,
+      paidPassLeaseTtlMs: 1_000,
+      jobLeaseTtlMs: 1_000,
     };
-    try {
-      sweepAbandonedJobs(now);
-    } finally {
-      delete (shadow as { update?: unknown }).update;
-    }
-    expect(interleaved).toBe(true); // the interleave actually fired
+    const { jobId } = createJob("RACE");
+    const claim = scheduler.claimQueuedJobById(jobId, "race", claimedAt, limits)!;
+    handle.db.update(jobs).set({ updatedAt: "2000-01-01T00:00:00.000Z" })
+      .where(eq(jobs.id, jobId)).run();
+    expect(scheduler.renewJobLease(
+      claim,
+      new Date(claimedAt.getTime() + 500),
+      limits,
+    )).toBe(true);
 
-    // With the stale predicate re-asserted, the freshly-live row is NOT reverted.
-    const row = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
-    expect(row?.status).toBe("running");
-    expect(row?.error).toBeNull();
+    expect(sweepAbandonedJobs(new Date(claimedAt.getTime() + 1_001))).toBe(0);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.status).toBe("running");
+    expect(sweepAbandonedJobs(new Date(claimedAt.getTime() + 1_501))).toBe(1);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.status).toBe("error");
   });
 
   // Regression (2026-07-20 audit): a cancel acknowledged (202) in the resume

@@ -7,7 +7,7 @@
  * and rerun only the missing tail. Nothing already paid for is re-billed.
  *
  * Contract:
- *   202 { jobId, resumed: true }  — resume started on the SAME job id (costs
+ *   202 { jobId, resumed: true }  — resume queued on the SAME job id (costs
  *                                   keep accumulating on its cost_log; the
  *                                   client re-opens the SSE stream).
  *   404 unknown job id.
@@ -26,15 +26,15 @@ import {
   claimPreparedJobResume,
   isSymbolJobActive,
   prepareJobResume,
-  recordQueuedResumeDispatchFailure,
-  runJob,
-  sweepAbandonedJobs,
 } from "@/pipeline/jobRunner";
+import { kickJobScheduler, reconcileExpiredJobClaims } from "@/pipeline/jobScheduler";
 import { readJobResumeState } from "@/pipeline/jobStore";
 import { noopPasses, resolvePasses } from "../../resolvePasses";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const resolveRunnablePasses = async () => (await resolvePasses()) ?? noopPasses();
 
 export async function POST(
   request: Request,
@@ -46,8 +46,6 @@ export async function POST(
   if (crossSite !== null) return crossSite;
 
   const { jobId } = await params;
-  sweepAbandonedJobs();
-
   const row = getDb().select().from(jobs).where(eq(jobs.id, jobId)).get();
   if (row === undefined) {
     return NextResponse.json({ error: `no job with id "${jobId}"` }, { status: 404 });
@@ -67,6 +65,10 @@ export async function POST(
   if (row.status !== "done" && row.status !== "error") {
     return NextResponse.json({ error: `job status ${row.status} cannot be retried` }, { status: 409 });
   }
+  // This is a mutating admission surface: reconcile physical expired owners
+  // before the active-symbol check/unique-index transition. GET/SSE stay
+  // read-only, while an expired sibling cannot spuriously force a retry 409.
+  reconcileExpiredJobClaims();
   if (isSymbolJobActive(row.symbol)) {
     return NextResponse.json(
       { error: `another job for ${row.symbol} is already active` },
@@ -95,24 +97,7 @@ export async function POST(
     );
   }
 
-  void (async () => {
-    try {
-      const passes = (await resolvePasses()) ?? noopPasses();
-      await runJob(jobId, passes, { resume: true });
-    } catch (err) {
-      // Resolution can fail before runJob owns the row, and a bounded durable
-      // re-derive can reject at dispatch. Fence the exact queued generation so
-      // an accepted 202 is never stranded; a report that appeared meanwhile
-      // is preserved and wins as terminal success.
-      recordQueuedResumeDispatchFailure(
-        jobId,
-        prepared.targetGeneration,
-        prepared.sourceRevision + 1,
-        err,
-      );
-      console.error(`runJob(${jobId}, resume) failed:`, err);
-    }
-  })();
+  kickJobScheduler(resolveRunnablePasses);
 
   return NextResponse.json({ jobId, resumed: true }, { status: 202 });
 }

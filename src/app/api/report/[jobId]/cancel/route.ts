@@ -1,4 +1,4 @@
-/** POST /api/report/[jobId]/cancel — cancel a queued or locally running job. */
+/** POST /api/report/[jobId]/cancel — durably cancel a queued or running job. */
 
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
@@ -6,9 +6,13 @@ import { assertSameOrigin } from "@/app/api/sameOrigin";
 import { getDb } from "@/db";
 import { jobs } from "@/db/schema";
 import { cancelJob } from "@/pipeline/jobRunner";
+import { kickJobScheduler } from "@/pipeline/jobScheduler";
+import { noopPasses, resolvePasses } from "../../resolvePasses";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const resolveRunnablePasses = async () => (await resolvePasses()) ?? noopPasses();
 
 export async function POST(
   request: Request,
@@ -29,9 +33,10 @@ export async function POST(
   }
   if (!cancelJob(jobId)) {
     return NextResponse.json(
-      { error: "job could not be canceled because its local execution state changed" },
+      { error: "job could not be canceled because its durable execution state changed" },
       { status: 409 },
     );
   }
+  kickJobScheduler(resolveRunnablePasses);
   return NextResponse.json({ jobId, canceled: true }, { status: 202 });
 }

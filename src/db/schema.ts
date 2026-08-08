@@ -125,6 +125,13 @@ export const jobs = sqliteTable(
     payloadFingerprint: text("payloadFingerprint"),
     /** Monotonic identity of the current execution generation. */
     runGeneration: integer("runGeneration").notNull().default(0),
+    /**
+     * Artifact/paid-attempt cohort a queued retry must re-derive from. This can
+     * be older than N-1 when an earlier queued retry was canceled before it
+     * acquired a scheduler claim. Retained as the durable lineage root across
+     * chained retries; per-pass authority is folded forward from this cohort.
+     */
+    resumeSourceGeneration: integer("resumeSourceGeneration"),
     /** Monotonic durable-state revision used to fence writers and SSE replay. */
     revision: integer("revision").notNull().default(0),
     /** Queue ordering timestamp; legacy queued rows are backfilled from createdAt. */

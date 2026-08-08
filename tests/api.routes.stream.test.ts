@@ -161,6 +161,40 @@ describe("GET /api/report/[jobId]/stream — unknown job", () => {
   });
 });
 
+describe("read-only liveness boundary", () => {
+  it("does not terminalize an ancient updatedAt row whose durable lease is live", async () => {
+    const { jobId } = createJob("AAPL");
+    handle.db.update(jobs).set({
+      status: "running",
+      updatedAt: "2000-01-01T00:00:00.000Z",
+      leaseOwner: "live:owner",
+      heartbeatAt: "2026-08-08T12:00:00.000Z",
+      leaseExpiresAt: "2999-01-01T00:00:00.000Z",
+      revision: 9,
+    }).where(eq(jobs.id, jobId)).run();
+    const abort = new AbortController();
+
+    const response = await streamGET(...streamReq(jobId, abort.signal));
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    for (let index = 0; index < 3 && !text.includes("event: snapshot"); index += 1) {
+      const chunk = await reader.read();
+      text += decoder.decode(chunk.value);
+    }
+    expect(text).toContain('\"status\":\"running\"');
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "running",
+      revision: 9,
+      leaseOwner: "live:owner",
+      updatedAt: "2000-01-01T00:00:00.000Z",
+    });
+
+    abort.abort();
+    await reader.cancel();
+  });
+});
+
 /* ------------------------------------------------------------------------ *
  * Already-terminal at connect
  * ------------------------------------------------------------------------ */

@@ -36,6 +36,13 @@ describe("parseEnv", () => {
     expect("verifyModel" in config).toBe(false);
     expect(config.fixtureMode).toBe(true);
     expect(config.hasAnthropicKey).toBe(false);
+    expect(config.maxActiveJobs).toBe(1);
+    expect(config.maxActiveLlmCalls).toBe(2);
+    expect(config.maxJobCostUsd).toBeNull();
+    expect(config.maxRollingCostUsd).toBeNull();
+    expect(config.rollingCostWindowMs).toBe(1_440 * 60_000);
+    expect(config.paidPassLeaseTtlMs).toBe(900_000);
+    expect(config.jobLeaseTtlMs).toBe(900_000);
   });
 
   it("trims and passes through real values, setting capability flags", () => {
@@ -82,6 +89,90 @@ describe("parseEnv", () => {
   it("returns a frozen config object", () => {
     const config = parseEnv({});
     expect(Object.isFrozen(config)).toBe(true);
+  });
+
+  it("parses strict scheduler counts, windows, leases, and decimal USD caps", () => {
+    const config = parseEnv({
+      THESIS_MAX_ACTIVE_JOBS: "3",
+      THESIS_MAX_ACTIVE_LLM_CALLS: "4",
+      THESIS_MAX_JOB_COST_USD: "12.345678",
+      THESIS_MAX_ROLLING_COST_USD: "99.01",
+      THESIS_ROLLING_COST_WINDOW_MINUTES: "60",
+      THESIS_PAID_PASS_LEASE_SECONDS: "901",
+      THESIS_JOB_LEASE_SECONDS: "1200",
+    });
+    expect(config).toMatchObject({
+      maxActiveJobs: 3,
+      maxActiveLlmCalls: 4,
+      maxJobCostUsd: 12.345678,
+      maxRollingCostUsd: 99.01,
+      rollingCostWindowMs: 3_600_000,
+      paidPassLeaseTtlMs: 901_000,
+      jobLeaseTtlMs: 1_200_000,
+    });
+  });
+
+  it("treats blank scheduler values as defaults/null rather than zero", () => {
+    const config = parseEnv({
+      THESIS_MAX_ACTIVE_JOBS: " ",
+      THESIS_MAX_ACTIVE_LLM_CALLS: "\t",
+      THESIS_MAX_JOB_COST_USD: "",
+      THESIS_MAX_ROLLING_COST_USD: " ",
+      THESIS_ROLLING_COST_WINDOW_MINUTES: "",
+      THESIS_PAID_PASS_LEASE_SECONDS: "",
+      THESIS_JOB_LEASE_SECONDS: "",
+    });
+    expect(config.maxActiveJobs).toBe(1);
+    expect(config.maxActiveLlmCalls).toBe(2);
+    expect(config.maxJobCostUsd).toBeNull();
+    expect(config.maxRollingCostUsd).toBeNull();
+    expect(config.rollingCostWindowMs).toBe(1_440 * 60_000);
+    expect(config.paidPassLeaseTtlMs).toBe(900_000);
+    expect(config.jobLeaseTtlMs).toBe(900_000);
+  });
+
+  it.each([
+    ["THESIS_MAX_ACTIVE_JOBS", "0"],
+    ["THESIS_MAX_ACTIVE_LLM_CALLS", "1.5"],
+    ["THESIS_ROLLING_COST_WINDOW_MINUTES", "-1"],
+    ["THESIS_PAID_PASS_LEASE_SECONDS", "600"],
+    ["THESIS_JOB_LEASE_SECONDS", "NaN"],
+    ["THESIS_MAX_ACTIVE_JOBS", "9007199254740992"],
+  ])("rejects invalid scheduler integer %s=%s", (key, value) => {
+    expect(() => parseEnv({ [key]: value })).toThrow();
+  });
+
+  it.each([
+    ["THESIS_ROLLING_COST_WINDOW_MINUTES", 60_000, 52_560_000],
+    ["THESIS_PAID_PASS_LEASE_SECONDS", 1_000, 2_147_483],
+    ["THESIS_JOB_LEASE_SECONDS", 1_000, 2_147_483],
+  ] as const)("rejects %s beyond its executable millisecond range", (key, scale, maximumInput) => {
+    expect(parseEnv({ [key]: String(maximumInput) })).toMatchObject({
+      [key === "THESIS_ROLLING_COST_WINDOW_MINUTES"
+        ? "rollingCostWindowMs"
+        : key === "THESIS_PAID_PASS_LEASE_SECONDS"
+          ? "paidPassLeaseTtlMs"
+          : "jobLeaseTtlMs"]: maximumInput * scale,
+    });
+    expect(() => parseEnv({ [key]: String(maximumInput + 1) })).toThrow(/safe|overflow|range|maximum/i);
+  });
+
+  it.each([
+    ["THESIS_MAX_JOB_COST_USD", "-0.01"],
+    ["THESIS_MAX_ROLLING_COST_USD", "NaN"],
+    ["THESIS_MAX_JOB_COST_USD", "Infinity"],
+    ["THESIS_MAX_ROLLING_COST_USD", "1e3"],
+    ["THESIS_MAX_JOB_COST_USD", "1,000"],
+    ["THESIS_MAX_JOB_COST_USD", "9007199254740992"],
+  ])("rejects invalid scheduler USD cap %s=%s", (key, value) => {
+    expect(() => parseEnv({ [key]: value })).toThrow();
+  });
+
+  it("rejects a raw six-place USD cap that binary conversion rounds outside exact micro-USD range", () => {
+    expect(parseEnv({ THESIS_MAX_JOB_COST_USD: "9007199254.740990" }).maxJobCostUsd)
+      .toBe(9_007_199_254.74099);
+    expect(() => parseEnv({ THESIS_MAX_JOB_COST_USD: "9007199254.740991" }))
+      .toThrow(/micro-USD|exact|range/i);
   });
 });
 

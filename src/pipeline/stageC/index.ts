@@ -44,6 +44,7 @@ import { ReportSchema } from "@/report/schema";
 import {
   runPass as providerRunPass,
   runPassStreaming as providerRunPassStreaming,
+  validateRunPassOptions,
   webSearchTool,
   type RunPassOptions,
 } from "@/providers/anthropic";
@@ -57,7 +58,11 @@ import type {
   VerifyPassResult,
   AssembleReportInput,
 } from "@/pipeline/jobRunner";
-import { BullBearPassFailure, PIPELINE_VERSION } from "@/pipeline/jobRunner";
+import {
+  BullBearPassFailure,
+  DURABLE_LAUNCH_AUTHORITY_CAPABILITY,
+  PIPELINE_VERSION,
+} from "@/pipeline/jobRunner";
 import {
   assembleContextPayload,
   FAIR_VALUE_PROVENANCE_ID,
@@ -73,10 +78,13 @@ import {
 import {
   runBullPass,
   runBearPass,
+  buildAnalystRunPassArgs,
+  buildJudgeRunPassArgs,
   runBullThenBear as runBullThenBearPass,
   runJudgePass as runJudgePass_,
   runVerifyPass as runVerifyPass_,
   assembleReport as assembleReport_,
+  BullBearOverlapLaunchFailure,
   type PassDeps,
   type PassResult,
   type PassRun,
@@ -162,6 +170,7 @@ function toPassDeps(deps: RunnerPassDeps<ContextPayload>): PassDeps {
   return {
     runPass,
     runPassStreaming,
+    validateRunPass: (args) => validateRunPassOptions(toRunPassOptions(args)),
     webSearchTool,
     model: deps.analysisModel,
     effort: deps.effort ?? "high",
@@ -333,6 +342,11 @@ function bindDeterministicReportProvenance(
  * ------------------------------------------------------------------------ */
 
 export const pipelinePasses: PipelinePasses<ContextPayload> = {
+  launchAuthorityCapability: DURABLE_LAUNCH_AUTHORITY_CAPABILITY,
+  // This implementation is a pure deterministic provenance walk and contains
+  // no provider call. Alternate/injected verify implementations must declare
+  // their own bounded billable capability.
+  verifyCapability: { billable: false },
   assembleContextPayload(
     bundle: DataBundle,
     computed: ComputedMetrics,
@@ -347,13 +361,47 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
     return payloadFingerprint(payload);
   },
 
+  preflightPass(deps, request): void {
+    // Deterministic verification has no provider boundary and is exactly $0.
+    if (request.pass === "verify") return;
+    const passDeps = toPassDeps(deps);
+    let args: RunPassArgs;
+    if (request.pass === "synthesize") {
+      args = buildJudgeRunPassArgs(
+        passDeps,
+        deps.payload,
+        request.bull.data,
+        request.bear.data,
+        request.validationFeedback,
+      );
+    } else {
+      args = buildAnalystRunPassArgs(passDeps, deps.payload, request.pass);
+    }
+    validateRunPassOptions(toRunPassOptions(args));
+  },
+
   async runBullThenBear(
     deps: RunnerPassDeps<ContextPayload>,
     hooks?: AnalystPassHooks,
     settlements?: AnalystSettlementHooks,
   ): Promise<{ bull: PassResultLike<AnalystCase>; bear: PassResultLike<AnalystCase> }> {
     const passDeps = toPassDeps(deps);
-    const { bull, bear } = await runBullThenBearPass(passDeps, deps.payload, hooks, settlements);
+    let bull: PassRun<AnalystCase>;
+    let bear: PassRun<AnalystCase>;
+    try {
+      ({ bull, bear } = await runBullThenBearPass(passDeps, deps.payload, hooks, settlements));
+    } catch (error) {
+      if (!(error instanceof BullBearOverlapLaunchFailure)) throw error;
+      const bullResult = error.bull.ok ? toPassResultLike(error.bull.result) : undefined;
+      throw new BullBearPassFailure(error.message, {
+        bull: bullResult,
+        bullError: error.bull.ok ? undefined : passRunFailureMessage(error.bull, "bull"),
+        bearError: error.message,
+        bullBilledAttempt: error.bull.ok ? undefined : billedAttemptFromRun(error.bull),
+        bullLaunched: true,
+        bearLaunched: error.bearLaunched,
+      });
+    }
     const bullResult = bull.ok ? toPassResultLike(bull.result) : undefined;
     const bearResult = bear.ok ? toPassResultLike(bear.result) : undefined;
     if (bullResult === undefined || bearResult === undefined) {
@@ -382,6 +430,7 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
     deps: RunnerPassDeps<ContextPayload>,
     side: "bull" | "bear",
     settlement?: PassSettlementHook<AnalystCase>,
+    beforeProviderLaunch?: () => void | Promise<void>,
   ): Promise<PassResultLike<AnalystCase>> {
     // Partial resume: the sibling's persisted snapshot is being reused, so a
     // lone pass simply writes (or re-reads) its own payload cache entry — no
@@ -390,8 +439,8 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
     const passDeps = toPassDeps(deps);
     const run =
       side === "bull"
-        ? await runBullPass(passDeps, deps.payload, settlement)
-        : await runBearPass(passDeps, deps.payload, settlement);
+        ? await runBullPass(passDeps, deps.payload, settlement, beforeProviderLaunch)
+        : await runBearPass(passDeps, deps.payload, settlement, beforeProviderLaunch);
     return toPassResultLike(unwrap(run, side));
   },
 
@@ -401,9 +450,18 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
     bear: PassResultLike<AnalystCase>,
     validationFeedback?: string,
     settlement?: PassSettlementHook<JudgeOutput>,
+    beforeProviderLaunch?: () => void | Promise<void>,
   ): Promise<PassResultLike<JudgeOutput>> {
     const passDeps = toPassDeps(deps);
-    const run = await runJudgePass_(passDeps, deps.payload, bull.data, bear.data, validationFeedback, settlement);
+    const run = await runJudgePass_(
+      passDeps,
+      deps.payload,
+      bull.data,
+      bear.data,
+      validationFeedback,
+      settlement,
+      beforeProviderLaunch,
+    );
     return toPassResultLike(unwrap(run, "judge"));
   },
 
@@ -412,6 +470,7 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
     judgeOutput: JudgeOutput,
     evidence: { fetchedUrls: string[] } = { fetchedUrls: [] },
     settlement?: PassSettlementHook<Report>,
+    beforeProviderLaunch?: () => void | Promise<void>,
   ): Promise<VerifyPassResult> {
     const passDeps = toPassDeps(deps);
     const ctx = assemblyContexts.get(deps.payload);
@@ -446,6 +505,7 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
       },
     );
     const bound = bindDeterministicReportProvenance(assembled, deps.payload);
+    await beforeProviderLaunch?.();
     const verify = await runVerifyPass_(passDeps, deps.payload, bound, evidence);
 
     // Stamp the metrics produced from that full object, then parse the final

@@ -30,11 +30,15 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, isNull, lt, notInArray } from "drizzle-orm";
-import { getDb } from "@/db";
+import { and, desc, eq, gt, gte, inArray, isNull, lte } from "drizzle-orm";
+import { getDb, type ThesisDb } from "@/db";
 import { costLog, jobPassArtifacts, jobs, reports, type JobRow } from "@/db/schema";
 import { getConfig } from "@/config/env";
-import { resolveModel } from "@/providers/anthropic";
+import {
+  maximumPassCostUsd,
+  resolveModel,
+  type VerifyReservationCapability,
+} from "@/providers/anthropic";
 import {
   getAnalysisEffortSetting,
   getAnalysisModelSetting,
@@ -72,7 +76,6 @@ import {
 import {
   PassSettlementHookError,
   parseLegacyAnalystSnapshot,
-  persistPassSettlement,
   serializePassFailure,
   type DurablePass,
   type ComputedJobResumePlan,
@@ -84,6 +87,22 @@ import {
   readQueuedSourceJobResumeInTransaction,
   readStoredJobResumeInTransaction,
 } from "@/pipeline/jobStore";
+import {
+  acquirePaidPassLease,
+  authorizePaidPassLaunch,
+  claimQueuedJobById,
+  configuredSchedulerLimits,
+  reconcileExpiredJobClaims,
+  reconcileExpiredSchedulerStateInTransaction,
+  releaseUnbilledPaidPassLease,
+  renewJobLease,
+  renewPaidPassLease,
+  settlePaidPassLease,
+  PaidPassOverReservationError,
+  type JobClaim,
+  type PaidPassLease,
+  type SchedulerLimits,
+} from "@/pipeline/jobScheduler";
 
 /* ------------------------------------------------------------------------ *
  * PipelinePasses — injected Stage C contract (loose/structural types)
@@ -214,6 +233,35 @@ export interface VerifyPassResult {
  */
 export interface PipelinePasses<TPayload = unknown> {
   /**
+   * Proves that every adapter method awaits the runner's durable launch-
+   * authority callback at its immediate provider/logical execution boundary.
+   * Adapters without this capability fail closed before model resolution.
+   */
+  launchAuthorityCapability?: typeof DURABLE_LAUNCH_AUTHORITY_CAPABILITY;
+  /** Verify is provider-free only when this explicit capability says so. */
+  verifyCapability?: VerifyReservationCapability;
+  /**
+   * Validate the exact forthcoming request against the finite provider bounds
+   * before the runner acquires a paid lease. Production implements this for
+   * every provider-backed pass; deterministic verify is a no-op.
+   */
+  preflightPass?(
+    deps: PassDeps<TPayload>,
+    request:
+      | { pass: "bull" | "bear" }
+      | {
+          pass: "synthesize";
+          bull: PassResultLike<AnalystCase>;
+          bear: PassResultLike<AnalystCase>;
+          validationFeedback?: string;
+        }
+      | {
+          pass: "verify";
+          judgeOutput: JudgeOutput;
+          evidence: { fetchedUrls: string[] };
+        },
+  ): void | Promise<void>;
+  /**
    * Assemble the deterministic context payload (Stage B metrics + extracts +
    * transcript + filings + ownership + macro + manifest). No timestamps/UUIDs,
    * sorted keys (cache discipline — the cost model §2).
@@ -256,6 +304,7 @@ export interface PipelinePasses<TPayload = unknown> {
     deps: PassDeps<TPayload>,
     side: "bull" | "bear",
     settlement?: PassSettlementHook<AnalystCase>,
+    beforeProviderLaunch?: () => void | Promise<void>,
   ): Promise<PassResultLike<AnalystCase>>;
 
   /** Judge/synthesis pass: bull + bear + payload → JudgeOutput (report minus meta/appendix). */
@@ -265,6 +314,7 @@ export interface PipelinePasses<TPayload = unknown> {
     bear: PassResultLike<AnalystCase>,
     validationFeedback?: string,
     settlement?: PassSettlementHook<JudgeOutput>,
+    beforeProviderLaunch?: () => void | Promise<void>,
   ): Promise<PassResultLike<JudgeOutput>>;
 
   /** Verification pass: trace every numeric claim; returns the verified Report + rate. */
@@ -273,6 +323,7 @@ export interface PipelinePasses<TPayload = unknown> {
     judgeOutput: JudgeOutput,
     evidence?: { fetchedUrls: string[] },
     settlement?: PassSettlementHook<Report>,
+    beforeProviderLaunch?: () => void | Promise<void>,
   ): Promise<VerifyPassResult>;
 
   /**
@@ -286,6 +337,13 @@ export interface PipelinePasses<TPayload = unknown> {
 
 /** Per-side lifecycle hooks for the combined bull+bear call (real timing). */
 export interface AnalystPassHooks {
+  /** Awaited paid-permit gate immediately before this provider side launches. */
+  beforePass?: (side: "bull" | "bear") => void | Promise<void>;
+  /**
+   * Awaited, non-swallowed durable authority fence at the immediate provider
+   * boundary. Timing/telemetry hooks below remain best-effort by design.
+   */
+  beforeProviderLaunch?: (side: "bull" | "bear") => void | Promise<void>;
   onPassStart?: (side: "bull" | "bear") => void;
   onPassFinish?: (side: "bull" | "bear") => void;
 }
@@ -332,6 +390,13 @@ export const PIPELINE_VERSION = "stage-c-1.0.0" as const;
 
 /** Reason recorded on skipped LLM steps when no Anthropic key is configured. */
 export const NO_KEY_SKIP_REASON = "ANTHROPIC_API_KEY not configured" as const;
+
+/** Adapter contract for the non-swallowed immediate pre-provider authority fence. */
+export const DURABLE_LAUNCH_AUTHORITY_CAPABILITY = "durable-preprovider-v1" as const;
+
+/** Honest degraded-mode reason for legacy/injected adapters lacking that fence. */
+export const LAUNCH_AUTHORITY_SKIP_REASON =
+  "Stage C adapter lacks durable pre-provider launch authority" as const;
 
 /** The four LLM steps (skipped as a block in the no-key path). */
 export const LLM_STEPS: readonly PipelineStep[] = ["bull", "bear", "synthesize", "verify"] as const;
@@ -390,8 +455,54 @@ interface RunState {
   symbol: string;
   startedAt: string;
   runGeneration: number;
+  revision: number;
+  claim: JobClaim;
+  schedulerLimits: SchedulerLimits;
   steps: StepProgress[];
   totalCostUsd: number;
+}
+
+interface LiveAuthorityRow {
+  revision: number;
+  stepsJson: string;
+}
+
+/**
+ * Acquire SQLite write authority before sampling wall time. Every runner-owned
+ * mutation uses this primitive so a writer-lock wait can never resurrect an
+ * owner whose durable lease expired while blocked.
+ */
+function withLiveRunAuthority<T>(
+  state: RunState,
+  expectedRevision: number | null,
+  work: (db: ThesisDb, row: LiveAuthorityRow, authorityAt: string) => T,
+): { authorized: true; value: T } | { authorized: false } {
+  return getDb().transaction((tx) => {
+    const authorityAt = new Date().toISOString();
+    const row = tx.select({
+      runGeneration: jobs.runGeneration,
+      revision: jobs.revision,
+      status: jobs.status,
+      leaseOwner: jobs.leaseOwner,
+      leaseExpiresAt: jobs.leaseExpiresAt,
+      stepsJson: jobs.stepsJson,
+    }).from(jobs).where(eq(jobs.id, state.jobId)).get();
+    if (
+      row === undefined ||
+      row.runGeneration !== state.runGeneration ||
+      row.status !== "running" ||
+      row.leaseOwner !== state.claim.leaseOwner ||
+      row.leaseExpiresAt === null ||
+      row.leaseExpiresAt <= authorityAt ||
+      (expectedRevision !== null && row.revision !== expectedRevision)
+    ) {
+      return { authorized: false } as const;
+    }
+    return {
+      authorized: true,
+      value: work(tx as ThesisDb, row, authorityAt),
+    } as const;
+  }, { behavior: "immediate" });
 }
 
 function findStep(state: RunState, step: PipelineStep): StepProgress {
@@ -405,30 +516,45 @@ function findStep(state: RunState, step: PipelineStep): StepProgress {
 
 /** Persist the current StepProgress[] + updatedAt to the jobs row. */
 function persistSteps(state: RunState, status?: JobStatus, error?: string | null): void {
-  const set: Record<string, unknown> = {
-    stepsJson: JSON.stringify(state.steps),
-    updatedAt: nowIso(),
-  };
-  if (status !== undefined) {
-    set.status = status;
-    if (status !== "unsupported") {
-      set.unsupportedKind = null;
-      set.unsupportedMessage = null;
+  const persisted = withLiveRunAuthority(state, state.revision, (db, row, authorityAt) => {
+    const set: Record<string, unknown> = {
+      stepsJson: JSON.stringify(state.steps),
+      updatedAt: authorityAt,
+      revision: row.revision + 1,
+    };
+    if (status !== undefined) {
+      set.status = status;
+      if (status === "done" || status === "error" || status === "unsupported") {
+        set.leaseOwner = null;
+        set.leaseExpiresAt = null;
+        set.heartbeatAt = null;
+      }
+      if (status !== "unsupported") {
+        set.unsupportedKind = null;
+        set.unsupportedMessage = null;
+      }
     }
-  }
-  if (error !== undefined) set.error = error;
-  const result = getDb()
-    .update(jobs)
-    .set(set)
-    .where(and(
-      eq(jobs.id, state.jobId),
-      eq(jobs.runGeneration, state.runGeneration),
-      eq(jobs.status, "running"),
-    ))
-    .run();
-  if (result.changes !== 1) {
+    if (error !== undefined) set.error = error;
+    const result = db.update(jobs)
+      .set(set)
+      .where(and(
+        eq(jobs.id, state.jobId),
+        eq(jobs.runGeneration, state.runGeneration),
+        eq(jobs.status, "running"),
+        eq(jobs.leaseOwner, state.claim.leaseOwner),
+        eq(jobs.revision, row.revision),
+        gt(jobs.leaseExpiresAt, authorityAt),
+      ))
+      .run();
+    if (result.changes !== 1) {
+      throw new SupersededRunError(state.jobId, state.runGeneration);
+    }
+    return row.revision + 1;
+  });
+  if (!persisted.authorized) {
     throw new SupersededRunError(state.jobId, state.runGeneration);
   }
+  state.revision = persisted.value;
 }
 
 /** Emit a step-update event for the given step's current state. */
@@ -444,11 +570,27 @@ function emitStep(state: RunState, step: PipelineStep): void {
 /** Publish an event through the bus (isolated so a bad subscriber can't break the run). */
 function publish(_state: RunState, event: JobEvent): void {
   const current = getDb()
-    .select({ runGeneration: jobs.runGeneration })
+    .select({
+      runGeneration: jobs.runGeneration,
+      status: jobs.status,
+      leaseOwner: jobs.leaseOwner,
+      leaseExpiresAt: jobs.leaseExpiresAt,
+    })
     .from(jobs)
     .where(eq(jobs.id, _state.jobId))
     .get();
-  if (current?.runGeneration === _state.runGeneration) publishJobEvent(event);
+  const live =
+    current?.runGeneration === _state.runGeneration &&
+    current.status === "running" &&
+    current.leaseOwner === _state.claim.leaseOwner &&
+    current.leaseExpiresAt !== null &&
+    current.leaseExpiresAt > nowIso();
+  const terminal = current?.runGeneration === _state.runGeneration && (
+    (event.type === "done" && current.status === "done") ||
+    (event.type === "error" && current.status === "error") ||
+    (event.type === "unsupported" && current.status === "unsupported")
+  );
+  if (live || terminal) publishJobEvent(event);
 }
 
 /** Mark a step "running" (stamp startedAt), persist, and emit. */
@@ -492,8 +634,8 @@ function finishStep(
   emitStep(state, step);
 }
 
-function sumLoggedStepCost(jobId: string, step: PipelineStep): number {
-  const rows = getDb()
+function sumLoggedStepCost(jobId: string, step: PipelineStep, db: ThesisDb = getDb()): number {
+  const rows = db
     .select({ costUsd: costLog.costUsd })
     .from(costLog)
     .where(and(eq(costLog.jobId, jobId), eq(costLog.step, step)))
@@ -618,45 +760,29 @@ function mergeCommittedSettlement<T>(
   settlement: PassSettlement<T>,
   inserted: boolean,
 ): boolean {
-  for (let retry = 0; retry < 20; retry++) {
-    const row = getDb()
-      .select({
-        runGeneration: jobs.runGeneration,
-        revision: jobs.revision,
-        status: jobs.status,
-        stepsJson: jobs.stepsJson,
-      })
-      .from(jobs)
-      .where(eq(jobs.id, state.jobId))
-      .get();
-    if (
-      row === undefined ||
-      row.runGeneration !== state.runGeneration ||
-      row.status !== "running"
-    ) return false;
-
+  const merged = withLiveRunAuthority(state, null, (db, row, authorityAt) => {
     const latest = parseStepsJson(row.stepsJson);
     const step = latest.find((candidate) => candidate.step === pass);
     if (!step) throw new Error(`jobRunner: missing durable step ${pass}`);
-    const status = settlement.outcome === "success" ? "done" : "error";
     if (!inserted) {
-      state.steps = latest;
-      state.totalCostUsd = sumLoggedCost(state.jobId);
-      return true;
+      return {
+        steps: latest,
+        revision: row.revision,
+        totalCostUsd: sumLoggedCost(state.jobId, db),
+      };
     }
-    step.status = status;
-    step.startedAt ??= nowIso();
-    step.finishedAt = findStep(state, pass).finishedAt ?? nowIso();
+    step.status = settlement.outcome === "success" ? "done" : "error";
+    step.startedAt ??= authorityAt;
+    step.finishedAt = findStep(state, pass).finishedAt ?? authorityAt;
     step.completedAt = step.finishedAt;
     step.detail = settlementStepDetail(settlement);
-    const logged = sumLoggedStepCost(state.jobId, pass);
+    const logged = sumLoggedStepCost(state.jobId, pass, db);
     if (settlement.telemetry.billable || logged > 0) step.costUsd = logged;
 
-    const update = getDb()
-      .update(jobs)
+    const update = db.update(jobs)
       .set({
         stepsJson: JSON.stringify(latest),
-        updatedAt: nowIso(),
+        updatedAt: authorityAt,
         revision: row.revision + 1,
       })
       .where(and(
@@ -664,29 +790,44 @@ function mergeCommittedSettlement<T>(
         eq(jobs.runGeneration, state.runGeneration),
         eq(jobs.revision, row.revision),
         eq(jobs.status, "running"),
+        eq(jobs.leaseOwner, state.claim.leaseOwner),
+        gt(jobs.leaseExpiresAt, authorityAt),
       ))
       .run();
-    if (update.changes !== 1) continue;
-
-    state.steps = latest;
-    state.totalCostUsd = sumLoggedCost(state.jobId);
-    if (inserted && settlement.telemetry.billable) {
-      publish(state, {
-        type: "cost-update",
-        jobId: state.jobId,
-        step: pass,
-        passCostUsd: settlement.telemetry.costUsd,
-        totalCostUsd: state.totalCostUsd,
-      });
+    if (update.changes !== 1) {
+      throw new SupersededRunError(state.jobId, state.runGeneration);
     }
-    emitStep(state, pass);
-    return true;
+    return {
+      steps: latest,
+      revision: row.revision + 1,
+      totalCostUsd: sumLoggedCost(state.jobId, db),
+    };
+  });
+  if (!merged.authorized) return false;
+  state.steps = merged.value.steps;
+  state.revision = merged.value.revision;
+  state.totalCostUsd = merged.value.totalCostUsd;
+  if (inserted && settlement.telemetry.billable) {
+    publish(state, {
+      type: "cost-update",
+      jobId: state.jobId,
+      step: pass,
+      passCostUsd: settlement.telemetry.costUsd,
+      totalCostUsd: state.totalCostUsd,
+    });
   }
-  throw new Error(`jobRunner: settlement step CAS exhausted for ${pass}`);
+  if (inserted) emitStep(state, pass);
+  return true;
 }
 
 interface SettlementCheckpoint<T> {
   attemptId: string;
+  beforeLaunch(): Promise<void>;
+  authorizeLaunch(startStepAtBoundary: boolean): void;
+  wasLaunched(): boolean;
+  releaseIfPrelaunch(): void;
+  stopRenewal(): void;
+  hasLease(): boolean;
   hook: PassSettlementHook<T>;
   wasCalled(): boolean;
   lastSettlement(): PassSettlement<T> | null;
@@ -703,35 +844,184 @@ function createSettlementCheckpoint<T>(
   state: RunState,
   pass: DurablePass,
   payloadFingerprint: string | null,
+  maximumNextPassUsd: number,
+  signal: AbortSignal,
+  controller: AbortController,
 ): SettlementCheckpoint<T> {
   const attemptId = randomUUID();
   let called = false;
+  let committed = false;
+  let launched = false;
   let last: PassSettlement<T> | null = null;
+  let lease: PaidPassLease | null = null;
+  let renewal: ReturnType<typeof setInterval> | undefined;
+  let permitBackoffMs = 250;
+
+  const stopRenewal = (): void => {
+    if (renewal !== undefined) clearInterval(renewal);
+    renewal = undefined;
+  };
+  const beforeLaunch = async (): Promise<void> => {
+    if (lease !== null) return;
+    while (lease === null) {
+      signal.throwIfAborted();
+      const acquired = acquirePaidPassLease(
+        state.claim,
+        pass,
+        attemptId,
+        maximumNextPassUsd,
+        undefined,
+        state.schedulerLimits,
+      );
+      if (acquired.acquired) {
+        lease = acquired.lease;
+        renewal = setInterval(() => {
+          try {
+            if (lease !== null && !renewPaidPassLease(lease, undefined, state.schedulerLimits)) {
+              stopRenewal();
+              controller.abort(new Error(`paid ${pass} lease renewal lost authority`));
+            }
+          } catch (error) {
+            stopRenewal();
+            controller.abort(error);
+          }
+        }, Math.max(1, Math.floor(state.schedulerLimits.paidPassLeaseTtlMs / 4)));
+        renewal.unref?.();
+        return;
+      }
+      if (
+        acquired.reason !== "capacity" &&
+        acquired.reason !== "job-budget-pending" &&
+        acquired.reason !== "rolling-budget-pending"
+      ) {
+        throw new Error(`paid ${pass} pass blocked by ${acquired.reason}`);
+      }
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = (): void => signal.removeEventListener("abort", onAbort);
+        const timer = setTimeout(() => {
+          cleanup();
+          resolve();
+        }, permitBackoffMs);
+        const onAbort = (): void => {
+          clearTimeout(timer);
+          cleanup();
+          reject(signal.reason ?? new DOMException("aborted", "AbortError"));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        timer.unref?.();
+      });
+      permitBackoffMs = Math.min(1_000, permitBackoffMs * 2);
+    }
+  };
+  const authorizeLaunch = (startStepAtBoundary: boolean): void => {
+    signal.throwIfAborted();
+    if (lease === null) {
+      throw new Error(`paid ${pass} launch authority checked before its durable lease was acquired`);
+    }
+    const priorSteps = structuredClone(state.steps);
+    const authorityNow = new Date();
+    if (startStepAtBoundary) {
+      const step = findStep(state, pass);
+      step.status = "running";
+      step.startedAt = authorityNow.toISOString();
+      delete step.completedAt;
+      delete step.finishedAt;
+      delete step.detail;
+    }
+    let authority: ReturnType<typeof authorizePaidPassLaunch>;
+    try {
+      authority = authorizePaidPassLaunch(
+        lease,
+        state.revision,
+        JSON.stringify(state.steps),
+        undefined,
+        state.schedulerLimits,
+      );
+    } catch (error) {
+      // The running transition above is only a candidate snapshot until the
+      // exact job + paid-lease fence commits. A database/configuration failure
+      // must not leave unpersisted local state that a later degradation path
+      // could accidentally publish.
+      state.steps = priorSteps;
+      if (!controller.signal.aborted) controller.abort(error);
+      throw error;
+    }
+    if (authority === null) {
+      state.steps = priorSteps;
+      const error = new SupersededRunError(state.jobId, state.runGeneration);
+      if (!controller.signal.aborted) controller.abort(error);
+      throw error;
+    }
+    state.revision = authority.revision;
+    state.claim.revision = authority.revision;
+    state.claim.heartbeatAt = authority.heartbeatAt;
+    state.claim.leaseExpiresAt = authority.jobLeaseExpiresAt;
+    lease = { ...lease, leaseExpiresAt: authority.paidLeaseExpiresAt };
+    launched = true;
+    if (startStepAtBoundary) emitStep(state, pass);
+  };
   const hook: PassSettlementHook<T> = async (settlement) => {
+    if (called) {
+      if (committed && JSON.stringify(last) === JSON.stringify(settlement)) return;
+      const duplicate = new PassSettlementHookError(
+        "conflicting duplicate pass settlement callback",
+      );
+      if (!controller.signal.aborted) controller.abort(duplicate);
+      throw duplicate;
+    }
     called = true;
     last = settlement;
     try {
-      const persisted = persistPassSettlement({
-        jobId: state.jobId,
-        runGeneration: state.runGeneration,
-        attemptId,
-        pass,
+      if (lease === null) {
+        throw new Error(`paid ${pass} settlement occurred before its durable lease was acquired`);
+      }
+      stopRenewal();
+      const persisted = settlePaidPassLease(lease, {
         settlement,
         payloadFingerprint,
       });
+      if (persisted.currentRevision !== null) state.revision = persisted.currentRevision;
       if (persisted.currentGeneration) {
         mergeCommittedSettlement(state, pass, settlement, persisted.inserted);
       }
+      committed = true;
     } catch (error) {
-      if (error instanceof PassSettlementHookError) throw error;
-      throw new PassSettlementHookError(
+      if (error instanceof PaidPassOverReservationError) {
+        if (error.result.currentRevision !== null) {
+          state.revision = error.result.currentRevision;
+        }
+        if (error.result.currentGeneration) {
+          mergeCommittedSettlement(state, pass, settlement, error.result.inserted);
+        }
+        committed = true;
+      }
+      const wrapped = error instanceof PassSettlementHookError
+        ? error
+        : new PassSettlementHookError(
         `pass settlement persistence failed: ${errMessage(error)}`,
         { cause: error },
       );
+      // Settlement persistence is execution authority, not telemetry. Stop a
+      // sibling still waiting at its permit gate so it cannot launch after the
+      // exact launched result was lost.
+      if (!controller.signal.aborted) controller.abort(wrapped);
+      throw wrapped;
     }
   };
   return {
     attemptId,
+    beforeLaunch,
+    authorizeLaunch,
+    wasLaunched: () => launched,
+    releaseIfPrelaunch: () => {
+      if (lease !== null && !launched && !called) {
+        stopRenewal();
+        releaseUnbilledPaidPassLease(lease);
+        lease = null;
+      }
+    },
+    stopRenewal,
+    hasLease: () => lease !== null,
     hook,
     wasCalled: () => called,
     lastSettlement: () => last,
@@ -815,8 +1105,8 @@ function isRetryableJudgeError(err: unknown): boolean {
 
 /**
  * Insert a fresh "queued" job for a symbol with every step "pending". Returns
- * the generated jobId. Does NOT start the pipeline — the caller (POST route)
- * kicks off runJob() in the background afterward.
+ * the generated jobId. Does not start the pipeline; the caller wakes the
+ * durable scheduler after the enqueue commits.
  */
 export function createJob(symbol: string): { jobId: string } {
   const sym = symbol.trim().toUpperCase();
@@ -831,6 +1121,8 @@ export function createJob(symbol: string): { jobId: string } {
       stepsJson: JSON.stringify(initialSteps()),
       createdAt: now,
       updatedAt: now,
+      queuedAt: now,
+      maxCostUsd: getConfig().maxJobCostUsd,
       error: null,
       reportId: null,
       unsupportedKind: null,
@@ -842,53 +1134,50 @@ export function createJob(symbol: string): { jobId: string } {
 
 /**
  * Atomically reuse or create the active job for a symbol. The partial unique
- * SQLite index is the final arbiter across processes; the transaction keeps
- * the common check+insert path together and converts a concurrent uniqueness
- * race into the already-existing row response.
+ * SQLite index is the final arbiter across processes. BEGIN IMMEDIATE keeps
+ * expiry reconciliation, the fresh-active check, and insertion under one
+ * writer lock so no expired owner can be returned between phases.
  */
-export function getOrCreateJobForSymbol(symbol: string):
+export function getOrCreateJobForSymbol(
+  symbol: string,
+  options: { now?: () => Date } = {},
+):
   | { jobId: string; existing: true; status: "queued" | "running"; updatedAt: string }
   | { jobId: string; existing: false } {
   const sym = symbol.trim().toUpperCase();
   const db = getDb();
-  try {
-    return db.transaction((tx) => {
-      const active = tx
-        .select({ id: jobs.id, status: jobs.status, updatedAt: jobs.updatedAt })
-        .from(jobs)
-        .where(and(eq(jobs.symbol, sym), inArray(jobs.status, ["queued", "running"])))
-        .orderBy(desc(jobs.updatedAt), desc(jobs.id))
-        .get();
-      if (active && isReusableStatus(active.status)) {
-        return { jobId: active.id, existing: true, status: active.status, updatedAt: active.updatedAt };
-      }
-      const jobId = randomUUID();
-      const now = nowIso();
-      tx.insert(jobs)
-        .values({
-          id: jobId,
-          symbol: sym,
-          status: "queued",
-          stepsJson: JSON.stringify(initialSteps()),
-          createdAt: now,
-          updatedAt: now,
-          error: null,
-          reportId: null,
-          unsupportedKind: null,
-          unsupportedMessage: null,
-        })
-        .run();
-      return { jobId, existing: false };
-    });
-  } catch (err) {
-    // Another process may have won the unique active-symbol insert after our
-    // snapshot. Read it back and return it; do not bill/start a second run.
-    const active = getReusableActiveJobForSymbol(sym);
-    if (active !== null) {
-      return { ...active, existing: true };
+  return db.transaction((tx) => {
+    const authority = options.now?.() ?? new Date();
+    reconcileExpiredSchedulerStateInTransaction(tx as ThesisDb, authority);
+    const active = tx
+      .select({ id: jobs.id, status: jobs.status, updatedAt: jobs.updatedAt })
+      .from(jobs)
+      .where(and(eq(jobs.symbol, sym), inArray(jobs.status, ["queued", "running"])))
+      .orderBy(desc(jobs.updatedAt), desc(jobs.id))
+      .get();
+    if (active && isReusableStatus(active.status)) {
+      return { jobId: active.id, existing: true, status: active.status, updatedAt: active.updatedAt };
     }
-    throw err;
-  }
+    const jobId = randomUUID();
+    const now = authority.toISOString();
+    tx.insert(jobs)
+      .values({
+        id: jobId,
+        symbol: sym,
+        status: "queued",
+        stepsJson: JSON.stringify(initialSteps()),
+        createdAt: now,
+        updatedAt: now,
+        queuedAt: now,
+        maxCostUsd: getConfig().maxJobCostUsd,
+        error: null,
+        reportId: null,
+        unsupportedKind: null,
+        unsupportedMessage: null,
+      })
+      .run();
+    return { jobId, existing: false };
+  }, { behavior: "immediate" });
 }
 
 export interface ReusableActiveJob {
@@ -902,83 +1191,43 @@ function isReusableStatus(status: string): status is ReusableActiveJob["status"]
 }
 
 /**
- * Return a still-fresh active job for a symbol so clients can resume its stream.
- * Stale queued/running rows are marked error first; otherwise they would block
- * all future runs for that ticker after a dev-server restart or detached task
- * death.
+ * Return a reusable active job for a symbol. Queued rows remain durable until a
+ * scheduler claims them; running rows are reusable only while their exact job
+ * lease is live. This read helper never mutates state or treats updatedAt as
+ * liveness authority.
  */
 export function getReusableActiveJobForSymbol(
   symbol: string,
   now: Date = new Date(),
-  staleMs = ACTIVE_JOB_STALE_MS,
+  _staleMs = ACTIVE_JOB_STALE_MS,
 ): ReusableActiveJob | null {
+  void _staleMs; // compatibility only; updatedAt age is never liveness authority
   const sym = symbol.trim().toUpperCase();
-  const nowMs = now.getTime();
-  const nowText = now.toISOString();
   const rows = getDb()
-    .select({ id: jobs.id, status: jobs.status, updatedAt: jobs.updatedAt })
+    .select({
+      id: jobs.id,
+      status: jobs.status,
+      updatedAt: jobs.updatedAt,
+      leaseOwner: jobs.leaseOwner,
+      leaseExpiresAt: jobs.leaseExpiresAt,
+    })
     .from(jobs)
     .where(eq(jobs.symbol, sym))
     .all()
-    .filter((r): r is { id: string; status: ReusableActiveJob["status"]; updatedAt: string } =>
-      isReusableStatus(r.status),
+    .filter((row): row is typeof row & { status: ReusableActiveJob["status"] } =>
+      row.status === "queued" ||
+      (
+        row.status === "running" &&
+        row.leaseOwner !== null &&
+        row.leaseExpiresAt !== null &&
+        row.leaseExpiresAt > now.toISOString()
+      ),
     )
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
-
-  let reusable: ReusableActiveJob | null = null;
-  for (const row of rows) {
-    const updatedMs = Date.parse(row.updatedAt);
-    // A job THIS process is still executing is never stale, no matter how long
-    // its current pass has been silent (see liveJobIds).
-    const stale =
-      !isJobLiveInProcess(row.id) &&
-      (!Number.isFinite(updatedMs) || nowMs - updatedMs > staleMs);
-    if (stale) {
-      const expired = getDb()
-        .update(jobs)
-        .set({
-          status: "error",
-          error: `stale active job expired after ${Math.round(staleMs / 60000)} minutes without progress`,
-          unsupportedKind: null,
-          unsupportedMessage: null,
-          updatedAt: nowText,
-        })
-        .where(
-          and(
-            eq(jobs.id, row.id),
-            eq(jobs.status, row.status),
-            eq(jobs.updatedAt, row.updatedAt),
-          ),
-        )
-        .run();
-      if (expired.changes === 0) {
-        // A heartbeat or terminal transition won after the SELECT. Re-read so
-        // a refreshed active job remains reusable while unsupported/done/error
-        // stays terminal; never clobber either with the stale decision.
-        const current = getDb()
-          .select({ id: jobs.id, status: jobs.status, updatedAt: jobs.updatedAt })
-          .from(jobs)
-          .where(eq(jobs.id, row.id))
-          .get();
-        if (current !== undefined && isReusableStatus(current.status)) {
-          const currentUpdatedMs = Date.parse(current.updatedAt);
-          const currentStale =
-            !isJobLiveInProcess(current.id) &&
-            (!Number.isFinite(currentUpdatedMs) || nowMs - currentUpdatedMs > staleMs);
-          if (!currentStale) {
-            reusable ??= {
-              jobId: current.id,
-              status: current.status,
-              updatedAt: current.updatedAt,
-            };
-          }
-        }
-      }
-      continue;
-    }
-    reusable ??= { jobId: row.id, status: row.status, updatedAt: row.updatedAt };
-  }
-  return reusable;
+  const row = rows[0];
+  return row === undefined
+    ? null
+    : { jobId: row.id, status: row.status, updatedAt: row.updatedAt };
 }
 
 /**
@@ -1035,6 +1284,9 @@ export function readPassSnapshots(jobId: string): PersistedPassSnapshots | null 
 
 export interface PreparedJobResume {
   jobId: string;
+  /** Current terminal/queued generation whose row is being advanced. */
+  claimGeneration: number;
+  /** Immutable artifact/paid-attempt cohort reused by the target generation. */
   sourceGeneration: number;
   targetGeneration: number;
   sourceRevision: number;
@@ -1055,14 +1307,8 @@ export interface PreparedJobResume {
 }
 
 const globalWithPreparedResumes = globalThis as typeof globalThis & {
-  __thesisPreparedJobResumes?: Map<string, PreparedJobResume>;
   __thesisPreparedResumeAuthenticity?: WeakMap<PreparedJobResume, string>;
 };
-
-function preparedResumeStore(): Map<string, PreparedJobResume> {
-  globalWithPreparedResumes.__thesisPreparedJobResumes ??= new Map();
-  return globalWithPreparedResumes.__thesisPreparedJobResumes;
-}
 
 function preparedResumeAuthenticity(): WeakMap<PreparedJobResume, string> {
   globalWithPreparedResumes.__thesisPreparedResumeAuthenticity ??= new WeakMap();
@@ -1092,17 +1338,6 @@ function immutablePreparedResume(prepared: PreparedJobResume): PreparedJobResume
   return deepFreeze(structuredClone(prepared));
 }
 
-function preparedResumeKey(jobId: string, targetGeneration: number): string {
-  return `${jobId}:${targetGeneration}`;
-}
-
-function takePreparedResume(jobId: string, targetGeneration: number): PreparedJobResume | null {
-  const key = preparedResumeKey(jobId, targetGeneration);
-  const prepared = preparedResumeStore().get(key) ?? null;
-  preparedResumeStore().delete(key);
-  return prepared;
-}
-
 type ResumeStateDb = Pick<ReturnType<typeof getDb>, "select">;
 
 /**
@@ -1113,14 +1348,16 @@ type ResumeStateDb = Pick<ReturnType<typeof getDb>, "select">;
 function sourceArtifactSetDigest(
   db: ResumeStateDb,
   jobId: string,
-  runGeneration: number,
+  firstGeneration: number,
+  lastGeneration: number,
 ): string {
   const artifacts = db
     .select()
     .from(jobPassArtifacts)
     .where(and(
       eq(jobPassArtifacts.jobId, jobId),
-      eq(jobPassArtifacts.runGeneration, runGeneration),
+      gte(jobPassArtifacts.runGeneration, firstGeneration),
+      lte(jobPassArtifacts.runGeneration, lastGeneration),
     ))
     .all()
     .sort((left, right) =>
@@ -1133,7 +1370,8 @@ function sourceArtifactSetDigest(
     .from(costLog)
     .where(and(
       eq(costLog.jobId, jobId),
-      eq(costLog.runGeneration, runGeneration),
+      gte(costLog.runGeneration, firstGeneration),
+      lte(costLog.runGeneration, lastGeneration),
     ))
     .all()
     .filter((row) => row.attemptId !== null)
@@ -1151,6 +1389,7 @@ function sourceArtifactSetDigest(
 function buildPreparedJobResume(
   row: JobRow,
   expectedTerminalStatus: "done" | "error",
+  sourceGeneration: number,
   plan: ComputedJobResumePlan,
   sourceReportExists: boolean,
   artifactSetDigest: string,
@@ -1158,7 +1397,8 @@ function buildPreparedJobResume(
   if (row.status !== expectedTerminalStatus || !plan.state.resumable) return null;
   return {
     jobId: row.id,
-    sourceGeneration: row.runGeneration,
+    claimGeneration: row.runGeneration,
+    sourceGeneration,
     targetGeneration: row.runGeneration + 1,
     sourceRevision: row.revision,
     sourceStatus: expectedTerminalStatus,
@@ -1191,7 +1431,8 @@ export function prepareQueuedJobResumeInTransaction(
   const row = stored.row;
   return immutablePreparedResume({
     jobId,
-    sourceGeneration: row.runGeneration - 1,
+    claimGeneration: row.runGeneration - 1,
+    sourceGeneration: stored.artifacts.runGeneration,
     targetGeneration: row.runGeneration,
     sourceRevision: Math.max(0, row.revision - 1),
     sourceStatus: "error",
@@ -1201,13 +1442,66 @@ export function prepareQueuedJobResumeInTransaction(
     sourceBullJson: row.bullJson,
     sourceBearJson: row.bearJson,
     sourcePayloadFingerprint: row.payloadFingerprint,
-    sourceArtifactSetDigest: sourceArtifactSetDigest(db, jobId, row.runGeneration - 1),
+    sourceArtifactSetDigest: sourceArtifactSetDigest(
+      db,
+      jobId,
+      stored.artifacts.runGeneration,
+      row.runGeneration - 1,
+    ),
     bull: stored.plan.bull,
     bear: stored.plan.bear,
     synthesize: stored.plan.synthesize,
     verify: stored.plan.verify,
     payloadFingerprint: stored.plan.payloadFingerprint,
   });
+}
+
+/** Re-check the immutable source authority after a queued claim-side mutation. */
+export function queuedResumeSourceMatchesInTransaction(
+  db: ResumeStateDb,
+  prepared: PreparedJobResume,
+): boolean {
+  const current = db
+    .select({
+      runGeneration: jobs.runGeneration,
+      stepsJson: jobs.stepsJson,
+      reportId: jobs.reportId,
+      bullJson: jobs.bullJson,
+      bearJson: jobs.bearJson,
+      payloadFingerprint: jobs.payloadFingerprint,
+    })
+    .from(jobs)
+    .where(eq(jobs.id, prepared.jobId))
+    .get();
+  if (
+    current === undefined ||
+    current.runGeneration !== prepared.targetGeneration ||
+    current.stepsJson !== prepared.sourceStepsJson ||
+    current.reportId !== prepared.sourceReportId ||
+    current.bullJson !== prepared.sourceBullJson ||
+    current.bearJson !== prepared.sourceBearJson ||
+    current.payloadFingerprint !== prepared.sourcePayloadFingerprint
+  ) {
+    return false;
+  }
+  if (
+    sourceArtifactSetDigest(
+      db,
+      prepared.jobId,
+      prepared.sourceGeneration,
+      prepared.claimGeneration,
+    ) !==
+    prepared.sourceArtifactSetDigest
+  ) {
+    return false;
+  }
+  const sourceReportExists = prepared.sourceReportId !== null &&
+    db
+      .select({ id: reports.id })
+      .from(reports)
+      .where(eq(reports.id, prepared.sourceReportId))
+      .get() !== undefined;
+  return sourceReportExists === prepared.sourceReportExists;
 }
 
 export function prepareQueuedJobResume(jobId: string): PreparedJobResume | null {
@@ -1228,10 +1522,16 @@ export function prepareJobResume(
     const prepared = getDb().transaction((tx) => {
       const stored = readStoredJobResumeInTransaction(tx, jobId);
       if (stored === null) return null;
-      const digest = sourceArtifactSetDigest(tx, jobId, stored.row.runGeneration);
+      const digest = sourceArtifactSetDigest(
+        tx,
+        jobId,
+        stored.artifacts.runGeneration,
+        stored.row.runGeneration,
+      );
       return buildPreparedJobResume(
         stored.row,
         expectedTerminalStatus,
+        stored.artifacts.runGeneration,
         stored.plan,
         stored.artifacts.reportExists,
         digest,
@@ -1255,7 +1555,9 @@ export function claimPreparedJobResume(prepared: PreparedJobResume): boolean {
     (prepared.sourceStatus !== "done" && prepared.sourceStatus !== "error") ||
     !Number.isSafeInteger(prepared.sourceGeneration) ||
     prepared.sourceGeneration < 0 ||
-    prepared.targetGeneration !== prepared.sourceGeneration + 1 ||
+    !Number.isSafeInteger(prepared.claimGeneration) ||
+    prepared.claimGeneration < prepared.sourceGeneration ||
+    prepared.targetGeneration !== prepared.claimGeneration + 1 ||
     !Number.isSafeInteger(prepared.sourceRevision) ||
     prepared.sourceRevision < 0 ||
     typeof prepared.sourceReportExists !== "boolean" ||
@@ -1267,7 +1569,12 @@ export function claimPreparedJobResume(prepared: PreparedJobResume): boolean {
   try {
     claimed = getDb().transaction((tx) => {
       if (
-        sourceArtifactSetDigest(tx, prepared.jobId, prepared.sourceGeneration) !==
+        sourceArtifactSetDigest(
+          tx,
+          prepared.jobId,
+          prepared.sourceGeneration,
+          prepared.claimGeneration,
+        ) !==
         prepared.sourceArtifactSetDigest
       ) {
         return false;
@@ -1286,6 +1593,7 @@ export function claimPreparedJobResume(prepared: PreparedJobResume): boolean {
           error: null,
           unsupportedKind: null,
           unsupportedMessage: null,
+          resumeSourceGeneration: prepared.sourceGeneration,
           runGeneration: prepared.targetGeneration,
           revision: prepared.sourceRevision + 1,
           queuedAt: nowIso(),
@@ -1294,7 +1602,7 @@ export function claimPreparedJobResume(prepared: PreparedJobResume): boolean {
         .where(and(
           eq(jobs.id, prepared.jobId),
           eq(jobs.status, prepared.sourceStatus),
-          eq(jobs.runGeneration, prepared.sourceGeneration),
+          eq(jobs.runGeneration, prepared.claimGeneration),
           eq(jobs.revision, prepared.sourceRevision),
           eq(jobs.stepsJson, prepared.sourceStepsJson),
           prepared.sourceReportId === null
@@ -1316,12 +1624,7 @@ export function claimPreparedJobResume(prepared: PreparedJobResume): boolean {
   } catch {
     return false;
   }
-  if (!claimed) return false;
-  preparedResumeStore().set(
-    preparedResumeKey(prepared.jobId, prepared.targetGeneration),
-    immutablePreparedResume(prepared),
-  );
-  return true;
+  return claimed;
 }
 
 /**
@@ -1339,15 +1642,14 @@ export function claimJobForResume(
 }
 
 /* ------------------------------------------------------------------------ *
- * In-process liveness registry
+ * In-process cancellation registry
  *
  * A single LLM pass can silently run >30 minutes (web-search-heavy passes,
  * provider backoff) or a laptop sleep can freeze the clock mid-pass — with no
- * jobs-table write in between. The stale sweep must never reap a job THIS
- * process is still executing: that would flip a live run to "error", let the
- * duplicate-job guard open, and allow a concurrent second pipeline on the
- * same job/symbol. Stashed on globalThis (like the events bus) so Next.js dev
- * hot-reloads share one registry with in-flight runs from older module copies.
+ * jobs-table write in between. Durable lease/heartbeat fields are the liveness
+ * authority; this process-local registry exists only to deliver cancellation
+ * promptly and expose a test diagnostic. Stashed on globalThis so Next.js dev
+ * hot-reloads share controllers with in-flight runs from older module copies.
  * ------------------------------------------------------------------------ */
 
 class JobCanceledError extends Error {
@@ -1390,7 +1692,13 @@ async function awaitJobStage<T>(
   stage: string,
   deadlineMs: number,
 ): Promise<T> {
-  throwIfJobAborted(signal);
+  if (signal.aborted) {
+    // The dependency promise is evaluated before this helper is entered. A
+    // synchronous pre-provider fence can abort/reject in that narrow window;
+    // observe its rejection before returning the durable cancellation result.
+    void promise.catch(() => undefined);
+    throw abortReason(signal);
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await new Promise<T>((resolve, reject) => {
@@ -1446,27 +1754,64 @@ function liveJobControllers(): Map<string, AbortController> {
  */
 export const JOB_CANCELED_ERROR = "job canceled by user";
 
-/** Cancel one currently executing local job. Returns false once it is terminal/not local. */
+function canceledStepsJson(raw: string, at: string): string {
+  try {
+    const steps = JSON.parse(raw) as StepProgress[];
+    if (!Array.isArray(steps)) return raw;
+    for (const step of steps) {
+      if (step.status === "running") {
+        step.status = "error";
+        step.detail = JOB_CANCELED_ERROR;
+        step.finishedAt = at;
+        step.completedAt = at;
+      } else if (step.status === "pending") {
+        step.status = "skipped";
+        step.detail = `not reached — ${JOB_CANCELED_ERROR}`;
+      }
+    }
+    return JSON.stringify(steps);
+  } catch {
+    return raw;
+  }
+}
+
+/** Durably cancel an exact queued/running row, then abort any local worker. */
 export function cancelJob(jobId: string): boolean {
   const controller = liveJobControllers().get(jobId);
-  if (controller !== undefined && !controller.signal.aborted) {
+  const canceled = getDb().transaction((tx): boolean => {
+    const at = nowIso();
+    const row = tx.select().from(jobs).where(eq(jobs.id, jobId)).get();
+    if (row === undefined || (row.status !== "queued" && row.status !== "running")) return false;
+    const leaseFence = row.leaseOwner === null
+      ? isNull(jobs.leaseOwner)
+      : eq(jobs.leaseOwner, row.leaseOwner);
+    return tx.update(jobs)
+      .set({
+        status: "error",
+        error: JOB_CANCELED_ERROR,
+        unsupportedKind: null,
+        unsupportedMessage: null,
+        stepsJson: canceledStepsJson(row.stepsJson, at),
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        updatedAt: at,
+        revision: row.revision + 1,
+      })
+      .where(and(
+        eq(jobs.id, jobId),
+        inArray(jobs.status, ["queued", "running"]),
+        eq(jobs.runGeneration, row.runGeneration),
+        eq(jobs.revision, row.revision),
+        leaseFence,
+      ))
+      .run().changes === 1;
+  }, { behavior: "immediate" });
+  if (canceled && controller !== undefined && !controller.signal.aborted) {
     controller.abort(new JobCanceledError(JOB_CANCELED_ERROR));
-    return true;
   }
-  // Close the dispatch race: the POST may have created a queued row but the
-  // detached runner has not registered its controller yet.
-  const result = getDb()
-    .update(jobs)
-    .set({
-      status: "error",
-      error: JOB_CANCELED_ERROR,
-      unsupportedKind: null,
-      unsupportedMessage: null,
-      updatedAt: nowIso(),
-    })
-    .where(and(eq(jobs.id, jobId), eq(jobs.status, "queued")))
-    .run();
-  return result.changes === 1;
+  if (canceled) publishJobEvent({ type: "error", jobId, message: JOB_CANCELED_ERROR });
+  return canceled;
 }
 
 /** TEST hook: true when runJob currently executes the job in this process. */
@@ -1474,83 +1819,20 @@ export function isJobLiveInProcess(jobId: string): boolean {
   return liveJobIds().has(jobId);
 }
 
-/** Heartbeat period — bumps jobs.updatedAt during long silent passes. */
+/** Legacy test export; durable renewal cadence is derived from the lease TTL. */
 export const JOB_HEARTBEAT_MS = 5 * 60 * 1000;
 
 /**
- * Global sweep: flip EVERY stale queued/running job — any symbol — to a
- * terminal error. getReusableActiveJobForSymbol only expires rows for the
- * symbol being re-run, so a job whose process died (dev-server restart,
- * crash) for a ticker the user never re-runs would show "running" forever
- * (the PYPL job in the 2026-07 audit sat running for two days). Called
- * lazily from the read/start paths (report POST, SSE stream open, job
- * polling) — one indexed UPDATE, cheap enough to run on every read. Jobs the
- * CURRENT process is still executing are excluded (liveJobIds), and runJob
- * additionally heartbeats jobs.updatedAt every 5 minutes, so neither this
- * process nor any other observer mistakes a long silent pass for a corpse.
- * Publishes no events: the dead process's subscribers are gone, and live
- * readers re-snapshot right after the sweep.
+ * Compatibility seam for older callers. It now reconciles only exact missing
+ * or expired durable job leases. Queued age and jobs.updatedAt have no write
+ * authority, and read routes do not invoke this function.
  */
 export function sweepAbandonedJobs(
-  now: Date = new Date(),
-  staleMs = ACTIVE_JOB_STALE_MS,
+  now: Date | undefined = undefined,
+  _staleMs = ACTIVE_JOB_STALE_MS,
 ): number {
-  const cutoffIso = new Date(now.getTime() - staleMs).toISOString();
-  const live = [...liveJobIds()];
-  const stale = and(
-    inArray(jobs.status, ["queued", "running"]),
-    lt(jobs.updatedAt, cutoffIso),
-  );
-  const message = `abandoned: no progress for ${Math.round(staleMs / 60000)} minutes (process restart or crash)`;
-  const db = getDb();
-  const rows = db
-    .select({ id: jobs.id, stepsJson: jobs.stepsJson })
-    .from(jobs)
-    .where(live.length > 0 ? and(stale, notInArray(jobs.id, live)) : stale)
-    .all();
-  for (const row of rows) {
-    // Normalize stepsJson the same way abortRun does for in-process aborts:
-    // running → error, pending → skipped. This is display normalization only;
-    // durable artifacts and report existence remain the sole retry authority.
-    // Malformed stepsJson is left untouched (the status flip still un-wedges
-    // the job row).
-    const set: Record<string, unknown> = {
-      status: "error",
-      error: message,
-      unsupportedKind: null,
-      unsupportedMessage: null,
-      updatedAt: now.toISOString(),
-    };
-    try {
-      const steps = JSON.parse(row.stepsJson ?? "") as StepProgress[];
-      if (Array.isArray(steps)) {
-        for (const step of steps) {
-          if (step.status === "running") {
-            step.status = "error";
-            step.finishedAt = now.toISOString();
-            step.completedAt = step.finishedAt;
-            step.detail = message;
-          } else if (step.status === "pending") {
-            step.status = "skipped";
-            step.detail = `not reached — ${message}`;
-          }
-        }
-        set.stepsJson = JSON.stringify(steps);
-      }
-    } catch {
-      /* keep original stepsJson */
-    }
-    // Re-assert the stale predicate on the write (TOCTOU): a row can flip live
-    // (a resume/fresh run claimed it into running with a fresh updatedAt) or
-    // terminal between the SELECT above and this UPDATE. Without the WHERE
-    // guard the per-row write would clobber that live/terminal state back to
-    // error. changes=0 for a row that moved is the correct no-op.
-    db.update(jobs)
-      .set(set)
-      .where(and(eq(jobs.id, row.id), stale))
-      .run();
-  }
-  return rows.length;
+  void _staleMs; // compatibility only; durable lease expiry is authoritative
+  return reconcileExpiredJobClaims(now);
 }
 
 /* ------------------------------------------------------------------------ *
@@ -1558,6 +1840,10 @@ export function sweepAbandonedJobs(
  * ------------------------------------------------------------------------ */
 
 export interface RunJobOptions<TPayload = unknown> {
+  /** Durable scheduler claim. Production always supplies this preclaimed path. */
+  claim?: JobClaim;
+  /** Snapshot used for every job/pass lease decision in this run. */
+  schedulerLimits?: SchedulerLimits;
   /** Options forwarded to buildDataBundle (injectable clients/clock in tests). */
   bundleOptions?: BuildDataBundleOptions;
   /**
@@ -1617,8 +1903,6 @@ export type RunJobResult =
       kind: Extract<InstrumentSupport, { supported: false }>["kind"];
       message: string;
     });
-
-class QueuedResumeSourceChangedError extends Error {}
 
 type QueuedResumeSettlement =
   | {
@@ -1759,6 +2043,8 @@ export async function runJob<TPayload = unknown>(
   opts: RunJobOptions<TPayload> = {},
 ): Promise<RunJobResult> {
   let jobRow = getDb().select().from(jobs).where(eq(jobs.id, jobId)).get();
+  let schedulerClaim = opts.claim;
+  const schedulerLimits = opts.schedulerLimits ?? configuredSchedulerLimits();
   if (jobRow === undefined) {
     throw new Error(`runJob: no job with id "${jobId}"`);
   }
@@ -1790,197 +2076,73 @@ export async function runJob<TPayload = unknown>(
     jobRow = getDb().select().from(jobs).where(eq(jobs.id, jobId)).get();
     if (!jobRow) throw new Error(`runJob: job "${jobId}" disappeared after resume claim`);
   }
-  if (opts.resume === true && jobRow.status === "queued") {
-    // Consume the legacy same-process handoff, but never trust it for
-    // correctness. A worker in any process re-derives generation N-1.
-    takePreparedResume(jobId, jobRow.runGeneration);
-  }
-
-  if (jobRow.status !== "queued") {
-    const reason = jobRow.status === "running" ? "already dispatched" : `not active (status ${jobRow.status})`;
-    throw new Error(`runJob: job "${jobId}" is ${reason}`);
-  }
-  type DispatchResult =
-    | { kind: "claimed"; preparedResume: PreparedJobResume | null }
-    | { kind: "done"; reportId: number; verificationRate: number | null }
-    | { kind: "error"; message: string }
-    | { kind: "unavailable" };
-
-  let dispatch: DispatchResult | null = null;
-  let repeatedSourceChange: unknown = null;
-  let expectedQueuedRevision = jobRow.revision;
-  for (let attempt = 0; attempt < 2 && dispatch === null; attempt += 1) {
-    try {
-      dispatch = getDb().transaction((tx): DispatchResult => {
-        const current = tx.select().from(jobs).where(eq(jobs.id, jobId)).get();
-        if (current === undefined || current.status !== "queued") {
-          return { kind: "unavailable" };
-        }
-        expectedQueuedRevision = current.revision;
-
-        let transactionPrepared: PreparedJobResume | null = null;
-        if (opts.resume === true && current.runGeneration > 0) {
-          const linkedReport = current.reportId === null
-            ? undefined
-            : tx
-                .select({ id: reports.id, verificationRate: reports.verificationRate })
-                .from(reports)
-                .where(eq(reports.id, current.reportId))
-                .get();
-          if (linkedReport !== undefined) {
-            const finished = tx
-              .update(jobs)
-              .set({
-                status: "done",
-                error: null,
-                updatedAt: nowIso(),
-                revision: current.revision + 1,
-              })
-              .where(and(
-                eq(jobs.id, jobId),
-                eq(jobs.status, "queued"),
-                eq(jobs.runGeneration, current.runGeneration),
-                eq(jobs.revision, current.revision),
-                eq(jobs.reportId, linkedReport.id),
-              ))
-              .run();
-            return finished.changes === 1
-              ? {
-                  kind: "done",
-                  reportId: linkedReport.id,
-                  verificationRate: linkedReport.verificationRate,
-                }
-              : { kind: "unavailable" };
-          }
-
-          transactionPrepared = prepareQueuedJobResumeInTransaction(tx, jobId);
-          if (transactionPrepared === null) {
-            const message = safeQueuedResumeFailure(
-              new Error("runJob: queued retry has no valid durable source plan"),
-            );
-            const failed = tx
-              .update(jobs)
-              .set({
-                status: "error",
-                error: message,
-                updatedAt: nowIso(),
-                revision: current.revision + 1,
-              })
-              .where(and(
-                eq(jobs.id, jobId),
-                eq(jobs.status, "queued"),
-                eq(jobs.runGeneration, current.runGeneration),
-                eq(jobs.revision, current.revision),
-              ))
-              .run();
-            return failed.changes === 1 ? { kind: "error", message } : { kind: "unavailable" };
-          }
-        }
-
-        const claimed = tx
-          .update(jobs)
-          .set({
-            status: "running",
-            error: null,
-            updatedAt: nowIso(),
-            revision: current.revision + 1,
+  if (schedulerClaim === undefined) {
+    schedulerClaim = claimQueuedJobById(
+      jobId,
+      `direct-${process.pid}`,
+      undefined,
+      schedulerLimits,
+    ) ?? undefined;
+    if (schedulerClaim === undefined) {
+      const afterClaim = getDb().select().from(jobs).where(eq(jobs.id, jobId)).get();
+      if (afterClaim?.status === "done" && afterClaim.reportId !== null) {
+        const linked = getDb()
+          .select({
+            verificationRate: reports.verificationRate,
+            costUsd: reports.costUsd,
           })
-          .where(and(
-            eq(jobs.id, jobId),
-            eq(jobs.status, "queued"),
-            eq(jobs.runGeneration, current.runGeneration),
-            eq(jobs.revision, current.revision),
-          ))
-          .run();
-        if (claimed.changes !== 1) return { kind: "unavailable" };
-
-        if (transactionPrepared !== null) {
-          if (
-            sourceArtifactSetDigest(tx, jobId, transactionPrepared.sourceGeneration) !==
-            transactionPrepared.sourceArtifactSetDigest
-          ) {
-            throw new QueuedResumeSourceChangedError(
-              "runJob: queued retry source artifact digest changed before dispatch",
-            );
-          }
-          const sourceReportExists = transactionPrepared.sourceReportId !== null &&
-            tx
-              .select({ id: reports.id })
-              .from(reports)
-              .where(eq(reports.id, transactionPrepared.sourceReportId))
-              .get() !== undefined;
-          if (sourceReportExists !== transactionPrepared.sourceReportExists) {
-            throw new QueuedResumeSourceChangedError(
-              "runJob: queued retry source report existence changed before dispatch",
-            );
-          }
+          .from(reports)
+          .where(eq(reports.id, afterClaim.reportId))
+          .get();
+        if (linked !== undefined) {
+          const result: RunJobResult = {
+            jobId,
+            status: "done",
+            reportId: afterClaim.reportId,
+            verificationRate: linked.verificationRate,
+            totalCostUsd: round4(linked.costUsd ?? sumLoggedCost(jobId)),
+            dataOnly: false,
+          };
+          publishJobEvent({ type: "done", ...result });
+          return result;
         }
-        return { kind: "claimed", preparedResume: transactionPrepared };
-      }, { behavior: "immediate" });
-    } catch (err) {
-      repeatedSourceChange = err;
+      }
+      if (afterClaim?.status === "error" && afterClaim.error !== null) {
+        throw new Error(afterClaim.error);
+      }
+      throw new Error(
+        `runJob: job "${jobId}" was already dispatched, already claimed, or blocked by scheduler capacity`,
+      );
     }
+    jobRow = getDb().select().from(jobs).where(eq(jobs.id, jobId)).get();
+    if (jobRow === undefined) throw new Error(`runJob: job "${jobId}" disappeared after durable claim`);
   }
 
-  if (dispatch === null) {
-    const generation = jobRow.runGeneration;
-    const settled = settleQueuedResumeWithoutExecution(
-      jobId,
-      generation,
-      expectedQueuedRevision,
-      repeatedSourceChange,
-    );
-    if (settled.kind === "done") {
-      return {
-        jobId,
-        status: "done",
-        reportId: settled.reportId,
-        verificationRate: settled.verificationRate,
-        totalCostUsd: round4(sumLoggedCost(jobId)),
-        dataOnly: false,
-      };
-    }
-    throw new Error(
-      settled.kind === "error"
-        ? settled.message
-        : safeQueuedResumeFailure(repeatedSourceChange),
-    );
+  if (
+    jobRow.status !== "running" ||
+    jobRow.runGeneration !== schedulerClaim.runGeneration ||
+    jobRow.leaseOwner !== schedulerClaim.leaseOwner ||
+    jobRow.leaseExpiresAt === null ||
+    jobRow.leaseExpiresAt <= new Date().toISOString()
+  ) {
+    const reason =
+      jobRow.status === "running" && jobRow.leaseOwner === schedulerClaim.leaseOwner
+        ? "expired live preclaim"
+        : jobRow.status === "running"
+          ? "already dispatched"
+          : `not active (status ${jobRow.status})`;
+    throw new Error(`runJob: job "${jobId}" has no exact preclaimed authority (${reason})`);
   }
-  if (dispatch.kind === "done") {
-    const totalCostUsd = round4(sumLoggedCost(jobId));
-    publishJobEvent({
-      type: "done",
-      jobId,
-      reportId: dispatch.reportId,
-      verificationRate: dispatch.verificationRate,
-      totalCostUsd,
-      dataOnly: false,
-    });
-    return {
-      jobId,
-      status: "done",
-      reportId: dispatch.reportId,
-      verificationRate: dispatch.verificationRate,
-      totalCostUsd,
-      dataOnly: false,
-    };
-  }
-  if (dispatch.kind === "error") {
-    publishJobEvent({ type: "error", jobId, message: dispatch.message });
-    throw new Error(dispatch.message);
-  }
-  if (dispatch.kind === "unavailable") {
-    throw new Error(`runJob: job "${jobId}" dispatch was already claimed`);
-  }
-  const preparedResume = dispatch.preparedResume;
-  jobRow = getDb().select().from(jobs).where(eq(jobs.id, jobId)).get();
-  if (!jobRow) throw new Error(`runJob: job "${jobId}" disappeared after dispatch claim`);
+  const preparedResume = schedulerClaim.preparedResume;
 
   const state: RunState = {
     jobId,
     symbol: jobRow.symbol,
     startedAt: jobRow.createdAt,
     runGeneration: jobRow.runGeneration,
+    revision: jobRow.revision,
+    claim: schedulerClaim,
+    schedulerLimits,
     steps: initialSteps(),
     // Rehydrate any cost already logged under this jobId BEFORE any early exit
     // (no-key / model-resolution-failure / compute-throw): a resumed run's
@@ -2011,29 +2173,26 @@ export async function runJob<TPayload = unknown>(
     }
   }, deadlineMs);
   overallTimer.unref?.();
-  persistSteps(state);
+  try {
+    persistSteps(state);
+  } catch (error) {
+    clearTimeout(overallTimer);
+    externalSignal?.removeEventListener("abort", onExternalAbort);
+    throw error;
+  }
 
-  // Liveness registration + heartbeat: a single silent pass can outlast the
-  // 30-minute stale threshold; the registry stops THIS process's sweeps from
-  // reaping the job, and the heartbeat keeps jobs.updatedAt fresh for any
-  // other observer. Both are cleaned up in the finally.
+  // Process-local cancellation registration plus durable exact-claim renewal.
   liveJobIds().add(jobId);
   liveJobControllers().set(jobId, jobController);
   const heartbeat = setInterval(() => {
     try {
-      getDb()
-        .update(jobs)
-        .set({ updatedAt: nowIso() })
-        .where(and(
-          eq(jobs.id, jobId),
-          eq(jobs.runGeneration, state.runGeneration),
-          eq(jobs.status, "running"),
-        ))
-        .run();
-    } catch {
-      // A failed heartbeat must never break the run.
+      if (!renewJobLease(state.claim, undefined, state.schedulerLimits)) {
+        jobController.abort(new SupersededRunError(state.jobId, state.runGeneration));
+      }
+    } catch (error) {
+      jobController.abort(error);
     }
-  }, JOB_HEARTBEAT_MS);
+  }, Math.max(1, Math.floor(state.schedulerLimits.jobLeaseTtlMs / 4)));
   heartbeat.unref?.();
 
   const now = opts.now ?? ((): Date => new Date());
@@ -2057,7 +2216,7 @@ export async function runJob<TPayload = unknown>(
         state,
         "verify",
         "done",
-        `reused durable verify artifact from generation ${preparedResume.sourceGeneration}`,
+        `reused durable verify from retry lineage rooted at generation ${preparedResume.sourceGeneration}`,
         preparedResume.verify.costUsd,
       );
       const recoveredReport = reconcileRecoveredVerifyReport(state, preparedResume.verify);
@@ -2166,6 +2325,17 @@ export async function runJob<TPayload = unknown>(
       for (const step of LLM_STEPS) {
         startStep(state, step);
         finishStep(state, step, "skipped", NO_KEY_SKIP_REASON);
+      }
+      return persistDataOnly(state, bundle, validation, computed, now, hasKey);
+    }
+
+    // Legacy or injected Stage C adapters must not be trusted to launch paid
+    // work after a durable cancel/owner change. This capability is explicit so
+    // the runner fails closed before even an "auto" model-resolution request.
+    if (passes.launchAuthorityCapability !== DURABLE_LAUNCH_AUTHORITY_CAPABILITY) {
+      for (const step of LLM_STEPS) {
+        startStep(state, step);
+        finishStep(state, step, "skipped", LAUNCH_AUTHORITY_SKIP_REASON);
       }
       return persistDataOnly(state, bundle, validation, computed, now, hasKey);
     }
@@ -2305,6 +2475,7 @@ export async function runJob<TPayload = unknown>(
       let lastValidationDetail = "";
       let lastFailedRawOutput = "";
       let lastJudgeFailureRetryable = true;
+      let judgeProviderAttempted = false;
       let pendingReusableJudge = reusableJudge;
 
       for (let attempt = 0; attempt <= maxJudgeRetries; attempt++) {
@@ -2321,7 +2492,7 @@ export async function runJob<TPayload = unknown>(
             state,
             "synthesize",
             "done",
-            `reused durable synthesize artifact from generation ${preparedResume?.sourceGeneration ?? "unknown"}`,
+            `reused durable synthesize from retry lineage rooted at generation ${preparedResume?.sourceGeneration ?? "unknown"}`,
             judge.costUsd,
           );
         } else {
@@ -2340,27 +2511,51 @@ export async function runJob<TPayload = unknown>(
             state,
             "synthesize",
             fingerprint,
+            maximumPassCostUsd(analysisModel, "synthesize"),
+            jobSignal,
+            jobController,
           );
           try {
+            await passes.preflightPass?.(deps, {
+              pass: "synthesize",
+              bull,
+              bear,
+              validationFeedback: feedback,
+            });
+            await judgeCheckpoint.beforeLaunch();
             judge = await awaitJobStage(
-              passes.runJudgePass(deps, bull, bear, feedback, judgeCheckpoint.hook),
+              passes.runJudgePass(
+                deps,
+                bull,
+                bear,
+                feedback,
+                judgeCheckpoint.hook,
+                () => {
+                  judgeCheckpoint.authorizeLaunch(false);
+                },
+              ),
               jobSignal,
               jobController,
               "synthesize",
               modelStageDeadlineMs,
             );
             throwIfJobAborted(jobSignal);
-            if (!judgeCheckpoint.wasCalled()) {
+            judgeProviderAttempted = true;
+            if (!judgeCheckpoint.wasCalled() && judgeCheckpoint.hasLease()) {
               await judgeCheckpoint.hook(successSettlement(judge));
             }
           } catch (err) {
             throwIfJobAborted(jobSignal);
             if (err instanceof PassSettlementHookError) throw err;
             const billedAttempt = billedAttemptFromError(err);
+            judgeProviderAttempted ||= judgeCheckpoint.wasLaunched() || billedAttempt !== null;
             lastValidationDetail = errMessage(err);
             lastFailedRawOutput = rawTextOfError(err);
             lastJudgeFailureRetryable = isRetryableJudgeError(err);
-            if (!judgeCheckpoint.wasCalled()) {
+            if (
+              !judgeCheckpoint.wasCalled() &&
+              (judgeCheckpoint.wasLaunched() || billedAttempt !== null)
+            ) {
               await judgeCheckpoint.hook(
                 failureSettlement(
                   err,
@@ -2378,6 +2573,11 @@ export async function runJob<TPayload = unknown>(
             }
             updateRunningStepDetail(state, "synthesize", detail);
             break;
+          } finally {
+            // A launched/canceled call keeps its durable reservation, but the
+            // exited worker must not retain a process-local renewal interval.
+            judgeCheckpoint.releaseIfPrelaunch();
+            judgeCheckpoint.stopRenewal();
           }
         }
 
@@ -2393,19 +2593,42 @@ export async function runJob<TPayload = unknown>(
           state,
           "verify",
           fingerprint,
+          maximumPassCostUsd(analysisModel, "verify", passes.verifyCapability),
+          jobSignal,
+          jobController,
         );
+        const fetchedUrls = [
+          ...new Set(
+            [...(bull?.fetchedUrls ?? []), ...(bear?.fetchedUrls ?? []), ...(judge.fetchedUrls ?? [])]
+              .flatMap((value) => {
+                const canonical = canonicalizeFetchedUrl(value);
+                return canonical ? [canonical] : [];
+              }),
+          ),
+        ].sort();
         try {
-          const fetchedUrls = [
-            ...new Set(
-              [...(bull?.fetchedUrls ?? []), ...(bear?.fetchedUrls ?? []), ...(judge.fetchedUrls ?? [])]
-                .flatMap((value) => {
-                  const canonical = canonicalizeFetchedUrl(value);
-                  return canonical ? [canonical] : [];
-                }),
-            ),
-          ].sort();
+          if (passes.verifyCapability?.billable === true && passes.preflightPass === undefined) {
+            throw new Error("billable verify requires finite provider preflight capability");
+          }
+          await passes.preflightPass?.(deps, {
+            pass: "verify",
+            judgeOutput: judge.data,
+            evidence: { fetchedUrls },
+          });
+          await verifyCheckpoint.beforeLaunch();
           const v = await awaitJobStage(
-            passes.runVerifyPass(deps, judge.data, { fetchedUrls }, verifyCheckpoint.hook),
+            passes.runVerifyPass(
+              deps,
+              judge.data,
+              { fetchedUrls },
+              verifyCheckpoint.hook,
+              () => {
+                // Verify was already moved to running above. The atomic launch
+                // transaction still renews/fences both exact leases and the
+                // current revision at its logical execution boundary.
+                verifyCheckpoint.authorizeLaunch(false);
+              },
+            ),
             jobSignal,
             jobController,
             "verify",
@@ -2428,7 +2651,7 @@ export async function runJob<TPayload = unknown>(
             billable,
             fetchedUrls: [],
           };
-          if (!verifyCheckpoint.wasCalled()) {
+          if (!verifyCheckpoint.wasCalled() && verifyCheckpoint.hasLease()) {
             await verifyCheckpoint.hook(
               parsedVerifiedReport.success
                 ? { outcome: "success", data: parsedVerifiedReport.data, telemetry: verifyTelemetry }
@@ -2448,8 +2671,11 @@ export async function runJob<TPayload = unknown>(
           throwIfJobAborted(jobSignal);
           if (err instanceof PassSettlementHookError) throw err;
           verifyError = errMessage(err);
-          if (!verifyCheckpoint.wasCalled()) {
-            const billedAttempt = billedAttemptFromError(err);
+          const billedAttempt = billedAttemptFromError(err);
+          if (
+            !verifyCheckpoint.wasCalled() &&
+            (verifyCheckpoint.wasLaunched() || billedAttempt !== null)
+          ) {
             await verifyCheckpoint.hook(
               failureSettlement(
                 err,
@@ -2457,11 +2683,21 @@ export async function runJob<TPayload = unknown>(
               ),
             );
           }
-          updateRunningStepDetail(
-            state,
-            "verify",
-            `verify failed; assembling unverified report: ${verifyError}`,
-          );
+          const detail = `verify failed; assembling unverified report: ${verifyError}`;
+          const verifyStatus = findStep(state, "verify").status;
+          if (verifyStatus === "running") {
+            // A prelaunch adapter exit has no artifact to merge, but the
+            // user-visible step must still become terminal before the
+            // unverified report commits. This does not fabricate billing.
+            finishStep(state, "verify", "error", detail);
+          } else if (verifyStatus === "error") {
+            // A launched failure was already settled atomically. Preserve that
+            // durable outcome while attaching the runner's degradation detail.
+            updateRunningStepDetail(state, "verify", detail);
+          }
+        } finally {
+          verifyCheckpoint.releaseIfPrelaunch();
+          verifyCheckpoint.stopRenewal();
         }
 
         // 3) Assemble the final Report. A throw here is a report-schema (Zod)
@@ -2531,7 +2767,7 @@ export async function runJob<TPayload = unknown>(
           field: "llm.judge",
           reason: detail,
           severity: "critical",
-          attemptedSources: ["anthropic"],
+          attemptedSources: judgeProviderAttempted ? ["anthropic"] : [],
         });
         return persistDataOnly(state, bundle, validation, computed, now, hasKey);
       }
@@ -2630,17 +2866,29 @@ export async function runJob<TPayload = unknown>(
           state,
           side,
           fingerprint,
+          maximumPassCostUsd(analysisModel, side),
+          jobSignal,
+          jobController,
         );
         try {
+          await passes.preflightPass?.(deps, { pass: side });
+          await analystCheckpoint.beforeLaunch();
           const fresh = await awaitJobStage(
-            passes.runAnalystPass!(deps, side, analystCheckpoint.hook),
+            passes.runAnalystPass!(
+              deps,
+              side,
+              analystCheckpoint.hook,
+              () => {
+                analystCheckpoint.authorizeLaunch(false);
+              },
+            ),
             jobSignal,
             jobController,
             side,
             modelStageDeadlineMs,
           );
           throwIfJobAborted(jobSignal);
-          if (!analystCheckpoint.wasCalled()) {
+          if (!analystCheckpoint.wasCalled() && analystCheckpoint.hasLease()) {
             await analystCheckpoint.hook(successSettlement(fresh));
           }
           if (side === "bull") resumedBull = fresh;
@@ -2651,7 +2899,10 @@ export async function runJob<TPayload = unknown>(
           // Same degradation contract as the fresh-run analyst catch: record
           // billed spend, disclose the failure in the manifest, data-only.
           const billedAttempt = billedAttemptFromError(err);
-          if (!analystCheckpoint.wasCalled()) {
+          if (
+            !analystCheckpoint.wasCalled() &&
+            (analystCheckpoint.wasLaunched() || billedAttempt !== null)
+          ) {
             await analystCheckpoint.hook(
               failureSettlement(err, telemetryFromAttempt(billedAttempt, analysisModel)),
             );
@@ -2660,11 +2911,15 @@ export async function runJob<TPayload = unknown>(
             field: `llm.${side}`,
             reason: errMessage(err),
             severity: "critical",
-            attemptedSources: ["anthropic"],
+            attemptedSources:
+              analystCheckpoint.wasLaunched() || billedAttempt !== null ? ["anthropic"] : [],
           });
           markSkipped(state, "synthesize", "upstream bull/bear pass failed");
           markSkipped(state, "verify", "upstream bull/bear pass failed");
           return persistDataOnly(state, bundle, validation, computed, now, hasKey);
+        } finally {
+          analystCheckpoint.releaseIfPrelaunch();
+          analystCheckpoint.stopRenewal();
         }
       }
       // `await` so a rejection is caught by the outer catch (error recording).
@@ -2676,18 +2931,44 @@ export async function runJob<TPayload = unknown>(
     // streaming path); ensureStepStarted backfills for hook-less mocks so a
     // step never jumps pending -> terminal.
     const analystLaunched = { bull: false, bear: false };
+    const bullCheckpoint = createSettlementCheckpoint<AnalystCase>(
+      state,
+      "bull",
+      fingerprint,
+      maximumPassCostUsd(analysisModel, "bull"),
+      jobSignal,
+      jobController,
+    );
+    const bearCheckpoint = createSettlementCheckpoint<AnalystCase>(
+      state,
+      "bear",
+      fingerprint,
+      maximumPassCostUsd(analysisModel, "bear"),
+      jobSignal,
+      jobController,
+    );
     const analystHooks: AnalystPassHooks = {
+      beforePass: async (side) => {
+        const checkpoint = side === "bull" ? bullCheckpoint : bearCheckpoint;
+        await checkpoint.beforeLaunch();
+      },
       onPassStart: (side) => {
+        // Best-effort timing only. Durable authority must never pass through a
+        // hook Stage C intentionally swallows.
+        void side;
+      },
+      beforeProviderLaunch: (side) => {
+        const checkpoint = side === "bull" ? bullCheckpoint : bearCheckpoint;
+        checkpoint.authorizeLaunch(true);
         analystLaunched[side] = true;
-        startStep(state, side);
       },
       onPassFinish: (side) => stampStepFinished(state, side),
     };
-    const bullCheckpoint = createSettlementCheckpoint<AnalystCase>(state, "bull", fingerprint);
-    const bearCheckpoint = createSettlementCheckpoint<AnalystCase>(state, "bear", fingerprint);
     let bull: PassResultLike<AnalystCase> | null = null;
     let bear: PassResultLike<AnalystCase> | null = null;
     try {
+      await passes.preflightPass?.(deps, { pass: "bull" });
+      await passes.preflightPass?.(deps, { pass: "bear" });
       const cases = await awaitJobStage(
         passes.runBullThenBear(deps, analystHooks, {
           bull: bullCheckpoint.hook,
@@ -2713,6 +2994,8 @@ export async function runJob<TPayload = unknown>(
       ]);
       throwFirstSettlementRejection(fallbackSettlements);
     } catch (err) {
+      if (!analystLaunched.bull) bullCheckpoint.releaseIfPrelaunch();
+      if (!analystLaunched.bear) bearCheckpoint.releaseIfPrelaunch();
       throwIfJobAborted(jobSignal);
       if (err instanceof PassSettlementHookError) throw err;
       // Adversarial passes failed — mark both error and fall through to a
@@ -2729,11 +3012,13 @@ export async function runJob<TPayload = unknown>(
         partial?.bearBilledAttempt !== undefined ||
         bearCheckpoint.wasCalled();
       if (!bullLaunched) {
+        bullCheckpoint.releaseIfPrelaunch();
         markSkipped(state, "bull", "provider pass was not launched");
       } else {
         ensureStepStarted(state, "bull");
       }
       if (!bearLaunched) {
+        bearCheckpoint.releaseIfPrelaunch();
         markSkipped(state, "bear", "provider pass was not launched");
       } else {
         ensureStepStarted(state, "bear");
@@ -2796,6 +3081,11 @@ export async function runJob<TPayload = unknown>(
       markSkipped(state, "synthesize", "upstream bull/bear pass failed");
       markSkipped(state, "verify", "upstream bull/bear pass failed");
       return persistDataOnly(state, bundle, validation, computed, now, hasKey);
+    } finally {
+      bullCheckpoint.releaseIfPrelaunch();
+      bearCheckpoint.releaseIfPrelaunch();
+      bullCheckpoint.stopRenewal();
+      bearCheckpoint.stopRenewal();
     }
 
     return await runSynthesisAndFinish(bull, bear);
@@ -2803,9 +3093,10 @@ export async function runJob<TPayload = unknown>(
     if (err instanceof SupersededRunError) {
       return supersededRunResult(state);
     }
-    if (jobSignal.aborted) {
+    const jobAbortReason = jobSignal.aborted ? abortReason(jobSignal) : null;
+    if (jobSignal.aborted && !(jobAbortReason instanceof PassSettlementHookError)) {
       try {
-        return abortRun(state, abortReason(jobSignal));
+        return abortRun(state, jobAbortReason);
       } catch (abortError) {
         if (abortError instanceof SupersededRunError) {
           return supersededRunResult(state);
@@ -2813,18 +3104,21 @@ export async function runJob<TPayload = unknown>(
         throw abortError;
       }
     }
-    // Unexpected orchestration failure — record and re-surface (the POST route
-    // has already returned; this rejects the detached promise).
+    // Unexpected orchestration failure: record and re-surface to the scheduler,
+    // whose terminal/finally path wakes the next durable claim.
+    const surfacedError = jobAbortReason instanceof PassSettlementHookError
+      ? jobAbortReason
+      : err;
     try {
-      persistSteps(state, "error", errMessage(err));
+      persistSteps(state, "error", errMessage(surfacedError));
     } catch (persistError) {
       if (persistError instanceof SupersededRunError) {
         return supersededRunResult(state);
       }
       throw persistError;
     }
-    publish(state, { type: "error", jobId, message: errMessage(err) });
-    throw err;
+    publish(state, { type: "error", jobId, message: errMessage(surfacedError) });
+    throw surfacedError;
   } finally {
     clearInterval(heartbeat);
     clearTimeout(overallTimer);
@@ -2881,26 +3175,39 @@ function finishUnsupported(
 ): RunJobResult {
   for (const step of state.steps) markSkipped(state, step.step, support.reason);
 
-  const update = getDb()
-    .update(jobs)
-    .set({
-      status: "unsupported",
-      error: null,
-      reportId: null,
-      unsupportedKind: support.kind,
-      unsupportedMessage: support.reason,
-      stepsJson: JSON.stringify(state.steps),
-      updatedAt: nowIso(),
-    })
-    .where(and(
-      eq(jobs.id, state.jobId),
-      eq(jobs.runGeneration, state.runGeneration),
-      eq(jobs.status, "running"),
-    ))
-    .run();
-  if (update.changes !== 1) {
+  const terminal = withLiveRunAuthority(state, state.revision, (db, row, authorityAt) => {
+    const update = db.update(jobs)
+      .set({
+        status: "unsupported",
+        error: null,
+        reportId: null,
+        unsupportedKind: support.kind,
+        unsupportedMessage: support.reason,
+        stepsJson: JSON.stringify(state.steps),
+        updatedAt: authorityAt,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        revision: row.revision + 1,
+      })
+      .where(and(
+        eq(jobs.id, state.jobId),
+        eq(jobs.runGeneration, state.runGeneration),
+        eq(jobs.status, "running"),
+        eq(jobs.leaseOwner, state.claim.leaseOwner),
+        eq(jobs.revision, row.revision),
+        gt(jobs.leaseExpiresAt, authorityAt),
+      ))
+      .run();
+    if (update.changes !== 1) {
+      throw new SupersededRunError(state.jobId, state.runGeneration);
+    }
+    return row.revision + 1;
+  });
+  if (!terminal.authorized) {
     throw new SupersededRunError(state.jobId, state.runGeneration);
   }
+  state.revision = terminal.value;
 
   const totalCostUsd = round4(state.totalCostUsd);
   publish(state, {
@@ -2953,7 +3260,6 @@ function abortRun(state: RunState, reason: unknown): RunJobResult {
       step.finishedAt = nowIso();
       step.completedAt = step.finishedAt;
       step.detail = message;
-      emitStep(state, step.step);
     } else if (step.status === "pending") {
       step.status = "skipped";
       step.detail = `not reached — ${message}`;
@@ -3063,13 +3369,12 @@ function persistReport(
   verificationRate: number | null,
   status: string,
 ): number {
-  const createdAt = nowIso();
-  return getDb().transaction((tx) => {
-    const inserted = tx
+  const persisted = withLiveRunAuthority(state, state.revision, (db, row, authorityAt) => {
+    const inserted = db
       .insert(reports)
       .values({
         symbol: state.symbol,
-        createdAt,
+        createdAt: authorityAt,
         model,
         status,
         reportJson: JSON.stringify(report),
@@ -3090,14 +3395,13 @@ function persistReport(
           persistedAt: nowIso(),
         },
       };
-      tx
+      db
         .update(reports)
         .set({ reportJson: JSON.stringify(persistedReport) })
         .where(eq(reports.id, inserted.id))
         .run();
     }
-    const completedAt = nowIso();
-    const link = tx
+    const link = db
       .update(jobs)
       .set({
         reportId: inserted.id,
@@ -3106,19 +3410,31 @@ function persistReport(
         unsupportedKind: null,
         unsupportedMessage: null,
         stepsJson: JSON.stringify(state.steps),
-        updatedAt: completedAt,
+        updatedAt: authorityAt,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        revision: row.revision + 1,
       })
       .where(and(
         eq(jobs.id, state.jobId),
         eq(jobs.runGeneration, state.runGeneration),
         eq(jobs.status, "running"),
+        eq(jobs.leaseOwner, state.claim.leaseOwner),
+        eq(jobs.revision, row.revision),
+        gt(jobs.leaseExpiresAt, authorityAt),
       ))
       .run();
     if (link.changes !== 1) {
       throw new SupersededRunError(state.jobId, state.runGeneration);
     }
-    return inserted.id;
-  }, { behavior: "immediate" });
+    return { reportId: inserted.id, revision: row.revision + 1 };
+  });
+  if (!persisted.authorized) {
+    throw new SupersededRunError(state.jobId, state.runGeneration);
+  }
+  state.revision = persisted.value.revision;
+  return persisted.value.reportId;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -3156,8 +3472,8 @@ function readCostLedger(jobId: string): CostLedgerRow[] {
 }
 
 /** Sum of every cost_log row already recorded for a job (resume rehydration). */
-function sumLoggedCost(jobId: string): number {
-  const rows = getDb()
+function sumLoggedCost(jobId: string, db: ThesisDb = getDb()): number {
+  const rows = db
     .select({ costUsd: costLog.costUsd })
     .from(costLog)
     .where(eq(costLog.jobId, jobId))

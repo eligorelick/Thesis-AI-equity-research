@@ -214,6 +214,8 @@ export type WebSearchToolFn = (maxUses: number, model?: string) => unknown;
 /** Everything the pass runners need injected. */
 export interface PassDeps {
   runPass: RunPassFn;
+  /** Synchronous finite-cost validation, run before a durable gate/provider call. */
+  validateRunPass?: (args: RunPassArgs) => void;
   /** Optional streaming runner; when absent, runBullThenBear falls back to runPass. */
   runPassStreaming?: RunPassStreamingFn;
   /** Web-search tool factory; when absent, passes run without web search. */
@@ -497,7 +499,7 @@ function toolsFor(deps: PassDeps, useWebSearch: boolean, model: string): unknown
 }
 
 async function runStructuredPass<T>(a: StructuredPassArgs<T>): Promise<PassRun<T>> {
-  const outcome = await a.deps.runPass({
+  const request: RunPassArgs = {
     model: a.model,
     system: a.system,
     messages: a.userTurns,
@@ -507,8 +509,34 @@ async function runStructuredPass<T>(a: StructuredPassArgs<T>): Promise<PassRun<T
     effort: a.deps.effort ?? "high",
     field: a.field,
     signal: a.deps.signal,
-  });
+  };
+  a.deps.validateRunPass?.(request);
+  const outcome = await a.deps.runPass(request);
   return finishStructuredPass(outcome, a.parse, a.field, a.model);
+}
+
+/** Exact provider request used by either analyst side. */
+export function buildAnalystRunPassArgs(
+  deps: PassDeps,
+  payload: ContextPayload,
+  side: "bull" | "bear",
+): RunPassArgs {
+  return {
+    model: deps.model,
+    system: SHARED_RULES_BLOCK,
+    messages: [
+      buildCachedUserMessage(
+        payload,
+        side === "bull" ? buildBullFraming() : buildBearFraming(),
+      ),
+    ],
+    tools: toolsFor(deps, true, deps.model),
+    outputSchema: analystCaseToJsonSchema(),
+    maxTokens: ANALYST_MAX_TOKENS,
+    effort: deps.effort ?? "high",
+    field: `llm.${side}`,
+    signal: deps.signal,
+  };
 }
 
 function finishStructuredPass<T>(
@@ -777,18 +805,13 @@ export async function runBullPass(
   deps: PassDeps,
   payload: ContextPayload,
   settlement?: PassSettlementHook<AnalystCase>,
+  beforeProviderLaunch?: () => void | Promise<void>,
 ): Promise<PassRun<AnalystCase>> {
-  const run = await runStructuredPass<AnalystCase>({
-    deps,
-    system: SHARED_RULES_BLOCK,
-    userTurns: [buildCachedUserMessage(payload, buildBullFraming())],
-    outputSchema: analystCaseToJsonSchema(),
-    parse: parseAnalystCase,
-    maxTokens: ANALYST_MAX_TOKENS,
-    useWebSearch: true,
-    model: deps.model,
-    field: "llm.bull",
-  });
+  const request = buildAnalystRunPassArgs(deps, payload, "bull");
+  deps.validateRunPass?.(request);
+  await beforeProviderLaunch?.();
+  const outcome = await deps.runPass(request);
+  const run = finishStructuredPass(outcome, parseAnalystCase, "llm.bull", deps.model);
   return settlePassRun(run, deps.model, settlement);
 }
 
@@ -797,24 +820,36 @@ export async function runBearPass(
   deps: PassDeps,
   payload: ContextPayload,
   settlement?: PassSettlementHook<AnalystCase>,
+  beforeProviderLaunch?: () => void | Promise<void>,
 ): Promise<PassRun<AnalystCase>> {
-  const run = await runStructuredPass<AnalystCase>({
-    deps,
-    system: SHARED_RULES_BLOCK,
-    userTurns: [buildCachedUserMessage(payload, buildBearFraming())],
-    outputSchema: analystCaseToJsonSchema(),
-    parse: parseAnalystCase,
-    maxTokens: ANALYST_MAX_TOKENS,
-    useWebSearch: true,
-    model: deps.model,
-    field: "llm.bear",
-  });
+  const request = buildAnalystRunPassArgs(deps, payload, "bear");
+  deps.validateRunPass?.(request);
+  await beforeProviderLaunch?.();
+  const outcome = await deps.runPass(request);
+  const run = finishStructuredPass(outcome, parseAnalystCase, "llm.bear", deps.model);
   return settlePassRun(run, deps.model, settlement);
 }
 
 export interface BullBearResult {
   bull: PassRun<AnalystCase>;
   bear: PassRun<AnalystCase>;
+}
+
+/**
+ * A sibling launch failed after bull crossed its provider boundary. Bull is
+ * awaited and durably settled before this typed partial state is propagated,
+ * so callers must never fabricate a second fallback settlement for it.
+ */
+export class BullBearOverlapLaunchFailure extends Error {
+  constructor(
+    readonly bull: PassRun<AnalystCase>,
+    readonly bearLaunched: boolean,
+    cause: unknown,
+  ) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`bear launch failed after bull started: ${detail}`, { cause });
+    this.name = "BullBearOverlapLaunchFailure";
+  }
 }
 
 /**
@@ -825,6 +860,10 @@ export interface BullBearResult {
  * a paid pass.
  */
 export interface BullBearHooks {
+  /** Durable permit gate. Unlike telemetry hooks, failure must stop launch. */
+  beforePass?: (side: "bull" | "bear") => void | Promise<void>;
+  /** Durable authority fence propagated at the immediate provider boundary. */
+  beforeProviderLaunch?: (side: "bull" | "bear") => void | Promise<void>;
   onPassStart?: (side: "bull" | "bear") => void;
   onPassFinish?: (side: "bull" | "bear") => void;
 }
@@ -854,6 +893,45 @@ function tapFinish<T>(promise: Promise<T>, hooks: BullBearHooks, side: "bull" | 
       throw err;
     },
   );
+}
+
+function pendingForever(): Promise<never> {
+  return new Promise<never>(() => undefined);
+}
+
+/**
+ * Once bull has crossed its provider boundary, every bear gate/fence failure
+ * must first observe bull's exact durable settlement. Conversely, a bull
+ * settlement failure must interrupt a still-pending bear gate instead of
+ * waiting for capacity/lease expiry before the control-plane failure surfaces.
+ */
+async function setupBearAfterLaunchedBull<T>(
+  settledBull: Promise<PassRun<AnalystCase>>,
+  setup: () => Promise<T>,
+  bearWasLaunched: () => boolean,
+): Promise<T> {
+  const setupPromise = setup();
+  const bullFailure = settledBull.then(
+    () => pendingForever(),
+    (error: unknown) => Promise.reject(error),
+  );
+  try {
+    return await Promise.race([setupPromise, bullFailure]);
+  } catch (error) {
+    const bullOutcome = await Promise.allSettled([settledBull]);
+    if (bullOutcome[0].status === "rejected") {
+      // Promise.race installed rejection observation on the pending setup. The
+      // runner aborts its shared signal on settlement persistence failure so a
+      // capacity-polling permit gate also exits and releases any prelaunch lease.
+      void setupPromise.catch(() => undefined);
+      throw bullOutcome[0].reason;
+    }
+    throw new BullBearOverlapLaunchFailure(
+      bullOutcome[0].value,
+      bearWasLaunched(),
+      error,
+    );
+  }
 }
 
 function failureMessage(err: unknown): string {
@@ -893,18 +971,12 @@ export async function runBullThenBear(
   settlements: BullBearSettlementHooks = {},
 ): Promise<BullBearResult> {
   if (deps.runPassStreaming) {
+    const bullRequest = buildAnalystRunPassArgs(deps, payload, "bull");
+    deps.validateRunPass?.(bullRequest);
+    await hooks.beforePass?.("bull");
     safeHook(hooks.onPassStart, "bull");
-    const bullHandle = deps.runPassStreaming({
-      model: deps.model,
-      system: SHARED_RULES_BLOCK,
-      messages: [buildCachedUserMessage(payload, buildBullFraming())],
-      tools: toolsFor(deps, true, deps.model),
-      outputSchema: analystCaseToJsonSchema(),
-      maxTokens: ANALYST_MAX_TOKENS,
-      effort: deps.effort ?? "high",
-      field: "llm.bull",
-      signal: deps.signal,
-    });
+    await hooks.beforeProviderLaunch?.("bull");
+    const bullHandle = deps.runPassStreaming(bullRequest);
     const bullRun = tapFinish(bullHandle.result, hooks, "bull").then(
       (outcome) => finishStructuredPass(outcome, parseAnalystCase, "llm.bull", deps.model),
       (error: unknown) => hardFailure("llm.bull", error),
@@ -926,28 +998,49 @@ export async function runBullThenBear(
       // Rare but possible: the SDK reached "end" without our streamEvent latch.
       // Run bear sequentially after bull completes rather than racing without a
       // confirmed cache write.
-      safeHook(hooks.onPassStart, "bear");
+      let bearLaunched = false;
+      const { settledBear } = await setupBearAfterLaunchedBull(
+        settledBull,
+        async () => {
+          const bearRequest = buildAnalystRunPassArgs(deps, payload, "bear");
+          deps.validateRunPass?.(bearRequest);
+          await hooks.beforePass?.("bear");
+          safeHook(hooks.onPassStart, "bear");
+          await hooks.beforeProviderLaunch?.("bear");
+          bearLaunched = true;
+          return {
+            settledBear: tapFinish(
+              runBearPass(deps, payload, settlements.bear),
+              hooks,
+              "bear",
+            ),
+          };
+        },
+        () => bearLaunched,
+      );
       const outcomes = await Promise.allSettled([
         settledBull,
-        tapFinish(runBearPass(deps, payload, settlements.bear), hooks, "bear"),
+        settledBear,
       ]);
       if (outcomes[0].status === "rejected") throw outcomes[0].reason;
       if (outcomes[1].status === "rejected") throw outcomes[1].reason;
       return { bull, bear: outcomes[1].value };
     }
     const settledBull = bullRun.then((run) => settlePassRun(run, deps.model, settlements.bull));
-    safeHook(hooks.onPassStart, "bear");
-    const bearHandle = deps.runPassStreaming({
-      model: deps.model,
-      system: SHARED_RULES_BLOCK,
-      messages: [buildCachedUserMessage(payload, buildBearFraming())],
-      tools: toolsFor(deps, true, deps.model),
-      outputSchema: analystCaseToJsonSchema(),
-      maxTokens: ANALYST_MAX_TOKENS,
-      effort: deps.effort ?? "high",
-      field: "llm.bear",
-      signal: deps.signal,
-    });
+    let bearLaunched = false;
+    const bearHandle = await setupBearAfterLaunchedBull(
+      settledBull,
+      async () => {
+        const bearRequest = buildAnalystRunPassArgs(deps, payload, "bear");
+        deps.validateRunPass?.(bearRequest);
+        await hooks.beforePass?.("bear");
+        safeHook(hooks.onPassStart, "bear");
+        await hooks.beforeProviderLaunch?.("bear");
+        bearLaunched = true;
+        return deps.runPassStreaming!(bearRequest);
+      },
+      () => bearLaunched,
+    );
     const settledBear = tapFinish(bearHandle.result, hooks, "bear")
       .then(
         (outcome) => finishStructuredPass(outcome, parseAnalystCase, "llm.bear", deps.model),
@@ -967,13 +1060,37 @@ export async function runBullThenBear(
   }
 
   // Non-streaming fallback: sequential (bull completes, then bear reads cache).
+  deps.validateRunPass?.(buildAnalystRunPassArgs(deps, payload, "bull"));
+  await hooks.beforePass?.("bull");
   safeHook(hooks.onPassStart, "bull");
-  const bull = await tapFinish(runBullPass(deps, payload), hooks, "bull");
+  const bull = await tapFinish(
+    runBullPass(deps, payload, undefined, () => hooks.beforeProviderLaunch?.("bull")),
+    hooks,
+    "bull",
+  );
   const settledBull = settlePassRun(bull, deps.model, settlements.bull);
-  safeHook(hooks.onPassStart, "bear");
+  let bearLaunched = false;
+  const { settledBear } = await setupBearAfterLaunchedBull(
+    settledBull,
+    async () => {
+      deps.validateRunPass?.(buildAnalystRunPassArgs(deps, payload, "bear"));
+      await hooks.beforePass?.("bear");
+      safeHook(hooks.onPassStart, "bear");
+      await hooks.beforeProviderLaunch?.("bear");
+      bearLaunched = true;
+      return {
+        settledBear: tapFinish(
+          runBearPass(deps, payload, settlements.bear),
+          hooks,
+          "bear",
+        ),
+      };
+    },
+    () => bearLaunched,
+  );
   const outcomes = await Promise.allSettled([
     settledBull,
-    tapFinish(runBearPass(deps, payload, settlements.bear), hooks, "bear"),
+    settledBear,
   ]);
   if (outcomes[0].status === "rejected") throw outcomes[0].reason;
   if (outcomes[1].status === "rejected") throw outcomes[1].reason;
@@ -1233,6 +1350,35 @@ const parseJudgeOutput = (raw: unknown) => {
     : ({ ok: false, error: r.error.message } as const);
 };
 
+/** Exact provider request used by a judge attempt. */
+export function buildJudgeRunPassArgs(
+  deps: PassDeps,
+  payload: ContextPayload,
+  bull: AnalystCase,
+  bear: AnalystCase,
+  validationFeedback?: string,
+): RunPassArgs {
+  const userTurns =
+    validationFeedback === undefined || validationFeedback.length === 0
+      ? judgeUserTurns(payload, bull, bear)
+      : [
+          ...judgeUserTurns(payload, bull, bear),
+          {
+            role: "user" as const,
+            content: `Your previous output FAILED report-schema validation with this error. Fix EXACTLY these issues and re-emit the full JUDGE_OUTPUT schema:\n${validationFeedback}`,
+          },
+        ];
+  return {
+    model: judgeModelFor(deps.model),
+    system: SHARED_RULES_BLOCK,
+    messages: userTurns,
+    maxTokens: JUDGE_MAX_TOKENS,
+    effort: deps.effort ?? "high",
+    field: "llm.judge",
+    signal: deps.signal,
+  };
+}
+
 /**
  * Run the judge/synthesis pass: payload + both cases -> JSON-only
  * JUDGE_OUTPUT_SCHEMA. Unlike bull/bear, the judge intentionally omits
@@ -1248,27 +1394,18 @@ export async function runJudgePass(
   bear: AnalystCase,
   validationFeedback?: string,
   settlement?: PassSettlementHook<JudgeOutput>,
+  beforeProviderLaunch?: () => void | Promise<void>,
 ): Promise<PassRun<JudgeOutput>> {
-  const userTurns =
-    validationFeedback === undefined || validationFeedback.length === 0
-      ? judgeUserTurns(payload, bull, bear)
-      : [
-          ...judgeUserTurns(payload, bull, bear),
-          {
-            role: "user" as const,
-            content: `Your previous output FAILED report-schema validation with this error. Fix EXACTLY these issues and re-emit the full JUDGE_OUTPUT schema:\n${validationFeedback}`,
-          },
-        ];
-  const run = await runStructuredPass<JudgeOutput>({
-    deps,
-    system: SHARED_RULES_BLOCK,
-    userTurns,
-    parse: parseJudgeOutput,
-    maxTokens: JUDGE_MAX_TOKENS,
-    useWebSearch: false,
-    model: judgeModelFor(deps.model),
-    field: "llm.judge",
-  });
+  const request = buildJudgeRunPassArgs(deps, payload, bull, bear, validationFeedback);
+  deps.validateRunPass?.(request);
+  await beforeProviderLaunch?.();
+  const outcome = await deps.runPass(request);
+  const run = finishStructuredPass(
+    outcome,
+    parseJudgeOutput,
+    "llm.judge",
+    judgeModelFor(deps.model),
+  );
   if (!run.ok) return settlePassRun(run, judgeModelFor(deps.model), settlement);
   const unresolved = unresolvedJudgeEntityConflicts(payload, bull, bear, run.result.output);
   const finalRun = unresolved.length === 0 ? run : entityConflictFailure(run.result, unresolved);

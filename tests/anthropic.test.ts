@@ -17,8 +17,11 @@ import type { BetaMessage, BetaUsage } from "@anthropic-ai/sdk/resources/beta/me
 import {
   CACHE_READ_MULTIPLIER,
   CACHE_WRITE_MULTIPLIER,
+  CLIENT_MAX_RETRIES,
   FABLE_FALLBACK_MODEL,
+  MAX_PROVIDER_WEB_SEARCHES,
   PASS_TRANSPORT_MAX_ATTEMPTS,
+  PASS_BILLING_EXPOSURE_MULTIPLIER,
   PASS_TRANSPORT_RETRY_DELAYS_MS,
   PREFERENCE_ORDER,
   PRICING,
@@ -41,6 +44,7 @@ import {
   resumeIfPaused,
   runPass,
   runPassStreaming,
+  requestInputTokenUpperBound,
   supportsEffort,
   thinkingConfigFor,
   webSearchTool,
@@ -138,9 +142,9 @@ describe("pickPreferredModel", () => {
     );
   });
 
-  it("falls back to the newest listed model when no preferred model exists", () => {
-    expect(pickPreferredModel(["claude-something-else", "claude-older"])).toBe(
-      "claude-something-else",
+  it("fails closed when the Models API lists no supported priced model", () => {
+    expect(() => pickPreferredModel(["claude-something-else", "claude-older"])).toThrow(
+      /supported|priced/i,
     );
   });
 
@@ -154,6 +158,11 @@ describe("resolveModel", () => {
     _resetAnthropicForTests(null); // keyless — must still work
     const resolved = await resolveModel("claude-sonnet-5");
     expect(resolved).toEqual({ model: "claude-sonnet-5", resolvedFrom: "explicit" });
+  });
+
+  it("rejects an explicit model that has no strict priced alias or dated snapshot", async () => {
+    _resetAnthropicForTests(null);
+    await expect(resolveModel("claude-mystery-9")).rejects.toThrow(/supported|priced/i);
   });
 
   it('resolves "auto" against models.list() in preference order', async () => {
@@ -273,6 +282,62 @@ describe("computeCostUsd", () => {
  * ------------------------------------------------------------------------ */
 
 describe("buildPassParams", () => {
+  it("fails closed for unpriced models before constructing a provider request", () => {
+    expect(() => buildPassParams({ ...baseOpts, model: "claude-opus-4-8-beta" })).toThrow(
+      /unsupported|priced/i,
+    );
+    expect(() => buildPassParams({ ...baseOpts, model: "claude-sonnet-4-5" })).toThrow(
+      /unsupported|priced/i,
+    );
+  });
+
+  it("enforces pass-specific output caps and positive integer max_tokens", () => {
+    expect(() => buildPassParams({ ...baseOpts, field: "llm.bull", maxTokens: 64_000 })).not.toThrow();
+    expect(() => buildPassParams({ ...baseOpts, field: "llm.bear", maxTokens: 64_001 })).toThrow(
+      /max_tokens.*64,?000/i,
+    );
+    expect(() => buildPassParams({ ...baseOpts, field: "llm.judge", maxTokens: 96_000 })).not.toThrow();
+    expect(() => buildPassParams({ ...baseOpts, field: "llm.judge", maxTokens: 96_001 })).toThrow(
+      /max_tokens.*96,?000/i,
+    );
+    for (const maxTokens of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => buildPassParams({ ...baseOpts, maxTokens })).toThrow(/max_tokens/i);
+    }
+  });
+
+  it("rejects requests whose conservative serialized-input bound exceeds the model context cap", () => {
+    const atCap = {
+      ...baseOpts,
+      model: "claude-haiku-4-5",
+      system: "x".repeat(199_800),
+      field: "llm.bull",
+      maxTokens: 64_000,
+    };
+    expect(requestInputTokenUpperBound(atCap)).toBeLessThanOrEqual(200_000);
+    expect(() => buildPassParams(atCap)).not.toThrow();
+
+    const overCap = { ...atCap, system: "x".repeat(200_001) };
+    expect(requestInputTokenUpperBound(overCap)).toBeGreaterThan(200_000);
+    expect(() => buildPassParams(overCap)).toThrow(/input.*200,?000|context/i);
+  });
+
+  it("rejects raw web-search tools that bypass the bounded factory", () => {
+    const overCapTool = {
+      type: WEB_SEARCH_TOOL_TYPE,
+      name: "web_search",
+      max_uses: MAX_PROVIDER_WEB_SEARCHES + 1,
+      response_inclusion: "full",
+    };
+    expect(() => buildPassParams({ ...baseOpts, tools: [overCapTool] as never })).toThrow(
+      /web.search.*8/i,
+    );
+    expect(() => buildPassParams({
+      ...baseOpts,
+      field: "llm.judge",
+      tools: [webSearchTool(1)] as never,
+    })).toThrow(/judge.*web.search|web.search.*judge/i);
+  });
+
   it("adds the server-side fallback beta + fallbacks for claude-fable-5", () => {
     const { params, usesFallbackBeta } = buildPassParams({ ...baseOpts, model: "claude-fable-5" });
     expect(usesFallbackBeta).toBe(true);
@@ -318,7 +383,7 @@ describe("buildPassParams", () => {
   });
 
   it("drops effort for models that reject it (haiku-4-5 400s on effort)", () => {
-    for (const model of ["claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-sonnet-4-5"]) {
+    for (const model of ["claude-haiku-4-5", "claude-haiku-4-5-20251001"]) {
       const { params } = buildPassParams({ ...baseOpts, model, effort: "high" });
       expect(params).not.toHaveProperty("output_config");
       expect(supportsEffort(model)).toBe(false);
@@ -347,7 +412,7 @@ describe("buildPassParams", () => {
   });
 
   it("passes tools through unchanged", () => {
-    const tools = [webSearchTool(10)];
+    const tools = [webSearchTool(MAX_PROVIDER_WEB_SEARCHES)];
     const { params } = buildPassParams({ ...baseOpts, tools });
     expect(params.tools).toBe(tools);
   });
@@ -355,26 +420,41 @@ describe("buildPassParams", () => {
 
 describe("webSearchTool", () => {
   it("returns the switchable tool type with name and max_uses", () => {
-    expect(webSearchTool(10)).toEqual({
+    expect(webSearchTool(MAX_PROVIDER_WEB_SEARCHES)).toEqual({
       type: WEB_SEARCH_TOOL_TYPE,
       name: "web_search",
-      max_uses: 10,
+      max_uses: MAX_PROVIDER_WEB_SEARCHES,
       response_inclusion: "full",
     });
     expect(WEB_SEARCH_TOOL_TYPE).toBe("web_search_20260318");
   });
 
   it("downgrades to the basic variant for haiku (20260318 400s there)", () => {
-    expect(webSearchTool(10, "claude-haiku-4-5")).toEqual({
+    expect(webSearchTool(MAX_PROVIDER_WEB_SEARCHES, "claude-haiku-4-5")).toEqual({
       type: "web_search_20250305",
       name: "web_search",
-      max_uses: 10,
+      max_uses: MAX_PROVIDER_WEB_SEARCHES,
     });
-    expect(webSearchTool(10, "claude-haiku-4-5-20251001").type).toBe("web_search_20250305");
+    expect(webSearchTool(MAX_PROVIDER_WEB_SEARCHES, "claude-haiku-4-5-20251001").type).toBe("web_search_20250305");
     // non-haiku models keep the dynamic-filtering variant
     for (const model of ["claude-opus-4-8", "claude-sonnet-5", "claude-fable-5"]) {
-      expect(webSearchTool(10, model).type).toBe(WEB_SEARCH_TOOL_TYPE);
+      expect(webSearchTool(MAX_PROVIDER_WEB_SEARCHES, model).type).toBe(WEB_SEARCH_TOOL_TYPE);
     }
+  });
+
+  it("enforces a positive integer search cap and a priced target model", () => {
+    expect(() => webSearchTool(MAX_PROVIDER_WEB_SEARCHES + 1)).toThrow(/max_uses.*8/i);
+    for (const maxUses of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => webSearchTool(maxUses)).toThrow(/max_uses/i);
+    }
+    expect(() => webSearchTool(1, "claude-mystery-9")).toThrow(/unsupported|priced/i);
+  });
+
+  it("keeps the literal retry exposure multiplier executable", () => {
+    expect(PASS_BILLING_EXPOSURE_MULTIPLIER).toBe(
+      (CLIENT_MAX_RETRIES + 1) * PASS_TRANSPORT_MAX_ATTEMPTS * (MAX_PAUSE_RESUMPTIONS + 1),
+    );
+    expect(PASS_BILLING_EXPOSURE_MULTIPLIER).toBe(108);
   });
 });
 

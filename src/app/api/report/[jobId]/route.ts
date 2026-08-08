@@ -9,7 +9,6 @@
 
 import { NextResponse } from "next/server";
 import { getJobSnapshot, type JobSnapshot } from "@/pipeline/events";
-import { sweepAbandonedJobs } from "@/pipeline/jobRunner";
 import { readJobResumeState } from "@/pipeline/jobStore";
 
 export const runtime = "nodejs";
@@ -20,9 +19,8 @@ export async function GET(
   { params }: { params: Promise<{ jobId: string }> },
 ): Promise<NextResponse<(JobSnapshot & { resumable: boolean }) | { error: string }>> {
   const { jobId } = await params;
-  // A job orphaned by a process death must poll as a terminal error, not
-  // spin as "running" forever.
-  sweepAbandonedJobs();
+  // Read-only by design. Scheduler/write surfaces reconcile expired leases;
+  // this route never uses updatedAt as liveness or mutates job state.
   const snapshot = getJobSnapshot(jobId);
   if (snapshot === null) {
     return NextResponse.json({ error: `no job with id "${jobId}"` }, { status: 404 });

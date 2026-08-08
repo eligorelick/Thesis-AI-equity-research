@@ -3,12 +3,13 @@
  *
  * Contract:
  *   POST { symbol: string } -> 202 { jobId }              (new background job)
- *   POST { symbol: string } -> 202 { jobId, existing:true } when a fresh active
+ *   POST { symbol: string } -> 202 { jobId, existing:true } when a reusable active
  *   job for that symbol is already queued/running.
  *   400 on a malformed body / missing symbol.
  *
  * The job runs the full pipeline (fetch → validate → compute → bull → bear →
- * synthesize → verify) via runJob(). We do NOT await it — the client then
+ * synthesize → verify) through durable scheduler claims. We do not await the
+ * process-local pump — the client then
  * subscribes to GET /api/report/[jobId]/stream (SSE) or polls
  * GET /api/report/[jobId] for progress.
  *
@@ -23,11 +24,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { assertSameOrigin } from "@/app/api/sameOrigin";
-import {
-  getOrCreateJobForSymbol,
-  runJob,
-  sweepAbandonedJobs,
-} from "@/pipeline/jobRunner";
+import { getOrCreateJobForSymbol } from "@/pipeline/jobRunner";
+import { kickJobScheduler } from "@/pipeline/jobScheduler";
 import { noopPasses, resolvePasses } from "./resolvePasses";
 import { SYMBOL_MAX_LENGTH, SYMBOL_PATTERN } from "@/symbol";
 
@@ -42,6 +40,8 @@ const postBody = z.object({
     .max(SYMBOL_MAX_LENGTH, "symbol too long")
     .regex(SYMBOL_PATTERN, "symbol must start/end alphanumeric (with . or - inside)"),
 });
+
+const resolveRunnablePasses = async () => (await resolvePasses()) ?? noopPasses();
 
 export async function POST(request: Request): Promise<NextResponse> {
   // CSRF trust boundary: a cross-site browser page must not be able to start
@@ -66,28 +66,18 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const symbol = parsed.data.symbol.toUpperCase();
 
-  // Terminal-ize any job orphaned by a process death (any symbol) before
-  // checking for a reusable one.
-  sweepAbandonedJobs();
-
+  // This write/start surface reconciles expired durable claims before checking
+  // for a reusable job. Read routes never infer liveness from updatedAt.
   const job = getOrCreateJobForSymbol(symbol);
   if (job.existing) {
+    kickJobScheduler(resolveRunnablePasses);
     return NextResponse.json({ jobId: job.jobId, existing: true }, { status: 202 });
   }
   const { jobId } = job;
 
-  // Kick off the pipeline in the background — do NOT await. Resolve the passes
-  // at runtime; a missing module degrades to a data-only report inside runJob.
-  void (async () => {
-    const passes = (await resolvePasses()) ?? noopPasses();
-    try {
-      await runJob(jobId, passes);
-    } catch (err) {
-      // runJob already recorded "error" on the job + emitted an error event;
-      // this catch only prevents an unhandled rejection on the detached task.
-      console.error(`runJob(${jobId}) failed:`, err);
-    }
-  })();
+  // Wake the process-local pump; correctness and backpressure come from the DB
+  // claim transaction. A missing pass module degrades to a data-only report.
+  kickJobScheduler(resolveRunnablePasses);
 
   return NextResponse.json({ jobId }, { status: 202 });
 }

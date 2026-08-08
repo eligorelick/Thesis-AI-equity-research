@@ -21,7 +21,6 @@ import {
   subscribeJob,
   type JobEvent,
 } from "@/pipeline/events";
-import { sweepAbandonedJobs } from "@/pipeline/jobRunner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,10 +76,8 @@ export async function GET(
 ): Promise<Response> {
   const { jobId } = await params;
 
-  // A job orphaned by a process death terminal-izes here so the stream emits
-  // an immediate error frame instead of heartbeating a dead "running" job.
-  sweepAbandonedJobs();
-
+  // Read-only by design: scheduler/write surfaces reconcile expired owners;
+  // SSE only reflects the current durable snapshot and live event stream.
   const snapshot = getJobSnapshot(jobId);
   if (snapshot === null) {
     return new Response(JSON.stringify({ error: `no job with id "${jobId}"` }), {

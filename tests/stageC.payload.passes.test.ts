@@ -1235,6 +1235,25 @@ describe("verify-pass tracing", () => {
  * ------------------------------------------------------------------------ */
 
 describe("final assembled report verification", () => {
+  it("declares and awaits durable launch authority before deterministic verify executes", async () => {
+    const bundle = fixtureBundle();
+    const computed = runStageB(bundle);
+    const validation = validateBundle(bundle, { now: new Date("2026-07-06T00:00:00Z") });
+    const payload = pipelinePasses.assembleContextPayload(bundle, computed, validation);
+    const beforeProviderLaunch = (): never => {
+      throw new Error("verify launch authority lost");
+    };
+
+    expect(pipelinePasses.launchAuthorityCapability).toBe("durable-preprovider-v1");
+    await expect(pipelinePasses.runVerifyPass(
+      { analysisModel: "claude-opus-4-8", payload },
+      judgeOutput(),
+      { fetchedUrls: [] },
+      undefined,
+      beforeProviderLaunch,
+    )).rejects.toThrow(/launch authority lost/i);
+  });
+
   it("verifies the complete report after deterministic Stage B values are injected", async () => {
     const bundle = fixtureBundle();
     const computed = runStageB(bundle);
@@ -2383,6 +2402,195 @@ describe("failure kinds — parse vs schema vs refusal are distinguishable", () 
 });
 
 describe("runBullThenBear per-pass lifecycle hooks", () => {
+  it.each(["permit gate", "launch fence"] as const)(
+    "awaits an in-flight bull settlement before propagating a bear %s failure",
+    async (failurePoint) => {
+      const { payload } = buildInputs();
+      const mock = new MockRunPass();
+      mock.onJson("llm.bull", analystCase("bull"), { costUsd: 0.41 });
+      let releaseBull!: () => void;
+      const bullGate = new Promise<void>((resolve) => {
+        releaseBull = resolve;
+      });
+      let bearBoundaryReached!: () => void;
+      const atBearBoundary = new Promise<void>((resolve) => {
+        bearBoundaryReached = resolve;
+      });
+      const deps = makeDeps(mock, {
+        runPassStreaming: (args) => ({
+          firstToken: Promise.resolve("streamEvent"),
+          result: bullGate.then(() => mock.runPass(args)),
+        }),
+      });
+      const settlements: string[] = [];
+      const combined = runBullThenBear(deps, payload, {
+        beforePass: (side) => {
+          if (side === "bear" && failurePoint === "permit gate") {
+            bearBoundaryReached();
+            throw new Error("bear permit gate lost while bull is pending");
+          }
+        },
+        beforeProviderLaunch: (side) => {
+          if (side === "bear" && failurePoint === "launch fence") {
+            bearBoundaryReached();
+            throw new Error("bear launch authority lost while bull is pending");
+          }
+        },
+      }, {
+        bull: (settlement) => {
+          settlements.push(`${settlement.outcome}:${settlement.telemetry.costUsd}`);
+        },
+      });
+      let combinedSettled = false;
+      void combined.then(
+        () => { combinedSettled = true; },
+        () => { combinedSettled = true; },
+      );
+
+      await atBearBoundary;
+      await Promise.resolve();
+      expect(combinedSettled).toBe(false);
+
+      releaseBull();
+      await expect(combined).rejects.toThrow(/bear (permit gate|launch authority) lost/i);
+      expect(settlements).toEqual(["success:0.41"]);
+      expect(mock.calls.map((call) => call.field)).toEqual(["llm.bull"]);
+    },
+  );
+
+  it.each(["stream-end", "non-streaming"] as const)(
+    "joins a rejecting bull settlement before a %s bear-gate failure escapes",
+    async (mode) => {
+      const { payload } = buildInputs();
+      const mock = new MockRunPass();
+      mock.onJson("llm.bull", analystCase("bull"), { costUsd: 0.41 });
+      let rejectSettlement!: () => void;
+      const settlementGate = new Promise<void>((resolve) => {
+        rejectSettlement = resolve;
+      });
+      const deps = makeDeps(mock, mode === "stream-end"
+        ? {
+            runPassStreaming: (args) => ({
+              firstToken: Promise.resolve("end" as never),
+              result: mock.runPass(args),
+            }),
+          }
+        : {});
+      if (mode === "non-streaming") {
+        delete (deps as { runPassStreaming?: unknown }).runPassStreaming;
+      }
+      let bearGateReached!: () => void;
+      const atBearGate = new Promise<void>((resolve) => {
+        bearGateReached = resolve;
+      });
+      const combined = runBullThenBear(deps, payload, {
+        beforePass: (side) => {
+          if (side === "bear") {
+            bearGateReached();
+            throw new Error("bear gate failed after bull provider result");
+          }
+        },
+      }, {
+        bull: async () => {
+          await settlementGate;
+          throw new Error("bull settlement persistence rejected");
+        },
+      });
+      let combinedSettled = false;
+      void combined.then(
+        () => { combinedSettled = true; },
+        () => { combinedSettled = true; },
+      );
+
+      await atBearGate;
+      await Promise.resolve();
+      expect(combinedSettled).toBe(false);
+      rejectSettlement();
+      await expect(combined).rejects.toThrow(/bull settlement persistence rejected/i);
+      expect(mock.calls.map((call) => call.field)).toEqual(["llm.bull"]);
+    },
+  );
+
+  it.each(["bull", "bear"] as const)(
+    "propagates the durable %s launch fence before that provider call",
+    async (targetSide) => {
+      const { payload } = buildInputs();
+      const mock = new MockRunPass();
+      mock.onJson("llm.bull", analystCase("bull"));
+      mock.onJson("llm.bear", analystCase("bear"));
+
+      await expect(runBullThenBear(makeDeps(mock), payload, {
+        beforeProviderLaunch: (side) => {
+          if (side === targetSide) throw new Error(`${side} launch authority lost`);
+        },
+      })).rejects.toThrow(new RegExp(`${targetSide} launch authority lost`, "i"));
+
+      expect(mock.calls.map((call) => call.field)).toEqual(
+        targetSide === "bull" ? [] : ["llm.bull"],
+      );
+    },
+  );
+
+  it.each(["bull", "bear"] as const)(
+    "propagates the single-side %s launch fence before runPass",
+    async (side) => {
+      const { payload } = buildInputs();
+      const mock = new MockRunPass();
+      const run = side === "bull" ? runBullPass : runBearPass;
+
+      await expect(run(
+        makeDeps(mock),
+        payload,
+        undefined,
+        () => {
+          throw new Error(`${side} launch authority lost`);
+        },
+      )).rejects.toThrow(new RegExp(`${side} launch authority lost`, "i"));
+      expect(mock.calls).toEqual([]);
+    },
+  );
+
+  it("propagates the judge launch fence before runPass", async () => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+
+    await expect(runJudgePass(
+      makeDeps(mock),
+      payload,
+      analystCase("bull"),
+      analystCase("bear"),
+      undefined,
+      undefined,
+      () => {
+        throw new Error("judge launch authority lost");
+      },
+    )).rejects.toThrow(/judge launch authority lost/i);
+    expect(mock.calls).toEqual([]);
+  });
+
+  it("validates the exact request before acquiring the durable gate or launching a provider", async () => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    const gateCalls: string[] = [];
+    const validated: string[] = [];
+    const deps = makeDeps(mock, {
+      validateRunPass: (args) => {
+        validated.push(args.field ?? "");
+        throw new Error("request exceeds finite provider cap");
+      },
+    });
+
+    await expect(runBullThenBear(deps, payload, {
+      beforePass: (side) => {
+        gateCalls.push(side);
+      },
+    })).rejects.toThrow(/finite provider cap/i);
+
+    expect(validated).toEqual(["llm.bull"]);
+    expect(gateCalls).toEqual([]);
+    expect(mock.calls).toEqual([]);
+  });
+
   it("fires start/finish for both sides, starts bull before bear (streaming path)", async () => {
     const { payload } = buildInputs();
     const mock = new MockRunPass();

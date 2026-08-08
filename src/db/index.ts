@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS "jobs" (
   "bearJson" TEXT,
   "payloadFingerprint" TEXT,
   "runGeneration" INTEGER NOT NULL DEFAULT 0,
+  "resumeSourceGeneration" INTEGER,
   "revision" INTEGER NOT NULL DEFAULT 0,
   "queuedAt" TEXT,
   "leaseOwner" TEXT,
@@ -198,6 +199,7 @@ export function bootstrapSchema(sqlite: Database.Database): void {
     ensureColumn(sqlite, "jobs", "unsupportedKind", "TEXT");
     ensureColumn(sqlite, "jobs", "unsupportedMessage", "TEXT");
     ensureColumn(sqlite, "jobs", "runGeneration", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn(sqlite, "jobs", "resumeSourceGeneration", "INTEGER");
     ensureColumn(sqlite, "jobs", "revision", "INTEGER NOT NULL DEFAULT 0");
     ensureColumn(sqlite, "jobs", "queuedAt", "TEXT");
     ensureColumn(sqlite, "jobs", "leaseOwner", "TEXT");

@@ -160,7 +160,7 @@ describe("durable job schema migration", () => {
       const job = sqlite.prepare(`
         SELECT "symbol", "status", "stepsJson", "bullJson", "payloadFingerprint",
                "runGeneration", "revision", "queuedAt", "leaseOwner", "leaseExpiresAt",
-               "heartbeatAt", "notBefore", "maxCostUsd"
+               "heartbeatAt", "notBefore", "maxCostUsd", "resumeSourceGeneration"
           FROM "jobs" WHERE "id" = 'legacy-job'
       `).get() as Record<string, unknown>;
       expect(job).toMatchObject({
@@ -177,6 +177,7 @@ describe("durable job schema migration", () => {
         heartbeatAt: null,
         notBefore: null,
         maxCostUsd: null,
+        resumeSourceGeneration: null,
       });
 
       const legacyCost = sqlite.prepare(`
@@ -193,6 +194,7 @@ describe("durable job schema migration", () => {
 
       const jobColumns = columnInfo(sqlite, "jobs");
       expect(jobColumns.get("runGeneration")).toEqual({ notnull: 1, dflt_value: "0", pk: 0 });
+      expect(jobColumns.get("resumeSourceGeneration")?.notnull).toBe(0);
       expect(jobColumns.get("revision")).toEqual({ notnull: 1, dflt_value: "0", pk: 0 });
       expect(jobColumns.get("leaseOwner")?.notnull).toBe(0);
       const costColumns = columnInfo(sqlite, "cost_log");

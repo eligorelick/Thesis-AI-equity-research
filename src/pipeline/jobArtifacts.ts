@@ -717,7 +717,34 @@ export function preparePassSettlement<T>(
   };
 }
 
-type SettlementDb = Pick<ThesisDb, "select" | "insert" | "update">;
+type SettlementDb = Pick<ThesisDb, "select" | "insert" | "update" | "delete">;
+
+export interface PassProjectionFence {
+  /** Fresh durable job-claim nonce; worker labels alone are never authority. */
+  jobLeaseOwner: string;
+  /** Exact settlement authority time, captured inside the acquired transaction. */
+  authorityAt?: string;
+}
+
+function hasCurrentProjectionAuthority(
+  current: {
+    runGeneration: number;
+    status: string;
+    leaseOwner: string | null;
+    leaseExpiresAt: string | null;
+  } | undefined,
+  inputGeneration: number,
+  projectionFence: PassProjectionFence | undefined,
+): boolean {
+  if (current?.runGeneration !== inputGeneration) return false;
+  if (projectionFence === undefined) return true;
+  return current.status === "running" &&
+    current.leaseOwner === projectionFence.jobLeaseOwner &&
+    (
+      projectionFence.authorityAt === undefined ||
+      (current.leaseExpiresAt !== null && current.leaseExpiresAt > projectionFence.authorityAt)
+    );
+}
 
 function artifactWhere(identity: PassArtifactIdentity) {
   return and(
@@ -784,6 +811,7 @@ export function persistPassSettlementInTransaction<T>(
   tx: SettlementDb,
   input: PersistPassSettlementInput<T>,
   prepared: PreparedPassSettlement<T>,
+  projectionFence?: PassProjectionFence,
 ): PersistPassSettlementResult {
   const existingArtifact = tx
     .select()
@@ -804,13 +832,22 @@ export function persistPassSettlementInTransaction<T>(
       throw new Error("jobArtifacts: conflicting duplicate settlement or corrupt artifact/cost pair");
     }
     const current = tx
-      .select({ runGeneration: jobs.runGeneration })
+      .select({
+        runGeneration: jobs.runGeneration,
+        status: jobs.status,
+        leaseOwner: jobs.leaseOwner,
+        leaseExpiresAt: jobs.leaseExpiresAt,
+      })
       .from(jobs)
       .where(eq(jobs.id, input.jobId))
       .get();
     return {
       inserted: false,
-      currentGeneration: current?.runGeneration === input.runGeneration,
+      currentGeneration: hasCurrentProjectionAuthority(
+        current,
+        input.runGeneration,
+        projectionFence,
+      ),
       telemetry: prepared.telemetry,
     };
   }
@@ -860,12 +897,21 @@ export function persistPassSettlementInTransaction<T>(
       .select({
         runGeneration: jobs.runGeneration,
         payloadFingerprint: jobs.payloadFingerprint,
+        status: jobs.status,
+        leaseOwner: jobs.leaseOwner,
+        leaseExpiresAt: jobs.leaseExpiresAt,
       })
       .from(jobs)
       .where(eq(jobs.id, input.jobId))
       .get();
-    currentGeneration = current?.runGeneration === input.runGeneration;
-    if (current !== undefined && currentGeneration) {
+    currentGeneration = hasCurrentProjectionAuthority(
+      current,
+      input.runGeneration,
+      projectionFence,
+    );
+    // Mutable compatibility projections are allowed only for the exact live
+    // durable claim. Immutable artifact/cost truth above remains independent.
+    if (current !== undefined && currentGeneration && projectionFence !== undefined) {
       const opposite = input.pass === "bull" ? "bearJson" : "bullJson";
       const own = input.pass === "bull" ? "bullJson" : "bearJson";
       const cohortChanged = current.payloadFingerprint !== input.payloadFingerprint;
@@ -876,16 +922,30 @@ export function persistPassSettlementInTransaction<T>(
       if (cohortChanged) set[opposite] = null;
       tx.update(jobs)
         .set({ ...set, updatedAt: input.settledAt ?? new Date().toISOString() })
-        .where(and(eq(jobs.id, input.jobId), eq(jobs.runGeneration, input.runGeneration)))
+        .where(and(
+          eq(jobs.id, input.jobId),
+          eq(jobs.runGeneration, input.runGeneration),
+          eq(jobs.status, "running"),
+          eq(jobs.leaseOwner, projectionFence.jobLeaseOwner),
+        ))
         .run();
     }
   } else {
     const current = tx
-      .select({ runGeneration: jobs.runGeneration })
+      .select({
+        runGeneration: jobs.runGeneration,
+        status: jobs.status,
+        leaseOwner: jobs.leaseOwner,
+        leaseExpiresAt: jobs.leaseExpiresAt,
+      })
       .from(jobs)
       .where(eq(jobs.id, input.jobId))
       .get();
-    currentGeneration = current?.runGeneration === input.runGeneration;
+    currentGeneration = hasCurrentProjectionAuthority(
+      current,
+      input.runGeneration,
+      projectionFence,
+    );
   }
 
   return { inserted: true, currentGeneration, telemetry: prepared.telemetry };

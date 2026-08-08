@@ -79,6 +79,13 @@ credential is optional.
 | `EDGAR_CONTACT` | Honest name and email for SEC request identification | Live EDGAR requests fail closed |
 | `ANALYSIS_MODEL` | Anthropic model ID or `auto` | Defaults to `auto` |
 | `ANALYSIS_EFFORT` | `low`, `medium`, `high`, `xhigh`, or `max` | Defaults to `high` |
+| `THESIS_MAX_ACTIVE_JOBS` | Durable cross-process job concurrency | Defaults to `1` |
+| `THESIS_MAX_ACTIVE_LLM_CALLS` | Durable cross-process paid-call concurrency | Defaults to `2` |
+| `THESIS_MAX_JOB_COST_USD` | Optional per-job settled-plus-reserved spend cap | No cap |
+| `THESIS_MAX_ROLLING_COST_USD` | Optional rolling settled-plus-reserved spend cap | No cap |
+| `THESIS_ROLLING_COST_WINDOW_MINUTES` | Rolling spend window, at most `52560000` minutes | Defaults to `1440` |
+| `THESIS_PAID_PASS_LEASE_SECONDS` | Paid-call lease TTL; `601`–`2147483` seconds | Defaults to `900` |
+| `THESIS_JOB_LEASE_SECONDS` | Job-claim lease TTL; at most `2147483` seconds | Defaults to `900` |
 | `THESIS_DB_PATH` | Exact SQLite file location | Uses the operating-system app-data directory |
 | `THESIS_DATA_DIR` | SQLite directory override | Uses the operating-system app-data directory |
 
@@ -89,6 +96,31 @@ visible data gap.
 The Settings page can override the analysis model and effort. Stored settings
 take precedence over environment variables, which take precedence over
 application defaults.
+
+Report requests are queued in SQLite and claimed with durable leases, so the
+limits hold across server processes and restarts. Node server startup drains
+pre-existing queued work, and a single process-local wake timer revisits future
+queue times and expired job/paid leases without making read routes mutate state.
+Spend admission atomically counts every settled attempt plus live reservations. Reservations deliberately
+use a worst-case 108-request exposure bound (SDK retries, transport retries,
+and pause resumptions), strict model/context/output/search caps, and standard
+pricing; this can be much larger than the typical final charge. The strict
+per-pass reservation is `108 * maximum cost of one capped provider request`:
+
+| Analysis model | Bull/bear analyst pass | Synthesize/judge pass |
+| --- | ---: | ---: |
+| Claude Haiku 4.5 | $70.20 | $560.52 |
+| Claude Sonnet 5 | $517.32 | $560.52 |
+| Claude Opus 4.8 | $856.44 | $934.20 |
+| Claude Fable 5 | $1,704.24 | $1,868.40 |
+
+Deterministic verification reserves exactly $0. An injected provider-backed
+verification adapter must declare and reserve its own finite maximum. Use these
+strict maxima, not typical observed charges, when sizing the optional job and
+rolling caps. A provider-launched call retains its reservation until exact
+settlement or lease expiry so another process cannot spend the same budget
+prematurely; only an exit before provider launch releases a reservation as
+unbilled.
 
 ## Privacy and safety
 

@@ -547,7 +547,11 @@ describe("default transport (injected fetchFn — no network)", () => {
   });
 
   it("accepts filing structures and meaningful untagged plain text", () => {
-    expect(filingDocumentBodyProblem("<?xml version=\"1.0\"?><xbrli:xbrl></xbrli:xbrl>")).toBeNull();
+    expect(
+      filingDocumentBodyProblem(
+        '<?xml version="1.0"?><xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance"></xbrli:xbrl>',
+      ),
+    ).toBeNull();
     expect(
       filingDocumentBodyProblem(
         "UNITED STATES SECURITIES AND EXCHANGE COMMISSION annual report filing disclosure.",
@@ -558,6 +562,56 @@ describe("default transport (injected fetchFn — no network)", () => {
         "Management described durable customer demand, improving operating margins, and the principal uncertainties affecting next year's results.",
       ),
     ).toBeNull();
+  });
+
+  it.each([
+    [
+      "alternate instance prefix",
+      '<inst:xbrl xmlns:inst="http://www.xbrl.org/2003/instance"><inst:context id="c"/></inst:xbrl>',
+    ],
+    [
+      "default instance namespace",
+      '<xbrl xmlns="http://www.xbrl.org/2003/instance"><context id="c"/></xbrl>',
+    ],
+    [
+      "2013 inline prefix",
+      '<html xmlns:alt="http://www.xbrl.org/2013/inlineXBRL"><alt:header></alt:header></html>',
+    ],
+    [
+      "2008 inline prefix",
+      "<html xmlns:legacy='http://www.xbrl.org/2008/inlineXBRL'><legacy:nonnumeric>Example</legacy:nonnumeric></html>",
+    ],
+    [
+      "inline tuple element",
+      '<html xmlns:report="http://www.xbrl.org/2013/inlineXBRL"><report:tuple name="example"></report:tuple></html>',
+    ],
+  ])("accepts bound XBRL namespaces with a non-normative %s", (_label, body) => {
+    expect(filingDocumentBodyProblem(body)).toBeNull();
+  });
+
+  it.each([
+    ["unbound prefix", "<foo:xbrl></foo:xbrl>"],
+    ["wrong prefix binding", '<foo:xbrl xmlns:foo="https://example.com/not-xbrl"></foo:xbrl>'],
+    ["wrong conventional-prefix binding", '<xbrli:xbrl xmlns:xbrli="https://example.com/not-xbrl"></xbrli:xbrl>'],
+    [
+      "lookalike namespace attribute",
+      '<foo:xbrl data-xmlns:foo="http://www.xbrl.org/2003/instance"></foo:xbrl>',
+    ],
+    ["unbound default local name", "<xbrl></xbrl>"],
+    [
+      "unused valid declaration",
+      '<html xmlns:inst="http://www.xbrl.org/2003/instance"><body>Hello world</body></html>',
+    ],
+    [
+      "bound XBRL code sample inside a comment",
+      '<html><body><!-- <inst:xbrl xmlns:inst="http://www.xbrl.org/2003/instance"></inst:xbrl> --><p>Hello world</p></body></html>',
+    ],
+    [
+      "bound XBRL code sample inside a script",
+      '<html><script type="text/plain"><inst:xbrl xmlns:inst="http://www.xbrl.org/2003/instance"></inst:xbrl></script><body>Hello world</body></html>',
+    ],
+  ])("rejects unbound XBRL lookalikes: %s", (_label, body) => {
+    expect(filingDocumentBodyProblem(body)).toMatch(/implausible/i);
   });
 
   it("rejects minimal arbitrary markup and branded SEC maintenance or XML error envelopes", () => {
@@ -579,6 +633,31 @@ describe("default transport (injected fetchFn — no network)", () => {
     ).toMatch(/error|implausible/i);
   });
 
+  it("rejects the official SEC scheduled maintenance site shell", () => {
+    const body = [
+      "<html><head><title>Scheduled Maintenance – SEC.gov</title></head><body>",
+      "<header>U.S. Securities and Exchange Commission SEC.gov</header>",
+      "<h1>Scheduled Maintenance</h1>",
+      "<h2>Forms Unavailable During Maintenance</h2>",
+      "<p>Some forms and filing tools are unavailable while scheduled maintenance is completed. Please return after the maintenance window.</p>",
+      "<footer>Accessibility, privacy, investor information, and contact links.</footer>",
+      "</body></html>",
+    ].join("");
+
+    expect(filingDocumentBodyProblem(body)).toMatch(/maintenance|error|placeholder/i);
+  });
+
+  it("accepts a genuine issuer filing discussion of scheduled maintenance", () => {
+    const body = [
+      "<html><body><h2>Operational Reliability</h2>",
+      "<p>The registrant performs scheduled maintenance on manufacturing equipment and cloud systems. ",
+      "Management staggers this work across facilities, maintains backup capacity, and monitors customer service levels to reduce disruption.</p>",
+      "</body></html>",
+    ].join("");
+
+    expect(filingDocumentBodyProblem(body)).toBeNull();
+  });
+
   it("rejects an implausible index body before caching and falls back to the valid HTML index", async () => {
     let headerHits = 0;
     let fallbackHits = 0;
@@ -596,6 +675,7 @@ describe("default transport (injected fetchFn — no network)", () => {
       return Promise.resolve(
         new Response(
           '<html><head><title>SEC.gov | EDGAR Filing Documents for Example Issuer</title></head>' +
+            '<div class="site-notice">Forms Unavailable During Maintenance in another SEC.gov service.</div>' +
             '<table><tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>' +
             '<tr><td>1</td><td>Annual report</td><td><a href="annual.htm">annual.htm</a></td><td>10-K</td><td>100</td></tr></table></html>',
           { status: 200 },

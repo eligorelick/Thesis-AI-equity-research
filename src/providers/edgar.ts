@@ -610,6 +610,13 @@ function knownEdgarErrorBody(body: string): boolean {
     ?.replace(/<[^>]*>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  const secSiteBranding = title !== undefined && /\bsec\.gov\b/i.test(title);
+  const maintenanceTitleSignal =
+    title !== undefined && /\b(?:scheduled )?maintenance\b|\b(?:temporarily )?unavailable\b/i.test(title);
+  // SEC's site-shell maintenance page contains enough legitimate prose to
+  // look meaningful. Require both the operational signal and SEC.gov title
+  // branding so issuer disclosures that discuss maintenance remain valid.
+  if (secSiteBranding && maintenanceTitleSignal) return true;
   if (
     title !== undefined &&
     /(?:page|file) not found\b|access denied\b|request rate threshold exceeded\b|service unavailable\b|temporarily unavailable\b|edgar (?:maintenance|unavailable)\b/i.test(
@@ -645,6 +652,74 @@ function hasMeaningfulHumanContent(body: string): boolean {
     (/[.!?;:]/.test(text) || /\b(?:and|but|because|while|which|that)\b/i.test(text));
 }
 
+const XBRL_INSTANCE_NAMESPACE = "http://www.xbrl.org/2003/instance";
+const INLINE_XBRL_NAMESPACES = new Set([
+  "http://www.xbrl.org/2013/inlineXBRL",
+  "http://www.xbrl.org/2008/inlineXBRL",
+]);
+const INLINE_XBRL_LOCAL_NAMES = new Set([
+  "continuation",
+  "denominator",
+  "exclude",
+  "footnote",
+  "fraction",
+  "header",
+  "hidden",
+  "nonfraction",
+  "nonnumeric",
+  "numerator",
+  "references",
+  "relationship",
+  "resources",
+  "tuple",
+]);
+
+/**
+ * Recognize XBRL by namespace URI, never by a conventional prefix. The small
+ * start-tag scanner tracks in-scope xmlns declarations sufficiently for cache
+ * admission without attempting to parse or execute the filing document.
+ */
+function hasBoundXbrlStructure(body: string): boolean {
+  const structuralMarkup = body
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/gi, " ")
+    .replace(/<(?:script|style)\b[^>]*>[\s\S]*?<\/(?:script|style)\s*>/gi, " ");
+  const scopes: Array<{ qName: string; bindings: Map<string, string> }> = [];
+  const voidElements = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+  const tagPattern = /<\s*(\/)?\s*([A-Za-z_][\w.-]*(?::[A-Za-z_][\w.-]*)?)\b([^<>]*?)(\/?)>/g;
+  let match: RegExpExecArray | null;
+  while ((match = tagPattern.exec(structuralMarkup)) !== null) {
+    const closing = match[1] === "/";
+    const qName = match[2];
+    if (closing) {
+      const index = scopes.findLastIndex((scope) => scope.qName.toLowerCase() === qName.toLowerCase());
+      if (index >= 0) scopes.splice(index);
+      continue;
+    }
+
+    const bindings = new Map(scopes.at(-1)?.bindings ?? []);
+    const attributes = match[3];
+    const namespacePattern = /(?:^|\s)xmlns(?::([A-Za-z_][\w.-]*))?\s*=\s*(["'])(.*?)\2/gi;
+    let declaration: RegExpExecArray | null;
+    while ((declaration = namespacePattern.exec(attributes)) !== null) {
+      bindings.set(declaration[1] ?? "", declaration[3].trim());
+    }
+
+    const colon = qName.indexOf(":");
+    const prefix = colon >= 0 ? qName.slice(0, colon) : "";
+    const localName = (colon >= 0 ? qName.slice(colon + 1) : qName).toLowerCase();
+    const namespace = bindings.get(prefix);
+    if (localName === "xbrl" && namespace === XBRL_INSTANCE_NAMESPACE) return true;
+    if (INLINE_XBRL_LOCAL_NAMES.has(localName) && namespace !== undefined && INLINE_XBRL_NAMESPACES.has(namespace)) {
+      return true;
+    }
+
+    const selfClosing = match[4] === "/" || voidElements.has(localName);
+    if (!selfClosing) scopes.push({ qName, bindings });
+  }
+  return false;
+}
+
 /** Return a semantic problem for a successful filing-document body, if any. */
 export function filingDocumentBodyProblem(body: string): string | null {
   const trimmed = body.trim();
@@ -655,9 +730,8 @@ export function filingDocumentBodyProblem(body: string): string | null {
   // or plain text. Recognize filing structures/terms first, then fall back to
   // meaningful human prose. Markup or an XML declaration alone proves nothing.
   if (
-    /<(?:xbrli:)?xbrl\b|<ix:(?:nonfraction|nonnumeric|header|resources)\b|<xbrli:(?:context|unit)\b|<SEC-DOCUMENT\b|<DOCUMENT\b[\s\S]*?<TYPE>[\s\S]*?<TEXT\b/i.test(
-      trimmed,
-    )
+    hasBoundXbrlStructure(trimmed) ||
+    /<SEC-DOCUMENT\b|<DOCUMENT\b[\s\S]*?<TYPE>[\s\S]*?<TEXT\b/i.test(trimmed)
   ) {
     return null;
   }

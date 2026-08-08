@@ -30,7 +30,7 @@ import type { ManifestEntry } from "@/types/core";
 
 /** One EOD bar, FMP field names. Computation normalizes rows to ASC by date. */
 export interface OhlcvRow {
-  /** ISO date "YYYY-MM-DD" (longer strings are truncated to the date part) */
+  /** Strict Gregorian ISO day, "YYYY-MM-DD". */
   date: string;
   open: number;
   high: number;
@@ -51,16 +51,42 @@ export interface SeriesPoint {
   value: number | null;
 }
 
-/** Normalize a row date to "YYYY-MM-DD"; returns null if unparseable. */
-function isoDay(d: string): string | null {
-  const s = d.length > 10 ? d.slice(0, 10) : d;
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return isLeapYear(year) ? 29 : 28;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+/** Validate a strict real Gregorian "YYYY-MM-DD" day. */
+function isoDay(d: unknown): string | null {
+  if (typeof d !== "string") return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (
+    year < 1 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth(year, month)
+  ) return null;
+  return d;
 }
 
 function epochUtc(dayIso: string): number {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayIso);
+  const strictDay = isoDay(dayIso);
+  if (!strictDay) return Number.NaN;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(strictDay);
   if (!m) return Number.NaN;
-  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const date = new Date(0);
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCFullYear(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return date.getTime();
 }
 
 function pad2(n: number): string {
@@ -69,21 +95,24 @@ function pad2(n: number): string {
 
 /** Shift an ISO day by whole months, clamping the day-of-month (Mar 31 −1mo → Feb 28/29). */
 export function shiftMonths(dayIso: string, deltaMonths: number): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dayIso);
+  const strictDay = isoDay(dayIso);
+  if (!strictDay || !Number.isInteger(deltaMonths)) return dayIso;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(strictDay);
   if (!m) return dayIso;
   const y = Number(m[1]);
   const mo0 = Number(m[2]) - 1 + deltaMonths;
   const y2 = y + Math.floor(mo0 / 12);
+  if (y2 < 1 || y2 > 9999) return dayIso;
   const m2 = ((mo0 % 12) + 12) % 12;
-  const lastDay = new Date(Date.UTC(y2, m2 + 1, 0)).getUTCDate();
+  const lastDay = daysInMonth(y2, m2 + 1);
   const d2 = Math.min(Number(m[3]), lastDay);
-  return `${y2}-${pad2(m2 + 1)}-${pad2(d2)}`;
+  return `${String(y2).padStart(4, "0")}-${pad2(m2 + 1)}-${pad2(d2)}`;
 }
 
 /**
  * Sanitize an input series: drop rows with unparseable dates or non-finite /
- * non-positive prices, normalize unavailable volume to null, truncate
- * datetimes to days, and re-sort ASC if the caller's contract (sorted ASC) was
+ * non-positive prices, normalize unavailable volume to null, require strict
+ * Gregorian ISO days, and re-sort ASC if the caller's contract (sorted ASC) was
  * violated. Never throws.
  */
 export function sanitizeRows(
@@ -432,7 +461,11 @@ export function range52w(rows: readonly OhlcvRow[]): Range52w {
 
 export interface RelativeStrengthPoint {
   months: 3 | 6 | 12;
-  /** Close-to-close total price return over the window, percent */
+  /** Exact shared start observation used by both series, when aligned. */
+  startDate: string | null;
+  /** Exact shared end observation used by both series, when end alignment succeeds. */
+  endDate: string | null;
+  /** Split-adjusted close-to-close price return over the window, percent. */
   symbolReturnPct: number | null;
   benchmarkReturnPct: number | null;
   /** symbol − benchmark, percentage points; null when either side is missing */
@@ -447,95 +480,346 @@ export interface RelativeStrengthSet {
   asOf: string | null;
 }
 
-const RS_WINDOWS: ReadonlyArray<3 | 6 | 12> = [3, 6, 12];
+export const RS_START_TOLERANCE_DAYS = 7;
+export const RS_END_TOLERANCE_DAYS = 7;
 
-/** Last row with date ≤ cutoff (rows sorted ASC), else null. */
-function rowAtOrBefore(rows: readonly OhlcvRow[], cutoff: string): OhlcvRow | null {
-  let found: OhlcvRow | null = null;
-  for (const r of rows) {
-    if (r.date <= cutoff) found = r;
-    else break;
+const RS_WINDOWS: ReadonlyArray<3 | 6 | 12> = [3, 6, 12];
+const CALENDAR_DAY_MS = 86_400_000;
+
+export type AlignedRelativeStrengthWindow =
+  | {
+      ok: true;
+      months: 3 | 6 | 12;
+      cutoffDate: string;
+      startDate: string;
+      endDate: string;
+      symbolStartClose: number;
+      symbolEndClose: number;
+      benchmarkStartClose: number;
+      benchmarkEndClose: number;
+    }
+  | {
+      ok: false;
+      months: 3 | 6 | 12 | null;
+      cutoffDate: string | null;
+      endDate: string | null;
+      reason: string;
+    };
+
+interface CloseMapResult {
+  closes: Map<string, number>;
+  conflictingDates: string[];
+  invalidCount: number;
+}
+
+function buildCloseByDate(
+  rows: readonly Pick<OhlcvRow, "date" | "close">[],
+): CloseMapResult {
+  const observations = new Map<string, Set<number>>();
+  let invalidCount = 0;
+  for (const row of rows) {
+    const day = typeof row?.date === "string" ? isoDay(row.date) : null;
+    const close = row?.close;
+    if (
+      day === null ||
+      typeof close !== "number" ||
+      !Number.isFinite(close) ||
+      close <= 0
+    ) {
+      invalidCount += 1;
+      continue;
+    }
+    const values = observations.get(day) ?? new Set<number>();
+    values.add(close);
+    observations.set(day, values);
   }
-  return found;
+
+  const closes = new Map<string, number>();
+  const conflictingDates: string[] = [];
+  for (const day of [...observations.keys()].sort()) {
+    const values = observations.get(day)!;
+    if (values.size === 1) closes.set(day, values.values().next().value as number);
+    else conflictingDates.push(day);
+  }
+  return { closes, conflictingDates, invalidCount };
+}
+
+function describeConflictingDates(dates: readonly string[]): string {
+  const displayLimit = 8;
+  const displayed = dates.slice(0, displayLimit).join(", ");
+  const remaining = dates.length - displayLimit;
+  return `${dates.length} date(s): ${displayed}${remaining > 0 ? ` (+${remaining} more)` : ""}`;
+}
+
+function elapsedDays(later: string, earlier: string): number {
+  return (epochUtc(later) - epochUtc(earlier)) / CALENDAR_DAY_MS;
+}
+
+function latestDate(closes: ReadonlyMap<string, number>): string | null {
+  const dates = [...closes.keys()].sort();
+  return dates.length > 0 ? dates[dates.length - 1] : null;
 }
 
 /**
- * Total-return differential vs a benchmark over 3/6/12 months, close-to-close.
- * Dividends are unavailable in the EOD feed, so this approximates total return
- * (note emitted). Window start = last row at or before (lastDate − N months).
+ * Select one exact shared start observation for a pre-selected shared end.
+ * The discriminated result makes alignment failure explicit to every caller.
  */
+export function alignRelativeStrengthWindow(
+  symbolCloseByDate: ReadonlyMap<string, number>,
+  benchmarkCloseByDate: ReadonlyMap<string, number>,
+  endDate: string,
+  months: 3 | 6 | 12,
+): AlignedRelativeStrengthWindow {
+  if (months !== 3 && months !== 6 && months !== 12) {
+    return {
+      ok: false,
+      months: null,
+      cutoffDate: null,
+      endDate: isoDay(endDate),
+      reason: "relative-strength window must be 3, 6, or 12 months",
+    };
+  }
+  const strictEnd = isoDay(endDate);
+  if (!strictEnd) {
+    return { ok: false, months, cutoffDate: null, endDate: null, reason: "invalid aligned end date" };
+  }
+  const symbolEndClose = symbolCloseByDate.get(strictEnd);
+  const benchmarkEndClose = benchmarkCloseByDate.get(strictEnd);
+  if (
+    typeof symbolEndClose !== "number" ||
+    !Number.isFinite(symbolEndClose) ||
+    symbolEndClose <= 0 ||
+    typeof benchmarkEndClose !== "number" ||
+    !Number.isFinite(benchmarkEndClose) ||
+    benchmarkEndClose <= 0
+  ) {
+    return {
+      ok: false,
+      months,
+      cutoffDate: null,
+      endDate: strictEnd,
+      reason: `aligned end ${strictEnd} lacks finite positive closes for both series`,
+    };
+  }
+
+  const cutoffDate = shiftMonths(strictEnd, -months);
+  if (cutoffDate >= strictEnd) {
+    return {
+      ok: false,
+      months,
+      cutoffDate: null,
+      endDate: strictEnd,
+      reason: `cannot derive the ${months}-month cutoff before Gregorian year 1`,
+    };
+  }
+  const candidates = [...symbolCloseByDate.keys()]
+    .filter(
+      (day) =>
+        isoDay(day) !== null &&
+        day < strictEnd &&
+        day <= cutoffDate &&
+        benchmarkCloseByDate.has(day),
+    )
+    .sort();
+  const startDate = candidates.length > 0 ? candidates[candidates.length - 1] : null;
+  if (!startDate) {
+    return {
+      ok: false,
+      months,
+      cutoffDate,
+      endDate: strictEnd,
+      reason: `no exact common start on or before ${cutoffDate} for the ${months}-month window`,
+    };
+  }
+  const lagDays = elapsedDays(cutoffDate, startDate);
+  if (!Number.isFinite(lagDays) || lagDays > RS_START_TOLERANCE_DAYS) {
+    return {
+      ok: false,
+      months,
+      cutoffDate,
+      endDate: strictEnd,
+      reason: `latest exact common start ${startDate} is ${lagDays} days before cutoff ${cutoffDate}, exceeding the ${RS_START_TOLERANCE_DAYS}-day start tolerance`,
+    };
+  }
+
+  const symbolStartClose = symbolCloseByDate.get(startDate);
+  const benchmarkStartClose = benchmarkCloseByDate.get(startDate);
+  if (
+    typeof symbolStartClose !== "number" ||
+    !Number.isFinite(symbolStartClose) ||
+    symbolStartClose <= 0 ||
+    typeof benchmarkStartClose !== "number" ||
+    !Number.isFinite(benchmarkStartClose) ||
+    benchmarkStartClose <= 0
+  ) {
+    return {
+      ok: false,
+      months,
+      cutoffDate,
+      endDate: strictEnd,
+      reason: `aligned start ${startDate} lacks finite positive closes for both series`,
+    };
+  }
+
+  return {
+    ok: true,
+    months,
+    cutoffDate,
+    startDate,
+    endDate: strictEnd,
+    symbolStartClose,
+    symbolEndClose,
+    benchmarkStartClose,
+    benchmarkEndClose,
+  };
+}
+
+function finitePriceReturnPct(startClose: number, endClose: number): number | null {
+  const ratio = endClose / startClose;
+  if (!Number.isFinite(ratio)) return null;
+  const result = (ratio - 1) * 100;
+  return Number.isFinite(result) ? result : null;
+}
+
+/** Price-relative strength vs a benchmark over exact aligned 3/6/12-month windows. */
 export function relativeStrength(
   rows: readonly OhlcvRow[],
   benchmarkRows: readonly BenchmarkRow[],
   benchmarkSymbol: string,
   fieldPrefix = `technicals.relativeStrength.${benchmarkSymbol}`,
 ): RelativeStrengthSet {
-  const notes: string[] = [];
+  const notes: string[] = [
+    "Relative strength uses split-adjusted close-to-close price return; dividends excluded.",
+  ];
   const gaps: ManifestEntry[] = [];
   const points: RelativeStrengthPoint[] = RS_WINDOWS.map((months) => ({
     months,
+    startDate: null,
+    endDate: null,
     symbolReturnPct: null,
     benchmarkReturnPct: null,
     differentialPctPoints: null,
   }));
-  const asOf = rows.length > 0 ? rows[rows.length - 1].date : null;
-  if (rows.length === 0) {
+
+  const symbol = buildCloseByDate(rows);
+  const benchmark = buildCloseByDate(benchmarkRows);
+  if (symbol.invalidCount > 0) {
+    notes.push(
+      `Symbol relative-strength history excluded ${symbol.invalidCount} observation(s) without a strict Gregorian day and finite positive close.`,
+    );
+  }
+  if (benchmark.invalidCount > 0) {
+    notes.push(
+      `${benchmarkSymbol} relative-strength history excluded ${benchmark.invalidCount} observation(s) without a strict Gregorian day and finite positive close.`,
+    );
+  }
+  if (symbol.conflictingDates.length > 0) {
     gaps.push({
-      field: fieldPrefix,
-      reason: "no symbol price history supplied",
+      field: `${fieldPrefix}.symbol.conflictingDates`,
+      reason: `conflicting symbol closes for ${describeConflictingDates(symbol.conflictingDates)} were excluded from relative-strength alignment`,
       severity: "warn",
     });
-    return { benchmarkSymbol, points, notes, gaps, asOf };
   }
-  if (benchmarkRows.length === 0) {
+  if (benchmark.conflictingDates.length > 0) {
     gaps.push({
-      field: fieldPrefix,
-      reason: `no ${benchmarkSymbol} benchmark history supplied`,
+      field: `${fieldPrefix}.benchmark.conflictingDates`,
+      reason: `conflicting ${benchmarkSymbol} closes for ${describeConflictingDates(benchmark.conflictingDates)} were excluded from relative-strength alignment`,
       severity: "warn",
     });
   }
-  notes.push(
-    "Relative strength uses split-adjusted close-to-close price returns; dividends unavailable in the EOD feed, so figures approximate total return.",
-  );
-  const symLast = rows[rows.length - 1];
-  const benchLast = benchmarkRows.length > 0 ? benchmarkRows[benchmarkRows.length - 1] : null;
-  if (benchLast) {
-    const driftDays = Math.abs(epochUtc(benchLast.date) - epochUtc(symLast.date)) / 86_400_000;
-    if (Number.isFinite(driftDays) && driftDays > 7) {
-      notes.push(
-        `${benchmarkSymbol} history ends ${benchLast.date} vs symbol ${symLast.date} (>7 days apart) — differentials computed on mismatched end dates.`,
-      );
-    }
-  }
-  for (const point of points) {
-    const cutoff = shiftMonths(symLast.date, -point.months);
-    const symStart = rowAtOrBefore(rows, cutoff);
-    if (symStart && symStart.close > 0) {
-      point.symbolReturnPct = (symLast.close / symStart.close - 1) * 100;
+
+  const symbolLatest = latestDate(symbol.closes);
+  const benchmarkLatest = latestDate(benchmark.closes);
+  let endFailure: string | null = null;
+  let commonEnd: string | null = null;
+  if (!symbolLatest) {
+    endFailure = "no valid symbol closes supplied for relative-strength alignment";
+  } else if (!benchmarkLatest) {
+    endFailure = `no valid ${benchmarkSymbol} closes supplied for relative-strength alignment`;
+  } else {
+    const commonDates = [...symbol.closes.keys()]
+      .filter((day) => benchmark.closes.has(day))
+      .sort();
+    commonEnd = commonDates.length > 0 ? commonDates[commonDates.length - 1] : null;
+    if (!commonEnd) {
+      endFailure = `no valid exact common end between symbol and ${benchmarkSymbol} close histories`;
     } else {
-      gaps.push({
-        field: `${fieldPrefix}.${point.months}mo`,
-        reason: `insufficient symbol history for the ${point.months}-month window (need data at/before ${cutoff})`,
-        severity: "info",
-      });
-    }
-    if (benchLast) {
-      const benchStart = rowAtOrBefore(benchmarkRows, cutoff);
-      if (benchStart && benchStart.close > 0) {
-        point.benchmarkReturnPct = (benchLast.close / benchStart.close - 1) * 100;
-      } else {
-        gaps.push({
-          field: `${fieldPrefix}.${point.months}mo`,
-          reason: `insufficient ${benchmarkSymbol} history for the ${point.months}-month window`,
-          severity: "info",
-        });
+      const symbolLag = elapsedDays(symbolLatest, commonEnd);
+      const benchmarkLag = elapsedDays(benchmarkLatest, commonEnd);
+      const staleParts: string[] = [];
+      if (!Number.isFinite(symbolLag) || symbolLag > RS_END_TOLERANCE_DAYS) {
+        staleParts.push(`${symbolLag} days behind the symbol endpoint ${symbolLatest}`);
+      }
+      if (!Number.isFinite(benchmarkLag) || benchmarkLag > RS_END_TOLERANCE_DAYS) {
+        staleParts.push(`${benchmarkLag} days behind the ${benchmarkSymbol} endpoint ${benchmarkLatest}`);
+      }
+      if (staleParts.length > 0) {
+        endFailure = `latest exact common end ${commonEnd} is ${staleParts.join(" and ")}, exceeding the ${RS_END_TOLERANCE_DAYS}-day end tolerance`;
+        commonEnd = null;
       }
     }
-    if (point.symbolReturnPct !== null && point.benchmarkReturnPct !== null) {
-      point.differentialPctPoints = point.symbolReturnPct - point.benchmarkReturnPct;
-    }
   }
-  return { benchmarkSymbol, points, notes, gaps, asOf };
+
+  if (endFailure || !commonEnd) {
+    gaps.push({
+      field: fieldPrefix,
+      reason: endFailure ?? "no valid exact common end for relative-strength alignment",
+      severity: "warn",
+    });
+    return { benchmarkSymbol, points, notes, gaps, asOf: null };
+  }
+
+  for (const point of points) {
+    point.endDate = commonEnd;
+    const aligned = alignRelativeStrengthWindow(
+      symbol.closes,
+      benchmark.closes,
+      commonEnd,
+      point.months,
+    );
+    if (!aligned.ok) {
+      gaps.push({
+        field: `${fieldPrefix}.${point.months}mo`,
+        reason: aligned.reason,
+        severity: "info",
+      });
+      continue;
+    }
+
+    point.startDate = aligned.startDate;
+    const symbolReturnPct = finitePriceReturnPct(
+      aligned.symbolStartClose,
+      aligned.symbolEndClose,
+    );
+    const benchmarkReturnPct = finitePriceReturnPct(
+      aligned.benchmarkStartClose,
+      aligned.benchmarkEndClose,
+    );
+    const differentialPctPoints =
+      symbolReturnPct !== null && benchmarkReturnPct !== null
+        ? symbolReturnPct - benchmarkReturnPct
+        : Number.NaN;
+    if (
+      symbolReturnPct === null ||
+      benchmarkReturnPct === null ||
+      !Number.isFinite(differentialPctPoints)
+    ) {
+      gaps.push({
+        field: `${fieldPrefix}.${point.months}mo`,
+        reason: `non-finite price return for aligned ${point.months}-month window ${aligned.startDate} to ${aligned.endDate}`,
+        severity: "info",
+      });
+      continue;
+    }
+
+    point.symbolReturnPct = symbolReturnPct;
+    point.benchmarkReturnPct = benchmarkReturnPct;
+    point.differentialPctPoints = differentialPctPoints;
+    notes.push(
+      `${point.months}-month price-relative-strength window aligned on ${aligned.startDate} to ${aligned.endDate}.`,
+    );
+  }
+  return { benchmarkSymbol, points, notes, gaps, asOf: commonEnd };
 }
 
 // ---------------------------------------------------------------------------
@@ -1055,12 +1339,19 @@ export function computeTechnicals(
   }
 
   let rsSummary = "unavailable";
+  const rsSummaryParts: string[] = [];
   if (rsBest && rsBest.differentialPctPoints !== null) {
-    rsSummary = `${signed1(rsBest.differentialPctPoints)} pct pts vs SPY (${rsBest.months}mo)`;
-    if (rsSector && rsSectorBest && rsSectorBest.differentialPctPoints !== null) {
-      rsSummary += `; ${signed1(rsSectorBest.differentialPctPoints)} vs ${rsSector.benchmarkSymbol} (${rsSectorBest.months}mo)`;
-    }
-    rsSummary += " — close-to-close, dividends excluded";
+    rsSummaryParts.push(
+      `${signed1(rsBest.differentialPctPoints)} pct pts vs SPY (${rsBest.months}mo)`,
+    );
+  }
+  if (rsSector && rsSectorBest && rsSectorBest.differentialPctPoints !== null) {
+    rsSummaryParts.push(
+      `${signed1(rsSectorBest.differentialPctPoints)} pct pts vs ${rsSector.benchmarkSymbol} (${rsSectorBest.months}mo)`,
+    );
+  }
+  if (rsSummaryParts.length > 0) {
+    rsSummary = `${rsSummaryParts.join("; ")} — close-to-close, dividends excluded`;
   }
 
   return {

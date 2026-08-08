@@ -131,7 +131,17 @@ function technicals(): TechnicalsResult {
     macd: {} as never,
     range52w: { high52w: 160, low52w: 100, highDate: null, lowDate: null, pctFromHigh: -6, pctFromLow: 50, distanceFromHigh: null, distanceFromLow: null, positionPct: 83, asOf: null },
     relativeStrength: {
-      benchmark: { benchmarkSymbol: "SPY", points: [{ months: 3, symbolReturnPct: 10, benchmarkReturnPct: 5, differentialPctPoints: 5 }, { months: 6, symbolReturnPct: 20, benchmarkReturnPct: 8, differentialPctPoints: 12 }, { months: 12, symbolReturnPct: 30, benchmarkReturnPct: 15, differentialPctPoints: 15 }], notes: [], gaps: [], asOf: null },
+      benchmark: {
+        benchmarkSymbol: "SPY",
+        points: [
+          { months: 3, startDate: "2025-06-30", endDate: "2025-09-30", symbolReturnPct: 10, benchmarkReturnPct: 5, differentialPctPoints: 5 },
+          { months: 6, startDate: "2025-03-31", endDate: "2025-09-30", symbolReturnPct: 20, benchmarkReturnPct: 8, differentialPctPoints: 12 },
+          { months: 12, startDate: "2024-09-30", endDate: "2025-09-30", symbolReturnPct: 30, benchmarkReturnPct: 15, differentialPctPoints: 15 },
+        ],
+        notes: [],
+        gaps: [],
+        asOf: "2025-09-30",
+      },
       sector: null,
     },
     volumeTrend: {} as never,
@@ -369,6 +379,39 @@ describe("grading — computeScores", () => {
     const flagged = computeScores(makeInputs({ forensics: withBeneish(-0.5) }));
     expect(clean.aspects.quality.score).not.toBeNull();
     expect(clean.aspects.quality.score!).toBeGreaterThan(flagged.aspects.quality.score!);
+  });
+});
+
+describe("grading — relative strength driver isolation", () => {
+  it("does not substitute a valid 12-month flag for a missing 6-month grade signal", () => {
+    const t = technicals();
+    t.relativeStrength.benchmark.points = [
+      {
+        months: 6,
+        startDate: null,
+        endDate: "2026-06-30",
+        symbolReturnPct: null,
+        benchmarkReturnPct: null,
+        differentialPctPoints: null,
+      },
+      {
+        months: 12,
+        startDate: "2025-06-30",
+        endDate: "2026-06-30",
+        symbolReturnPct: 50,
+        benchmarkReturnPct: 10,
+        differentialPctPoints: 40,
+      },
+    ];
+    t.read = {
+      ...t.read,
+      flags: ["Outperformed SPY by 40.0 pct pts over 12mo (close-to-close)."],
+    };
+
+    const technical = computeScores(makeInputs({ technicals: t })).aspects.technicals;
+    expect(technical.drivers.some((driver) => driver.source.endsWith(".relStrength6m"))).toBe(false);
+    expect(technical.dataCompleteness).toBeCloseTo(0.7, 12);
+    expect(technical.drivers).toHaveLength(3);
   });
 });
 

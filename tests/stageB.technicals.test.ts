@@ -9,6 +9,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  RS_END_TOLERANCE_DAYS,
+  RS_START_TOLERANCE_DAYS,
+  alignRelativeStrengthWindow,
   atr14,
   computeTechnicals,
   emaSeries,
@@ -46,20 +49,20 @@ function mkRows(closes: number[], start = "2024-01-02", volume = 1_000): OhlcvRo
   }));
 }
 
-/** Rows ENDING at `end`, one per calendar day, close = f(dateIso). */
-function mkRowsEnding(end: string, days: number, f: (date: string) => number): OhlcvRow[] {
-  const tEnd = Date.parse(`${end}T00:00:00Z`);
-  const out: OhlcvRow[] = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const date = new Date(tEnd - i * DAY_MS).toISOString().slice(0, 10);
-    const c = f(date);
-    out.push({ date, open: c, high: c, low: c, close: c, volume: 1_000 });
-  }
-  return out;
-}
-
 function range(n: number, f: (i: number) => number): number[] {
   return Array.from({ length: n }, (_, i) => f(i));
+}
+
+function closeRow(date: string, close: number): OhlcvRow {
+  return { date, open: close, high: close, low: close, close, volume: 1_000 };
+}
+
+function closeRows(entries: ReadonlyArray<readonly [string, number]>): OhlcvRow[] {
+  return entries.map(([date, close]) => closeRow(date, close));
+}
+
+function padDay(day: number): string {
+  return String(day).padStart(2, "0");
 }
 
 // ---------------------------------------------------------------------------
@@ -336,32 +339,338 @@ describe("range52w", () => {
 // Relative strength
 // ---------------------------------------------------------------------------
 
-describe("relativeStrength", () => {
-  it("computes 12mo total-return differential in pct points (step series)", () => {
-    const end = "2026-06-30";
-    const cutoff12 = shiftMonths(end, -12); // 2025-06-30
-    expect(cutoff12).toBe("2025-06-30");
-    const sym = mkRowsEnding(end, 400, (d) => (d <= cutoff12 ? 100 : 200));
-    const spy = mkRowsEnding(end, 400, (d) => (d <= cutoff12 ? 100 : 110));
-    const rs = relativeStrength(sym, spy, "SPY");
-    const p12 = rs.points.find((p) => p.months === 12);
-    const p6 = rs.points.find((p) => p.months === 6);
-    expect(p12?.symbolReturnPct).toBeCloseTo(100, 10);
-    expect(p12?.benchmarkReturnPct).toBeCloseTo(10, 10);
-    expect(p12?.differentialPctPoints).toBeCloseTo(90, 10);
-    // both series are flat inside the 6mo window → differential 0
-    expect(p6?.differentialPctPoints).toBeCloseTo(0, 10);
-    expect(rs.notes.join(" ")).toMatch(/approximate total return/i);
+describe("relative strength alignment", () => {
+  const end = "2026-06-30";
+  const symbolEntries = [
+    ["2025-06-30", 80],
+    ["2025-12-30", 100],
+    ["2026-03-30", 110],
+    [end, 120],
+  ] as const;
+  const benchmarkEntries = [
+    ["2025-06-30", 100],
+    ["2025-12-30", 100],
+    ["2026-03-30", 105],
+    [end, 110],
+  ] as const;
+  const noCommonEntries = [
+    ["2025-07-01", 100],
+    ["2025-12-31", 100],
+    ["2026-03-31", 105],
+    ["2026-07-01", 110],
+  ] as const;
+
+  it("exports explicit 7-day boundaries and a discriminated exact-window helper", () => {
+    expect(RS_START_TOLERANCE_DAYS).toBe(7);
+    expect(RS_END_TOLERANCE_DAYS).toBe(7);
+    const aligned = alignRelativeStrengthWindow(
+      new Map(symbolEntries),
+      new Map(benchmarkEntries),
+      end,
+      3,
+    );
+    expect(aligned.ok).toBe(true);
+    if (!aligned.ok) throw new Error(aligned.reason);
+    expect(aligned.startDate).toBe("2026-03-30");
+    expect(aligned.endDate).toBe(end);
+    expect(aligned.symbolStartClose).toBe(110);
+    expect(aligned.benchmarkEndClose).toBe(110);
+    const invalidEndCall = () =>
+      alignRelativeStrengthWindow(
+        new Map(symbolEntries),
+        new Map(benchmarkEntries),
+        Symbol("invalid") as unknown as string,
+        3,
+      );
+    expect(invalidEndCall).not.toThrow();
+    const invalidEnd = invalidEndCall();
+    expect(invalidEnd.ok).toBe(false);
+    if (invalidEnd.ok) throw new Error("invalid end unexpectedly aligned");
+    expect(invalidEnd.reason).toMatch(/invalid aligned end date/i);
+    for (const invalidMonths of [0, Number.NaN, Symbol("invalid")]) {
+      const call = () =>
+        alignRelativeStrengthWindow(
+          new Map(symbolEntries),
+          new Map(benchmarkEntries),
+          end,
+          invalidMonths as unknown as 3,
+        );
+      expect(call).not.toThrow();
+      const rejected = call();
+      expect(rejected.ok).toBe(false);
+      if (rejected.ok) throw new Error("invalid window unexpectedly aligned");
+      expect(rejected.reason).toMatch(/must be 3, 6, or 12 months/i);
+    }
   });
 
-  it("degrades with gaps when history is too short or benchmark missing", () => {
-    const sym = mkRows(range(100, (i) => 100 + i)); // ~3.3 months of calendar days
-    const rs = relativeStrength(sym, [], "SPY");
+  it("uses the same exact start/end observations for hand-calculated 3/6/12-month price-relative strength", () => {
+    const rs = relativeStrength(closeRows(symbolEntries), closeRows(benchmarkEntries), "SPY");
+    const p3 = rs.points.find((p) => p.months === 3);
+    const p6 = rs.points.find((p) => p.months === 6);
     const p12 = rs.points.find((p) => p.months === 12);
-    expect(p12?.symbolReturnPct).toBeNull();
-    expect(p12?.differentialPctPoints).toBeNull();
-    expect(rs.gaps.some((g) => g.field === "technicals.relativeStrength.SPY")).toBe(true);
-    expect(rs.gaps.some((g) => /12-month window/.test(g.reason))).toBe(true);
+
+    expect(rs.asOf).toBe(end);
+    expect(p3).toMatchObject({ startDate: "2026-03-30", endDate: end });
+    expect(p3?.differentialPctPoints).toBeCloseTo(4.329004329, 9);
+    expect(p6).toMatchObject({ startDate: "2025-12-30", endDate: end });
+    expect(p6?.differentialPctPoints).toBeCloseTo(10, 12);
+    expect(p12).toMatchObject({ startDate: "2025-06-30", endDate: end });
+    expect(p12?.differentialPctPoints).toBeCloseTo(40, 12);
+    expect(rs.notes.join(" ")).toMatch(/split-adjusted close-to-close price return; dividends excluded/i);
+    expect(rs.notes.join(" ")).not.toMatch(/total return/i);
+  });
+
+  it("reanchors a fresh endpoint mismatch to the latest exact common end", () => {
+    const sym = closeRows([...symbolEntries, ["2026-07-03", 999]]);
+    const spy = closeRows([...benchmarkEntries, ["2026-07-02", 999]]);
+    const rs = relativeStrength(sym, spy, "SPY");
+    expect(rs.asOf).toBe(end);
+    const p3 = rs.points.find((p) => p.months === 3);
+    expect(p3).toMatchObject({ startDate: "2026-03-30", endDate: end });
+    expect(p3?.symbolReturnPct).toBeCloseTo((120 / 110 - 1) * 100, 12);
+    expect(p3?.benchmarkReturnPct).toBeCloseTo((110 / 105 - 1) * 100, 12);
+  });
+
+  it("suppresses every window with one bounded set gap when no fresh exact common end exists", () => {
+    const noCommon = relativeStrength(
+      closeRows(symbolEntries),
+      closeRows(noCommonEntries),
+      "SPY",
+    );
+    expect(noCommon.asOf).toBeNull();
+    expect(noCommon.points.every((p) => p.startDate === null && p.endDate === null && p.differentialPctPoints === null)).toBe(true);
+    expect(noCommon.gaps.filter((gap) => gap.field === "technicals.relativeStrength.SPY")).toHaveLength(1);
+    expect(noCommon.gaps[0].reason).toMatch(/no valid exact common end/i);
+
+    const endBoundary = relativeStrength(
+      closeRows([...symbolEntries, ["2026-07-07", 121]]),
+      closeRows(benchmarkEntries),
+      "SPY",
+    );
+    expect(endBoundary.asOf).toBe(end);
+    expect(endBoundary.points.find((point) => point.months === 12)?.differentialPctPoints).toBeCloseTo(40, 12);
+    const benchmarkEndBoundary = relativeStrength(
+      closeRows(symbolEntries),
+      closeRows([...benchmarkEntries, ["2026-07-07", 111]]),
+      "SPY",
+    );
+    expect(benchmarkEndBoundary.asOf).toBe(end);
+
+    const stale = relativeStrength(
+      closeRows([...symbolEntries, ["2026-07-08", 121]]),
+      closeRows(benchmarkEntries),
+      "SPY",
+    );
+    expect(stale.asOf).toBeNull();
+    expect(stale.points.every((p) => p.symbolReturnPct === null && p.benchmarkReturnPct === null && p.differentialPctPoints === null)).toBe(true);
+    expect(stale.gaps.filter((gap) => gap.field === "technicals.relativeStrength.SPY")).toHaveLength(1);
+    expect(stale.gaps[0].reason).toMatch(/8 days.*7-day end tolerance/i);
+    const staleBenchmark = relativeStrength(
+      closeRows(symbolEntries),
+      closeRows([...benchmarkEntries, ["2026-07-08", 111]]),
+      "SPY",
+    );
+    expect(staleBenchmark.asOf).toBeNull();
+    expect(staleBenchmark.gaps[0].reason).toMatch(/8 days.*SPY endpoint.*7-day end tolerance/i);
+  });
+
+  it("fails closed when a relative strength cutoff would cross before Gregorian year 1", () => {
+    const earlyEnd = "0001-06-30";
+    const rs = relativeStrength(
+      closeRows([["0001-06-29", 100], [earlyEnd, 120]]),
+      closeRows([["0001-06-29", 100], [earlyEnd, 110]]),
+      "SPY",
+    );
+    expect(rs.points.find((point) => point.months === 6)).toMatchObject({
+      startDate: null,
+      endDate: earlyEnd,
+      symbolReturnPct: null,
+      benchmarkReturnPct: null,
+      differentialPctPoints: null,
+    });
+    expect(rs.gaps.find((gap) => gap.field.endsWith(".6mo"))?.reason).toMatch(/cannot derive.*Gregorian year 1/i);
+  });
+
+  it("accepts an exact-common start 7 days before cutoff and rejects 8 days", () => {
+    const pass = relativeStrength(
+      closeRows([["2026-03-23", 100], [end, 120]]),
+      closeRows([["2026-03-23", 100], [end, 110]]),
+      "SPY",
+    );
+    expect(pass.points.find((p) => p.months === 3)).toMatchObject({
+      startDate: "2026-03-23",
+      endDate: end,
+    });
+    expect(pass.points.find((p) => p.months === 3)?.differentialPctPoints).toBeCloseTo(10, 12);
+
+    const reject = relativeStrength(
+      closeRows([["2026-03-22", 100], [end, 120]]),
+      closeRows([["2026-03-22", 100], [end, 110]]),
+      "SPY",
+    );
+    expect(reject.points.find((p) => p.months === 3)).toMatchObject({
+      startDate: null,
+      endDate: end,
+      symbolReturnPct: null,
+      benchmarkReturnPct: null,
+      differentialPctPoints: null,
+    });
+    const windowGaps = reject.gaps.filter((gap) => gap.field === "technicals.relativeStrength.SPY.3mo");
+    expect(windowGaps).toHaveLength(1);
+    expect(windowGaps[0].reason).toMatch(/8 days.*7-day start tolerance/i);
+  });
+
+  it("never substitutes separate near-cutoff starts for one exact common start", () => {
+    const rs = relativeStrength(
+      closeRows([["2026-03-30", 100], [end, 120]]),
+      closeRows([["2026-03-29", 100], [end, 110]]),
+      "SPY",
+    );
+    expect(rs.points.find((point) => point.months === 3)).toMatchObject({
+      startDate: null,
+      endDate: end,
+      symbolReturnPct: null,
+      benchmarkReturnPct: null,
+      differentialPctPoints: null,
+    });
+    expect(rs.gaps.filter((gap) => gap.field === "technicals.relativeStrength.SPY.3mo")).toHaveLength(1);
+  });
+
+  it.each([
+    ["weekend cutoff", "2026-06-29", "2026-03-27"],
+    ["leap-day month-end clamp", "2024-05-31", "2024-02-29"],
+  ])("handles %s with a shared prior trading day", (_label, windowEnd, start) => {
+    const rs = relativeStrength(
+      closeRows([[start, 100], [windowEnd, 120]]),
+      closeRows([[start, 100], [windowEnd, 110]]),
+      "SPY",
+    );
+    expect(rs.points.find((p) => p.months === 3)).toMatchObject({
+      startDate: start,
+      endDate: windowEnd,
+    });
+    expect(rs.points.find((p) => p.months === 3)?.differentialPctPoints).toBeCloseTo(10, 12);
+  });
+
+  it("is order-invariant, collapses identical duplicates, and excludes conflicting dates", () => {
+    const baseline = relativeStrength(closeRows(symbolEntries), closeRows(benchmarkEntries), "SPY");
+    const shuffledWithIdenticalDuplicates = relativeStrength(
+      closeRows([...symbolEntries, symbolEntries[2]]).reverse(),
+      closeRows([...benchmarkEntries, benchmarkEntries[2]]).reverse(),
+      "SPY",
+    );
+    expect(shuffledWithIdenticalDuplicates.points).toEqual(baseline.points);
+
+    const conflict = relativeStrength(
+      closeRows([...symbolEntries, ["2026-03-30", 111]]),
+      closeRows(benchmarkEntries),
+      "SPY",
+    );
+    expect(conflict.points.find((p) => p.months === 3)?.differentialPctPoints).toBeNull();
+    expect(conflict.gaps.some((gap) => /conflicting symbol closes.*2026-03-30.*excluded/i.test(gap.reason))).toBe(true);
+    expect(conflict.gaps.filter((gap) => gap.field === "technicals.relativeStrength.SPY.3mo")).toHaveLength(1);
+    const reversedConflict = relativeStrength(
+      closeRows([...symbolEntries, ["2026-03-30", 111]]).reverse(),
+      closeRows(benchmarkEntries).reverse(),
+      "SPY",
+    );
+    expect(reversedConflict.points).toEqual(conflict.points);
+    expect(reversedConflict.gaps).toEqual(conflict.gaps);
+
+    const conflictingDates = Array.from(
+      { length: 12 },
+      (_, index) => `2025-01-${padDay(index + 1)}`,
+    );
+    const manyConflicts = conflictingDates.flatMap((date) => [
+      closeRow(date, 100),
+      closeRow(date, 101),
+    ]);
+    const bounded = relativeStrength(
+      [...closeRows(symbolEntries), ...manyConflicts],
+      closeRows(benchmarkEntries),
+      "SPY",
+    );
+    const conflictReason = bounded.gaps.find((gap) => gap.field.endsWith("symbol.conflictingDates"))?.reason;
+    expect(conflictReason).toMatch(/12 date\(s\).*2025-01-01.*2025-01-08.*\+4 more/i);
+    expect(conflictReason).not.toContain("2025-01-09");
+  });
+
+  it("rejects timestamps, locale/impossible dates, and non-positive/non-finite closes", () => {
+    const invalidDates = ["0000-01-01", "2026-02-30", "2026-06-30T00:00:00Z", "06/30/2026"];
+    const invalidCloses = [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+    const sym = closeRows(symbolEntries);
+    const spy = closeRows(benchmarkEntries);
+    for (const date of invalidDates) {
+      sym.push(closeRow(date, 999));
+      spy.push(closeRow(date, 999));
+    }
+    sym.push({ ...closeRow("2026-07-20", 999), date: Symbol("invalid") } as unknown as OhlcvRow);
+    spy.push({ ...closeRow("2026-07-20", 999), date: { day: end } } as unknown as OhlcvRow);
+    invalidCloses.forEach((close, index) => {
+      const date = `2026-07-${padDay(index + 1)}`;
+      sym.push(closeRow(date, close));
+      spy.push(closeRow(date, close));
+    });
+
+    const rs = relativeStrength(sym, spy, "SPY");
+    expect(rs.asOf).toBe(end);
+    expect(rs.points.find((p) => p.months === 12)?.differentialPctPoints).toBeCloseTo(40, 12);
+    expect(
+      rs.points
+        .flatMap((p) => [p.symbolReturnPct, p.benchmarkReturnPct, p.differentialPctPoints])
+        .every((value) => value === null || Number.isFinite(value)),
+    ).toBe(true);
+  });
+
+  it("fails a window closed when finite positive prices overflow return arithmetic", () => {
+    const rs = relativeStrength(
+      closeRows([["2026-03-30", Number.MIN_VALUE], [end, Number.MAX_VALUE]]),
+      closeRows([["2026-03-30", 100], [end, 110]]),
+      "SPY",
+    );
+    expect(rs.points.find((p) => p.months === 3)).toMatchObject({
+      startDate: "2026-03-30",
+      endDate: end,
+      symbolReturnPct: null,
+      benchmarkReturnPct: null,
+      differentialPctPoints: null,
+    });
+    const gaps = rs.gaps.filter((gap) => gap.field === "technicals.relativeStrength.SPY.3mo");
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].reason).toMatch(/non-finite price return/i);
+  });
+
+  it("keeps sparse two-point histories null when neither point is near a window cutoff", () => {
+    const rs = relativeStrength(
+      closeRows([["2025-07-15", 100], [end, 120]]),
+      closeRows([["2025-07-15", 100], [end, 110]]),
+      "SPY",
+    );
+    expect(rs.points.every((p) => p.symbolReturnPct === null && p.benchmarkReturnPct === null && p.differentialPctPoints === null)).toBe(true);
+    expect(rs.gaps.filter((gap) => /\.(3|6|12)mo$/.test(gap.field))).toHaveLength(3);
+  });
+
+  it("degrades empty input with one set-level gap and never throws", () => {
+    expect(() => relativeStrength([], [], "SPY")).not.toThrow();
+    const rs = relativeStrength(closeRows(symbolEntries), [], "SPY");
+    expect(rs.points.every((p) => p.differentialPctPoints === null)).toBe(true);
+    expect(rs.gaps.filter((gap) => gap.field === "technicals.relativeStrength.SPY")).toHaveLength(1);
+    expect(rs.gaps[0].reason).toMatch(/no valid SPY closes|no valid exact common end/i);
+  });
+
+  it("aligns SPY and sector sets independently and never flags an all-null set", () => {
+    const symbol = closeRows(symbolEntries);
+    const noCommon = closeRows(noCommonEntries);
+    const sector = closeRows(benchmarkEntries);
+    const independent = computeTechnicals(symbol, noCommon, sector, "XLK");
+    expect(independent.relativeStrength.benchmark.points.every((p) => p.differentialPctPoints === null)).toBe(true);
+    expect(independent.relativeStrength.sector?.points.find((p) => p.months === 12)?.differentialPctPoints).toBeCloseTo(40, 12);
+    expect(independent.read.flags.some((flag) => /SPY/.test(flag) && /performed/.test(flag))).toBe(false);
+    expect(independent.read.flags.some((flag) => /XLK/.test(flag) && /performed/.test(flag))).toBe(true);
+    expect(independent.read.relativeStrength).toMatch(/XLK/);
+
+    const allNull = computeTechnicals(symbol, noCommon, noCommon, "XLK");
+    expect(allNull.read.flags.some((flag) => /(SPY|XLK)/.test(flag) && /performed/.test(flag))).toBe(false);
   });
 });
 
@@ -525,12 +834,19 @@ describe("sanitizeRows", () => {
     expect(notes.some((n) => /dropped 2 row/.test(n))).toBe(true);
   });
 
-  it("truncates datetime strings to the day", () => {
-    const { rows } = sanitizeRows(
-      [{ date: "2024-01-02 00:00:00", open: 1, high: 1, low: 1, close: 1, volume: 1 }],
+  it("accepts only strict real Gregorian days rather than truncating provider suffixes", () => {
+    const { rows, notes } = sanitizeRows(
+      [
+        { date: "2024-01-02", open: 1, high: 1, low: 1, close: 1, volume: 1 },
+        { date: "2024-01-02 00:00:00", open: 2, high: 2, low: 2, close: 2, volume: 1 },
+        { date: "2024-02-30", open: 3, high: 3, low: 3, close: 3, volume: 1 },
+        { date: Symbol("invalid"), open: 4, high: 4, low: 4, close: 4, volume: 1 } as unknown as OhlcvRow,
+        { date: { day: "2024-01-02" }, open: 5, high: 5, low: 5, close: 5, volume: 1 } as unknown as OhlcvRow,
+      ],
       "symbol",
     );
-    expect(rows[0].date).toBe("2024-01-02");
+    expect(rows.map((row) => row.date)).toEqual(["2024-01-02"]);
+    expect(notes.some((note) => /dropped 4 row/i.test(note))).toBe(true);
   });
 
   it("keeps valid price rows with missing volume and reports price drops separately", () => {
@@ -585,7 +901,8 @@ describe("computeTechnicals", () => {
     expect(res.gaps.every((g) => g.severity !== "critical")).toBe(true);
     // house rules are annotated, never silent
     expect(res.notes.some((n) => /House rules/.test(n))).toBe(true);
-    expect(res.notes.some((n) => /approximate total return/i.test(n))).toBe(true);
+    expect(res.notes.some((n) => /split-adjusted close-to-close price return; dividends excluded/i.test(n))).toBe(true);
+    expect([...res.notes, res.read.relativeStrength].join(" ")).not.toMatch(/total return/i);
   });
 
   it("<200 rows degrades gracefully: null SMA200 + IPO-overlay gap and flag", () => {

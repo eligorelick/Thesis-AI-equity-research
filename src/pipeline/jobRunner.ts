@@ -29,10 +29,10 @@
  * via settings/model resolution). Never import from a client component.
  */
 
-import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, lt, notInArray } from "drizzle-orm";
+import { createHash, randomUUID } from "node:crypto";
+import { and, desc, eq, inArray, isNull, lt, notInArray } from "drizzle-orm";
 import { getDb } from "@/db";
-import { costLog, jobs, reports } from "@/db/schema";
+import { costLog, jobPassArtifacts, jobs, reports, type JobRow } from "@/db/schema";
 import { getConfig } from "@/config/env";
 import { resolveModel } from "@/providers/anthropic";
 import {
@@ -70,6 +70,17 @@ import {
   classifyInstrumentSupport,
   type InstrumentSupport,
 } from "@/pipeline/stageB/instrumentSupport";
+import {
+  PassSettlementHookError,
+  persistPassSettlement,
+  readCurrentGenerationPassArtifacts,
+  serializePassFailure,
+  type DurablePass,
+  type CurrentGenerationPassArtifact,
+  type PassSettlement,
+  type PassSettlementHook,
+  type PassTelemetry,
+} from "@/pipeline/jobArtifacts";
 
 /* ------------------------------------------------------------------------ *
  * PipelinePasses — injected Stage C contract (loose/structural types)
@@ -116,6 +127,9 @@ export interface BullBearPassFailureDetails {
   bearError?: string;
   bullBilledAttempt?: BilledPassAttempt;
   bearBilledAttempt?: BilledPassAttempt;
+  /** False only when cache sequencing prevented this provider pass from launching. */
+  bullLaunched?: boolean;
+  bearLaunched?: boolean;
 }
 
 /**
@@ -130,6 +144,8 @@ export class BullBearPassFailure extends Error {
   readonly bearError?: string;
   readonly bullBilledAttempt?: BilledPassAttempt;
   readonly bearBilledAttempt?: BilledPassAttempt;
+  readonly bullLaunched?: boolean;
+  readonly bearLaunched?: boolean;
 
   constructor(message: string, details: BullBearPassFailureDetails) {
     super(message);
@@ -140,6 +156,8 @@ export class BullBearPassFailure extends Error {
     this.bearError = details.bearError;
     this.bullBilledAttempt = details.bullBilledAttempt;
     this.bearBilledAttempt = details.bearBilledAttempt;
+    this.bullLaunched = details.bullLaunched;
+    this.bearLaunched = details.bearLaunched;
   }
 }
 
@@ -220,6 +238,7 @@ export interface PipelinePasses<TPayload = unknown> {
   runBullThenBear(
     deps: PassDeps<TPayload>,
     hooks?: AnalystPassHooks,
+    settlements?: AnalystSettlementHooks,
   ): Promise<{ bull: PassResultLike<AnalystCase>; bear: PassResultLike<AnalystCase> }>;
 
   /**
@@ -233,6 +252,7 @@ export interface PipelinePasses<TPayload = unknown> {
   runAnalystPass?(
     deps: PassDeps<TPayload>,
     side: "bull" | "bear",
+    settlement?: PassSettlementHook<AnalystCase>,
   ): Promise<PassResultLike<AnalystCase>>;
 
   /** Judge/synthesis pass: bull + bear + payload → JudgeOutput (report minus meta/appendix). */
@@ -241,6 +261,7 @@ export interface PipelinePasses<TPayload = unknown> {
     bull: PassResultLike<AnalystCase>,
     bear: PassResultLike<AnalystCase>,
     validationFeedback?: string,
+    settlement?: PassSettlementHook<JudgeOutput>,
   ): Promise<PassResultLike<JudgeOutput>>;
 
   /** Verification pass: trace every numeric claim; returns the verified Report + rate. */
@@ -248,6 +269,7 @@ export interface PipelinePasses<TPayload = unknown> {
     deps: PassDeps<TPayload>,
     judgeOutput: JudgeOutput,
     evidence?: { fetchedUrls: string[] },
+    settlement?: PassSettlementHook<Report>,
   ): Promise<VerifyPassResult>;
 
   /**
@@ -263,6 +285,12 @@ export interface PipelinePasses<TPayload = unknown> {
 export interface AnalystPassHooks {
   onPassStart?: (side: "bull" | "bear") => void;
   onPassFinish?: (side: "bull" | "bear") => void;
+}
+
+/** Awaited, durable per-side settlement callbacks (trailing/optional compatibility). */
+export interface AnalystSettlementHooks {
+  bull?: PassSettlementHook<AnalystCase>;
+  bear?: PassSettlementHook<AnalystCase>;
 }
 
 /** Everything assembleReport() needs to wrap a JudgeOutput into a full Report. */
@@ -328,6 +356,14 @@ export const DEFAULT_MODEL_STAGE_DEADLINE_MS = 45 * 60 * 1000;
 /** Job lifecycle statuses (owned by this module; jobs.status is free TEXT). */
 export type JobStatus = "queued" | "running" | "done" | "error" | "unsupported";
 
+/** The durable row moved to another generation/owner while this worker was alive. */
+class SupersededRunError extends Error {
+  constructor(jobId: string, runGeneration: number) {
+    super(`jobRunner: job "${jobId}" generation ${runGeneration} was superseded`);
+    this.name = "SupersededRunError";
+  }
+}
+
 /* ------------------------------------------------------------------------ *
  * Step-progress bookkeeping
  * ------------------------------------------------------------------------ */
@@ -350,6 +386,7 @@ interface RunState {
   jobId: string;
   symbol: string;
   startedAt: string;
+  runGeneration: number;
   steps: StepProgress[];
   totalCostUsd: number;
 }
@@ -377,7 +414,18 @@ function persistSteps(state: RunState, status?: JobStatus, error?: string | null
     }
   }
   if (error !== undefined) set.error = error;
-  getDb().update(jobs).set(set).where(eq(jobs.id, state.jobId)).run();
+  const result = getDb()
+    .update(jobs)
+    .set(set)
+    .where(and(
+      eq(jobs.id, state.jobId),
+      eq(jobs.runGeneration, state.runGeneration),
+      eq(jobs.status, "running"),
+    ))
+    .run();
+  if (result.changes !== 1) {
+    throw new SupersededRunError(state.jobId, state.runGeneration);
+  }
 }
 
 /** Emit a step-update event for the given step's current state. */
@@ -392,7 +440,12 @@ function emitStep(state: RunState, step: PipelineStep): void {
 
 /** Publish an event through the bus (isolated so a bad subscriber can't break the run). */
 function publish(_state: RunState, event: JobEvent): void {
-  publishJobEvent(event);
+  const current = getDb()
+    .select({ runGeneration: jobs.runGeneration })
+    .from(jobs)
+    .where(eq(jobs.id, _state.jobId))
+    .get();
+  if (current?.runGeneration === _state.runGeneration) publishJobEvent(event);
 }
 
 /** Mark a step "running" (stamp startedAt), persist, and emit. */
@@ -445,13 +498,10 @@ function sumLoggedStepCost(jobId: string, step: PipelineStep): number {
   return rows.reduce((total, row) => total + row.costUsd, 0);
 }
 
-/** Stamp a running step's finishedAt (pass-finish hook) without finalizing it. */
+/** Record local timing only; durable completion is published after settlement commit. */
 function stampStepFinished(state: RunState, step: PipelineStep): void {
   const s = findStep(state, step);
   s.finishedAt = nowIso();
-  s.completedAt = s.finishedAt;
-  persistSteps(state);
-  emitStep(state, step);
 }
 
 /** startStep only if the step never started (backfill for hook-less mocks). */
@@ -473,57 +523,219 @@ function updateRunningStepDetail(
   emitStep(state, step);
 }
 
-/* ------------------------------------------------------------------------ *
- * Cost logging
- * ------------------------------------------------------------------------ */
+function numOr0(v: number | null | undefined): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
 
-/**
- * Write one cost_log row for an LLM pass and update the running total. Emits a
- * "cost-update" with the pass cost + running total. Also stamps the step's
- * costUsd (accumulating across multiple passes attributed to one step, e.g. a
- * fallback retry) via finishStep at the caller.
- */
-function logPassCost(
-  state: RunState,
-  step: PipelineStep,
-  pass: {
-    model: string;
-    costUsd: number;
-    fallbackUsed: boolean;
-    usage?: PassUsageLike;
-    webSearches?: number;
-  },
-): void {
-  const u = pass.usage ?? {};
-  getDb()
-    .insert(costLog)
-    .values({
-      jobId: state.jobId,
-      step,
-      model: pass.model,
-      inputTokens: numOr0(u.input_tokens),
-      outputTokens: numOr0(u.output_tokens),
-      cacheReadTokens: numOr0(u.cache_read_input_tokens),
-      cacheWriteTokens: numOr0(u.cache_creation_input_tokens),
-      webSearches: numOr0(pass.webSearches),
-      costUsd: pass.costUsd,
-      fallbackUsed: pass.fallbackUsed,
-      createdAt: nowIso(),
-    })
-    .run();
+function canonicalFetchedUrls(values: string[] | undefined): string[] {
+  return [
+    ...new Set(
+      (values ?? []).flatMap((value) => {
+        const canonical = canonicalizeFetchedUrl(value);
+        return canonical ? [canonical] : [];
+      }),
+    ),
+  ].sort();
+}
 
-  state.totalCostUsd += pass.costUsd;
-  publish(state, {
-    type: "cost-update",
-    jobId: state.jobId,
-    step,
-    passCostUsd: pass.costUsd,
-    totalCostUsd: state.totalCostUsd,
+function telemetryFromPassResult<T>(
+  pass: PassResultLike<T>,
+  billable = true,
+): PassTelemetry {
+  return {
+    model: pass.model,
+    inputTokens: numOr0(pass.usage?.input_tokens),
+    outputTokens: numOr0(pass.usage?.output_tokens),
+    cacheReadTokens: numOr0(pass.usage?.cache_read_input_tokens),
+    cacheWriteTokens: numOr0(pass.usage?.cache_creation_input_tokens),
+    webSearches: numOr0(pass.webSearches),
+    costUsd: pass.costUsd,
+    fallbackUsed: pass.fallbackUsed,
+    billable,
+    fetchedUrls: canonicalFetchedUrls(pass.fetchedUrls),
+  };
+}
+
+function telemetryFromAttempt(
+  attempt: BilledPassAttempt | null,
+  defaultModel: string,
+): PassTelemetry {
+  return {
+    model: attempt?.model ?? defaultModel,
+    inputTokens: numOr0(attempt?.usage?.input_tokens),
+    outputTokens: numOr0(attempt?.usage?.output_tokens),
+    cacheReadTokens: numOr0(attempt?.usage?.cache_read_input_tokens),
+    cacheWriteTokens: numOr0(attempt?.usage?.cache_creation_input_tokens),
+    webSearches: numOr0(attempt?.webSearches),
+    costUsd: attempt?.costUsd ?? 0,
+    fallbackUsed: attempt?.fallbackUsed ?? false,
+    billable: attempt !== null,
+    fetchedUrls: [],
+  };
+}
+
+function successSettlement<T>(pass: PassResultLike<T>, billable = true): PassSettlement<T> {
+  return { outcome: "success", data: pass.data, telemetry: telemetryFromPassResult(pass, billable) };
+}
+
+function failureSettlement(
+  error: unknown,
+  telemetry: PassTelemetry,
+  details: { kind?: string; retryable?: boolean } = {},
+): PassSettlement<never> {
+  return {
+    outcome: "failure",
+    failure: serializePassFailure(error, details),
+    telemetry,
+  };
+}
+
+function settlementStepDetail<T>(settlement: PassSettlement<T>): string {
+  if (settlement.outcome === "failure") return settlement.failure.message;
+  return passDetail({
+    data: settlement.data,
+    model: settlement.telemetry.model,
+    costUsd: settlement.telemetry.costUsd,
+    fallbackUsed: settlement.telemetry.fallbackUsed,
+    usage: {
+      input_tokens: settlement.telemetry.inputTokens,
+      output_tokens: settlement.telemetry.outputTokens,
+      cache_read_input_tokens: settlement.telemetry.cacheReadTokens,
+      cache_creation_input_tokens: settlement.telemetry.cacheWriteTokens,
+    },
+    webSearches: settlement.telemetry.webSearches,
+    fetchedUrls: settlement.telemetry.fetchedUrls,
   });
 }
 
-function numOr0(v: number | null | undefined): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+/** Merge a committed settlement into the latest step snapshot under a generation+revision CAS. */
+function mergeCommittedSettlement<T>(
+  state: RunState,
+  pass: DurablePass,
+  settlement: PassSettlement<T>,
+  inserted: boolean,
+): boolean {
+  for (let retry = 0; retry < 20; retry++) {
+    const row = getDb()
+      .select({
+        runGeneration: jobs.runGeneration,
+        revision: jobs.revision,
+        status: jobs.status,
+        stepsJson: jobs.stepsJson,
+      })
+      .from(jobs)
+      .where(eq(jobs.id, state.jobId))
+      .get();
+    if (
+      row === undefined ||
+      row.runGeneration !== state.runGeneration ||
+      row.status !== "running"
+    ) return false;
+
+    const latest = parseStepsJson(row.stepsJson);
+    const step = latest.find((candidate) => candidate.step === pass);
+    if (!step) throw new Error(`jobRunner: missing durable step ${pass}`);
+    const status = settlement.outcome === "success" ? "done" : "error";
+    if (
+      !inserted &&
+      (step.status === "done" || step.status === "error" || step.status === "skipped")
+    ) {
+      state.steps = latest;
+      state.totalCostUsd = sumLoggedCost(state.jobId);
+      return true;
+    }
+    step.status = status;
+    step.startedAt ??= nowIso();
+    step.finishedAt = findStep(state, pass).finishedAt ?? nowIso();
+    step.completedAt = step.finishedAt;
+    step.detail = settlementStepDetail(settlement);
+    const logged = sumLoggedStepCost(state.jobId, pass);
+    if (settlement.telemetry.billable || logged > 0) step.costUsd = logged;
+
+    const update = getDb()
+      .update(jobs)
+      .set({
+        stepsJson: JSON.stringify(latest),
+        updatedAt: nowIso(),
+        revision: row.revision + 1,
+      })
+      .where(and(
+        eq(jobs.id, state.jobId),
+        eq(jobs.runGeneration, state.runGeneration),
+        eq(jobs.revision, row.revision),
+        eq(jobs.status, "running"),
+      ))
+      .run();
+    if (update.changes !== 1) continue;
+
+    state.steps = latest;
+    state.totalCostUsd = sumLoggedCost(state.jobId);
+    if (inserted && settlement.telemetry.billable) {
+      publish(state, {
+        type: "cost-update",
+        jobId: state.jobId,
+        step: pass,
+        passCostUsd: settlement.telemetry.costUsd,
+        totalCostUsd: state.totalCostUsd,
+      });
+    }
+    emitStep(state, pass);
+    return true;
+  }
+  throw new Error(`jobRunner: settlement step CAS exhausted for ${pass}`);
+}
+
+interface SettlementCheckpoint<T> {
+  attemptId: string;
+  hook: PassSettlementHook<T>;
+  wasCalled(): boolean;
+  lastSettlement(): PassSettlement<T> | null;
+}
+
+function throwFirstSettlementRejection(outcomes: PromiseSettledResult<unknown>[]): void {
+  const rejected = outcomes.find(
+    (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
+  );
+  if (rejected) throw rejected.reason;
+}
+
+function createSettlementCheckpoint<T>(
+  state: RunState,
+  pass: DurablePass,
+  payloadFingerprint: string | null,
+): SettlementCheckpoint<T> {
+  const attemptId = randomUUID();
+  let called = false;
+  let last: PassSettlement<T> | null = null;
+  const hook: PassSettlementHook<T> = async (settlement) => {
+    called = true;
+    last = settlement;
+    try {
+      const persisted = persistPassSettlement({
+        jobId: state.jobId,
+        runGeneration: state.runGeneration,
+        attemptId,
+        pass,
+        settlement,
+        payloadFingerprint,
+      });
+      if (persisted.currentGeneration) {
+        mergeCommittedSettlement(state, pass, settlement, persisted.inserted);
+      }
+    } catch (error) {
+      if (error instanceof PassSettlementHookError) throw error;
+      throw new PassSettlementHookError(
+        `pass settlement persistence failed: ${errMessage(error)}`,
+        { cause: error },
+      );
+    }
+  };
+  return {
+    attemptId,
+    hook,
+    wasCalled: () => called,
+    lastSettlement: () => last,
+  };
 }
 
 function billedAttemptFromError(err: unknown): BilledPassAttempt | null {
@@ -551,11 +763,13 @@ function bullBearFailureFromError(err: unknown): BullBearPassFailureDetails | nu
   const hasBull =
     candidate.bull !== undefined ||
     candidate.bullError !== undefined ||
-    candidate.bullBilledAttempt !== undefined;
+    candidate.bullBilledAttempt !== undefined ||
+    candidate.bullLaunched !== undefined;
   const hasBear =
     candidate.bear !== undefined ||
     candidate.bearError !== undefined ||
-    candidate.bearBilledAttempt !== undefined;
+    candidate.bearBilledAttempt !== undefined ||
+    candidate.bearLaunched !== undefined;
   if (!hasBull && !hasBear) return null;
   return candidate;
 }
@@ -592,32 +806,6 @@ function isRetryableJudgeError(err: unknown): boolean {
     message.includes("not valid json") ||
     message.includes("report-schema") ||
     message.includes("schema validation")
-  );
-}
-
-function finishAnalystSide(
-  state: RunState,
-  step: "bull" | "bear",
-  result: PassResultLike<AnalystCase> | undefined,
-  errorDetail: string | undefined,
-  billedAttempt: BilledPassAttempt | undefined,
-  fallbackDetail: string,
-): void {
-  if (result !== undefined) {
-    logPassCost(state, step, result);
-    finishStep(state, step, "done", passDetail(result), result.costUsd);
-    return;
-  }
-
-  if (billedAttempt !== undefined) {
-    logPassCost(state, step, billedAttempt);
-  }
-  finishStep(
-    state,
-    step,
-    "error",
-    errorDetail ?? fallbackDetail,
-    billedAttempt?.costUsd,
   );
 }
 
@@ -944,6 +1132,351 @@ export function snapshotsCoverResume(
   return steps.find((s) => s.step === "synthesize")?.status !== "done";
 }
 
+export interface PreparedJobResume {
+  jobId: string;
+  sourceGeneration: number;
+  targetGeneration: number;
+  sourceRevision: number;
+  sourceStatus: "done" | "error";
+  sourceReportId: number | null;
+  sourceStepsJson: string;
+  sourceBullJson: string | null;
+  sourceBearJson: string | null;
+  sourcePayloadFingerprint: string | null;
+  /** Exact source-generation artifact + paid-attempt ledger cohort captured before claim. */
+  sourceArtifactSetDigest: string;
+  bull: PassResultLike<AnalystCase> | null;
+  bear: PassResultLike<AnalystCase> | null;
+  payloadFingerprint: string | null;
+}
+
+interface ResumeCandidate {
+  pass: PassResultLike<AnalystCase>;
+  fingerprint: string | null;
+  source: "artifact" | "legacy";
+}
+
+const globalWithPreparedResumes = globalThis as typeof globalThis & {
+  __thesisPreparedJobResumes?: Map<string, PreparedJobResume>;
+  __thesisPreparedResumeAuthenticity?: WeakMap<PreparedJobResume, string>;
+};
+
+function preparedResumeStore(): Map<string, PreparedJobResume> {
+  globalWithPreparedResumes.__thesisPreparedJobResumes ??= new Map();
+  return globalWithPreparedResumes.__thesisPreparedJobResumes;
+}
+
+function preparedResumeAuthenticity(): WeakMap<PreparedJobResume, string> {
+  globalWithPreparedResumes.__thesisPreparedResumeAuthenticity ??= new WeakMap();
+  return globalWithPreparedResumes.__thesisPreparedResumeAuthenticity;
+}
+
+function preparedResumeDigest(prepared: PreparedJobResume): string {
+  return createHash("sha256").update(JSON.stringify(prepared)).digest("hex");
+}
+
+function registerPreparedResume(prepared: PreparedJobResume | null): PreparedJobResume | null {
+  if (prepared !== null) {
+    preparedResumeAuthenticity().set(prepared, preparedResumeDigest(prepared));
+  }
+  return prepared;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function immutablePreparedResume(prepared: PreparedJobResume): PreparedJobResume {
+  return deepFreeze(structuredClone(prepared));
+}
+
+function preparedResumeKey(jobId: string, targetGeneration: number): string {
+  return `${jobId}:${targetGeneration}`;
+}
+
+function takePreparedResume(jobId: string, targetGeneration: number): PreparedJobResume | null {
+  const key = preparedResumeKey(jobId, targetGeneration);
+  const prepared = preparedResumeStore().get(key) ?? null;
+  preparedResumeStore().delete(key);
+  return prepared;
+}
+
+type ResumeStateDb = Pick<ReturnType<typeof getDb>, "select">;
+
+/**
+ * Fingerprint the complete durable settlement cohort for an exact prepare/claim
+ * fence. Including the paired attempt ledger prevents a half-pair repair or a
+ * late billable settlement from slipping through the claim window.
+ */
+function sourceArtifactSetDigest(
+  db: ResumeStateDb,
+  jobId: string,
+  runGeneration: number,
+): string {
+  const artifacts = db
+    .select()
+    .from(jobPassArtifacts)
+    .where(and(
+      eq(jobPassArtifacts.jobId, jobId),
+      eq(jobPassArtifacts.runGeneration, runGeneration),
+    ))
+    .all()
+    .sort((left, right) =>
+      left.attemptId.localeCompare(right.attemptId) ||
+      left.pass.localeCompare(right.pass) ||
+      left.settledAt.localeCompare(right.settledAt),
+    );
+  const ledger = db
+    .select()
+    .from(costLog)
+    .where(and(
+      eq(costLog.jobId, jobId),
+      eq(costLog.runGeneration, runGeneration),
+    ))
+    .all()
+    .filter((row) => row.attemptId !== null)
+    .sort((left, right) =>
+      (left.attemptId ?? "").localeCompare(right.attemptId ?? "") ||
+      left.step.localeCompare(right.step) ||
+      left.id - right.id,
+    );
+  return createHash("sha256")
+    .update(JSON.stringify({ version: 1, artifacts, ledger }))
+    .digest("hex");
+}
+
+function artifactSnapshotCandidate(
+  row: JobRow,
+  side: "bull" | "bear",
+  artifacts: CurrentGenerationPassArtifact[],
+): ResumeCandidate | null {
+  const sideArtifacts = artifacts.filter((candidate) => candidate.pass === side);
+  const successes = sideArtifacts.filter(
+    (candidate) => candidate.envelope.outcome === "success",
+  );
+  if (successes.length > 1) {
+    throw new Error(`jobRunner: ambiguous ${side} success artifacts in source generation`);
+  }
+  const artifact = successes[0];
+  if (artifact?.envelope.outcome === "success") {
+    return {
+      pass: {
+        data: artifact.envelope.data as AnalystCase,
+        model: artifact.telemetry.model,
+        costUsd: artifact.telemetry.costUsd,
+        fallbackUsed: artifact.telemetry.fallbackUsed,
+        usage: {
+          input_tokens: artifact.telemetry.inputTokens,
+          output_tokens: artifact.telemetry.outputTokens,
+          cache_read_input_tokens: artifact.telemetry.cacheReadTokens,
+          cache_creation_input_tokens: artifact.telemetry.cacheWriteTokens,
+        },
+        webSearches: artifact.telemetry.webSearches,
+        fetchedUrls: artifact.telemetry.fetchedUrls,
+      },
+      fingerprint: artifact.envelope.payloadFingerprint,
+      source: "artifact",
+    };
+  }
+  // A durable current-generation failure is authoritative for this analyst
+  // only. It suppresses that side's older legacy snapshot without disabling
+  // a compatible opposite analyst or being affected by judge/verify rows.
+  if (sideArtifacts.length > 0) return null;
+  const legacy = parsePassSnapshot(side === "bull" ? row.bullJson : row.bearJson);
+  return legacy === null
+    ? null
+    : {
+        pass: legacy,
+        fingerprint: row.payloadFingerprint ?? null,
+        source: "legacy",
+      };
+}
+
+/** Build the immutable reusable-pass plan while the terminal source generation is current. */
+function buildPreparedJobResume(
+  row: JobRow,
+  expectedTerminalStatus: "done" | "error",
+  artifacts: CurrentGenerationPassArtifact[],
+  artifactSetDigest: string,
+): PreparedJobResume | null {
+  if (row.status !== expectedTerminalStatus) return null;
+  const steps = parseStepsJson(row.stepsJson);
+  if (steps.find((step) => step.step === "synthesize")?.status === "done") return null;
+
+  let bull = artifactSnapshotCandidate(row, "bull", artifacts);
+  let bear = artifactSnapshotCandidate(row, "bear", artifacts);
+  if (bull && bear && bull.fingerprint !== bear.fingerprint) {
+    // Never combine two fingerprint cohorts. A current-generation artifact is
+    // authoritative for its side; an incoherent legacy opposite is discarded.
+    if (bull.source === "artifact" && bear.source === "legacy") bear = null;
+    else if (bear.source === "artifact" && bull.source === "legacy") bull = null;
+    else return null;
+  }
+  const snapshots: PersistedPassSnapshots | null = bull || bear
+    ? {
+        bull: bull?.pass ?? null,
+        bear: bear?.pass ?? null,
+        payloadFingerprint: bull?.fingerprint ?? bear?.fingerprint ?? null,
+      }
+    : null;
+  // One validated analyst already represents paid work worth preserving. Step
+  // words may be reset to skipped by a crash before the missing side launches,
+  // so they cannot strand that durable/legacy success.
+  if (snapshots === null || (snapshots.bull === null && snapshots.bear === null)) {
+    return null;
+  }
+  return {
+    jobId: row.id,
+    sourceGeneration: row.runGeneration,
+    targetGeneration: row.runGeneration + 1,
+    sourceRevision: row.revision,
+    sourceStatus: expectedTerminalStatus,
+    sourceReportId: row.reportId,
+    sourceStepsJson: row.stepsJson,
+    sourceBullJson: row.bullJson,
+    sourceBearJson: row.bearJson,
+    sourcePayloadFingerprint: row.payloadFingerprint,
+    sourceArtifactSetDigest: artifactSetDigest,
+    bull: snapshots.bull,
+    bear: snapshots.bear,
+    payloadFingerprint: snapshots.payloadFingerprint,
+  };
+}
+
+/**
+ * Recover after a process dies between a successful retry claim and dispatch.
+ * Current-generation artifacts remain empty by design; only the validated,
+ * generation-fenced legacy analyst cohort may seed this fallback.
+ */
+function prepareQueuedResumeFallback(row: JobRow): PreparedJobResume | null {
+  if (row.status !== "queued" || row.runGeneration < 1) return null;
+  const bull = parsePassSnapshot(row.bullJson);
+  const bear = parsePassSnapshot(row.bearJson);
+  if (bull === null && bear === null) return null;
+  const steps = parseStepsJson(row.stepsJson);
+  if (steps.find((step) => step.step === "synthesize")?.status === "done") return null;
+  return immutablePreparedResume({
+    jobId: row.id,
+    sourceGeneration: row.runGeneration - 1,
+    targetGeneration: row.runGeneration,
+    sourceRevision: Math.max(0, row.revision - 1),
+    sourceStatus: "error",
+    sourceReportId: null,
+    sourceStepsJson: row.stepsJson,
+    sourceBullJson: row.bullJson,
+    sourceBearJson: row.bearJson,
+    sourcePayloadFingerprint: row.payloadFingerprint,
+    sourceArtifactSetDigest: sourceArtifactSetDigest(
+      getDb(),
+      row.id,
+      Math.max(0, row.runGeneration - 1),
+    ),
+    bull,
+    bear,
+    payloadFingerprint: row.payloadFingerprint ?? null,
+  });
+}
+
+/** Prepare and validate an immutable resume plan against the terminal source row. */
+export function prepareJobResume(
+  jobId: string,
+  expectedTerminalStatus: "done" | "error",
+): PreparedJobResume | null {
+  if (expectedTerminalStatus !== "done" && expectedTerminalStatus !== "error") return null;
+  try {
+    const prepared = getDb().transaction((tx) => {
+      const row = tx.select().from(jobs).where(eq(jobs.id, jobId)).get();
+      if (!row) return null;
+      // readCurrentGenerationPassArtifacts uses the same synchronous SQLite
+      // connection, so these strict parser/ledger reads share this snapshot.
+      const artifacts = readCurrentGenerationPassArtifacts(jobId);
+      const digest = sourceArtifactSetDigest(tx, jobId, row.runGeneration);
+      return buildPreparedJobResume(row, expectedTerminalStatus, artifacts, digest);
+    });
+    return registerPreparedResume(prepared);
+  } catch {
+    return null;
+  }
+}
+
+/** Claim exactly the source state captured by prepareJobResume and retain its reusable plan. */
+export function claimPreparedJobResume(prepared: PreparedJobResume): boolean {
+  const authenticity = preparedResumeAuthenticity();
+  const expectedDigest = authenticity.get(prepared);
+  authenticity.delete(prepared);
+  if (
+    expectedDigest === undefined ||
+    preparedResumeDigest(prepared) !== expectedDigest ||
+    prepared.jobId.length === 0 ||
+    (prepared.sourceStatus !== "done" && prepared.sourceStatus !== "error") ||
+    !Number.isSafeInteger(prepared.sourceGeneration) ||
+    prepared.sourceGeneration < 0 ||
+    prepared.targetGeneration !== prepared.sourceGeneration + 1 ||
+    !Number.isSafeInteger(prepared.sourceRevision) ||
+    prepared.sourceRevision < 0 ||
+    !/^[0-9a-f]{64}$/.test(prepared.sourceArtifactSetDigest)
+  ) {
+    return false;
+  }
+  let claimed = false;
+  try {
+    claimed = getDb().transaction((tx) => {
+      if (
+        sourceArtifactSetDigest(tx, prepared.jobId, prepared.sourceGeneration) !==
+        prepared.sourceArtifactSetDigest
+      ) {
+        return false;
+      }
+      const result = tx
+        .update(jobs)
+        .set({
+          status: "queued",
+          error: null,
+          reportId: null,
+          unsupportedKind: null,
+          unsupportedMessage: null,
+          runGeneration: prepared.targetGeneration,
+          revision: prepared.sourceRevision + 1,
+          queuedAt: nowIso(),
+          updatedAt: nowIso(),
+        })
+        .where(and(
+          eq(jobs.id, prepared.jobId),
+          eq(jobs.status, prepared.sourceStatus),
+          eq(jobs.runGeneration, prepared.sourceGeneration),
+          eq(jobs.revision, prepared.sourceRevision),
+          eq(jobs.stepsJson, prepared.sourceStepsJson),
+          prepared.sourceReportId === null
+            ? isNull(jobs.reportId)
+            : eq(jobs.reportId, prepared.sourceReportId),
+          prepared.sourceBullJson === null
+            ? isNull(jobs.bullJson)
+            : eq(jobs.bullJson, prepared.sourceBullJson),
+          prepared.sourceBearJson === null
+            ? isNull(jobs.bearJson)
+            : eq(jobs.bearJson, prepared.sourceBearJson),
+          prepared.sourcePayloadFingerprint === null
+            ? isNull(jobs.payloadFingerprint)
+            : eq(jobs.payloadFingerprint, prepared.sourcePayloadFingerprint),
+        ))
+        .run();
+      return result.changes === 1;
+    }, { behavior: "immediate" });
+  } catch {
+    return false;
+  }
+  if (!claimed) return false;
+  preparedResumeStore().set(
+    preparedResumeKey(prepared.jobId, prepared.targetGeneration),
+    immutablePreparedResume(prepared),
+  );
+  return true;
+}
+
 /**
  * Atomically claim a terminal job for a synthesis-only retry. The expected
  * status is part of the UPDATE predicate, so two HTTP requests that read the
@@ -954,44 +1487,8 @@ export function claimJobForResume(
   jobId: string,
   expectedTerminalStatus: "done" | "error",
 ): boolean {
-  if (expectedTerminalStatus !== "done" && expectedTerminalStatus !== "error") return false;
-  const result = getDb()
-    .update(jobs)
-    .set({
-      status: "queued",
-      error: null,
-      reportId: null,
-      unsupportedKind: null,
-      unsupportedMessage: null,
-      updatedAt: nowIso(),
-    })
-    .where(and(eq(jobs.id, jobId), eq(jobs.status, expectedTerminalStatus)))
-    .run();
-  return result.changes === 1;
-}
-
-/** Persist one analyst side's result so a failed synthesize can resume later. */
-function persistPassSnapshot(
-  state: RunState,
-  side: "bull" | "bear",
-  result: PassResultLike<AnalystCase>,
-): void {
-  const column = side === "bull" ? { bullJson: JSON.stringify(result) } : { bearJson: JSON.stringify(result) };
-  getDb()
-    .update(jobs)
-    .set({ ...column, updatedAt: nowIso() })
-    .where(eq(jobs.id, state.jobId))
-    .run();
-}
-
-/** Persist the payload fingerprint the analyst passes were built on. */
-function persistPayloadFingerprint(state: RunState, fingerprint: string | null): void {
-  if (fingerprint === null) return;
-  getDb()
-    .update(jobs)
-    .set({ payloadFingerprint: fingerprint, updatedAt: nowIso() })
-    .where(eq(jobs.id, state.jobId))
-    .run();
+  const prepared = prepareJobResume(jobId, expectedTerminalStatus);
+  return prepared !== null && claimPreparedJobResume(prepared);
 }
 
 /* ------------------------------------------------------------------------ *
@@ -1247,9 +1744,9 @@ export interface RunJobOptions<TPayload = unknown> {
    * Resume from persisted bull/bear snapshots (2026-07 audit item 1): skip the
    * analyst passes entirely — they are the expensive part — and re-run only
    * synthesize/verify/assemble. fetch/validate/compute still re-run (cheap and
-   * cache-served) to rebuild the judge payload; a payload-fingerprint mismatch
-   * against the snapshot is disclosed as a warn gap, not a failure. When the
-   * snapshots are missing/corrupt the runner degrades to a full fresh run.
+   * cache-served) to rebuild the judge payload. A payload-fingerprint mismatch
+   * makes the prepared artifacts incompatible and aborts before paid work.
+   * When snapshots are missing/corrupt, the runner safely starts fresh.
    */
   resume?: boolean;
   /** Marker so TPayload is inferable from the passes argument. */
@@ -1288,16 +1785,9 @@ export async function runJob<TPayload = unknown>(
   passes: PipelinePasses<TPayload>,
   opts: RunJobOptions<TPayload> = {},
 ): Promise<RunJobResult> {
-  const jobRow = getDb().select().from(jobs).where(eq(jobs.id, jobId)).get();
+  let jobRow = getDb().select().from(jobs).where(eq(jobs.id, jobId)).get();
   if (jobRow === undefined) {
     throw new Error(`runJob: no job with id "${jobId}"`);
-  }
-  if (
-    jobRow.status !== "queued" &&
-    jobRow.status !== "running" &&
-    !(opts.resume === true && (jobRow.status === "done" || jobRow.status === "error"))
-  ) {
-    throw new Error(`runJob: job "${jobId}" is not active (status ${jobRow.status})`);
   }
 
   // A cancel acknowledged (202) in the resume-dispatch window flips the claimed
@@ -1320,20 +1810,52 @@ export async function runJob<TPayload = unknown>(
     };
   }
 
+  let preparedResume: PreparedJobResume | null = null;
   if (opts.resume === true && (jobRow.status === "done" || jobRow.status === "error")) {
-    const steps = parseStepsJson(jobRow.stepsJson);
-    const snapshots = readPassSnapshots(jobId);
-    const resumable =
-      stepsShowResumableFailure(steps) !== null || snapshotsCoverResume(snapshots, steps);
-    if (!resumable) {
+    if (!claimJobForResume(jobId, jobRow.status)) {
       throw new Error(`runJob: job "${jobId}" is not resumable (already synthesized or no reusable analyst work)`);
     }
+    jobRow = getDb().select().from(jobs).where(eq(jobs.id, jobId)).get();
+    if (!jobRow) throw new Error(`runJob: job "${jobId}" disappeared after resume claim`);
+    preparedResume = takePreparedResume(jobId, jobRow.runGeneration);
+    if (!preparedResume) {
+      throw new Error(`runJob: prepared resume plan missing after claim for "${jobId}"`);
+    }
+  } else if (opts.resume === true && jobRow.status === "queued") {
+    preparedResume =
+      takePreparedResume(jobId, jobRow.runGeneration) ?? prepareQueuedResumeFallback(jobRow);
   }
+
+  if (jobRow.status !== "queued") {
+    const reason = jobRow.status === "running" ? "already dispatched" : `not active (status ${jobRow.status})`;
+    throw new Error(`runJob: job "${jobId}" is ${reason}`);
+  }
+  const dispatch = getDb()
+    .update(jobs)
+    .set({
+      status: "running",
+      error: null,
+      updatedAt: nowIso(),
+      revision: jobRow.revision + 1,
+    })
+    .where(and(
+      eq(jobs.id, jobId),
+      eq(jobs.status, "queued"),
+      eq(jobs.runGeneration, jobRow.runGeneration),
+      eq(jobs.revision, jobRow.revision),
+    ))
+    .run();
+  if (dispatch.changes !== 1) {
+    throw new Error(`runJob: job "${jobId}" dispatch was already claimed`);
+  }
+  jobRow = getDb().select().from(jobs).where(eq(jobs.id, jobId)).get();
+  if (!jobRow) throw new Error(`runJob: job "${jobId}" disappeared after dispatch claim`);
 
   const state: RunState = {
     jobId,
     symbol: jobRow.symbol,
     startedAt: jobRow.createdAt,
+    runGeneration: jobRow.runGeneration,
     steps: initialSteps(),
     // Rehydrate any cost already logged under this jobId BEFORE any early exit
     // (no-key / model-resolution-failure / compute-throw): a resumed run's
@@ -1364,7 +1886,7 @@ export async function runJob<TPayload = unknown>(
     }
   }, deadlineMs);
   overallTimer.unref?.();
-  persistSteps(state, "running", null);
+  persistSteps(state);
 
   // Liveness registration + heartbeat: a single silent pass can outlast the
   // 30-minute stale threshold; the registry stops THIS process's sweeps from
@@ -1374,7 +1896,15 @@ export async function runJob<TPayload = unknown>(
   liveJobControllers().set(jobId, jobController);
   const heartbeat = setInterval(() => {
     try {
-      getDb().update(jobs).set({ updatedAt: nowIso() }).where(eq(jobs.id, jobId)).run();
+      getDb()
+        .update(jobs)
+        .set({ updatedAt: nowIso() })
+        .where(and(
+          eq(jobs.id, jobId),
+          eq(jobs.runGeneration, state.runGeneration),
+          eq(jobs.status, "running"),
+        ))
+        .run();
     } catch {
       // A failed heartbeat must never break the run.
     }
@@ -1614,35 +2144,49 @@ export async function runJob<TPayload = unknown>(
               ? `${lastValidationDetail}\n\nYOUR PREVIOUS OUTPUT (repair this JSON in place — do not start over):\n${lastFailedRawOutput}`
               : lastValidationDetail
             : undefined;
+        const judgeCheckpoint = createSettlementCheckpoint<JudgeOutput>(
+          state,
+          "synthesize",
+          fingerprint,
+        );
         try {
           judge = await awaitJobStage(
-            passes.runJudgePass(deps, bull, bear, feedback),
+            passes.runJudgePass(deps, bull, bear, feedback, judgeCheckpoint.hook),
             jobSignal,
             jobController,
             "synthesize",
             modelStageDeadlineMs,
           );
           throwIfJobAborted(jobSignal);
+          if (!judgeCheckpoint.wasCalled()) {
+            await judgeCheckpoint.hook(successSettlement(judge));
+          }
         } catch (err) {
           throwIfJobAborted(jobSignal);
+          if (err instanceof PassSettlementHookError) throw err;
           const billedAttempt = billedAttemptFromError(err);
-          if (billedAttempt !== null) logPassCost(state, "synthesize", billedAttempt);
           lastValidationDetail = errMessage(err);
           lastFailedRawOutput = rawTextOfError(err);
           lastJudgeFailureRetryable = isRetryableJudgeError(err);
+          if (!judgeCheckpoint.wasCalled()) {
+            await judgeCheckpoint.hook(
+              failureSettlement(
+                err,
+                telemetryFromAttempt(billedAttempt, analysisModel),
+                { retryable: lastJudgeFailureRetryable },
+              ),
+            );
+          }
           const retrying = lastJudgeFailureRetryable && attempt < maxJudgeRetries;
-          updateRunningStepDetail(
-            state,
-            "synthesize",
-            `judge attempt ${attempt + 1}/${maxJudgeRetries + 1} failed${retrying ? "; retrying" : ""}: ${lastValidationDetail}`,
-          );
-          if (retrying) continue;
+          const detail = `judge attempt ${attempt + 1}/${maxJudgeRetries + 1} failed${retrying ? "; retrying" : ""}: ${lastValidationDetail}`;
+          if (retrying) {
+            startStep(state, "synthesize");
+            updateRunningStepDetail(state, "synthesize", detail);
+            continue;
+          }
+          updateRunningStepDetail(state, "synthesize", detail);
           break;
         }
-        logPassCost(state, "synthesize", judge);
-        // The judge is complete before verification begins. Persist this
-        // transition now so lifecycle logs cannot imply overlap or inversion.
-        finishStep(state, "synthesize", "done", passDetail(judge), judge.costUsd);
 
         // 2) Verify pass. Verification failing is NOT a schema-validation failure
         //    (the judge output is valid) — do not burn a retry; persist the
@@ -1652,6 +2196,11 @@ export async function runJob<TPayload = unknown>(
         let verifyLog: unknown = undefined;
         let verifyError: string | null = null;
         startStep(state, "verify");
+        const verifyCheckpoint = createSettlementCheckpoint<Report>(
+          state,
+          "verify",
+          fingerprint,
+        );
         try {
           const fetchedUrls = [
             ...new Set(
@@ -1663,7 +2212,7 @@ export async function runJob<TPayload = unknown>(
             ),
           ].sort();
           const v = await awaitJobStage(
-            passes.runVerifyPass(deps, judge.data, { fetchedUrls }),
+            passes.runVerifyPass(deps, judge.data, { fetchedUrls }, verifyCheckpoint.hook),
             jobSignal,
             jobController,
             "verify",
@@ -1671,20 +2220,50 @@ export async function runJob<TPayload = unknown>(
           );
           throwIfJobAborted(jobSignal);
           verificationRate = v.verificationRate;
-          verifiedReport = v.verifiedReport;
           verifyLog = v.log;
-          if (typeof v.costUsd === "number") {
-            logPassCost(state, "verify", {
-              model: v.model ?? analysisModel,
-              costUsd: v.costUsd,
-              fallbackUsed: v.fallbackUsed ?? false,
-              usage: v.usage,
-              webSearches: v.webSearches,
-            });
+          const parsedVerifiedReport = ReportSchema.safeParse(v.verifiedReport);
+          const billable = typeof v.costUsd === "number";
+          const verifyTelemetry: PassTelemetry = {
+            model: v.model ?? (billable ? analysisModel : "deterministic"),
+            inputTokens: numOr0(v.usage?.input_tokens),
+            outputTokens: numOr0(v.usage?.output_tokens),
+            cacheReadTokens: numOr0(v.usage?.cache_read_input_tokens),
+            cacheWriteTokens: numOr0(v.usage?.cache_creation_input_tokens),
+            webSearches: numOr0(v.webSearches),
+            costUsd: v.costUsd ?? 0,
+            fallbackUsed: v.fallbackUsed ?? false,
+            billable,
+            fetchedUrls: [],
+          };
+          if (!verifyCheckpoint.wasCalled()) {
+            await verifyCheckpoint.hook(
+              parsedVerifiedReport.success
+                ? { outcome: "success", data: parsedVerifiedReport.data, telemetry: verifyTelemetry }
+                : failureSettlement(
+                    new Error("verify returned no schema-valid report"),
+                    verifyTelemetry,
+                    { kind: "schema" },
+                  ),
+            );
+          }
+          if (parsedVerifiedReport.success) {
+            verifiedReport = parsedVerifiedReport.data;
+          } else {
+            verifyError = "verify returned no schema-valid report";
           }
         } catch (err) {
           throwIfJobAborted(jobSignal);
+          if (err instanceof PassSettlementHookError) throw err;
           verifyError = errMessage(err);
+          if (!verifyCheckpoint.wasCalled()) {
+            const billedAttempt = billedAttemptFromError(err);
+            await verifyCheckpoint.hook(
+              failureSettlement(
+                err,
+                telemetryFromAttempt(billedAttempt, billedAttempt ? analysisModel : "deterministic"),
+              ),
+            );
+          }
           updateRunningStepDetail(
             state,
             "verify",
@@ -1733,16 +2312,7 @@ export async function runJob<TPayload = unknown>(
         }
 
         // Success for this attempt — synthesis already completed before verify.
-        if (verifyError !== null) {
-          finishStep(state, "verify", "error", verifyError);
-        } else {
-          finishStep(
-            state,
-            "verify",
-            "done",
-            `citation coverage ${verificationRate === null ? "n/a" : (verificationRate * 100).toFixed(1) + "%"}`,
-          );
-        }
+        void verifyError;
         assembled = { report, verificationRate, verifyLog, meta, costBreakdown };
         break;
       }
@@ -1816,7 +2386,13 @@ export async function runJob<TPayload = unknown>(
     };
 
     // -- resume: reuse persisted analyst passes --------------------------------
-    const resumeSnapshots = opts.resume === true ? readPassSnapshots(jobId) : null;
+    const resumeSnapshots = opts.resume === true && preparedResume !== null
+      ? {
+          bull: preparedResume.bull,
+          bear: preparedResume.bear,
+          payloadFingerprint: preparedResume.payloadFingerprint,
+        }
+      : null;
     const resumeMissingSides = resumeSnapshots
       ? (["bull", "bear"] as const).filter((side) => resumeSnapshots[side] === null)
       : [];
@@ -1842,22 +2418,10 @@ export async function runJob<TPayload = unknown>(
           snapshot.costUsd,
         );
       }
-      if (
-        fingerprint !== null &&
-        resumeSnapshots.payloadFingerprint !== null &&
-        fingerprint !== resumeSnapshots.payloadFingerprint
-      ) {
-        // Disclose, don't fail: the analyst cases cite the ORIGINAL data
-        // snapshot while the judge sees the rebuilt payload (typically a
-        // fresher quote/EOD bar). computed.gaps flows into the report's
-        // missing-data manifest at assembly time.
-        computed.gaps.push({
-          field: "analysis.resume",
-          reason:
-            "resumed from persisted bull/bear analyst passes generated against an earlier data snapshot (payload fingerprint drifted between runs)",
-          severity: "warn",
-          attemptedSources: ["pipeline"],
-        });
+      if (fingerprint !== resumeSnapshots.payloadFingerprint) {
+        throw new Error(
+          "runJob: resume payload fingerprint mismatch; stored analyst artifacts are incompatible — start a fresh job",
+        );
       }
       // Re-run ONLY the missing side(s) — the sibling's paid output is reused
       // (2026-07-10: one-sided analyst failures no longer discard the pair).
@@ -1865,27 +2429,36 @@ export async function runJob<TPayload = unknown>(
       let resumedBear = resumeSnapshots.bear;
       for (const side of resumeMissingSides) {
         startStep(state, side);
+        const analystCheckpoint = createSettlementCheckpoint<AnalystCase>(
+          state,
+          side,
+          fingerprint,
+        );
         try {
           const fresh = await awaitJobStage(
-            passes.runAnalystPass!(deps, side),
+            passes.runAnalystPass!(deps, side, analystCheckpoint.hook),
             jobSignal,
             jobController,
             side,
             modelStageDeadlineMs,
           );
           throwIfJobAborted(jobSignal);
-          logPassCost(state, side, fresh);
-          finishStep(state, side, "done", passDetail(fresh), fresh.costUsd);
-          persistPassSnapshot(state, side, fresh);
+          if (!analystCheckpoint.wasCalled()) {
+            await analystCheckpoint.hook(successSettlement(fresh));
+          }
           if (side === "bull") resumedBull = fresh;
           else resumedBear = fresh;
         } catch (err) {
           throwIfJobAborted(jobSignal);
+          if (err instanceof PassSettlementHookError) throw err;
           // Same degradation contract as the fresh-run analyst catch: record
           // billed spend, disclose the failure in the manifest, data-only.
           const billedAttempt = billedAttemptFromError(err);
-          if (billedAttempt !== null) logPassCost(state, side, billedAttempt);
-          finishStep(state, side, "error", errMessage(err), billedAttempt?.costUsd);
+          if (!analystCheckpoint.wasCalled()) {
+            await analystCheckpoint.hook(
+              failureSettlement(err, telemetryFromAttempt(billedAttempt, analysisModel)),
+            );
+          }
           computed.gaps.push({
             field: `llm.${side}`,
             reason: errMessage(err),
@@ -1909,11 +2482,16 @@ export async function runJob<TPayload = unknown>(
       onPassStart: (side) => startStep(state, side),
       onPassFinish: (side) => stampStepFinished(state, side),
     };
+    const bullCheckpoint = createSettlementCheckpoint<AnalystCase>(state, "bull", fingerprint);
+    const bearCheckpoint = createSettlementCheckpoint<AnalystCase>(state, "bear", fingerprint);
     let bull: PassResultLike<AnalystCase> | null = null;
     let bear: PassResultLike<AnalystCase> | null = null;
     try {
       const cases = await awaitJobStage(
-        passes.runBullThenBear(deps, analystHooks),
+        passes.runBullThenBear(deps, analystHooks, {
+          bull: bullCheckpoint.hook,
+          bear: bearCheckpoint.hook,
+        }),
         jobSignal,
         jobController,
         "bull/bear",
@@ -1924,38 +2502,60 @@ export async function runJob<TPayload = unknown>(
       bear = cases.bear;
       ensureStepStarted(state, "bull");
       ensureStepStarted(state, "bear");
-      logPassCost(state, "bull", bull);
-      logPassCost(state, "bear", bear);
-      finishStep(state, "bull", "done", passDetail(bull), bull.costUsd);
-      finishStep(state, "bear", "done", passDetail(bear), bear.costUsd);
+      const fallbackSettlements = await Promise.allSettled([
+        bullCheckpoint.wasCalled()
+          ? Promise.resolve()
+          : bullCheckpoint.hook(successSettlement(bull)),
+        bearCheckpoint.wasCalled()
+          ? Promise.resolve()
+          : bearCheckpoint.hook(successSettlement(bear)),
+      ]);
+      throwFirstSettlementRejection(fallbackSettlements);
     } catch (err) {
       throwIfJobAborted(jobSignal);
+      if (err instanceof PassSettlementHookError) throw err;
       // Adversarial passes failed — mark both error and fall through to a
       // data-only stub (we still have fetch/validate/compute).
       ensureStepStarted(state, "bull");
       ensureStepStarted(state, "bear");
       const partial = bullBearFailureFromError(err);
-      if (partial !== null) {
-        finishAnalystSide(
-          state,
-          "bull",
-          partial.bull,
-          partial.bullError,
-          partial.bullBilledAttempt,
-          errMessage(err),
+      const settleMissingSide = async (
+        checkpoint: SettlementCheckpoint<AnalystCase>,
+        result: PassResultLike<AnalystCase> | undefined,
+        sideError: string | undefined,
+        billed: BilledPassAttempt | undefined,
+        launched: boolean | undefined,
+      ): Promise<void> => {
+        if (checkpoint.wasCalled()) return;
+        if (launched === false) return;
+        if (result !== undefined) {
+          await checkpoint.hook(successSettlement(result));
+          return;
+        }
+        await checkpoint.hook(
+          failureSettlement(
+            new Error(sideError ?? errMessage(err)),
+            telemetryFromAttempt(billed ?? null, analysisModel),
+          ),
         );
-        finishAnalystSide(
-          state,
-          "bear",
-          partial.bear,
-          partial.bearError,
-          partial.bearBilledAttempt,
-          errMessage(err),
-        );
-      } else {
-        finishStep(state, "bull", "error", errMessage(err));
-        finishStep(state, "bear", "error", errMessage(err));
-      }
+      };
+      const fallbackSettlements = await Promise.allSettled([
+        settleMissingSide(
+          bullCheckpoint,
+          partial?.bull,
+          partial?.bullError,
+          partial?.bullBilledAttempt,
+          partial?.bullLaunched,
+        ),
+        settleMissingSide(
+          bearCheckpoint,
+          partial?.bear,
+          partial?.bearError,
+          partial?.bearBilledAttempt,
+          partial?.bearLaunched,
+        ),
+      ]);
+      throwFirstSettlementRejection(fallbackSettlements);
       // Disclose the per-pass failures in the report's missing-data manifest —
       // the report page has no access to step details, so without these the
       // data-only report could not say WHY analysis is absent (2026-07-10:
@@ -1963,12 +2563,8 @@ export async function runJob<TPayload = unknown>(
       // A side that DID succeed is persisted (with the fingerprint) so its
       // paid output survives for a partial resume instead of being discarded.
       for (const side of ["bull", "bear"] as const) {
-        const sideResult = side === "bull" ? partial?.bull : partial?.bear;
-        if (sideResult !== undefined) {
-          persistPassSnapshot(state, side, sideResult);
-          persistPayloadFingerprint(state, fingerprint);
-          continue; // side succeeded — not a gap
-        }
+        const checkpoint = side === "bull" ? bullCheckpoint : bearCheckpoint;
+        if (checkpoint.lastSettlement()?.outcome === "success") continue;
         const sideError = side === "bull" ? partial?.bullError : partial?.bearError;
         computed.gaps.push({
           field: `llm.${side}`,
@@ -1982,22 +2578,31 @@ export async function runJob<TPayload = unknown>(
       return persistDataOnly(state, bundle, validation, computed, now, hasKey);
     }
 
-    // Persist the analyst snapshots + fingerprint BEFORE synthesis: if the
-    // judge fails, a later retry resumes from here without re-billing the
-    // expensive passes (a partial bull/bear failure is not resumable — the
-    // judge needs the full adversarial pair, so only full success persists).
-    persistPassSnapshot(state, "bull", bull);
-    persistPassSnapshot(state, "bear", bear);
-    persistPayloadFingerprint(state, fingerprint);
-
     return await runSynthesisAndFinish(bull, bear);
   } catch (err) {
+    if (err instanceof SupersededRunError) {
+      return supersededRunResult(state);
+    }
     if (jobSignal.aborted) {
-      return abortRun(state, abortReason(jobSignal));
+      try {
+        return abortRun(state, abortReason(jobSignal));
+      } catch (abortError) {
+        if (abortError instanceof SupersededRunError) {
+          return supersededRunResult(state);
+        }
+        throw abortError;
+      }
     }
     // Unexpected orchestration failure — record and re-surface (the POST route
     // has already returned; this rejects the detached promise).
-    persistSteps(state, "error", errMessage(err));
+    try {
+      persistSteps(state, "error", errMessage(err));
+    } catch (persistError) {
+      if (persistError instanceof SupersededRunError) {
+        return supersededRunResult(state);
+      }
+      throw persistError;
+    }
     publish(state, { type: "error", jobId, message: errMessage(err) });
     throw err;
   } finally {
@@ -2038,13 +2643,25 @@ function finishRun(
   };
 }
 
+/** Return to a stale caller without changing or announcing the current owner. */
+function supersededRunResult(state: RunState): RunJobResult {
+  return {
+    jobId: state.jobId,
+    status: "error",
+    reportId: null,
+    verificationRate: null,
+    totalCostUsd: round4(sumLoggedCost(state.jobId)),
+    dataOnly: false,
+  };
+}
+
 function finishUnsupported(
   state: RunState,
   support: Extract<InstrumentSupport, { supported: false }>,
 ): RunJobResult {
   for (const step of state.steps) markSkipped(state, step.step, support.reason);
 
-  getDb()
+  const update = getDb()
     .update(jobs)
     .set({
       status: "unsupported",
@@ -2055,8 +2672,15 @@ function finishUnsupported(
       stepsJson: JSON.stringify(state.steps),
       updatedAt: nowIso(),
     })
-    .where(eq(jobs.id, state.jobId))
+    .where(and(
+      eq(jobs.id, state.jobId),
+      eq(jobs.runGeneration, state.runGeneration),
+      eq(jobs.status, "running"),
+    ))
     .run();
+  if (update.changes !== 1) {
+    throw new SupersededRunError(state.jobId, state.runGeneration);
+  }
 
   const totalCostUsd = round4(state.totalCostUsd);
   publish(state, {
@@ -2253,7 +2877,7 @@ function persistReport(
         .run();
     }
     const completedAt = nowIso();
-    tx
+    const link = tx
       .update(jobs)
       .set({
         reportId: inserted.id,
@@ -2264,10 +2888,17 @@ function persistReport(
         stepsJson: JSON.stringify(state.steps),
         updatedAt: completedAt,
       })
-      .where(eq(jobs.id, state.jobId))
+      .where(and(
+        eq(jobs.id, state.jobId),
+        eq(jobs.runGeneration, state.runGeneration),
+        eq(jobs.status, "running"),
+      ))
       .run();
+    if (link.changes !== 1) {
+      throw new SupersededRunError(state.jobId, state.runGeneration);
+    }
     return inserted.id;
-  });
+  }, { behavior: "immediate" });
 }
 
 /* ------------------------------------------------------------------------ *

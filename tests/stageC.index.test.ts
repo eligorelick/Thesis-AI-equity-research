@@ -294,6 +294,105 @@ function unregisteredPayload(): ContextPayload {
 
 const keyOf = (m: ManifestEntry): string => `${m.field}|${m.reason}`;
 
+type AdapterSettlement<T> =
+  | { outcome: "success"; data: T; telemetry: AdapterTelemetry }
+  | { outcome: "failure"; failure: { name: string; message: string; kind?: string }; telemetry: AdapterTelemetry };
+
+interface AdapterTelemetry {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  webSearches: number;
+  costUsd: number;
+  fallbackUsed: boolean;
+  billable: boolean;
+  fetchedUrls: string[];
+}
+
+type AdapterSettlementHook<T> = (settlement: AdapterSettlement<T>) => void | Promise<void>;
+
+function adapterMessage(
+  output: unknown,
+  over: { stopReason?: string; outputTokens?: number; model?: string } = {},
+): Record<string, unknown> {
+  return {
+    id: "msg_task20",
+    type: "message",
+    role: "assistant",
+    model: over.model ?? "claude-opus-4-8",
+    content: [{ type: "text", text: JSON.stringify(output), citations: null }],
+    stop_reason: over.stopReason ?? "end_turn",
+    stop_sequence: null,
+    stop_details: null,
+    usage: {
+      input_tokens: 1_000,
+      output_tokens: over.outputTokens ?? 500,
+      cache_creation_input_tokens: 100,
+      cache_read_input_tokens: 200,
+      cache_creation: null,
+      inference_geo: null,
+      iterations: null,
+      output_tokens_details: null,
+      server_tool_use: { web_search_requests: 2 },
+      service_tier: null,
+      speed: null,
+    },
+  };
+}
+
+function adapterStreamingClient(messages: Record<string, unknown>[]): Anthropic {
+  let index = 0;
+  return {
+    beta: {
+      messages: {
+        stream: () => {
+          const listeners = new Map<string, Array<{ fn: (...args: unknown[]) => void; once: boolean }>>();
+          const add = (name: string, fn: (...args: unknown[]) => void, once: boolean) => {
+            const current = listeners.get(name) ?? [];
+            current.push({ fn, once });
+            listeners.set(name, current);
+          };
+          const emit = (name: string, ...args: unknown[]) => {
+            const current = listeners.get(name) ?? [];
+            listeners.set(name, current.filter((listener) => !listener.once));
+            current.forEach((listener) => listener.fn(...args));
+          };
+          const message = messages[Math.min(index++, messages.length - 1)];
+          const final = new Promise<Record<string, unknown>>((resolve) => {
+            queueMicrotask(() => {
+              emit("streamEvent", { type: "message_start", message });
+              emit("end");
+              resolve(message);
+            });
+          });
+          return {
+            on: (name: string, fn: (...args: unknown[]) => void) => add(name, fn, false),
+            once: (name: string, fn: (...args: unknown[]) => void) => add(name, fn, true),
+            finalMessage: () => final,
+          };
+        },
+        create: async () => {
+          throw new Error("unexpected non-streaming provider call");
+        },
+      },
+    },
+  } as unknown as Anthropic;
+}
+
+function adapterPassResult<T>(data: T) {
+  return {
+    data,
+    model: "claude-opus-4-8",
+    costUsd: 0.1,
+    fallbackUsed: false,
+    usage: { input_tokens: 1, output_tokens: 1 },
+    webSearches: 0,
+    fetchedUrls: [],
+  };
+}
+
 /* ------------------------------------------------------------------------ *
  * Construction
  * ------------------------------------------------------------------------ */
@@ -388,6 +487,189 @@ describe("pipelinePasses adapter smoke", () => {
   it("fakeAnalystCase is a valid shape (fixture sanity)", () => {
     // Guards the fixture used by future adapter tests; keeps this file self-contained.
     expect(fakeAnalystCase().priceTarget.value).toBe(250);
+  });
+});
+
+describe("pipelinePasses awaited durable settlement hooks", () => {
+  afterEach(() => {
+    _resetAnthropicForTests();
+    _setTransportRetrySleepForTests();
+  });
+
+  it("forwards and awaits separate bull and bear settlement hooks", async () => {
+    _resetAnthropicForTests(
+      adapterStreamingClient([
+        adapterMessage(fakeAnalystCase()),
+        adapterMessage(fakeAnalystCase()),
+      ]),
+    );
+    const { bundle, computed, validation } = buildInputs();
+    const payload = pipelinePasses.assembleContextPayload(bundle, computed, validation);
+    const deps: PassDeps<ContextPayload> = { analysisModel: "claude-opus-4-8", payload };
+    let releaseBull!: () => void;
+    let enteredBull!: () => void;
+    const bullEntered = new Promise<void>((resolve) => {
+      enteredBull = resolve;
+    });
+    const bullGate = new Promise<void>((resolve) => {
+      releaseBull = resolve;
+    });
+    const settlements: string[] = [];
+    const run = pipelinePasses.runBullThenBear as unknown as (
+      deps: PassDeps<ContextPayload>,
+      lifecycle?: unknown,
+      hooks?: { bull?: AdapterSettlementHook<AnalystCase>; bear?: AdapterSettlementHook<AnalystCase> },
+    ) => ReturnType<typeof pipelinePasses.runBullThenBear>;
+
+    let aggregateSettled = false;
+    const aggregate = run(deps, undefined, {
+      bull: async (settlement) => {
+        settlements.push(`bull:${settlement.outcome}`);
+        enteredBull();
+        await bullGate;
+      },
+      bear: async (settlement) => {
+        settlements.push(`bear:${settlement.outcome}`);
+      },
+    }).finally(() => {
+      aggregateSettled = true;
+    });
+
+    const bullHookRanBeforeAggregate = await Promise.race([
+      bullEntered.then(() => true),
+      aggregate.then(() => false),
+    ]);
+    expect(bullHookRanBeforeAggregate).toBe(true);
+    expect(aggregateSettled).toBe(false);
+    releaseBull();
+    const result = await aggregate;
+    expect(result.bull.data).toEqual(fakeAnalystCase());
+    expect(result.bear.data).toEqual(fakeAnalystCase());
+    expect(settlements.sort()).toEqual(["bear:success", "bull:success"]);
+  });
+
+  it("forwards billed judge failure telemetry before rejecting", async () => {
+    _resetAnthropicForTests(
+      adapterStreamingClient([
+        adapterMessage({}, { stopReason: "max_tokens", outputTokens: 32_000 }),
+      ]),
+    );
+    const { bundle, computed, validation } = buildInputs();
+    const payload = pipelinePasses.assembleContextPayload(bundle, computed, validation);
+    const deps: PassDeps<ContextPayload> = { analysisModel: "claude-opus-4-8", payload };
+    let observed: AdapterSettlement<JudgeOutput> | undefined;
+    const run = pipelinePasses.runJudgePass as unknown as (
+      deps: PassDeps<ContextPayload>,
+      bull: ReturnType<typeof adapterPassResult<AnalystCase>>,
+      bear: ReturnType<typeof adapterPassResult<AnalystCase>>,
+      feedback?: string,
+      hook?: AdapterSettlementHook<JudgeOutput>,
+    ) => ReturnType<typeof pipelinePasses.runJudgePass>;
+
+    await expect(
+      run(
+        deps,
+        adapterPassResult(fakeAnalystCase()),
+        adapterPassResult(fakeAnalystCase()),
+        undefined,
+        async (settlement) => {
+          observed = settlement;
+        },
+      ),
+    ).rejects.toThrow(/max_tokens/i);
+
+    expect(observed).toMatchObject({
+      outcome: "failure",
+      telemetry: {
+        model: "claude-opus-4-8",
+        outputTokens: 32_000,
+        billable: true,
+      },
+    });
+  });
+
+  it("does not relabel a persistence-hook rejection as provider transport failure", async () => {
+    _resetAnthropicForTests(
+      adapterStreamingClient([
+        adapterMessage(fakeAnalystCase()),
+        adapterMessage(fakeAnalystCase()),
+      ]),
+    );
+    const { bundle, computed, validation } = buildInputs();
+    const payload = pipelinePasses.assembleContextPayload(bundle, computed, validation);
+    const deps: PassDeps<ContextPayload> = { analysisModel: "claude-opus-4-8", payload };
+    let bearCheckpointed = false;
+    const run = pipelinePasses.runBullThenBear as unknown as (
+      deps: PassDeps<ContextPayload>,
+      lifecycle?: unknown,
+      hooks?: { bull?: AdapterSettlementHook<AnalystCase>; bear?: AdapterSettlementHook<AnalystCase> },
+    ) => ReturnType<typeof pipelinePasses.runBullThenBear>;
+
+    const error = await run(deps, undefined, {
+      bull: async () => {
+        throw new Error("injected sqlite persistence failure");
+      },
+      bear: async () => {
+        bearCheckpointed = true;
+      },
+    }).then(
+      () => null,
+      (failure: unknown) => failure,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("injected sqlite persistence failure");
+    expect(error).not.toBeInstanceOf(BullBearPassFailure);
+    expect((error as Error).message).not.toMatch(/transport/i);
+    expect(bearCheckpointed).toBe(true);
+  });
+
+  it("settles deterministic verify as an awaited unbillable artifact", async () => {
+    const { bundle, computed, validation } = buildInputs();
+    const payload = pipelinePasses.assembleContextPayload(bundle, computed, validation);
+    const deps: PassDeps<ContextPayload> = { analysisModel: "claude-opus-4-8", payload };
+    let observed: AdapterSettlement<Report> | undefined;
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const hookEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const run = pipelinePasses.runVerifyPass as unknown as (
+      deps: PassDeps<ContextPayload>,
+      judge: JudgeOutput,
+      evidence?: { fetchedUrls: string[] },
+      hook?: AdapterSettlementHook<Report>,
+    ) => ReturnType<typeof pipelinePasses.runVerifyPass>;
+    let verifySettled = false;
+    const verifying = run(deps, fakeJudgeOutput(), { fetchedUrls: [] }, async (settlement) => {
+      observed = settlement;
+      entered();
+      await gate;
+    }).finally(() => {
+      verifySettled = true;
+    });
+
+    const hookRanBeforeVerify = await Promise.race([
+      hookEntered.then(() => true),
+      verifying.then(() => false),
+    ]);
+    expect(hookRanBeforeVerify).toBe(true);
+    expect(verifySettled).toBe(false);
+    release();
+    const result = await verifying;
+    expect(result.verifiedReport.meta.symbol).toBe("AAPL");
+    expect(observed).toMatchObject({
+      outcome: "success",
+      telemetry: {
+        model: "deterministic",
+        costUsd: 0,
+        billable: false,
+      },
+    });
+    expect((observed as Extract<AdapterSettlement<Report>, { outcome: "success" }>).data.meta.symbol).toBe("AAPL");
   });
 });
 

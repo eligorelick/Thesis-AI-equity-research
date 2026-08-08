@@ -50,6 +50,7 @@ import {
 import type {
   PipelinePasses,
   AnalystPassHooks,
+  AnalystSettlementHooks,
   BilledPassAttempt,
   PassDeps as RunnerPassDeps,
   PassResultLike,
@@ -83,6 +84,10 @@ import {
   type RunPassFn,
   type RunPassStreamingFn,
 } from "@/pipeline/stageC/passes";
+import {
+  invokePassSettlementHook,
+  type PassSettlementHook,
+} from "@/pipeline/jobArtifacts";
 
 /* ------------------------------------------------------------------------ *
  * Per-job assembly context (recovered in the verify pass)
@@ -345,9 +350,10 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
   async runBullThenBear(
     deps: RunnerPassDeps<ContextPayload>,
     hooks?: AnalystPassHooks,
+    settlements?: AnalystSettlementHooks,
   ): Promise<{ bull: PassResultLike<AnalystCase>; bear: PassResultLike<AnalystCase> }> {
     const passDeps = toPassDeps(deps);
-    const { bull, bear } = await runBullThenBearPass(passDeps, deps.payload, hooks);
+    const { bull, bear } = await runBullThenBearPass(passDeps, deps.payload, hooks, settlements);
     const bullResult = bull.ok ? toPassResultLike(bull.result) : undefined;
     const bearResult = bear.ok ? toPassResultLike(bear.result) : undefined;
     if (bullResult === undefined || bearResult === undefined) {
@@ -362,6 +368,8 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
         bearError: bear.ok ? undefined : passRunFailureMessage(bear, "bear"),
         bullBilledAttempt: bull.ok ? undefined : billedAttemptFromRun(bull),
         bearBilledAttempt: bear.ok ? undefined : billedAttemptFromRun(bear),
+        bullLaunched: bull.ok || bull.error.notLaunched !== true,
+        bearLaunched: bear.ok || bear.error.notLaunched !== true,
       });
     }
     return {
@@ -373,6 +381,7 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
   async runAnalystPass(
     deps: RunnerPassDeps<ContextPayload>,
     side: "bull" | "bear",
+    settlement?: PassSettlementHook<AnalystCase>,
   ): Promise<PassResultLike<AnalystCase>> {
     // Partial resume: the sibling's persisted snapshot is being reused, so a
     // lone pass simply writes (or re-reads) its own payload cache entry — no
@@ -381,8 +390,8 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
     const passDeps = toPassDeps(deps);
     const run =
       side === "bull"
-        ? await runBullPass(passDeps, deps.payload)
-        : await runBearPass(passDeps, deps.payload);
+        ? await runBullPass(passDeps, deps.payload, settlement)
+        : await runBearPass(passDeps, deps.payload, settlement);
     return toPassResultLike(unwrap(run, side));
   },
 
@@ -391,9 +400,10 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
     bull: PassResultLike<AnalystCase>,
     bear: PassResultLike<AnalystCase>,
     validationFeedback?: string,
+    settlement?: PassSettlementHook<JudgeOutput>,
   ): Promise<PassResultLike<JudgeOutput>> {
     const passDeps = toPassDeps(deps);
-    const run = await runJudgePass_(passDeps, deps.payload, bull.data, bear.data, validationFeedback);
+    const run = await runJudgePass_(passDeps, deps.payload, bull.data, bear.data, validationFeedback, settlement);
     return toPassResultLike(unwrap(run, "judge"));
   },
 
@@ -401,6 +411,7 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
     deps: RunnerPassDeps<ContextPayload>,
     judgeOutput: JudgeOutput,
     evidence: { fetchedUrls: string[] } = { fetchedUrls: [] },
+    settlement?: PassSettlementHook<Report>,
   ): Promise<VerifyPassResult> {
     const passDeps = toPassDeps(deps);
     const ctx = assemblyContexts.get(deps.payload);
@@ -452,6 +463,23 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
         verificationRate: verify.verificationRate,
         provenanceCoverage: verify.coverage,
         verificationLog: verify.log,
+      },
+    });
+
+    await invokePassSettlementHook(settlement, {
+      outcome: "success",
+      data: verifiedReport,
+      telemetry: {
+        model: "deterministic",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        webSearches: 0,
+        costUsd: 0,
+        fallbackUsed: false,
+        billable: false,
+        fetchedUrls: [],
       },
     });
 

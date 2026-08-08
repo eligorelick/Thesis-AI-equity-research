@@ -32,18 +32,22 @@ vi.mock("@/providers/anthropic", () => ({
 
 import { resolveModel } from "@/providers/anthropic";
 import { bootstrapSchema, createDatabase, setDbForTests, type DatabaseHandle } from "@/db";
-import { costLog, jobs, reports } from "@/db/schema";
+import { costLog, jobPassArtifacts, jobs, reports } from "@/db/schema";
 import { setSetting } from "@/settings/settings";
 import {
   ACTIVE_JOB_STALE_MS,
+  BullBearPassFailure,
   cancelJob,
   claimJobForResume,
+  claimPreparedJobResume,
   createJob,
   getOrCreateJobForSymbol,
   getReusableActiveJobForSymbol,
   isSymbolJobActive,
   JOB_CANCELED_ERROR,
+  JOB_HEARTBEAT_MS,
   readPassSnapshots,
+  prepareJobResume,
   runJob,
   snapshotsCoverResume,
   sweepAbandonedJobs,
@@ -57,6 +61,13 @@ import {
   type PassResultLike,
   type VerifyPassResult,
 } from "@/pipeline/jobRunner";
+import {
+  DURABLE_PASSES,
+  PASS_ARTIFACT_ENVELOPE_VERSION,
+  parsePassArtifactEnvelope,
+  persistPassSettlement,
+  readCurrentGenerationPassArtifacts,
+} from "@/pipeline/jobArtifacts";
 import {
   _clearJobSubscribers,
   subscribeJob,
@@ -100,6 +111,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   setDbForTests(null);
   handle.sqlite.close();
   _clearJobSubscribers();
@@ -425,6 +437,100 @@ function mockPasses(over: Partial<{
 
 const NOW = (): Date => new Date("2026-07-06T00:00:00.000Z");
 
+type TestSettlement<T> =
+  | { outcome: "success"; data: T; telemetry: TestTelemetry }
+  | { outcome: "failure"; failure: { name: string; message: string; kind?: string }; telemetry: TestTelemetry };
+
+interface TestTelemetry {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  webSearches: number;
+  costUsd: number;
+  fallbackUsed: boolean;
+  billable: boolean;
+  fetchedUrls: string[];
+}
+
+type TestSettlementHook<T> = (settlement: TestSettlement<T>) => void | Promise<void>;
+
+interface TestAnalystSettlementHooks {
+  bull?: TestSettlementHook<AnalystCase>;
+  bear?: TestSettlementHook<AnalystCase>;
+}
+
+function testTelemetry<T>(pass: PassResultLike<T>, billable = true): TestTelemetry {
+  return {
+    model: pass.model,
+    inputTokens: pass.usage?.input_tokens ?? 0,
+    outputTokens: pass.usage?.output_tokens ?? 0,
+    cacheReadTokens: pass.usage?.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: pass.usage?.cache_creation_input_tokens ?? 0,
+    webSearches: pass.webSearches ?? 0,
+    costUsd: pass.costUsd,
+    fallbackUsed: pass.fallbackUsed,
+    billable,
+    fetchedUrls: [...(pass.fetchedUrls ?? [])],
+  };
+}
+
+function testSuccessSettlement<T>(pass: PassResultLike<T>, billable = true): TestSettlement<T> {
+  return { outcome: "success", data: pass.data, telemetry: testTelemetry(pass, billable) };
+}
+
+function testAnalystPass(side: "bull" | "bear", costUsd = side === "bull" ? 0.9 : 0.47): PassResultLike<AnalystCase> {
+  return {
+    data: fakeAnalystCase(),
+    model: "claude-opus-4-8",
+    costUsd,
+    fallbackUsed: false,
+    usage: {
+      input_tokens: side === "bull" ? 15_000 : 14_000,
+      output_tokens: side === "bull" ? 6_000 : 5_500,
+      cache_creation_input_tokens: side === "bull" ? 75_000 : 0,
+      cache_read_input_tokens: side === "bear" ? 300_000 : 0,
+    },
+    webSearches: side === "bull" ? 7 : 6,
+    fetchedUrls: [`https://example.com/${side}`],
+  };
+}
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function seedResumableLegacyJob(
+  jobId: string,
+  status: "done" | "error" = "error",
+  fingerprint = "1.3.0:seeded",
+): void {
+  handle.db
+    .update(jobs)
+    .set({
+      status,
+      error: "synthesize failed",
+      stepsJson: JSON.stringify([
+        { step: "bull", status: "done" },
+        { step: "bear", status: "done" },
+        { step: "synthesize", status: "error" },
+      ] satisfies StepProgress[]),
+      bullJson: JSON.stringify(testAnalystPass("bull")),
+      bearJson: JSON.stringify(testAnalystPass("bear")),
+      payloadFingerprint: fingerprint,
+    })
+    .where(eq(jobs.id, jobId))
+    .run();
+}
+
 /* ------------------------------------------------------------------------ *
  * Unsupported instrument terminal gate
  * ------------------------------------------------------------------------ */
@@ -641,6 +747,7 @@ describe("runJob — unsupported instruments", () => {
       unsupportedMessage: null,
     });
 
+    seedResumableLegacyJob(failed, "error");
     handle.db
       .update(jobs)
       .set({ unsupportedKind: "etf", unsupportedMessage: "stale" })
@@ -729,6 +836,1276 @@ describe("runJob — unsupported instruments", () => {
       getReusableActiveJobForSymbol("MSFT", new Date("2026-08-07T00:00:01.000Z"), 60_000),
     ).toEqual({ jobId, status: "queued", updatedAt: refreshedAt });
     expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.status).toBe("queued");
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Task 20 - paid-pass durable settlement boundaries
+ * ------------------------------------------------------------------------ */
+
+describe("runJob - durable paid-pass settlements", () => {
+  it("analyst finish lifecycle stays local until the durable settlement commits", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const started = deferred();
+    const allowFinish = deferred();
+    const finished = deferred();
+    const releaseResult = deferred();
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (deps, hooks) => {
+        hooks?.onPassStart?.("bull");
+        started.resolve(undefined);
+        await allowFinish.promise;
+        hooks?.onPassFinish?.("bull");
+        finished.resolve(undefined);
+        await releaseResult.promise;
+        return base.passes.runBullThenBear(deps);
+      },
+    };
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    try {
+      await started.promise;
+      events.length = 0;
+      allowFinish.resolve(undefined);
+      await finished.promise;
+      const row = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+      const bull = (JSON.parse(row.stepsJson) as StepProgress[])
+        .find((step) => step.step === "bull");
+      expect(bull).toMatchObject({ status: "running" });
+      expect(bull?.finishedAt).toBeUndefined();
+      expect(bull?.completedAt).toBeUndefined();
+      expect(events).toEqual([]);
+    } finally {
+      cancelJob(jobId);
+      releaseResult.resolve(undefined);
+      await running.catch(() => undefined);
+      unsubscribe();
+    }
+  });
+
+  it("superseded worker cannot write lifecycle heartbeat failure terminal state or events", async () => {
+    vi.useFakeTimers();
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const entered = deferred();
+    let rejectAnalysts!: (error: Error) => void;
+    let finishOldBull: (() => void) | undefined;
+    const oldAnalysts = new Promise<never>((_resolve, reject) => {
+      rejectAnalysts = reject;
+    });
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (_deps, hooks) => {
+        hooks?.onPassStart?.("bull");
+        finishOldBull = () => hooks?.onPassFinish?.("bull");
+        entered.resolve(undefined);
+        return oldAnalysts;
+      },
+    };
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      deadlineMs: 90 * 60 * 1000,
+    });
+    await entered.promise;
+
+    const sentinelSteps = initialSteps().map((step) => ({
+      ...step,
+      detail: "new generation owns this row",
+    }));
+    const sentinelUpdatedAt = "2026-08-08T08:00:00.000Z";
+    handle.db
+      .update(jobs)
+      .set({
+        status: "queued",
+        runGeneration: 1,
+        revision: 44,
+        stepsJson: JSON.stringify(sentinelSteps),
+        error: "new generation sentinel",
+        reportId: null,
+        updatedAt: sentinelUpdatedAt,
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+    try {
+      await vi.advanceTimersByTimeAsync(JOB_HEARTBEAT_MS);
+      finishOldBull?.();
+      rejectAnalysts(new Error("old generation analyst failure"));
+      const result = await running;
+      expect(result).toMatchObject({ status: "error", reportId: null });
+
+      expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+        status: "queued",
+        runGeneration: 1,
+        revision: 44,
+        stepsJson: JSON.stringify(sentinelSteps),
+        error: "new generation sentinel",
+        reportId: null,
+        updatedAt: sentinelUpdatedAt,
+      });
+      expect(handle.db.select().from(reports).all()).toEqual([]);
+      expect(events).toEqual([]);
+    } finally {
+      unsubscribe();
+      rejectAnalysts(new Error("test cleanup"));
+      await running.catch(() => undefined);
+    }
+  });
+
+  it("does not persist a placeholder artifact for an analyst side never launched", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (...raw: unknown[]) => {
+        const hooks = raw[1] as {
+          onPassStart?: (side: "bull" | "bear") => void;
+          onPassFinish?: (side: "bull" | "bear") => void;
+        } | undefined;
+        const bull = (raw[2] as TestAnalystSettlementHooks | undefined)?.bull;
+        hooks?.onPassStart?.("bull");
+        if (!bull) throw new Error("missing bull settlement hook");
+        await bull({
+          outcome: "failure",
+          failure: { name: "Error", message: "bull failed before cache warm" },
+          telemetry: testTelemetry(testAnalystPass("bull", 0), false),
+        });
+        hooks?.onPassFinish?.("bull");
+        const failure = new BullBearPassFailure("bull failed; bear not launched", {
+          bullError: "bull failed before cache warm",
+          bearError: "bear not launched",
+          bullLaunched: true,
+          bearLaunched: false,
+        });
+        throw failure;
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result.dataOnly).toBe(true);
+    expect(
+      handle.db
+        .select()
+        .from(jobPassArtifacts)
+        .where(eq(jobPassArtifacts.jobId, jobId))
+        .all()
+        .map((artifact) => artifact.pass),
+    ).toEqual(["bull"]);
+  });
+
+  it("persists bull artifact and cost before unresolved bear settles", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const bull = testAnalystPass("bull");
+    const bear = testAnalystPass("bear");
+    const entered = deferred();
+    const bullCallbackReturned = deferred();
+    const releaseBear = deferred();
+
+    const passes: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: () => "1.3.0:aaaabbbb",
+      runBullThenBear: async (...raw: unknown[]) => {
+        const settlements = raw[2] as TestAnalystSettlementHooks | undefined;
+        entered.resolve(undefined);
+        if (settlements?.bull) {
+          await settlements.bull(testSuccessSettlement(bull));
+        }
+        bullCallbackReturned.resolve(undefined);
+        await releaseBear.promise;
+        return { bull, bear };
+      },
+    };
+
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    try {
+      await entered.promise;
+      await bullCallbackReturned.promise;
+
+      const artifacts = handle.db
+        .select()
+        .from(jobPassArtifacts)
+        .where(eq(jobPassArtifacts.jobId, jobId))
+        .all();
+      const costs = handle.db
+        .select()
+        .from(costLog)
+        .where(eq(costLog.jobId, jobId))
+        .all();
+      expect(artifacts).toHaveLength(1);
+      expect(artifacts[0]).toMatchObject({ pass: "bull", runGeneration: 0 });
+      expect(costs).toHaveLength(1);
+      expect(costs[0]).toMatchObject({ step: "bull", runGeneration: 0 });
+      expect(costs[0]?.attemptId).toBe(artifacts[0]?.attemptId);
+
+      const row = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+      const steps = JSON.parse(row.stepsJson) as StepProgress[];
+      expect(steps.find((step) => step.step === "bull")?.status).toBe("done");
+      expect(steps.find((step) => step.step === "bear")?.status).not.toBe("done");
+    } finally {
+      cancelJob(jobId);
+      releaseBear.resolve(undefined);
+      await running.catch(() => undefined);
+    }
+  });
+
+  it("late settlement after cancellation cannot mutate a newer generation", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const entered = deferred();
+    let lateBull: TestSettlementHook<AnalystCase> | undefined;
+    const passes: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: () => "1.3.0:old00000",
+      runBullThenBear: async (...raw: unknown[]) => {
+        lateBull = (raw[2] as TestAnalystSettlementHooks | undefined)?.bull;
+        entered.resolve(undefined);
+        return new Promise<never>(() => {});
+      },
+    };
+
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      deadlineMs: 10_000,
+    });
+    await entered.promise;
+    expect(cancelJob(jobId)).toBe(true);
+    expect((await running).status).toBe("error");
+    expect(typeof lateBull).toBe("function");
+
+    const newerSnapshot = JSON.stringify({
+      ...testAnalystPass("bull", 0.12),
+      model: "new-generation-model",
+    });
+    const resumableSteps = [
+      { step: "bull", status: "done" },
+      { step: "bear", status: "done" },
+      { step: "synthesize", status: "error" },
+    ] as StepProgress[];
+    handle.db
+      .update(jobs)
+      .set({
+        status: "error",
+        error: "retryable synthesis failure",
+        stepsJson: JSON.stringify(resumableSteps),
+        bullJson: newerSnapshot,
+        bearJson: newerSnapshot,
+        payloadFingerprint: "1.3.0:new00000",
+        revision: 9,
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    const claimed = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(claimed.runGeneration).toBe(1);
+    const immutableNewerState = {
+      stepsJson: claimed.stepsJson,
+      revision: claimed.revision,
+      bullJson: claimed.bullJson,
+      bearJson: claimed.bearJson,
+      payloadFingerprint: claimed.payloadFingerprint,
+    };
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+    try {
+      await lateBull!(testSuccessSettlement(testAnalystPass("bull")));
+    } finally {
+      unsubscribe();
+    }
+
+    const after = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect({
+      stepsJson: after.stepsJson,
+      revision: after.revision,
+      bullJson: after.bullJson,
+      bearJson: after.bearJson,
+      payloadFingerprint: after.payloadFingerprint,
+    }).toEqual(immutableNewerState);
+    expect(events).toEqual([]);
+    expect(
+      handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all(),
+    ).toEqual([expect.objectContaining({ pass: "bull", runGeneration: 0 })]);
+    expect(
+      handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all(),
+    ).toEqual([expect.objectContaining({ step: "bull", runGeneration: 0 })]);
+  });
+
+  it("superseded worker rolls back its report insert when the generation changes before link", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const verifySettled = deferred();
+    const releaseVerify = deferred();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runVerifyPass: async (deps, judge, evidence, settlement) => {
+        const verified = await base.passes.runVerifyPass(deps, judge, evidence);
+        if (!settlement) throw new Error("missing verify settlement hook");
+        await settlement({
+          outcome: "success",
+          data: verified.verifiedReport,
+          telemetry: {
+            model: "deterministic",
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            webSearches: 0,
+            costUsd: 0,
+            fallbackUsed: false,
+            billable: false,
+            fetchedUrls: [],
+          },
+        });
+        verifySettled.resolve(undefined);
+        await releaseVerify.promise;
+        return verified;
+      },
+    };
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    await verifySettled.promise;
+
+    const before = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    const sentinelSteps = initialSteps().map((step) => ({
+      ...step,
+      detail: "new generation report sentinel",
+    }));
+    handle.db
+      .update(jobs)
+      .set({
+        status: "queued",
+        runGeneration: 1,
+        revision: before.revision + 1,
+        stepsJson: JSON.stringify(sentinelSteps),
+        error: "new generation remains unlinked",
+        reportId: null,
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+    const immutable = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+    try {
+      releaseVerify.resolve(undefined);
+      expect(await running).toMatchObject({ status: "error", reportId: null });
+    } finally {
+      unsubscribe();
+      releaseVerify.resolve(undefined);
+      await running.catch(() => undefined);
+    }
+
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toEqual(immutable);
+    expect(handle.db.select().from(reports).all()).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it("duplicate settlement callback bills exactly once", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses({ verifyCostUsd: 0 });
+    const bull = testAnalystPass("bull");
+    const bear = testAnalystPass("bear");
+    const passes: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: () => "1.3.0:aaaabbbb",
+      runBullThenBear: async (...raw: unknown[]) => {
+        const settlements = raw[2] as TestAnalystSettlementHooks | undefined;
+        if (settlements?.bull) {
+          await settlements.bull(testSuccessSettlement(bull));
+          await settlements.bull(testSuccessSettlement(bull));
+        }
+        if (settlements?.bear) await settlements.bear(testSuccessSettlement(bear));
+        return { bull, bear };
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    expect(result.status).toBe("done");
+
+    const bullArtifacts = handle.db
+      .select()
+      .from(jobPassArtifacts)
+      .where(eq(jobPassArtifacts.jobId, jobId))
+      .all()
+      .filter((row) => row.pass === "bull");
+    const bullCosts = handle.db
+      .select()
+      .from(costLog)
+      .where(eq(costLog.jobId, jobId))
+      .all()
+      .filter((row) => row.step === "bull");
+    expect(bullArtifacts).toHaveLength(1);
+    expect(bullCosts).toHaveLength(1);
+    expect(bullCosts[0]?.attemptId).toBe(bullArtifacts[0]?.attemptId);
+    expect(bullCosts[0]?.costUsd).toBeCloseTo(0.9, 10);
+  });
+
+  it("persists schema-valid judge artifact before verify starts", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses({ verifyCostUsd: 0 });
+    const originalJudge = base.passes.runJudgePass.bind(base.passes);
+    const originalVerify = base.passes.runVerifyPass.bind(base.passes);
+    let judgeArtifactsAtVerify = 0;
+    let judgeEnvelope: unknown;
+    const passes: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: () => "1.3.0:aaaabbbb",
+      runJudgePass: async (...raw: unknown[]) => {
+        const result = await originalJudge(
+          raw[0] as Parameters<PipelinePasses["runJudgePass"]>[0],
+          raw[1] as Parameters<PipelinePasses["runJudgePass"]>[1],
+          raw[2] as Parameters<PipelinePasses["runJudgePass"]>[2],
+          raw[3] as string | undefined,
+        );
+        const settlement = raw[4] as TestSettlementHook<JudgeOutput> | undefined;
+        if (settlement) await settlement(testSuccessSettlement(result));
+        return result;
+      },
+      runVerifyPass: async (...raw: Parameters<PipelinePasses["runVerifyPass"]>) => {
+        const rows = handle.db
+          .select()
+          .from(jobPassArtifacts)
+          .where(eq(jobPassArtifacts.jobId, jobId))
+          .all()
+          .filter((row) => row.pass === "synthesize");
+        judgeArtifactsAtVerify = rows.length;
+        judgeEnvelope = rows[0] ? JSON.parse(rows[0].outcomeJson) : null;
+        return originalVerify(...raw);
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    expect(result.status).toBe("done");
+    expect(judgeArtifactsAtVerify).toBe(1);
+    expect(judgeEnvelope).toMatchObject({
+      artifactVersion: 1,
+      outcome: "success",
+      data: expect.objectContaining({ verdict: expect.any(Object) }),
+      payloadFingerprint: "1.3.0:aaaabbbb",
+    });
+  });
+
+  it.each([
+    {
+      label: "artifact failure rolls back cost",
+      trigger: `
+        CREATE TRIGGER reject_task20_artifact
+        BEFORE INSERT ON job_pass_artifacts
+        WHEN NEW.pass = 'bull'
+        BEGIN SELECT RAISE(ABORT, 'injected artifact failure'); END;
+      `,
+      expected: "injected artifact failure",
+    },
+    {
+      label: "cost failure rolls back artifact",
+      trigger: `
+        CREATE TRIGGER reject_task20_cost
+        BEFORE INSERT ON cost_log
+        WHEN NEW.step = 'bull' AND NEW.attemptId IS NOT NULL
+        BEGIN SELECT RAISE(ABORT, 'injected cost failure'); END;
+      `,
+      expected: "injected cost failure",
+    },
+  ])("$label and emits no done step/event", async ({ trigger, expected }) => {
+    const { jobId } = createJob("AAPL");
+    handle.sqlite.exec(trigger);
+    const base = mockPasses();
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+    const passes: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: () => "1.3.0:aaaabbbb",
+      runBullThenBear: async (...raw: unknown[]) => {
+        const settlement = (raw[2] as TestAnalystSettlementHooks | undefined)?.bull;
+        if (!settlement) throw new Error("missing durable bull settlement hook");
+        await settlement(testSuccessSettlement(testAnalystPass("bull")));
+        throw new Error("unreachable after injected persistence rejection");
+      },
+    };
+
+    try {
+      await expect(
+        runJob(jobId, passes, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW }),
+      ).rejects.toThrow(expected);
+    } finally {
+      unsubscribe();
+    }
+    expect(
+      handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all(),
+    ).toHaveLength(0);
+    expect(
+      handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all(),
+    ).toHaveLength(0);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "step-update" && event.step.step === "bull" && event.step.status === "done",
+      ),
+    ).toBe(false);
+  });
+
+  it("hook-less analyst fallback still checkpoints the sibling after persistence rejection", async () => {
+    const { jobId } = createJob("AAPL");
+    handle.sqlite.exec(`
+      CREATE TRIGGER reject_task20_bull_artifact
+      BEFORE INSERT ON job_pass_artifacts
+      WHEN NEW.pass = 'bull'
+      BEGIN SELECT RAISE(ABORT, 'injected bull artifact failure'); END;
+    `);
+    const base = mockPasses();
+
+    await expect(runJob(jobId, base.passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    })).rejects.toThrow(/injected bull artifact failure/i);
+
+    expect(
+      handle.db
+        .select()
+        .from(jobPassArtifacts)
+        .where(eq(jobPassArtifacts.jobId, jobId))
+        .all()
+        .map((artifact) => artifact.pass),
+    ).toEqual(["bear"]);
+    expect(
+      handle.db
+        .select()
+        .from(costLog)
+        .where(eq(costLog.jobId, jobId))
+        .all()
+        .map((cost) => cost.step),
+    ).toEqual(["bear"]);
+  });
+
+  it("conflicting duplicate settlement rejects without mutating the first checkpoint", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const bull = testAnalystPass("bull");
+    const passes: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: () => "1.3.0:aaaabbbb",
+      runBullThenBear: async (...raw: unknown[]) => {
+        const settlement = (raw[2] as TestAnalystSettlementHooks | undefined)?.bull;
+        if (!settlement) throw new Error("missing durable bull settlement hook");
+        await settlement(testSuccessSettlement(bull));
+        await settlement(testSuccessSettlement({ ...bull, costUsd: 9.99 }));
+        throw new Error("unreachable after conflicting duplicate");
+      },
+    };
+
+    await expect(
+      runJob(jobId, passes, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW }),
+    ).rejects.toThrow(/conflict|invariant/i);
+
+    const artifacts = handle.db
+      .select()
+      .from(jobPassArtifacts)
+      .where(eq(jobPassArtifacts.jobId, jobId))
+      .all();
+    const costs = handle.db
+      .select()
+      .from(costLog)
+      .where(eq(costLog.jobId, jobId))
+      .all();
+    expect(artifacts).toHaveLength(1);
+    expect(costs).toHaveLength(1);
+    expect(costs[0]?.costUsd).toBeCloseTo(0.9, 10);
+  });
+
+  it("preclaimed resume bumps exactly once, keeps legacy fallbacks, and clones no artifacts", async () => {
+    const { jobId } = createJob("AAPL");
+    const source = mockPasses();
+    const sourcePasses: PipelinePasses = {
+      ...source.passes,
+      fingerprintPayload: () => "1.3.0:source",
+      runJudgePass: async () => {
+        throw new Error("judge transport failed after analyst settlement");
+      },
+    };
+    await runJob(jobId, sourcePasses, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    const terminal = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    const sourceArtifacts = handle.db
+      .select()
+      .from(jobPassArtifacts)
+      .where(eq(jobPassArtifacts.jobId, jobId))
+      .all();
+    expect(terminal.runGeneration).toBe(0);
+    expect(terminal.bullJson).not.toBeNull();
+    expect(terminal.bearJson).not.toBeNull();
+
+    expect(claimJobForResume(jobId, "done")).toBe(true);
+    const claimed = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(claimed.runGeneration).toBe(1);
+    expect(claimed.bullJson).toBe(terminal.bullJson);
+    expect(claimed.bearJson).toBe(terminal.bearJson);
+    expect(readCurrentGenerationPassArtifacts(jobId)).toEqual([]);
+    expect(
+      handle.db
+        .select()
+        .from(jobPassArtifacts)
+        .where(eq(jobPassArtifacts.jobId, jobId))
+        .all()
+        .filter((row) => row.runGeneration === 1),
+    ).toEqual([]);
+
+    const resumed = mockPasses();
+    const paidAnalystDispatch = vi.fn(async () => {
+      throw new Error("preclaimed resume must not re-run analysts");
+    });
+    const result = await runJob(
+      jobId,
+      {
+        ...resumed.passes,
+        fingerprintPayload: () => "1.3.0:source",
+        runBullThenBear: paidAnalystDispatch,
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    );
+    expect(result.status).toBe("done");
+    expect(paidAnalystDispatch).not.toHaveBeenCalled();
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(1);
+    const allArtifacts = handle.db
+      .select()
+      .from(jobPassArtifacts)
+      .where(eq(jobPassArtifacts.jobId, jobId))
+      .all();
+    expect(allArtifacts.filter((row) => row.runGeneration === 0)).toHaveLength(sourceArtifacts.length);
+    expect(
+      allArtifacts.filter(
+        (row) => row.runGeneration === 1 && (row.pass === "bull" || row.pass === "bear"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("direct terminal resume performs the same single generation bump", async () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error", "1.3.0:direct");
+    const healthy = mockPasses();
+    const analysts = vi.fn(async () => {
+      throw new Error("direct resume must reuse prepared analysts");
+    });
+
+    const result = await runJob(
+      jobId,
+      {
+        ...healthy.passes,
+        fingerprintPayload: () => "1.3.0:direct",
+        runBullThenBear: analysts,
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    );
+    expect(result.status).toBe("done");
+    expect(analysts).not.toHaveBeenCalled();
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(1);
+  });
+
+  it("one-sided paid analyst remains resumable after a preclaimed retry crashes early", () => {
+    const { jobId } = createJob("AAPL");
+    handle.db
+      .update(jobs)
+      .set({
+        status: "error",
+        error: "bear failed",
+        stepsJson: JSON.stringify([
+          { step: "bull", status: "done" },
+          { step: "bear", status: "error" },
+          { step: "synthesize", status: "skipped" },
+        ] satisfies StepProgress[]),
+        bullJson: JSON.stringify(testAnalystPass("bull")),
+        bearJson: null,
+        payloadFingerprint: "1.3.0:one-sided",
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    const claimed = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(claimed.runGeneration).toBe(1);
+
+    handle.db
+      .update(jobs)
+      .set({
+        status: "error",
+        error: "crashed during fetch before missing bear launched",
+        revision: claimed.revision + 1,
+        stepsJson: JSON.stringify([
+          { step: "fetch", status: "error" },
+          { step: "validate", status: "skipped" },
+          { step: "compute", status: "skipped" },
+          { step: "bull", status: "skipped" },
+          { step: "bear", status: "skipped" },
+          { step: "synthesize", status: "skipped" },
+          { step: "verify", status: "skipped" },
+        ] satisfies StepProgress[]),
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    const again = prepareJobResume(jobId, "error");
+    expect(again).not.toBeNull();
+    expect(again?.bull).not.toBeNull();
+    expect(again?.bear).toBeNull();
+    expect(claimPreparedJobResume(again!)).toBe(true);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(2);
+  });
+
+  it("duplicate run dispatch launches providers once", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const original = base.passes.runBullThenBear.bind(base.passes);
+    const entered = deferred();
+    const release = deferred();
+    const providerLaunch = vi.fn(async (...args: Parameters<PipelinePasses["runBullThenBear"]>) => {
+      entered.resolve(undefined);
+      await release.promise;
+      return original(...args);
+    });
+    const passes: PipelinePasses = { ...base.passes, runBullThenBear: providerLaunch };
+
+    const first = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    await entered.promise;
+    await expect(
+      runJob(jobId, passes, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW }),
+    ).rejects.toThrow(/already dispatched|already claimed/i);
+    release.resolve(undefined);
+    expect((await first).status).toBe("done");
+    expect(providerLaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it("simultaneous bull and bear settlements preserve both step states", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const bull = testAnalystPass("bull");
+    const bear = testAnalystPass("bear");
+    const passes: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: () => "1.3.0:parallel",
+      runBullThenBear: async (...raw: unknown[]) => {
+        const hooks = raw[2] as TestAnalystSettlementHooks | undefined;
+        if (!hooks?.bull || !hooks.bear) throw new Error("missing analyst settlement hooks");
+        await Promise.all([
+          hooks.bull(testSuccessSettlement(bull)),
+          hooks.bear(testSuccessSettlement(bear)),
+        ]);
+        return { bull, bear };
+      },
+    };
+
+    expect((await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    })).status).toBe("done");
+    const steps = JSON.parse(
+      handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!.stepsJson,
+    ) as StepProgress[];
+    expect(steps.find((step) => step.step === "bull")?.status).toBe("done");
+    expect(steps.find((step) => step.step === "bear")?.status).toBe("done");
+    expect(
+      readCurrentGenerationPassArtifacts(jobId)
+        .filter((artifact) => artifact.pass === "bull" || artifact.pass === "bear"),
+    ).toHaveLength(2);
+  });
+
+  it.each([
+    { label: "billed", billable: true, costUsd: 0.33 },
+    { label: "unbilled", billable: false, costUsd: 0 },
+  ])("persists a $label failure atomically", async ({ billable, costUsd }) => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const error = new Error("judge attempt failed deterministically");
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runJudgePass: async (...raw: unknown[]) => {
+        const hook = raw[4] as TestSettlementHook<JudgeOutput> | undefined;
+        if (!hook) throw new Error("missing judge settlement hook");
+        await hook({
+          outcome: "failure",
+          failure: { name: "Error", message: error.message },
+          telemetry: {
+            ...testTelemetry({
+              data: fakeJudgeOutput(),
+              model: "claude-opus-4-8",
+              costUsd,
+              fallbackUsed: false,
+              usage: { input_tokens: 800, output_tokens: 400 },
+            }, billable),
+            billable,
+          },
+        });
+        if (billable) {
+          Object.assign(error, {
+            billedAttempt: {
+              model: "claude-opus-4-8",
+              costUsd,
+              fallbackUsed: false,
+              usage: { input_tokens: 800, output_tokens: 400 },
+            },
+          });
+        }
+        throw error;
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    expect(result.dataOnly).toBe(true);
+    const synth = readCurrentGenerationPassArtifacts(jobId).filter(
+      (artifact) => artifact.pass === "synthesize",
+    );
+    expect(synth).toHaveLength(1);
+    expect(synth[0]?.envelope.outcome).toBe("failure");
+    const synthCosts = handle.db
+      .select()
+      .from(costLog)
+      .where(eq(costLog.jobId, jobId))
+      .all()
+      .filter((row) => row.step === "synthesize");
+    expect(synthCosts).toHaveLength(billable ? 1 : 0);
+    if (billable) expect(synthCosts[0]?.attemptId).toBe(synth[0]?.attemptId);
+  });
+
+  it.each([
+    { label: "deterministic", billable: false, costUsd: undefined },
+    { label: "paid mock", billable: true, costUsd: 0.18 },
+  ])("persists $label verify with the correct atomic cost pair", async ({ billable, costUsd }) => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const original = base.passes.runVerifyPass.bind(base.passes);
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runVerifyPass: async (deps, judge, evidence, hook) => {
+        const result = await original(deps, judge, evidence);
+        const telemetry: TestTelemetry = {
+          model: billable ? "claude-opus-4-8" : "deterministic",
+          inputTokens: billable ? 100 : 0,
+          outputTokens: billable ? 50 : 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          webSearches: 0,
+          costUsd: costUsd ?? 0,
+          fallbackUsed: false,
+          billable,
+          fetchedUrls: [],
+        };
+        await (hook as TestSettlementHook<Report> | undefined)?.({
+          outcome: "success",
+          data: result.verifiedReport,
+          telemetry,
+        });
+        return {
+          ...result,
+          costUsd,
+          model: telemetry.model,
+          usage: { input_tokens: telemetry.inputTokens, output_tokens: telemetry.outputTokens },
+        };
+      },
+    };
+
+    expect((await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    })).status).toBe("done");
+    const verifyArtifacts = readCurrentGenerationPassArtifacts(jobId).filter(
+      (artifact) => artifact.pass === "verify",
+    );
+    expect(verifyArtifacts).toHaveLength(1);
+    const verifyCosts = handle.db
+      .select()
+      .from(costLog)
+      .where(eq(costLog.jobId, jobId))
+      .all()
+      .filter((row) => row.step === "verify");
+    expect(verifyCosts).toHaveLength(billable ? 1 : 0);
+    if (billable) expect(verifyCosts[0]?.attemptId).toBe(verifyArtifacts[0]?.attemptId);
+  });
+
+  it("clears an opposite legacy analyst when a new fingerprint cohort settles", async () => {
+    const { jobId } = createJob("AAPL");
+    handle.db
+      .update(jobs)
+      .set({
+        bullJson: JSON.stringify(testAnalystPass("bull")),
+        payloadFingerprint: "1.3.0:fpA",
+      })
+      .where(eq(jobs.id, jobId))
+      .run();
+    const base = mockPasses();
+    const bearSettled = deferred();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: () => "1.3.0:fpB",
+      runBullThenBear: async (...raw: unknown[]) => {
+        const bear = (raw[2] as TestAnalystSettlementHooks | undefined)?.bear;
+        if (!bear) throw new Error("missing bear settlement hook");
+        await bear(testSuccessSettlement(testAnalystPass("bear")));
+        bearSettled.resolve(undefined);
+        return new Promise<never>(() => {});
+      },
+    };
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      deadlineMs: 10_000,
+    });
+    await bearSettled.promise;
+    const checkpoint = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(checkpoint.payloadFingerprint).toBe("1.3.0:fpB");
+    expect(checkpoint.bullJson).toBeNull();
+    expect(checkpoint.bearJson).not.toBeNull();
+    expect(cancelJob(jobId)).toBe(true);
+    expect((await running).status).toBe("error");
+  });
+
+  it("current judge failure keeps each legacy analyst resumable without cloning or rebilling", async () => {
+    const { jobId } = createJob("AAPL");
+    const source = mockPasses();
+    await runJob(
+      jobId,
+      {
+        ...source.passes,
+        fingerprintPayload: () => "1.3.0:cohort",
+        runJudgePass: async () => {
+          throw new Error("source judge unavailable");
+        },
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW },
+    );
+    expect(claimJobForResume(jobId, "done")).toBe(true);
+
+    const retry = mockPasses();
+    const judgeError = Object.assign(new Error("current judge billed failure"), {
+      billedAttempt: {
+        model: "claude-opus-4-8",
+        costUsd: 0.27,
+        fallbackUsed: false,
+        usage: { input_tokens: 500, output_tokens: 250 },
+      },
+    });
+    const result = await runJob(
+      jobId,
+      {
+        ...retry.passes,
+        fingerprintPayload: () => "1.3.0:cohort",
+        runBullThenBear: async () => {
+          throw new Error("must reuse legacy analysts");
+        },
+        runJudgePass: async () => {
+          throw judgeError;
+        },
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    );
+    expect(result.dataOnly).toBe(true);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(1);
+    const current = readCurrentGenerationPassArtifacts(jobId);
+    expect(current.filter((artifact) => artifact.pass === "bull" || artifact.pass === "bear")).toEqual([]);
+    expect(current.filter((artifact) => artifact.pass === "synthesize")).toHaveLength(1);
+    expect(
+      handle.db
+        .select()
+        .from(costLog)
+        .where(eq(costLog.jobId, jobId))
+        .all()
+        .filter((row) => row.step === "bull" || row.step === "bear"),
+    ).toHaveLength(2);
+    expect(readPassSnapshots(jobId)?.bull).not.toBeNull();
+    expect(readPassSnapshots(jobId)?.bear).not.toBeNull();
+    expect(claimJobForResume(jobId, "done")).toBe(true);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(2);
+  });
+
+  it("report-link change in the prepare-to-claim window loses the exact source-state CAS", () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error");
+    const reportValues = (suffix: string) => ({
+      symbol: "AAPL",
+      createdAt: `2026-07-06T00:00:0${suffix}.000Z`,
+      model: "deterministic",
+      status: "done",
+      reportJson: JSON.stringify(fakeReport(fakeJudgeOutput())),
+      verificationRate: null,
+      costUsd: 0,
+      specVersion: "1.0.0",
+    });
+    const first = handle.db.insert(reports).values(reportValues("1")).returning({ id: reports.id }).get();
+    const second = handle.db.insert(reports).values(reportValues("2")).returning({ id: reports.id }).get();
+    handle.db.update(jobs).set({ reportId: first.id }).where(eq(jobs.id, jobId)).run();
+    const prepared = prepareJobResume(jobId, "error");
+    expect(prepared).not.toBeNull();
+    handle.db.update(jobs).set({ reportId: second.id }).where(eq(jobs.id, jobId)).run();
+
+    expect(claimPreparedJobResume(prepared!)).toBe(false);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "error",
+      runGeneration: 0,
+      reportId: second.id,
+    });
+  });
+
+  it("artifact settlement in the prepare-to-claim window loses the exact source-state CAS", () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error");
+    const prepared = prepareJobResume(jobId, "error");
+    expect(prepared).not.toBeNull();
+
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "late-source-settlement",
+      pass: "synthesize",
+      settlement: {
+        outcome: "failure",
+        failure: { name: "Error", message: "late source failure" },
+        telemetry: testTelemetry({
+          data: fakeJudgeOutput(),
+          model: "local-unbilled",
+          costUsd: 0,
+          fallbackUsed: false,
+        }, false),
+      },
+      payloadFingerprint: "1.3.0:seeded",
+      settledAt: NOW().toISOString(),
+    });
+
+    expect(claimPreparedJobResume(prepared!)).toBe(false);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "error",
+      runGeneration: 0,
+    });
+  });
+
+  it("prepared resume rejects reusable-plan mutation before the exact claim", () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error", "1.3.0:immutable");
+    const prepared = prepareJobResume(jobId, "error");
+    expect(prepared).not.toBeNull();
+    prepared!.payloadFingerprint = null;
+
+    expect(claimPreparedJobResume(prepared!)).toBe(false);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()).toMatchObject({
+      status: "error",
+      runGeneration: 0,
+    });
+  });
+
+  it("post-claim caller mutation cannot alter the cached reusable analyst plan", async () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error", "1.3.0:immutable");
+    const prepared = prepareJobResume(jobId, "error");
+    expect(prepared).not.toBeNull();
+    expect(claimPreparedJobResume(prepared!)).toBe(true);
+
+    prepared!.bull!.data.thesis[0]!.text = "MUTATED AFTER CLAIM";
+    prepared!.payloadFingerprint = null;
+    const base = mockPasses();
+    let observedBullText = "";
+    const result = await runJob(
+      jobId,
+      {
+        ...base.passes,
+        fingerprintPayload: () => "1.3.0:immutable",
+        runBullThenBear: async () => {
+          throw new Error("preclaimed resume must reuse analysts");
+        },
+        runJudgePass: async (deps, bull, bear, feedback, settlement) => {
+          observedBullText = bull.data.thesis[0]?.text ?? "";
+          return base.passes.runJudgePass(deps, bull, bear, feedback, settlement);
+        },
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, resume: true },
+    );
+
+    expect(result.status).toBe("done");
+    expect(observedBullText).toBe("t");
+  });
+
+  it("duplicate replay of an earlier judge attempt cannot regress a later success", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const verifyEntered = deferred();
+    const releaseVerify = deferred();
+    let attempt = 0;
+    let firstHook: TestSettlementHook<JudgeOutput> | undefined;
+    const firstFailure: TestSettlement<JudgeOutput> = {
+      outcome: "failure",
+      failure: { name: "Error", message: "schema-invalid first judge", kind: "schema" },
+      telemetry: {
+        model: "claude-opus-4-8",
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        webSearches: 0,
+        costUsd: 0.12,
+        fallbackUsed: false,
+        billable: true,
+        fetchedUrls: [],
+      },
+    };
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runJudgePass: async (deps, bull, bear, feedback, settlement) => {
+        attempt += 1;
+        if (!settlement) throw new Error("missing judge settlement hook");
+        if (attempt === 1) {
+          firstHook = settlement;
+          await settlement(firstFailure);
+          throw new Error("schema-invalid first judge");
+        }
+        const success = await base.passes.runJudgePass(deps, bull, bear, feedback);
+        await settlement(testSuccessSettlement(success));
+        return success;
+      },
+      runVerifyPass: async (...args) => {
+        verifyEntered.resolve(undefined);
+        await releaseVerify.promise;
+        return base.passes.runVerifyPass(...args);
+      },
+    };
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    await verifyEntered.promise;
+    expect(firstHook).toBeTypeOf("function");
+    const events: JobEvent[] = [];
+    const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
+    try {
+      await firstHook!(firstFailure);
+      const steps = JSON.parse(
+        handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!.stepsJson,
+      ) as StepProgress[];
+      expect(steps.find((step) => step.step === "synthesize")?.status).toBe("done");
+      expect(events).toEqual([]);
+    } finally {
+      unsubscribe();
+      releaseVerify.resolve(undefined);
+      await running.catch(() => undefined);
+    }
+  });
+
+  it("current same-pass failure suppresses only that analyst legacy fallback", () => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error", "1.3.0:same-pass");
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "current-bull-failure",
+      pass: "bull",
+      settlement: {
+        outcome: "failure",
+        failure: { name: "Error", message: "current bull failed" },
+        telemetry: testTelemetry(testAnalystPass("bull", 0), false),
+      },
+      payloadFingerprint: "1.3.0:same-pass",
+      settledAt: NOW().toISOString(),
+    });
+
+    const prepared = prepareJobResume(jobId, "error");
+    expect(prepared).not.toBeNull();
+    expect(prepared?.bull).toBeNull();
+    expect(prepared?.bear?.data).toEqual(fakeAnalystCase());
+  });
+
+  it("strict artifact parser rejects unknown versions and fields", () => {
+    expect(DURABLE_PASSES).toEqual(["bull", "bear", "synthesize", "verify"]);
+    const valid = {
+      artifactVersion: PASS_ARTIFACT_ENVELOPE_VERSION,
+      outcome: "success",
+      data: fakeAnalystCase(),
+      payloadFingerprint: "1.3.0:strict",
+    } as const;
+    expect(parsePassArtifactEnvelope("bull", valid)).toMatchObject(valid);
+    expect(() => parsePassArtifactEnvelope("bull", { ...valid, artifactVersion: 2 })).toThrow(
+      /version/i,
+    );
+    expect(() => parsePassArtifactEnvelope("bull", { ...valid, extra: true })).toThrow(
+      /unexpected/i,
+    );
+  });
+
+  it("strict artifact reader rejects mismatched cost metadata and missing ledger pairs", () => {
+    const { jobId } = createJob("AAPL");
+    const attemptId = "strict-cost-pair";
+    const pass = testAnalystPass("bull");
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId,
+      pass: "bull",
+      settlement: testSuccessSettlement(pass),
+      payloadFingerprint: "1.3.0:strict-cost",
+      settledAt: NOW().toISOString(),
+    });
+    const artifact = handle.db
+      .select()
+      .from(jobPassArtifacts)
+      .where(eq(jobPassArtifacts.attemptId, attemptId))
+      .get()!;
+    const cost = JSON.parse(artifact.costJson) as Record<string, unknown>;
+    handle.db
+      .update(jobPassArtifacts)
+      .set({ costJson: JSON.stringify({ ...cost, costUsd: pass.costUsd + 1 }) })
+      .where(eq(jobPassArtifacts.attemptId, attemptId))
+      .run();
+    expect(() => readCurrentGenerationPassArtifacts(jobId)).toThrow(/telemetry.*cost/i);
+
+    handle.db
+      .update(jobPassArtifacts)
+      .set({ costJson: artifact.costJson })
+      .where(eq(jobPassArtifacts.attemptId, attemptId))
+      .run();
+    handle.db.delete(costLog).where(eq(costLog.attemptId, attemptId)).run();
+    expect(() => readCurrentGenerationPassArtifacts(jobId)).toThrow(/cost pair/i);
   });
 });
 
@@ -1501,7 +2878,16 @@ describe("runJob — judge retry on schema-validation failure (SPEC §2)", () =>
 
     // Failed but billed judge attempts are logged before the successful retry.
     const costRows = handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all();
-    expect(costRows.filter((r) => r.step === "synthesize")).toHaveLength(3);
+    const synthCosts = costRows.filter((r) => r.step === "synthesize");
+    expect(synthCosts).toHaveLength(3);
+    const synthArtifacts = readCurrentGenerationPassArtifacts(jobId).filter(
+      (artifact) => artifact.pass === "synthesize",
+    );
+    expect(synthArtifacts).toHaveLength(3);
+    expect(new Set(synthArtifacts.map((artifact) => artifact.attemptId)).size).toBe(3);
+    expect(new Set(synthCosts.map((row) => row.attemptId))).toEqual(
+      new Set(synthArtifacts.map((artifact) => artifact.attemptId)),
+    );
     expect(costRows.map((r) => r.step).sort()).toEqual([
       "bear",
       "bull",
@@ -1657,7 +3043,7 @@ describe("runJob — judge retry on schema-validation failure (SPEC §2)", () =>
     const steps = JSON.parse(jobRow?.stepsJson ?? "[]") as StepProgress[];
     const byStep = new Map(steps.map((s) => [s.step, s]));
     expect(byStep.get("synthesize")?.status).toBe("done");
-    expect(byStep.get("verify")?.status).toBe("done");
+    expect(byStep.get("verify")?.status).toBe("error");
   });
 
   it("never persists a report that becomes invalid during final meta/log reconciliation", async () => {
@@ -1957,7 +3343,7 @@ describe("runJob — resume from persisted analyst snapshots", () => {
     expect(reportRow!.costUsd!).toBeCloseTo(0.9 + 0.47 + 0.4 + 0.2, 4);
   });
 
-  it("discloses payload drift as a warn gap fed into report assembly", async () => {
+  it("rejects payload drift before any resumed paid pass", async () => {
     const { jobId } = createJob("AAPL");
     const first = failingJudgePasses();
     await runJob(
@@ -1969,26 +3355,66 @@ describe("runJob — resume from persisted analyst snapshots", () => {
     // Force the assembleReport path (verify throws) and record the computed
     // gaps the runner hands it — the drift gap must be among them.
     const second = mockPasses();
-    const assembledGapFields: string[][] = [];
-    const result = await runJob(
-      jobId,
-      {
-        ...second.passes,
-        fingerprintPayload: () => "fp-v2-DRIFTED",
-        runVerifyPass: async () => {
-          throw new Error("verify unavailable (simulated)");
-        },
-        assembleReport: (input) => {
-          assembledGapFields.push(input.computed.gaps.map((g) => g.field));
-          return second.passes.assembleReport(input);
-        },
-      },
-      { bundle: fakeBundle("AAPL"), hasAnthropicKey: true, now: NOW, resume: true },
-    );
-    expect(result.status).toBe("done");
-    expect(result.dataOnly).toBe(false);
-    expect(assembledGapFields).toHaveLength(1);
-    expect(assembledGapFields[0]).toContain("analysis.resume");
+    await expect(
+      runJob(
+        jobId,
+        { ...second.passes, fingerprintPayload: () => "fp-v2-DRIFTED" },
+        { bundle: fakeBundle("AAPL"), hasAnthropicKey: true, now: NOW, resume: true },
+      ),
+    ).rejects.toThrow(/fingerprint mismatch|start a fresh job/i);
+    expect(second.calls).toEqual(["assembleContextPayload"]);
+    expect(
+      handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all(),
+    ).toHaveLength(2);
+  });
+
+  it.each([
+    {
+      label: "stored provenance is unknown but the rebuilt payload is fingerprinted",
+      storedFingerprint: null,
+      rebuiltFingerprint: "fp-v1-known",
+    },
+    {
+      label: "stored provenance is fingerprinted but the rebuilt payload is unknown",
+      storedFingerprint: "fp-v1-known",
+      rebuiltFingerprint: null,
+    },
+  ])("rejects $label before any resumed paid pass", async ({
+    storedFingerprint,
+    rebuiltFingerprint,
+  }) => {
+    const { jobId } = createJob("AAPL");
+    seedResumableLegacyJob(jobId, "error", storedFingerprint ?? "temporary-fingerprint");
+    if (storedFingerprint === null) {
+      handle.db
+        .update(jobs)
+        .set({ payloadFingerprint: null })
+        .where(eq(jobs.id, jobId))
+        .run();
+    }
+
+    const base = mockPasses();
+    const paidAnalysts = vi.fn(base.passes.runBullThenBear);
+    const paidJudge = vi.fn(base.passes.runJudgePass);
+    const resumePasses: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: rebuiltFingerprint === null
+        ? undefined
+        : () => rebuiltFingerprint,
+      runBullThenBear: paidAnalysts,
+      runJudgePass: paidJudge,
+    };
+
+    await expect(
+      runJob(jobId, resumePasses, {
+        bundle: fakeBundle("AAPL"),
+        hasAnthropicKey: true,
+        now: NOW,
+        resume: true,
+      }),
+    ).rejects.toThrow(/fingerprint mismatch|start a fresh job/i);
+    expect(paidAnalysts).not.toHaveBeenCalled();
+    expect(paidJudge).not.toHaveBeenCalled();
   });
 
   it("a resume without snapshots degrades to a full fresh run", async () => {
@@ -2416,16 +3842,13 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
 
   it("claimJobForResume lets exactly one terminal-state contender claim a retry", () => {
     const { jobId } = createJob("AAPL");
-    handle.db
-      .update(jobs)
-      .set({ status: "done", error: "synthesize failed" })
-      .where(eq(jobs.id, jobId))
-      .run();
+    seedResumableLegacyJob(jobId, "done");
 
     expect(claimJobForResume(jobId, "done")).toBe(true);
     const claimed = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
     expect(claimed?.status).toBe("queued");
     expect(claimed?.error).toBeNull();
+    expect(claimed?.runGeneration).toBe(1);
     expect(claimJobForResume(jobId, "done")).toBe(false);
   });
 

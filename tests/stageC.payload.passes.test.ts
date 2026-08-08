@@ -2112,6 +2112,7 @@ describe("mock-driven bull/bear/judge passes", () => {
   it("does not launch bear when the bull stream settles before a real first token", async () => {
     const { payload } = buildInputs();
     const calls: string[] = [];
+    const settlements: string[] = [];
     const deps: PassDeps = {
       model: "claude-opus-4-8",
       runPass: async () => {
@@ -2152,9 +2153,17 @@ describe("mock-driven bull/bear/judge passes", () => {
       },
     };
 
-    const result = await runBullThenBear(deps, payload);
+    const result = await runBullThenBear(deps, payload, {}, {
+      bull: async (settlement) => {
+        settlements.push(`bull:${settlement.outcome}`);
+      },
+      bear: async (settlement) => {
+        settlements.push(`bear:${settlement.outcome}`);
+      },
+    });
 
     expect(calls).toEqual(["llm.bull"]);
+    expect(settlements).toEqual(["bull:failure"]);
     expect(result.bull.ok).toBe(false);
     expect(result.bear.ok).toBe(false);
     if (!result.bear.ok) {

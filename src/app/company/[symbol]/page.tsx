@@ -45,7 +45,7 @@ import {
   priceChartPropsFromBundle,
   relativeStrengthSeriesFromBundle,
 } from "@/components/charts/map";
-import { ReportView } from "@/components/report/ReportView";
+import { PersistedReportView } from "@/components/report/PersistedReportView";
 import { ExportButtons } from "@/components/report/ExportButtons";
 import { WatchlistSidebar } from "@/components/watchlist/Sidebar";
 import { getLatestDoneReport, type LatestReport } from "@/report/query";
@@ -914,9 +914,7 @@ export async function CompanyBody({ symbol }: { symbol: string }) {
 
   const { validation, computed } = data;
 
-  // Build the heavy (~1260-bar) chart datasets ONCE and thread them through both
-  // the analysis panels and the ReportView charts (both tab trees render on this
-  // request) instead of rebuilding each 2–3× across the tree.
+  // Build the heavy (~1260-bar) chart datasets once for the live analysis tree.
   const priceProps = priceChartPropsFromBundle(bundle, computed);
   const rsSeries = relativeStrengthSeriesFromBundle(bundle);
   const fundData = fundamentalsChartDataFromBundle(bundle, computed);
@@ -924,6 +922,9 @@ export async function CompanyBody({ symbol }: { symbol: string }) {
   // Stage-B live analysis panels (always available from the just-run pipeline).
   const analysisPanels = (
     <div className="flex flex-col gap-3">
+      <div className="text-[11px] text-faint">
+        live bundle · built {new Date(bundle.builtAt).toISOString().replace("T", " ").slice(0, 19)}Z
+      </div>
       <div className="grid gap-3 lg:grid-cols-2">
         <FundamentalsPanel computed={computed} bundle={bundle} chartData={fundData} />
         <ReturnsPanel computed={computed} />
@@ -937,16 +938,13 @@ export async function CompanyBody({ symbol }: { symbol: string }) {
     </div>
   );
 
-  // When a persisted report exists, render the full ReportView (with live charts)
-  // behind a tab, defaulting to the report; otherwise show the analysis directly.
+  // When a persisted report exists, default to its saved snapshot; current charts
+  // and their bundle timestamp stay isolated in the live-analysis tab.
   const hasReport = data.latestReport?.report != null;
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-3 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-[11px] text-faint">
-            built {new Date(bundle.builtAt).toISOString().replace("T", " ").slice(0, 19)}Z
-          </div>
+        <div className="flex flex-wrap items-center justify-end gap-3">
           <div className="flex items-center gap-2">
             {hasReport && data.latestReport ? (
               <ExportButtons
@@ -972,20 +970,8 @@ export async function CompanyBody({ symbol }: { symbol: string }) {
           <ReportTabs
             reportMeta={`#${data.latestReport.reportId} · ${data.latestReport.createdAt.slice(0, 10)}`}
             report={
-              <ReportView
+              <PersistedReportView
                 report={data.latestReport.report as NonNullable<LatestReport["report"]>}
-                technicalsChart={
-                  <TechnicalsChartPanel
-                    bars={priceProps.rows}
-                    crosses={priceProps.crosses}
-                    relativeStrength={rsSeries}
-                  />
-                }
-                fundamentalsChart={
-                  <div className="p-3">
-                    <FundamentalsChartGrid data={fundData} />
-                  </div>
-                }
               />
             }
             analysis={analysisPanels}

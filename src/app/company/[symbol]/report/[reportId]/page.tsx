@@ -22,7 +22,8 @@ import { notFound } from "next/navigation";
 import { AppShell } from "@/components/shell";
 import { Badge } from "@/components/ui";
 import { WatchlistSidebar } from "@/components/watchlist/Sidebar";
-import { ReportView, isDataOnlyReport } from "@/components/report/ReportView";
+import { PersistedReportView } from "@/components/report/PersistedReportView";
+import { isDataOnlyReport } from "@/components/report/ReportView";
 import { ExportButtons } from "@/components/report/ExportButtons";
 import { getReportByIdForSymbol, parseReportId } from "@/report/history";
 import { normalizeRouteSymbol } from "@/symbol";
@@ -125,7 +126,7 @@ export default async function RunReportPage({
             <Link
               href={`/company/${encodeURIComponent(symbol)}`}
               className="mono border border-edge-strong px-2 py-1 text-[10px] uppercase tracking-[0.1em] text-muted transition-colors hover:border-accent hover:text-accent"
-              title="live analysis + charts (latest report)"
+              title="company page · latest saved report + current live analysis"
             >
               live →
             </Link>
@@ -133,7 +134,7 @@ export default async function RunReportPage({
         </div>
       </div>
 
-      <ReportView report={report} />
+      <PersistedReportView report={report} />
     </AppShell>
   );
 }

@@ -779,11 +779,35 @@ describe("POST /api/report/[jobId]/{retry,cancel} (same-origin guard)", () => {
 });
 
 describe("POST /api/settings (same-origin guard)", () => {
-  it("rejects a cross-origin settings change with 403 and persists nothing", async () => {
-    const res = await settingsPOST(
-      jsonReq("http://localhost:3000/api/settings", "POST", { analysisModel: "claude-opus-4-8" }, EVIL),
+  it.each([
+    ["cross-origin", { origin: "https://evil.example" }],
+    ["forged Host", { host: "evil.example:3000" }],
+  ])("rejects %s before If-Match, body parsing, or database access", async (_label, headers) => {
+    const request = new Request("http://localhost:3000/api/settings", {
+      method: "POST",
+      headers: {
+        host: "localhost:3000",
+        "content-type": "application/json",
+        "if-match": "not-even-a-valid-tag",
+        ...headers,
+      },
+      body: "hostile-json{",
+    });
+    const jsonSpy = vi.spyOn(request, "json").mockRejectedValue(
+      new Error("TASK29 body parser must not run"),
     );
-    await expect403(res);
+    const throwingDb = new Proxy(handle.db, {
+      get() {
+        throw new Error("TASK29 database must not be touched");
+      },
+    });
+    setDbForTests(throwingDb);
+    try {
+      await expect403(await settingsPOST(request));
+    } finally {
+      setDbForTests(handle.db);
+    }
+    expect(jsonSpy).not.toHaveBeenCalled();
     expect(handle.db.select().from(settings).all()).toHaveLength(0);
   });
 });

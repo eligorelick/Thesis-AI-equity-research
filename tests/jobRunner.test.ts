@@ -15,7 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -3291,6 +3291,8 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(claimJobForResume(jobId, "error")).toBe(true);
     clearPreparedResumeProcessCache();
     resolveModelMock.mockRejectedValue(new Error("models.list must not run for durable synthesize"));
+    setSetting("analysisModel", "claude-sonnet-5");
+    setSetting("analysisEffort", "medium");
 
     const base = mockPasses();
     const analysts = vi.fn(async () => {
@@ -3339,6 +3341,10 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(oneAnalyst).not.toHaveBeenCalled();
     expect(judge).not.toHaveBeenCalled();
     expect(verify).toHaveBeenCalledTimes(1);
+    expect(verify.mock.calls[0]?.[0]).toMatchObject({
+      analysisModel: "claude-opus-4-8",
+      effort: "medium",
+    });
     expect(
       handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all()
         .map((row) => [row.step, row.costUsd]),
@@ -5580,6 +5586,51 @@ describe("runJob — full pipeline with mock passes", () => {
     setSetting("analysisEffort", "medium");
     await runWithCapture(); // settings-table override
     expect(capturedEfforts).toEqual(["high", "medium"]);
+  });
+
+  it("captures one coherent model/effort revision before asynchronous model resolution", async () => {
+    setSetting("analysisModel", "claude-fable-5");
+    setSetting("analysisEffort", "medium");
+    const resolution = deferred<Awaited<ReturnType<typeof resolveModel>>>();
+    resolveModelMock.mockImplementationOnce(() => resolution.promise);
+    const captured: Array<{ analysisModel: string; effort: string | undefined }> = [];
+    const { jobId } = createJob("AAPL");
+    const { passes } = mockPasses();
+    const original = passes.runBullThenBear;
+    passes.runBullThenBear = async (deps, hooks, settlements) => {
+      captured.push({ analysisModel: deps.analysisModel, effort: deps.effort });
+      return original(deps, hooks, settlements);
+    };
+
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    await vi.waitFor(() => {
+      expect(resolveModelMock).toHaveBeenCalledWith("claude-fable-5");
+    });
+
+    setSetting("analysisModel", "claude-sonnet-5");
+    setSetting("analysisEffort", "max");
+    resolution.resolve({
+      model: "claude-fable-5",
+      resolvedFrom: "explicit",
+    });
+    await running;
+
+    expect(captured).toEqual([{ analysisModel: "claude-fable-5", effort: "medium" }]);
+  });
+
+  it("reads the writable pair through one snapshot API and never through split legacy getters", () => {
+    const source = readFileSync(
+      join(process.cwd(), "src", "pipeline", "jobRunner.ts"),
+      "utf8",
+    );
+    expect(source).toContain("getWritableSettingsAuthority(");
+    expect(source.match(/getWritableSettingsAuthority\(/g)).toHaveLength(1);
+    expect(source).not.toContain("getAnalysisModelSetting");
+    expect(source).not.toContain("getAnalysisEffortSetting");
   });
 });
 

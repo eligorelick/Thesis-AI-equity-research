@@ -117,7 +117,10 @@ describe("public release contract", () => {
 
   it("labels keyless data as synthetic and keeps synthetic artifacts fictional", () => {
     const home = read("src/app/page.tsx");
-    const settings = read("src/app/settings/page.tsx");
+    const settings = [
+      read("src/app/settings/page.tsx"),
+      read("src/app/settings/SettingsPageView.tsx"),
+    ].join("\n");
     const company = read("src/app/company/[symbol]/page.tsx");
     const implementationNotes = [
       read("src/pipeline/dataBundle.ts"),

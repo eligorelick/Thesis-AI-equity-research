@@ -40,8 +40,7 @@ import {
   type VerifyReservationCapability,
 } from "@/providers/anthropic";
 import {
-  getAnalysisEffortSetting,
-  getAnalysisModelSetting,
+  getWritableSettingsAuthority,
   type EffortLevel,
 } from "@/settings/settings";
 import {
@@ -2423,25 +2422,23 @@ export async function runJob<TPayload = unknown>(
     // "skipped" with the resolution error and still persist a data-only report
     // (Fix §1, the design rationale hardening backlog). Only genuinely unexpected
     // failures downstream still reach the outer catch and 'error'.
+    const capturedSettings = getWritableSettingsAuthority();
     let analysisModel: string;
     let analysisEffort: EffortLevel;
     if (reusableSynthesize !== null) {
       analysisModel = reusableSynthesize.model;
-      analysisEffort = getAnalysisEffortSetting();
+      analysisEffort = capturedSettings.state.analysisEffort;
     } else {
       try {
-        const analysisSetting = getAnalysisModelSetting();
         const analysisResolved = await awaitJobStage(
-          resolveModel(analysisSetting),
+          resolveModel(capturedSettings.state.analysisModel),
           jobSignal,
           jobController,
           "model resolution",
           fetchDeadlineMs,
         );
         analysisModel = analysisResolved.model;
-        // Effort reads settings/env only (no network); unknown values sanitize
-        // to the default inside the getter, so this cannot fail on bad input.
-        analysisEffort = getAnalysisEffortSetting();
+        analysisEffort = capturedSettings.state.analysisEffort;
       } catch (err) {
         throwIfJobAborted(jobSignal);
         const reason = `${MODEL_RESOLUTION_SKIP_PREFIX}: ${errMessage(err)}`;

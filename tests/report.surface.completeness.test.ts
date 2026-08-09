@@ -249,7 +249,7 @@ describe("Task 28 completeness across live, Markdown, and print report surfaces"
     const banner = markdown.split(/\r?\n/).find((line) =>
       line.startsWith("> ") && line.includes("No completed multi-pass analysis"));
     expect(banner).toContain(
-      "TASK28:analysis:first line TASK28:analysis:second \\| structural",
+      "TASK28:analysis:first line TASK28:analysis:second | structural",
     );
     expect(markdown).not.toMatch(/^TASK28:analysis:second/m);
     expect(JSON.stringify(report)).toBe(before);

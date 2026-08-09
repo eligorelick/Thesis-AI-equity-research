@@ -48,6 +48,14 @@ import {
   type ReportCompletenessPresentation,
 } from "@/report/completeness";
 import {
+  markdownBlockquote,
+  markdownHeading,
+  markdownListItem,
+  markdownProse,
+  markdownSourceLabel,
+  markdownTable as table,
+} from "@/report/export/markdownEscape";
+import {
   ASPECT_SCORE_FIELDS,
   AS_OF_MAP_FIELDS,
   COMPOSITE_SCORE_FIELDS,
@@ -158,7 +166,7 @@ function signedPct(v: number | null | undefined, digits = 1): string {
 
 /** As-of stamp suffix; empty when the claim/figure is timeless (null). */
 function asOfSuffix(asOf: string | null): string {
-  return asOf ? ` _(as of ${asOf})_` : "";
+  return asOf ? ` _(as of ${markdownProse(asOf)})_` : "";
 }
 
 /**
@@ -188,34 +196,9 @@ function tracedAuditCells(trace: TracedNumber): string[] {
   });
 }
 
-/* ======================================================================== *
- * Markdown-safe cell text (escape pipes/newlines so tables don't break)
- * ======================================================================== */
-
-/** Collapse newlines and escape pipes so a value is safe inside a table cell. */
-function cell(text: string): string {
-  return text.replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
-}
-
-/**
- * A Markdown table from a header row + body rows. Every cell is escaped. When
- * there are no body rows, emits a single "—" spanning-ish row so the table is
- * still valid GFM.
- */
-function table(headers: string[], rows: string[][]): string {
-  const head = `| ${headers.map(cell).join(" | ")} |`;
-  const sep = `| ${headers.map(() => "---").join(" | ")} |`;
-  if (rows.length === 0) {
-    const empty = `| ${headers.map((_, i) => (i === 0 ? DASH : "")).join(" | ")} |`;
-    return [head, sep, empty].join("\n");
-  }
-  const body = rows.map((r) => `| ${r.map(cell).join(" | ")} |`).join("\n");
-  return [head, sep, body].join("\n");
-}
-
-/** One generated blockquote line, routed through the shared Markdown cell boundary. */
+/** One generated blockquote line; the template marker remains trusted syntax. */
 function blockquote(text: string): string {
-  return `> ${cell(text)}`;
+  return `> ${markdownBlockquote(text)}`;
 }
 
 /* ======================================================================== *
@@ -227,8 +210,9 @@ function claimList(claims: readonly SourcedClaim[]): string {
   if (claims.length === 0) return `- ${DASH}`;
   return claims
     .map((c) =>
-      `- **[${c.label}]** ${c.text.replace(/\r\n?|\n/g, " ")}${asOfSuffix(c.asOf)} ` +
-      `\`source id: ${c.sourceId ?? "n/a"}\` \`src: ${c.source}\``)
+      `- **[${markdownListItem(c.label)}]** ${markdownListItem(c.text)}${asOfSuffix(c.asOf)} ` +
+      `${markdownSourceLabel(`source id: ${c.sourceId ?? "n/a"}`)} ` +
+      markdownSourceLabel(`src: ${c.source}`))
     .join("\n");
 }
 
@@ -239,10 +223,10 @@ function gradeBlock(title: string, block: GradeBlock): string {
     `**${title} — Grade ${block.grade}** (confidence: ${block.confidence})`,
   );
   lines.push("");
-  lines.push(`_${block.oneLineWhy}_`);
+  lines.push(`_${markdownProse(block.oneLineWhy)}_`);
   if (block.interpretation) {
     lines.push("");
-    lines.push(block.interpretation);
+    lines.push(markdownProse(block.interpretation));
   }
   if (block.reasoning.length > 0) {
     lines.push("");
@@ -312,7 +296,7 @@ function renderVerdict(report: Report): string {
       block.oneLineWhy,
     ]),
   );
-  const lines: string[] = ["## 1. Verdict", "", v.synthesis, ""];
+  const lines: string[] = ["## 1. Verdict", "", markdownProse(v.synthesis), ""];
   if (v.executiveSummary && v.executiveSummary.length > 0) {
     lines.push("### Executive summary", "", claimList(v.executiveSummary), "");
   }
@@ -395,9 +379,9 @@ function renderScores(scores: Scoring): string {
         ])),
     ),
     "",
-    `_${c.methodology}_`,
+    `_${markdownProse(c.methodology)}_`,
     "",
-    `_Band table: ${scores.bandsVersion}._`,
+    `_Band table: ${markdownProse(scores.bandsVersion)}._`,
   ].join("\n");
 }
 
@@ -410,11 +394,17 @@ function renderProjections(p: Projections): string {
     "",
   ];
   if (series.length === 0) {
-    lines.push(`_Not applicable${p.notApplicableReason ? `: ${p.notApplicableReason}` : "."}_`, "");
+    lines.push(
+      `_Not applicable${p.notApplicableReason ? `: ${markdownProse(p.notApplicableReason)}` : "."}_`,
+      "",
+    );
   }
   const forwardPaths = PROJECTION_PATHS.filter((descriptor) => descriptor.kind !== "historical");
   for (const s of series) {
-    lines.push(`### ${PROJECTION_METRIC_BY_KEY[s.metric].label} (${s.unit})`, "");
+    lines.push(
+      `### ${PROJECTION_METRIC_BY_KEY[s.metric].label} (${markdownHeading(s.unit)})`,
+      "",
+    );
     const rows = projectionPeriodRows(s).flatMap((row) => {
       const points = forwardPaths.map((descriptor) =>
         projectionCellPoint(row, descriptor.key, s.unit));
@@ -426,7 +416,12 @@ function renderProjections(p: Projections): string {
     });
     lines.push(table(["Period", ...forwardPaths.map((descriptor) => descriptor.label)], rows), "");
     if (s.assumptions.length > 0) {
-      lines.push("Assumptions:", "", s.assumptions.map((a) => `- ${a}`).join("\n"), "");
+      lines.push(
+        "Assumptions:",
+        "",
+        s.assumptions.map((assumption) => `- ${markdownListItem(assumption)}`).join("\n"),
+        "",
+      );
     }
   }
 
@@ -568,15 +563,18 @@ function renderValuation(v: Valuation, scenarioTargets?: ScenarioTargets, fairVa
     "### DCF",
     "",
     dcfPs
-      ? `Intrinsic value per share: **${tracedValue(dcfPs)}**${asOfSuffix(dcfPs.asOf)}${v.dcf.upsidePct === null ? "" : ` — upside ${signedPct(v.dcf.upsidePct)}`}`
+      ? `Intrinsic value per share: **${markdownProse(tracedValue(dcfPs))}**${asOfSuffix(dcfPs.asOf)}${v.dcf.upsidePct === null ? "" : ` — upside ${signedPct(v.dcf.upsidePct)}`}`
       : "Intrinsic value per share: **unavailable** — the deterministic fair value could not be computed for this route/inputs (see missing-data appendix).",
     // Honest disclosure of how the intrinsic value was derived (computed-derived,
     // route-appropriate method), or why suppressed.
     ...(fairValue
       ? [
           fairValue.status === "available"
-            ? `_${fairValue.basis.join(" ")}_`
-            : `_Intrinsic value per share suppressed — ${fairValue.reasons.map((r) => r.reason).join("; ") || fairValue.basis.join(" ")}_`,
+            ? `_${markdownProse(fairValue.basis.join(" "))}_`
+            : `_Intrinsic value per share suppressed — ${markdownProse(
+                fairValue.reasons.map((r) => r.reason).join("; ")
+                  || fairValue.basis.join(" "),
+              )}_`,
         ]
       : []),
     "",
@@ -617,13 +615,13 @@ function renderValuation(v: Valuation, scenarioTargets?: ScenarioTargets, fairVa
   lines.push(
     "### Reverse DCF",
     "",
-    `Implied ${v.reverseDcf.impliedMetric}: **${
+    `Implied ${markdownProse(v.reverseDcf.impliedMetric)}: **${
       v.reverseDcf.impliedValue === null
         ? DASH
         : `${v.reverseDcf.impliedValue.toFixed(1)}`
     }**`,
     "",
-    v.reverseDcf.narrative,
+    markdownProse(v.reverseDcf.narrative),
     "",
   );
 
@@ -655,10 +653,18 @@ function renderValuation(v: Valuation, scenarioTargets?: ScenarioTargets, fairVa
   // computed-derived DCF sensitivity, NOT source-verified analyst targets.
   if (scenarioTargets) {
     if (scenarioTargets.status === "available") {
-      lines.push(`_Price targets are computed-derived (${scenarioTargets.method}), not analyst targets. ${scenarioTargets.basis.join(" ")}_`, "");
+      lines.push(
+        `_Price targets are computed-derived (${markdownProse(scenarioTargets.method)}), not analyst targets. ${markdownProse(scenarioTargets.basis.join(" "))}_`,
+        "",
+      );
     } else {
       const reasons = scenarioTargets.missingReasons.map((m) => m.reason).join("; ");
-      lines.push(`_Scenario price targets suppressed — ${reasons || scenarioTargets.basis.join(" ")}_`, "");
+      lines.push(
+        `_Scenario price targets suppressed — ${markdownProse(
+          reasons || scenarioTargets.basis.join(" "),
+        )}_`,
+        "",
+      );
     }
   }
   for (const sc of v.scenarios) {
@@ -672,20 +678,20 @@ function renderScenario(sc: Scenario): string {
   // priceTarget is null when the deterministic computation suppressed it
   // (insufficient valuation inputs) — show "unavailable", never a fabricated value.
   const pt = sc.priceTarget;
-  const target = pt ? tracedValue(pt) : "unavailable";
+  const target = pt ? markdownHeading(tracedValue(pt)) : "unavailable";
   const targetAsOf = pt ? asOfSuffix(pt.asOf) : "";
   const probability = sc.probability === null
     ? "n/a"
     : `${(sc.probability * 100).toFixed(0)}%`;
   lines.push(
-    `#### ${capitalize(sc.name)} — target ${target} (p = ${probability}, ${sc.horizon})${targetAsOf}`,
+    `#### ${capitalize(sc.name)} — target ${target} (p = ${probability}, ${markdownHeading(sc.horizon)})${targetAsOf}`,
   );
   lines.push("");
   lines.push("Assumptions:");
   lines.push("");
   lines.push(
     sc.assumptions.length > 0
-      ? sc.assumptions.map((a) => `- ${a}`).join("\n")
+      ? sc.assumptions.map((assumption) => `- ${markdownListItem(assumption)}`).join("\n")
       : `- ${DASH}`,
   );
   lines.push("");
@@ -693,7 +699,8 @@ function renderScenario(sc: Scenario): string {
   lines.push("");
   lines.push(
     sc.whatWouldHaveToBeTrue.length > 0
-      ? sc.whatWouldHaveToBeTrue.map((w) => `- ${w}`).join("\n")
+      ? sc.whatWouldHaveToBeTrue.map((condition) =>
+          `- ${markdownListItem(condition)}`).join("\n")
       : `- ${DASH}`,
   );
   return lines.join("\n");
@@ -736,10 +743,10 @@ function renderTechnicals(t: Technicals): string {
   lines.push(
     "### Structured read",
     "",
-    `- **Trend:** ${t.read.trend}`,
-    `- **Momentum:** ${t.read.momentum}`,
-    `- **Key levels:** ${t.read.keyLevels}`,
-    `- **Relative strength:** ${t.read.relativeStrength}`,
+    `- **Trend:** ${markdownListItem(t.read.trend)}`,
+    `- **Momentum:** ${markdownListItem(t.read.momentum)}`,
+    `- **Key levels:** ${markdownListItem(t.read.keyLevels)}`,
+    `- **Relative strength:** ${markdownListItem(t.read.relativeStrength)}`,
     "",
   );
   if (t.indicators.length > 0) {
@@ -777,7 +784,7 @@ function renderLeadership(l: Leadership): string {
   lines.push("### Executives", "");
   for (const e of l.executives) {
     lines.push(
-      `#### ${e.name} — ${e.title}`,
+      `#### ${markdownHeading(e.name)} — ${markdownHeading(e.title)}`,
       "",
       `Grade **${e.grade}** · credibility **${e.credibilityGrade}**${
         e.tenureYears === null ? "" : ` · tenure ${e.tenureYears.toFixed(1)}y`
@@ -822,9 +829,18 @@ function renderCompetitive(c: Competitive): string {
   }
   lines.push("### Moat assessment", "");
   for (const m of c.moatAssessment) {
-    lines.push(`- **${m.source}** (${m.strength}): ${m.reasoning.map((r) => r.text).join(" ")}`);
+    lines.push(
+      `- **${markdownListItem(m.source)}** (${markdownListItem(m.strength)}): ${markdownListItem(
+        m.reasoning.map((reason) => reason.text).join(" "),
+      )}`,
+    );
   }
-  lines.push("", "### Market-share direction", "", c.marketShareDirection);
+  lines.push(
+    "",
+    "### Market-share direction",
+    "",
+    markdownProse(c.marketShareDirection),
+  );
   return lines.join("\n");
 }
 
@@ -902,7 +918,7 @@ function renderMacro(m: Macro): string {
     lines.push("### Sensitivity notes", "", claimList(m.sensitivityNotes), "");
   }
   // Mandatory FRED attribution, verbatim.
-  lines.push(`> ${m.fredAttribution}`);
+  lines.push(`> ${markdownBlockquote(m.fredAttribution)}`);
   return lines.join("\n");
 }
 
@@ -911,10 +927,10 @@ function renderDisagreements(disagreements: readonly Disagreement[]): string {
   const lines: string[] = ["### Bull/bear disagreements", ""];
   for (const d of disagreements) {
     lines.push(
-      `- **${d.topic}** (${d.kind})`,
-      `  - Bull: ${d.bullView}`,
-      `  - Bear: ${d.bearView}`,
-      `  - Judge: ${d.judgeResolution}`,
+      `- **${markdownListItem(d.topic)}** (${markdownListItem(d.kind)})`,
+      `  - Bull: ${markdownListItem(d.bullView)}`,
+      `  - Bear: ${markdownListItem(d.bearView)}`,
+      `  - Judge: ${markdownListItem(d.judgeResolution)}`,
     );
   }
   return lines.join("\n");
@@ -957,7 +973,7 @@ function renderAppendix(
               return gap[field.key];
             })),
         )
-      : `_${completeness.manifestText}_`,
+      : `_${markdownProse(completeness.manifestText)}_`,
     "",
   );
   lines.push(
@@ -1010,7 +1026,9 @@ function renderHeader(
 ): string {
   const m = report.meta;
   const lines: string[] = [];
-  lines.push(`# ${m.companyName} (${m.symbol}) — Research Report`);
+  lines.push(
+    `# ${markdownHeading(m.companyName)} (${markdownHeading(m.symbol)}) — Research Report`,
+  );
   lines.push("");
   lines.push(
     table(
@@ -1035,7 +1053,7 @@ function renderHeader(
   );
   lines.push("");
   // Mandatory disclaimer, verbatim.
-  lines.push(`> ${m.disclaimer}`);
+  lines.push(`> ${markdownBlockquote(m.disclaimer)}`);
   return lines.join("\n");
 }
 

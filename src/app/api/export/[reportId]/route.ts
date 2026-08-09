@@ -70,6 +70,7 @@ export async function GET(
         "Content-Type": "text/markdown; charset=utf-8",
         "Content-Disposition": `attachment; filename="${base}.md"`,
         "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
       },
     });
   }
@@ -84,6 +85,7 @@ export async function GET(
       // rather than downloading raw HTML.
       "Content-Disposition": `inline; filename="${base}.html"`,
       "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 }
@@ -91,6 +93,9 @@ export async function GET(
 function jsonError(message: string, status: number): Response {
   return new Response(JSON.stringify({ error: message }), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
+    },
   });
 }

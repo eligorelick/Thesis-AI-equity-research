@@ -424,8 +424,11 @@ describe("Task 28 complete report surfaces", () => {
         expect(row).toContain(asOf);
       }
       for (const log of report.appendix.verificationLog ?? []) {
-        const row = rowWithin(output, log.claim, surface === "markdown");
-        expect(row).toContain(log.claim);
+        const renderedClaim = surface === "markdown"
+          ? log.claim.replace(/[\[\]]/g, "\\$&")
+          : log.claim;
+        const row = rowWithin(output, renderedClaim, surface === "markdown");
+        expect(row).toContain(renderedClaim);
         expect(row).toContain(log.outcome === "verified" ? "cited" : log.outcome === "unverified" ? "uncited" : "removed");
         expect(row).toContain(log.note!);
         expect(row).toContain(log.path!);
@@ -636,8 +639,14 @@ describe("Task 28 complete report surfaces", () => {
       expect(surfaces.print).toContain(escaped);
       expect(surfaces.print).not.toContain(poison);
     }
-    for (const poison of [poisons.driver, poisons.disclosure, poisons.source, poisons.log, poisons.asOfMap]) {
-      expect(surfaces.markdown).toContain(poison.replace(" | ", " \\| "));
+    for (const expected of [
+      String.raw`\<script data-task28="driver"\>alert(28)\</script\> \| driver`,
+      String.raw`\<script data-task28="disclosure"\>alert(28)\</script\> \| disclosure`,
+      String.raw`\<script data-task28="source"\>alert(28)\</script\> \| source`,
+      String.raw`\<script data-task28="log"\>alert(28)\</script\> \| log`,
+      String.raw`\<script data-task28="asof"\>alert(28)\</script\> \| asof`,
+    ]) {
+      expect(surfaces.markdown).toContain(expected);
     }
     expect(JSON.stringify(report)).toBe(before);
   });

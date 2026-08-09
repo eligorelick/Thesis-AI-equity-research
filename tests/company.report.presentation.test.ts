@@ -237,6 +237,8 @@ describe("persisted report presentation", () => {
     const tabs = elementsWithin(companyTree).find((element) => element.type === ReportTabs);
     expect(tabs).toBeDefined();
     const companyPersisted = tabs!.props.report as ReactElement<Props>;
+    expect(harness.buildDataBundle).toHaveBeenCalledTimes(1);
+    expect(harness.runStageB).toHaveBeenCalledTimes(1);
 
     const savedTree = await SavedReportPage({
       params: Promise.resolve({ symbol: "DEMO", reportId: "42" }),
@@ -245,6 +247,8 @@ describe("persisted report presentation", () => {
       (element) => element.props.report === report,
     );
     expect(savedPersisted).toBeDefined();
+    expect(harness.buildDataBundle).toHaveBeenCalledTimes(1);
+    expect(harness.runStageB).toHaveBeenCalledTimes(1);
 
     expect(Object.keys(companyPersisted.props)).toEqual(["report"]);
     expect(Object.keys(savedPersisted!.props)).toEqual(["report"]);

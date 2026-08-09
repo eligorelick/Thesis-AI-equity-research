@@ -881,9 +881,11 @@ describe("runJob — unsupported instruments", () => {
     expect(steps.every((step) => step.detail === terminal.error)).toBe(true);
   });
 
-  it("terminalizes an ETF after validation with no company report, Stage C payload, or paid work", async () => {
+  it("terminalizes an unsupported ETF before paid work with zero durable leases, artifacts, costs, reports, or provider/model/pass calls", async () => {
     const { jobId } = createJob("SPY");
-    const { passes, calls } = mockPasses();
+    const { passes: basePasses, calls } = mockPasses();
+    const preflightPass = vi.fn();
+    const passes: PipelinePasses = { ...basePasses, preflightPass };
     const events: JobEvent[] = [];
     const unsubscribe = subscribeJob(jobId, (event) => events.push(event));
 
@@ -904,7 +906,13 @@ describe("runJob — unsupported instruments", () => {
     });
     expect(result).toHaveProperty("message", expect.stringMatching(/not supported/i));
     expect(calls).toEqual([]);
+    expect(preflightPass).not.toHaveBeenCalled();
     expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(providerBoundaryMocks.runPass).not.toHaveBeenCalled();
+    expect(providerBoundaryMocks.runPassStreaming).not.toHaveBeenCalled();
+    expect(providerBoundaryMocks.webSearchTool).not.toHaveBeenCalled();
+    expect(handle.db.select().from(jobLlmLeases).all()).toHaveLength(0);
+    expect(handle.db.select().from(jobPassArtifacts).all()).toHaveLength(0);
     expect(handle.db.select().from(reports).all()).toHaveLength(0);
     expect(handle.db.select().from(costLog).all()).toHaveLength(0);
 

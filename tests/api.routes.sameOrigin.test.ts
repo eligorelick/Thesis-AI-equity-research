@@ -11,6 +11,8 @@
  * directly, in-memory better-sqlite3 via setDbForTests, runJob stubbed.
  */
 
+import "next/dist/server/node-environment";
+import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 
@@ -562,10 +564,6 @@ describe("request-wide proxy", () => {
     expect(loadedModule).not.toHaveProperty("config");
     expect(loadedModule).not.toHaveProperty("runtime");
 
-    await import("next/dist/server/node-environment");
-    const { unstable_doesMiddlewareMatch } = await import(
-      "next/experimental/testing/server"
-    );
     for (const url of [
       "http://localhost:3000/",
       "http://localhost:3000/company/AAPL?_rsc=1",

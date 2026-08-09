@@ -36,6 +36,11 @@ import type { StepProgress } from "@/types/core";
 import { resetConfigCache } from "@/config/env";
 
 const NOW = new Date("2026-08-08T12:00:00.000Z");
+const RACE_PHASE_TIMEOUT_MS = 10_000;
+// Worker startup and the synchronized SQLite action are separate bounded
+// phases. Leave time for both plus worker termination without relaxing any
+// non-process test or the suite-wide timeout.
+const PROCESS_RACE_TEST_TIMEOUT_MS = 30_000;
 
 const LIMITS = {
   maxActiveJobs: 1,
@@ -289,7 +294,7 @@ async function runBarrierRace(
   let completionTimer: ReturnType<typeof setTimeout> | undefined;
 
   try {
-    const readyDeadline = Date.now() + 10_000;
+    const readyDeadline = Date.now() + RACE_PHASE_TIMEOUT_MS;
     while (Atomics.load(readyView, 0) !== workers.length) {
       if (Date.now() >= readyDeadline) throw new Error("race workers did not reach the barrier");
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -299,7 +304,10 @@ async function runBarrierRace(
     return await Promise.race([
       Promise.all(results),
       new Promise<never>((_, reject) => {
-        completionTimer = setTimeout(() => reject(new Error("race workers did not finish")), 10_000);
+        completionTimer = setTimeout(
+          () => reject(new Error("race workers did not finish")),
+          RACE_PHASE_TIMEOUT_MS,
+        );
         completionTimer.unref();
       }),
     ]);
@@ -401,7 +409,7 @@ describe("durable job claims", () => {
     expect(terminalizeClaim(winners[0]!, "error", "race complete", NOW, second.db)).toBe(true);
     seedJob(first.db, "after-race", "MSFT");
     expect((await scheduler()).claimNextQueuedJob("after", NOW, LIMITS, second.db)?.jobId).toBe("after-race");
-  });
+  }, PROCESS_RACE_TEST_TIMEOUT_MS);
 
   it("enforces active-job capacity across connections and dispatches the next due job after release", async () => {
     const { claimNextQueuedJob, terminalizeClaim } = await scheduler();
@@ -1260,7 +1268,7 @@ describe("paid-pass leases and exact spend gates", () => {
     if (winner?.acquired !== true) throw new Error("race fixture has no winning lease");
     expect(releaseUnbilledPaidPassLease(winner.lease, second.db, NOW)).toBe(true);
     expect(first.db.select().from(jobLlmLeases).all()).toEqual([]);
-  });
+  }, PROCESS_RACE_TEST_TIMEOUT_MS);
 
   it("serializes simultaneous rolling-budget admissions across jobs", async () => {
     const { claimNextQueuedJob, releaseUnbilledPaidPassLease } = await scheduler();
@@ -1289,7 +1297,7 @@ describe("paid-pass leases and exact spend gates", () => {
     const winner = winners[0];
     if (winner?.acquired !== true) throw new Error("race fixture has no winning lease");
     expect(releaseUnbilledPaidPassLease(winner.lease, first.db, NOW)).toBe(true);
-  });
+  }, PROCESS_RACE_TEST_TIMEOUT_MS);
 
   it("sums every generation, legacy null-attempt costs, and live reservations using micro-USD comparisons", async () => {
     const { acquirePaidPassLease, claimNextQueuedJob } = await scheduler();

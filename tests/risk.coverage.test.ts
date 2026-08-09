@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(__dirname, "..");
@@ -159,6 +160,31 @@ function runCoverageMutation(options: {
 }
 
 describe("risk coverage contract", () => {
+  it("keeps interrupted coverage temp TypeScript out of canonical compilation", () => {
+    const tempRoot = path.join(ROOT, "tmp");
+    mkdirSync(tempRoot, { recursive: true });
+    const tempDir = mkdtempSync(path.join(tempRoot, "coverage-contract-stale-"));
+    const staleTestFile = path.join(tempDir, "mutation.test.ts");
+
+    try {
+      writeFileSync(
+        staleTestFile,
+        'const interruptedCoveragePoison: number = "not-a-number";\n',
+        "utf8",
+      );
+      const configPath = path.join(ROOT, "tsconfig.json");
+      const loaded = ts.readConfigFile(configPath, ts.sys.readFile);
+      expect(loaded.error).toBeUndefined();
+      const parsed = ts.parseJsonConfigFileContent(loaded.config, ts.sys, ROOT);
+      expect(parsed.errors).toEqual([]);
+      expect(
+        parsed.fileNames.map((file) => path.resolve(file).toLowerCase()),
+      ).not.toContain(path.resolve(staleTestFile).toLowerCase());
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses the exact literal audited source manifest in both directions", async () => {
     const shared = await loadSharedConfig();
     const risk = await loadRiskConfig();

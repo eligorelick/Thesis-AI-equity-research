@@ -117,7 +117,7 @@ interface LoadedVitestConfig {
     pool?: string;
     isolate?: boolean;
     fileParallelism?: boolean;
-    maxWorkers?: number;
+    maxWorkers?: number | string;
     testTimeout?: number;
     retry?: number;
     coverage?: {
@@ -273,6 +273,7 @@ describe("public release contract", () => {
     expect(product.test?.exclude).toBe(shared.PRODUCT_TEST_EXCLUDE);
     expect(risk.test?.exclude).toBe(shared.PRODUCT_TEST_EXCLUDE);
     expect(integration.test?.include).toBe(shared.INTEGRATION_TEST_INCLUDE);
+    expect(product.test?.maxWorkers).toBe("50%");
     expect(risk.test?.maxWorkers).toBe(1);
     expect(product.resolve?.alias).toBe(shared.SHARED_RESOLVE_ALIAS);
     expect(risk.resolve?.alias).toBe(shared.SHARED_RESOLVE_ALIAS);

@@ -13,6 +13,10 @@ export default defineConfig({
     // Keep forks: threads are unsafe with the native better-sqlite3 addon.
     pool: "forks",
     isolate: true,
+    // Several scheduler tests intentionally launch their own TypeScript worker
+    // threads. Reserving half the CPUs prevents Vitest forks from starving
+    // those nested workers while preserving parallel product-test execution.
+    maxWorkers: "50%",
     coverage: {
       provider: "v8",
       include: ["src/pipeline/stageB/**/*.ts", "src/report/schema.ts"],

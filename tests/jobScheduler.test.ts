@@ -291,6 +291,11 @@ async function runBarrierRace(
       if (!settled && code !== 0) reject(new Error(`race worker exited with code ${code}`));
     });
   }));
+  const allResults = Promise.all(results);
+  // Attach a rejection observer before waiting at the readiness barrier. A
+  // worker can fail during startup, and cleanup must never surface that later
+  // as an unhandled rejection after the owning test has already failed.
+  void allResults.catch(() => undefined);
   let completionTimer: ReturnType<typeof setTimeout> | undefined;
 
   try {
@@ -302,7 +307,7 @@ async function runBarrierRace(
     Atomics.store(startView, 0, 1);
     Atomics.notify(startView, 0, workers.length);
     return await Promise.race([
-      Promise.all(results),
+      allResults,
       new Promise<never>((_, reject) => {
         completionTimer = setTimeout(
           () => reject(new Error("race workers did not finish")),
@@ -314,6 +319,7 @@ async function runBarrierRace(
   } finally {
     if (completionTimer !== undefined) clearTimeout(completionTimer);
     await Promise.all(workers.map((worker) => worker.terminate()));
+    await Promise.allSettled(results);
   }
 }
 

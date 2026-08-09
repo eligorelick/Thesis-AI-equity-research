@@ -42,12 +42,18 @@
     "start": "next start -H 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest",
+    "test": "vitest run --config vitest.config.ts",
+    "test:product": "vitest run --config vitest.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:coverage:core": "vitest run --config vitest.config.ts --coverage",
+    "test:coverage:risk": "vitest run --config vitest.risk.config.ts --coverage",
+    "test:coverage": "npm run test:coverage:core && npm run test:coverage:risk",
+    "test:watch": "vitest --config vitest.config.ts",
     "export:corrected": "tsx src/report/export/correctedCli.ts",
     "db:push": "node --conditions=react-server node_modules/drizzle-kit/bin.cjs push",
-    "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
+    "check:dependencies": "node scripts/check-dependency-shape.mjs",
+    "audit:security": "node scripts/run-security-audit.mjs",
+    "verify": "npm run check:dependencies && npm run typecheck && npm run lint && npm run test:product && npm run test:integration && npm run test:coverage && npm run build && npm run audit:security"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

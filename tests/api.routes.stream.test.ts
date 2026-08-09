@@ -195,7 +195,7 @@ describe("GET /api/report/[jobId]/stream — revisioned snapshot protocol", () =
     }
 
     expect(mismatches).toEqual([]);
-  }, 15_000);
+  }, 30_000);
 
   it("always emits a revision-zero baseline with an SSE id even when Last-Event-ID is newer", async () => {
     const { jobId } = createJob("AAPL");

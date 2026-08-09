@@ -2,6 +2,7 @@ import { defineConfig } from "vitest/config";
 import {
   PRODUCT_TEST_EXCLUDE,
   PRODUCT_TEST_INCLUDE,
+  RISK_SOURCE_MANIFEST,
   SHARED_RESOLVE_ALIAS,
 } from "./vitest.shared";
 
@@ -10,19 +11,21 @@ export default defineConfig({
     include: PRODUCT_TEST_INCLUDE,
     exclude: PRODUCT_TEST_EXCLUDE,
     environment: "node",
-    // Keep forks: threads are unsafe with the native better-sqlite3 addon.
     pool: "forks",
     isolate: true,
+    maxWorkers: 1,
     coverage: {
       provider: "v8",
-      include: ["src/pipeline/stageB/**/*.ts", "src/report/schema.ts"],
+      include: RISK_SOURCE_MANIFEST,
       reporter: ["text", "json-summary"],
-      reportsDirectory: "coverage/core",
+      reportsDirectory: "coverage/risk",
       thresholds: {
-        statements: 90,
-        branches: 84,
-        functions: 95,
-        lines: 93,
+        statements: 85,
+        branches: 75,
+        functions: 85,
+        lines: 85,
+        perFile: true,
+        autoUpdate: false,
       },
     },
   },

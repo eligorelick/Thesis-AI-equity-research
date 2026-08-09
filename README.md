@@ -30,8 +30,11 @@ comparison, watchlist, Markdown export, and browser print-to-PDF support.
 
 Requirements:
 
-- Node.js 20.9 or newer
+- Node.js 24 LTS
 - npm
+
+Node.js 20 compatibility is retained as a transitional CI lane, but Node 20 is
+end-of-life and is not the supported runtime for new deployments.
 
 ```powershell
 npm ci
@@ -172,16 +175,26 @@ npm run dev            # local development server
 npm run build          # production build
 npm start              # serve the production build
 npm run db:push        # create/update the configured local SQLite database
-npm test               # deterministic mocked test suite; no live network
+npm test               # isolated product suite; DB CLI integration excluded
+npm run test:integration       # single-worker database CLI integration
 npm run typecheck      # strict TypeScript check
 npm run lint           # ESLint
-npm run test:coverage  # focused coverage report
-npm run verify         # typecheck + lint + tests + production build
+npm run test:coverage:core     # Stage B/schema coverage contract
+npm run test:coverage:risk     # audited per-file risk coverage contract
+npm run test:coverage          # both independent coverage contracts
+npm run check:dependencies     # exact lockfile + installed-tree versions
+npm run audit:security         # dev-inclusive low-severity npm audit
+npm run verify         # all required local CI gates in release order
 ```
 
 Run `npm run verify` before contributing or publishing a change. A successful
 Next.js build alone is not the type-safety gate because strict checking runs as
 a separate command.
+
+GitHub Actions runs the same required gates on Node.js 24 LTS, retains a
+Node.js 20 compatibility lane, and performs a single-worker Windows smoke run.
+Repository administrators must configure branch protection to require the
+`CI / full` check; the workflow cannot enable branch protection by itself.
 
 ## Project layout
 

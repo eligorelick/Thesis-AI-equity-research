@@ -645,6 +645,32 @@ describe("request-wide proxy", () => {
     expect(response.headers.get("x-middleware-next")).toBe("1");
   });
 
+  it("keeps an EventSource-shaped report stream on the Host-only proxy path", async () => {
+    const loadedModule = await loadProxyModule();
+    const runProxy = proxyFunction(loadedModule);
+    if (runProxy === undefined) return;
+
+    const eventSourceHeaders = {
+      accept: "text/event-stream",
+      "sec-fetch-site": "cross-site",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-dest": "empty",
+    };
+    const allowed = await runProxy(
+      proxyRequest("/api/report/job-sse/stream", eventSourceHeaders),
+    );
+    expect(allowed.status).toBe(200);
+    expect(allowed.headers.get("x-middleware-next")).toBe("1");
+
+    const forgedHost = await runProxy(
+      proxyRequest("/api/report/job-sse/stream", {
+        ...eventSourceHeaders,
+        host: "evil.example:3000",
+      }),
+    );
+    await expect403(forgedHost);
+  });
+
   it("allows top-level and same-origin heavy loads, including RSC prefetch", async () => {
     const loadedModule = await loadProxyModule();
     const runProxy = proxyFunction(loadedModule);

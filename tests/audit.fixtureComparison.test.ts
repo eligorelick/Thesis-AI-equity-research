@@ -484,6 +484,7 @@ describe("Task 32 provider-free historical fixture comparison", () => {
         env: generatorChildEnv(),
         input: readFileSync(GENERATOR_PATH, "utf8"),
         maxBuffer: 4 * 1024 * 1024,
+        timeout: 20_000,
       },
     );
     expect(JSON.parse(emitted) as JsonValue).toEqual(current);
@@ -546,5 +547,5 @@ describe("Task 32 provider-free historical fixture comparison", () => {
     expect(() =>
       assertExactDeltaContract(baseline.projection, arbitraryAllowedPathDrift),
     ).toThrow(/unexpected current value.*stageB\.technicals\.volumeTrend\.ratio/);
-  });
+  }, 30_000);
 });

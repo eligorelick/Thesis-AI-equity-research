@@ -59,6 +59,12 @@ import PrintReportPage from "@/app/company/[symbol]/report/[reportId]/print/page
 import { FundamentalsChartGrid, TechnicalsChartPanel } from "@/components/charts/lazy";
 import { ReportView } from "@/components/report/ReportView";
 import { ReportSchema } from "@/report/schema";
+import {
+  computeDupont,
+  computeRoic,
+  computeRoicVsWaccSpread,
+  computeWacc,
+} from "@/pipeline/stageB/returns";
 import { task28SentinelReport } from "./helpers/task28Report";
 
 type Props = Record<string, unknown> & { children?: ReactNode };
@@ -82,6 +88,26 @@ function structuralText(node: ReactNode): string {
 function invoke(element: ReactElement<Props>): ReactElement<Props> {
   expect(typeof element.type).toBe("function");
   return (element.type as FunctionComponent<Props>)(element.props) as ReactElement<Props>;
+}
+
+async function renderLiveReturnsPanel(
+  metrics: unknown,
+  symbol: string,
+): Promise<string> {
+  harness.runStageB.mockReturnValue(metrics);
+  harness.getLatestDoneReport.mockReturnValue(null);
+
+  const companyTree = await CompanyBody({ symbol });
+  const tabs = elementsWithin(companyTree).find((element) => element.type === ReportTabs);
+  const liveAnalysis =
+    (tabs?.props.analysis as ReactNode | undefined) ?? companyTree;
+  const returnsPanel = elementsWithin(liveAnalysis).find(
+    (element) =>
+      typeof element.type === "function" &&
+      element.type.name === "ReturnsPanel",
+  );
+  expect(returnsPanel).toBeDefined();
+  return renderToStaticMarkup(invoke(returnsPanel!));
 }
 
 const report = ReportSchema.parse(
@@ -260,6 +286,103 @@ describe("persisted report presentation", () => {
     expect(elementsWithin(technicalsRoot).some((element) => element.type === TechnicalsChartPanel)).toBe(true);
     expect(renderToStaticMarkup(fundamentalsRoot.props.right as ReactElement)).toMatch(/as of.*2025-12-31/i);
     expect(renderToStaticMarkup(technicalsRoot.props.right as ReactElement)).toMatch(/as of.*2026-08-06/i);
+  });
+
+  it("audit A3 preserves null WACC weights through computeWacc and renders n/a at the live company-page callsite", async () => {
+    const wacc = computeWacc({
+      beta: 1,
+      riskFreePct: 4,
+      erpPct: 5,
+      interestExpenseTtm: 10,
+      totalDebtAvg: null,
+      marketCap: 1_000,
+      effectiveTaxRate: 0.2,
+      ebitTtm: 100,
+      analysisDate: "2026-08-07",
+    });
+    const roic = computeRoic([], []);
+    const dupont = computeDupont([], []);
+    const roicVsWacc = computeRoicVsWaccSpread(
+      roic.latestRoicPct,
+      wacc.waccPct,
+    );
+
+    expect(wacc.weightEquity).toBeNull();
+    expect(wacc.weightDebt).toBeNull();
+
+    const html = await renderLiveReturnsPanel(
+      {
+        ...computed,
+        returns: {
+          wacc,
+          roic,
+          dupont,
+          roicVsWacc,
+          notes: [...wacc.notes, ...roic.notes, ...dupont.notes],
+          gaps: [...wacc.gaps, ...roic.gaps, ...dupont.gaps],
+        },
+      },
+      "A3NULL",
+    );
+
+    expect(html).toMatch(
+      /<dt[^>]*>weight E \/ D<\/dt><dd[^>]*>n\/a \/ n\/a<\/dd>/,
+    );
+    expect(html).not.toMatch(/weight E \/ D<\/dt><dd[^>]*>0\.0% \/ 0\.0%<\/dd>/);
+  });
+
+  it("audit A4 preserves a null DuPont margin through computeDupont and renders n/a at the live company-page callsite", async () => {
+    const wacc = computeWacc({
+      beta: 1,
+      riskFreePct: 4,
+      erpPct: 5,
+      interestExpenseTtm: 10,
+      totalDebtAvg: 200,
+      marketCap: 800,
+      effectiveTaxRate: 0.2,
+      ebitTtm: 100,
+      analysisDate: "2026-08-07",
+    });
+    const roic = computeRoic([], []);
+    const dupont = computeDupont(
+      [{ date: "2025-12-31", revenue: 1_000, netIncome: null }],
+      [{
+        date: "2025-12-31",
+        totalAssets: 2_000,
+        totalStockholdersEquity: 800,
+      }],
+    );
+    const roicVsWacc = computeRoicVsWaccSpread(
+      roic.latestRoicPct,
+      wacc.waccPct,
+    );
+
+    expect(dupont.latest).toEqual(expect.objectContaining({
+      netMargin: null,
+      assetTurnover: 0.5,
+      leverage: 2.5,
+      roePct: null,
+    }));
+
+    const html = await renderLiveReturnsPanel(
+      {
+        ...computed,
+        returns: {
+          wacc,
+          roic,
+          dupont,
+          roicVsWacc,
+          notes: [...wacc.notes, ...roic.notes, ...dupont.notes],
+          gaps: [...wacc.gaps, ...roic.gaps, ...dupont.gaps],
+        },
+      },
+      "A4NULL",
+    );
+
+    expect(html).toMatch(
+      /<dt[^>]*>net margin<\/dt><dd[^>]*>n\/a<\/dd>/,
+    );
+    expect(html).not.toMatch(/net margin<\/dt><dd[^>]*>0\.0%<\/dd>/);
   });
 
   it("renders every Task 28 audit family through latest, saved, and print pages without mutation", async () => {

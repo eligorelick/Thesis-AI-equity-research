@@ -1,0 +1,4190 @@
+{
+  "provenance": {
+    "auditedBaseCommit": "524d09e81b00b08fe6af386011d34759a5e02fc0",
+    "auditedBaseTree": "3210ac4f6e04a81e44ebdfd6989ecf721cb0e2a0",
+    "sourceBlobs": {
+      "src/pipeline/dataBundle.ts": "ca2efa5a8b191a45eb879142d5ec738777691eaf",
+      "src/pipeline/compute.ts": "835d6dab9b892fbb9905fd3393a7600215e9c3ab",
+      "src/pipeline/stageC/passes.ts": "11b36ed190e872c27621c0c79dbd34bb4a9b43da",
+      "src/report/schema.ts": "891d66275b154aa2b4f1f1b32961382eaa0e72ad"
+    },
+    "fixtureHashes": {
+      "fmpTreeSha256": "2d4278a6d73453ea372bf655f299e9b8709b627098214ce5d0d3c2190aa3c7d9",
+      "reportSha256": "e98dbece14978fa5662db016e002ab5b4706b24ac0cf5bbe0408c9f17c969c88"
+    },
+    "generator": {
+      "helperSha256": "73e890f2ec86463f5c86cb220e7ee65c8955ba4e0fdcbbc7eea6baff5e035bfe",
+      "basePackageLockBlob": "66f7242846b6d20cfe99e21400d2dada27bbfbfd",
+      "comparisonPackageLockBlob": "39e4ec59aca9f54e0bc6a65e4b47fd877256fea0",
+      "generationNode": "v24.11.1",
+      "generationNpm": "11.6.2",
+      "command": "in detached 524d09e: npm ci; provider env blank; NODE_OPTIONS=--conditions=react-server; NODE_PATH=<base>/node_modules; AUDIT_FIXTURE_EMIT=1; node <base>/node_modules/tsx/dist/cli.mjs - < <remediation>/tests/helpers/auditFixtureComparison.ts"
+    },
+    "fixedNow": "2026-07-06T00:00:00.000Z",
+    "generatedAt": "2026-07-06T12:00:00.000Z"
+  },
+  "projection": {
+    "fixtureControl": {
+      "symbol": "DEMO",
+      "companyName": "Thesis Example Systems",
+      "quotePrice": 40
+    },
+    "stageB": {
+      "symbol": "DEMO",
+      "builtAt": "2026-07-06T00:00:00.000Z",
+      "route": {
+        "base": "general",
+        "overlays": [],
+        "evidence": {
+          "sector": "Technology",
+          "industry": "Software - Infrastructure",
+          "sic": null
+        },
+        "notes": [
+          "insufficient historical coverage: only 3 quarterly statement(s) available (< 8), but verified ipoDate 2015-01-02 is older than 24 months — treated as incomplete data coverage, NOT a recent-IPO overlay (audit 2026-07-11 finding #4). Long-window CAGRs/technicals degrade via their own insufficiency flags."
+        ],
+        "gaps": [
+          {
+            "field": "route.insufficientHistory",
+            "reason": "only 3 quarterly statement(s) available (< 8); verified ipoDate 2015-01-02 is older than 24 months — insufficient historical coverage, not a recent IPO",
+            "severity": "info",
+            "attemptedSources": [
+              "fmp:/stable/income-statement?period=quarter",
+              "fmp:/stable/profile.ipoDate"
+            ]
+          }
+        ],
+        "asOf": {
+          "today": "2026-07-06",
+          "incomeTtm": "2025-12-31",
+          "incomeAnnual": "2025-12-31",
+          "cashflowTtm": "2025-12-31",
+          "cashflowAnnual": "2025-12-31"
+        }
+      },
+      "degradation": {
+        "route": "general",
+        "overlays": [],
+        "items": [],
+        "notes": [
+          "no degradations: general route with no overlays."
+        ],
+        "gaps": []
+      },
+      "growth": {
+        "asOf": "2025-12-31",
+        "period": "annual",
+        "revenueCagrs": [
+          {
+            "windowYears": 1,
+            "actualYears": 1,
+            "cagrPct": 8.695652173913038,
+            "startDate": "2024-12-31",
+            "endDate": "2025-12-31",
+            "startValue": 11500000000,
+            "endValue": 12500000000,
+            "note": {
+              "$auditUndefined": true
+            }
+          },
+          {
+            "windowYears": 3,
+            "actualYears": 2,
+            "cagrPct": 9.108945117996182,
+            "startDate": "2023-12-31",
+            "endDate": "2025-12-31",
+            "startValue": 10500000000,
+            "endValue": 12500000000,
+            "note": "requested 3y window, only 2y of history available"
+          },
+          {
+            "windowYears": 5,
+            "actualYears": 2,
+            "cagrPct": 9.108945117996182,
+            "startDate": "2023-12-31",
+            "endDate": "2025-12-31",
+            "startValue": 10500000000,
+            "endValue": 12500000000,
+            "note": "requested 5y window, only 2y of history available"
+          },
+          {
+            "windowYears": 10,
+            "actualYears": 2,
+            "cagrPct": 9.108945117996182,
+            "startDate": "2023-12-31",
+            "endDate": "2025-12-31",
+            "startValue": 10500000000,
+            "endValue": 12500000000,
+            "note": "requested 10y window, only 2y of history available"
+          }
+        ],
+        "epsDilutedCagrs": [
+          {
+            "windowYears": 1,
+            "actualYears": 1,
+            "cagrPct": 17.80487804878048,
+            "startDate": "2024-12-31",
+            "endDate": "2025-12-31",
+            "startValue": 7.246376811594203,
+            "endValue": 8.536585365853659,
+            "note": {
+              "$auditUndefined": true
+            }
+          },
+          {
+            "windowYears": 3,
+            "actualYears": 2,
+            "cagrPct": 18.995342761454292,
+            "startDate": "2023-12-31",
+            "endDate": "2025-12-31",
+            "startValue": 6.028708133971292,
+            "endValue": 8.536585365853659,
+            "note": "requested 3y window, only 2y of history available"
+          },
+          {
+            "windowYears": 5,
+            "actualYears": 2,
+            "cagrPct": 18.995342761454292,
+            "startDate": "2023-12-31",
+            "endDate": "2025-12-31",
+            "startValue": 6.028708133971292,
+            "endValue": 8.536585365853659,
+            "note": "requested 5y window, only 2y of history available"
+          },
+          {
+            "windowYears": 10,
+            "actualYears": 2,
+            "cagrPct": 18.995342761454292,
+            "startDate": "2023-12-31",
+            "endDate": "2025-12-31",
+            "startValue": 6.028708133971292,
+            "endValue": 8.536585365853659,
+            "note": "requested 10y window, only 2y of history available"
+          }
+        ],
+        "fcfCagrs": [
+          {
+            "windowYears": 1,
+            "actualYears": 1,
+            "cagrPct": 16.129032258064523,
+            "startDate": "2024-12-31",
+            "endDate": "2025-12-31",
+            "startValue": 1550000000,
+            "endValue": 1800000000,
+            "note": {
+              "$auditUndefined": true
+            }
+          },
+          {
+            "windowYears": 3,
+            "actualYears": 1,
+            "cagrPct": 16.129032258064523,
+            "startDate": "2024-12-31",
+            "endDate": "2025-12-31",
+            "startValue": 1550000000,
+            "endValue": 1800000000,
+            "note": "requested 3y window, only 1y of history available"
+          },
+          {
+            "windowYears": 5,
+            "actualYears": 1,
+            "cagrPct": 16.129032258064523,
+            "startDate": "2024-12-31",
+            "endDate": "2025-12-31",
+            "startValue": 1550000000,
+            "endValue": 1800000000,
+            "note": "requested 5y window, only 1y of history available"
+          },
+          {
+            "windowYears": 10,
+            "actualYears": 1,
+            "cagrPct": 16.129032258064523,
+            "startDate": "2024-12-31",
+            "endDate": "2025-12-31",
+            "startValue": 1550000000,
+            "endValue": 1800000000,
+            "note": "requested 10y window, only 1y of history available"
+          }
+        ],
+        "margins": {
+          "gross": {
+            "series": [
+              {
+                "date": "2023-12-31",
+                "pct": 57.99999999999999
+              },
+              {
+                "date": "2024-12-31",
+                "pct": 59
+              },
+              {
+                "date": "2025-12-31",
+                "pct": 60
+              }
+            ],
+            "slopePctPtsPerYear": 0.9993153821010039,
+            "note": {
+              "$auditUndefined": true
+            }
+          },
+          "operating": {
+            "series": [
+              {
+                "date": "2023-12-31",
+                "pct": 18
+              },
+              {
+                "date": "2024-12-31",
+                "pct": 19
+              },
+              {
+                "date": "2025-12-31",
+                "pct": 20
+              }
+            ],
+            "slopePctPtsPerYear": 0.9993153821010003,
+            "note": {
+              "$auditUndefined": true
+            }
+          },
+          "net": {
+            "series": [
+              {
+                "date": "2023-12-31",
+                "pct": 12
+              },
+              {
+                "date": "2024-12-31",
+                "pct": 13.043478260869565
+              },
+              {
+                "date": "2025-12-31",
+                "pct": 14.000000000000002
+              }
+            ],
+            "slopePctPtsPerYear": 0.9993351944561649,
+            "note": {
+              "$auditUndefined": true
+            }
+          }
+        },
+        "revenueAcceleration": {
+          "latestYoyPct": 8.695652173913038,
+          "threeYearCagrPct": 9.108945117996182,
+          "deltaPctPts": -0.4132929440831443,
+          "accelerating": false,
+          "note": "revenue acceleration = latest YoY minus 3y CAGR (house framing per the application contract §4)"
+        },
+        "notes": [],
+        "gaps": []
+      },
+      "returns": {
+        "wacc": {
+          "syntheticRating": null,
+          "syntheticSpreadPct": null,
+          "interestCoverageRatio": null,
+          "betaRaw": 1.1,
+          "betaAdjusted": 1.0670000000000002,
+          "betaFinal": 1.0670000000000002,
+          "riskFreePct": 4,
+          "erpPct": 5,
+          "taxRateUsed": 0.2708333,
+          "notes": [
+            "Blume adjustment: beta_adj = 0.67·raw + 0.33",
+            "effective cost of debt 12% accepted (band [rf − 1, rf + 19] = [3, 23]%)",
+            "debt weight uses book totalDebt (avg of latest two periods) as market-value proxy"
+          ],
+          "clampsApplied": [],
+          "gaps": [],
+          "asOf": {
+            "riskFreeRate": "2025-12-31",
+            "statements": "2025-12-31",
+            "marketCap": "2025-12-31"
+          },
+          "waccPct": 9.255946000000002,
+          "waccRawPct": 9.255946000000002,
+          "costOfEquityPct": 9.335,
+          "costOfDebtPct": 12,
+          "costOfDebtMethod": "effective",
+          "weightEquity": 0.8648648648648649,
+          "weightDebt": 0.13513513513513514
+        },
+        "roic": {
+          "series": [
+            {
+              "date": "2023-12-31",
+              "roicPct": null,
+              "nopat": 1384534883.72093,
+              "investedCapitalAvg": null,
+              "taxRateUsed": 0.26744186046511625,
+              "notes": [
+                "no balance sheet within 45d of 2023-12-31"
+              ]
+            },
+            {
+              "date": "2024-12-31",
+              "roicPct": 33.30792682926829,
+              "nopat": 1598780487.804878,
+              "investedCapitalAvg": 4800000000,
+              "taxRateUsed": 0.2682926829268293,
+              "notes": [
+                "no prior balance sheet — single-period IC used"
+              ]
+            },
+            {
+              "date": "2025-12-31",
+              "roicPct": 36.458333333333336,
+              "nopat": 1822916666.6666667,
+              "investedCapitalAvg": 5000000000,
+              "taxRateUsed": 0.2708333333333333,
+              "notes": []
+            }
+          ],
+          "latestRoicPct": 36.458333333333336,
+          "asOf": "2025-12-31",
+          "notes": [
+            "invested capital = totalDebt + totalStockholdersEquity − cashAndCashEquivalents (house definition per the valuation methodology §2.2)"
+          ],
+          "gaps": []
+        },
+        "dupont": {
+          "series": [
+            {
+              "date": "2023-12-31",
+              "netMargin": null,
+              "assetTurnover": null,
+              "leverage": null,
+              "roePct": null,
+              "notes": [
+                "no balance sheet within 45d of 2023-12-31"
+              ]
+            },
+            {
+              "date": "2024-12-31",
+              "netMargin": 0.13043478260869565,
+              "assetTurnover": 1.2777777777777777,
+              "leverage": 1.7307692307692308,
+              "roePct": 28.846153846153843,
+              "notes": [
+                "no prior totalAssets — single-period value used",
+                "no prior totalStockholdersEquity — single-period value used"
+              ]
+            },
+            {
+              "date": "2025-12-31",
+              "netMargin": 0.14,
+              "assetTurnover": 1.3157894736842106,
+              "leverage": 1.6964285714285714,
+              "roePct": 31.25,
+              "notes": []
+            }
+          ],
+          "latest": {
+            "date": "2025-12-31",
+            "netMargin": 0.14,
+            "assetTurnover": 1.3157894736842106,
+            "leverage": 1.6964285714285714,
+            "roePct": 31.25,
+            "notes": []
+          },
+          "asOf": "2025-12-31",
+          "notes": [
+            "DuPont uses average assets/equity (current and prior period) where a prior balance exists"
+          ],
+          "gaps": []
+        },
+        "roicVsWacc": {
+          "spreadPctPts": 27.202387333333334,
+          "note": "spread = ROIC 36.4583% − WACC 9.2559% (positive = returns above cost of capital)"
+        },
+        "notes": [],
+        "gaps": []
+      },
+      "capital": {
+        "asOf": "2025-12-31",
+        "fcf": {
+          "series": [
+            {
+              "date": "2024-12-31",
+              "fcf": 1550000000,
+              "netIncome": 1500000000,
+              "fcfConversion": 1.0333333333333334,
+              "note": {
+                "$auditUndefined": true
+              }
+            },
+            {
+              "date": "2025-12-31",
+              "fcf": 1800000000,
+              "netIncome": 1750000000,
+              "fcfConversion": 1.0285714285714285,
+              "note": {
+                "$auditUndefined": true
+              }
+            }
+          ],
+          "latestFcf": 1800000000,
+          "latestConversion": 1.0285714285714285
+        },
+        "capexIntensity": {
+          "series": [
+            {
+              "date": "2024-12-31",
+              "capex": 550000000,
+              "revenue": 11500000000,
+              "capexToRevenuePct": 4.782608695652174,
+              "capexToDA": 1.9642857142857142
+            },
+            {
+              "date": "2025-12-31",
+              "capex": 600000000,
+              "revenue": 12500000000,
+              "capexToRevenuePct": 4.8,
+              "capexToDA": 2
+            }
+          ],
+          "latestPct": 4.8,
+          "slopePctPtsPerYear": null
+        },
+        "maintenanceVsGrowthCapex": {
+          "capexToDALatest": 2,
+          "capexToDA5yAvg": 1.9821428571428572,
+          "impliedMaintenanceCapex": 300000000,
+          "impliedGrowthCapex": 300000000,
+          "note": "HEURISTIC: maintenance capex approximated by D&A (maintenance = min(|capex|, D&A), growth = max(0, |capex| − D&A)); actual split is not disclosed in standardized statements"
+        },
+        "netDebtToEbitda": {
+          "value": -0.4642857142857143,
+          "netDebt": -1300000000,
+          "ebitda": 2800000000,
+          "asOf": "2025-12-31",
+          "resolution": {
+            "version": "NET_DEBT_V1",
+            "asOf": "2025-12-31",
+            "components": {
+              "totalDebt": 1200000000,
+              "cashAndCashEquivalents": 2000000000,
+              "shortTermInvestments": 500000000,
+              "cashAndShortTermInvestments": 2500000000,
+              "vendorNetDebt": -800000000
+            },
+            "value": -1300000000,
+            "cashBasis": "combined-field",
+            "reason": "total debt minus cash and short-term investments (combined field)"
+          },
+          "note": "NET_DEBT_V1: total debt minus cash and short-term investments (combined field); EBITDA computed as operatingIncome + cash-flow D&A (latest FY, not TTM)"
+        },
+        "interestCoverage": {
+          "value": 16.666666666666668,
+          "ebit": 2500000000,
+          "interestExpense": 150000000,
+          "note": {
+            "$auditUndefined": true
+          }
+        },
+        "sbc": {
+          "latest": 250000000,
+          "pctOfRevenue": 2,
+          "pctOfFcf": 13.88888888888889,
+          "note": {
+            "$auditUndefined": true
+          }
+        },
+        "shareCount": {
+          "trendPct": -1.9138755980861233,
+          "annualizedPct": -0.9615607948540661,
+          "direction": "buyback",
+          "startDate": "2023-12-31",
+          "endDate": "2025-12-31",
+          "startShares": 209000000,
+          "endShares": 205000000,
+          "actualYears": 2,
+          "note": "flat band = ±1% total change over the window (house rule); requested 5y window, only 2y of share history available"
+        },
+        "buybackPriceAnalysis": {
+          "totalRepurchased": 400000000,
+          "avgPricePaidProxy": null,
+          "currentPrice": 40,
+          "premiumDiscountPct": null,
+          "years": [
+            {
+              "date": "2024-12-31",
+              "repurchased": 200000000,
+              "avgMarketCap": null,
+              "avgPriceProxy": null,
+              "sharesProxy": null,
+              "note": "no market-cap history inside the fiscal window"
+            },
+            {
+              "date": "2025-12-31",
+              "repurchased": 200000000,
+              "avgMarketCap": null,
+              "avgPriceProxy": null,
+              "sharesProxy": null,
+              "note": "no market-cap history inside the fiscal window"
+            }
+          ],
+          "note": "HEURISTIC: assumes shares were repurchased at each fiscal year's average price proxy (average daily market cap ÷ weighted-average diluted shares); actual execution prices are not disclosed"
+        },
+        "notes": [
+          "capex-intensity slope requires ≥3 non-null annual points (house rule)"
+        ],
+        "gaps": []
+      },
+      "forensics": {
+        "altmanSelection": {
+          "variant": "z2",
+          "notes": [
+            "House heuristic: no SIC code available — manufacturer status inferred from sector/industry strings (non-manufacturer → Z″)."
+          ]
+        },
+        "altman": {
+          "variant": "z2",
+          "score": 6.1338,
+          "zone": "safe",
+          "thresholds": {
+            "distressBelow": 1.1,
+            "safeAbove": 2.6
+          },
+          "components": {
+            "x1": 0.25,
+            "x2": 0.38,
+            "x3": 0.25,
+            "x4": 1.5,
+            "x5": null
+          },
+          "notes": [
+            "X5 (sales/TA) is dropped by the Z″ model to remove industry asset-turnover effects."
+          ],
+          "gaps": [],
+          "asOf": {
+            "balanceSheet": "2025-12-31",
+            "incomeStatement": "2025-12-31",
+            "marketCap": "2025-12-31"
+          }
+        },
+        "beneish": {
+          "score": -2.6827912496211668,
+          "verdict": "unlikely",
+          "indices": {
+            "dsri": 1.0304,
+            "gmi": 0.9833333333333333,
+            "aqi": 0.9473684210526317,
+            "sgi": 1.0869565217391304,
+            "depi": 1.0078247261345854,
+            "sgai": 0.9945945945945946,
+            "tata": -0.065,
+            "lvgi": 0.926470588235294
+          },
+          "tataBalanceSheet": -0.02,
+          "neutralized": [],
+          "clamped": [],
+          "notes": [
+            "TATA uses the cash-flow construction (NI from continuing ops − CFO)/TA_t (Hribar–Collins 2002); balance-sheet construction reported as diagnostic only.",
+            "Diagnostic balance-sheet TATA uses shortTermDebt as a proxy for current maturities of LTD (broader — includes notes payable).",
+            "The model detects overstatement, not understatement — a very negative M does not prove conservative accounting."
+          ],
+          "gaps": [],
+          "asOf": {
+            "current": "2025-12-31",
+            "prior": "2024-12-31"
+          }
+        },
+        "piotroski": {
+          "score": 7,
+          "outOf": 7,
+          "signals": {
+            "roaPositive": {
+              "value": 1,
+              "detail": "ROA 19.44% (NI / beginning-of-year TA)"
+            },
+            "cfoPositive": {
+              "value": 1,
+              "detail": "CFO/TA_begin 26.67%"
+            },
+            "roaImproved": {
+              "value": null,
+              "detail": "prior-year ROA not computable (missing NI or TA at t−2)"
+            },
+            "accrualQuality": {
+              "value": 1,
+              "detail": "CFO 2400000000 vs NI 1750000000 (accruals < 0)"
+            },
+            "leverageDown": {
+              "value": 1,
+              "detail": "LTD/avg TA 11.67% → 10.53% (average-TA denominator per the paper)"
+            },
+            "liquidityUp": {
+              "value": 1,
+              "detail": "current ratio 1.83 → 2.00"
+            },
+            "noEquityIssuance": {
+              "value": 1,
+              "detail": "commonStockIssuance 0"
+            },
+            "marginUp": {
+              "value": 1,
+              "detail": "gross margin 59.00% → 60.00%"
+            },
+            "turnoverUp": {
+              "value": null,
+              "detail": "revenue or beginning-of-year total assets missing"
+            }
+          },
+          "notes": [
+            "ΔLEVER: prior-year average TA proxied by end-of-year TA (no t−2 balance sheet) — annotated proxy."
+          ],
+          "gaps": [
+            {
+              "field": "forensics.piotroski",
+              "reason": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7",
+              "severity": "info"
+            }
+          ],
+          "asOf": {
+            "current": "2025-12-31",
+            "prior": "2024-12-31",
+            "prior2": "2023-12-31"
+          }
+        },
+        "accruals": {
+          "cashFlowAccrualRatio": 0.03296703296703297,
+          "balanceSheetAccrualRatio": 0.06593406593406594,
+          "aggregateAccrualsCashFlow": 150000000,
+          "aggregateAccrualsBalanceSheet": 300000000,
+          "noaCurrent": 4700000000,
+          "noaPrior": 4400000000,
+          "scaler": "avgNOA",
+          "scalerValue": 4550000000,
+          "band": "unremarkable",
+          "notes": [
+            "House-rule bands: |ratio| < 10% unremarkable, 10–20% elevated, > 20% red flag (heuristic — Sloan 1996 is a decile-ranking result with no canonical bright line)."
+          ],
+          "gaps": [],
+          "asOf": {
+            "current": "2025-12-31",
+            "prior": "2024-12-31"
+          }
+        },
+        "flags": [],
+        "notes": [],
+        "gaps": [
+          {
+            "field": "forensics.piotroski",
+            "reason": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7",
+            "severity": "info"
+          }
+        ]
+      },
+      "technicals": {
+        "asOf": "2025-12-31",
+        "lastClose": 40,
+        "rowsUsed": 300,
+        "smaCross": {
+          "sma50": 39.26280000000003,
+          "sma200": 36.523700000000034,
+          "state": "golden",
+          "lastCrossDate": null,
+          "lastCrossType": null
+        },
+        "rsi14": 93.68616779109662,
+        "macd": {
+          "macd": 0.205186182668065,
+          "signal": 0.2591469082187272,
+          "histogram": -0.053960725550662225,
+          "state": "bearish",
+          "lastCrossoverDate": "2025-12-10",
+          "lastCrossoverType": "bearish",
+          "barsSinceCrossover": 15,
+          "asOf": "2025-12-31"
+        },
+        "range52w": {
+          "high52w": 40.43,
+          "low52w": 30,
+          "highDate": "2025-12-25",
+          "lowDate": "2025-01-01",
+          "pctFromHigh": -1.063566658421966,
+          "pctFromLow": 33.33333333333333,
+          "distanceFromHigh": -0.4299999999999997,
+          "distanceFromLow": 10,
+          "positionPct": 95.87727708533077,
+          "asOf": "2025-12-31"
+        },
+        "relativeStrength": {
+          "benchmark": {
+            "benchmarkSymbol": "SPY",
+            "points": [
+              {
+                "months": 3,
+                "symbolReturnPct": 6.496272630457933,
+                "benchmarkReturnPct": null,
+                "differentialPctPoints": null
+              },
+              {
+                "months": 6,
+                "symbolReturnPct": 13.830392714854867,
+                "benchmarkReturnPct": null,
+                "differentialPctPoints": null
+              },
+              {
+                "months": 12,
+                "symbolReturnPct": 31.492439184746868,
+                "benchmarkReturnPct": null,
+                "differentialPctPoints": null
+              }
+            ],
+            "notes": [
+              "Relative strength uses split-adjusted close-to-close price returns; dividends unavailable in the EOD feed, so figures approximate total return."
+            ],
+            "gaps": [
+              {
+                "field": "technicals.relativeStrength.SPY",
+                "reason": "no SPY benchmark history supplied",
+                "severity": "warn"
+              }
+            ],
+            "asOf": "2025-12-31"
+          },
+          "sector": null
+        },
+        "volumeTrend": {
+          "avg20d": 1237500,
+          "avg90d": 1223611.111111111,
+          "ratio": 1.011350737797957,
+          "state": "flat",
+          "asOf": "2025-12-31"
+        },
+        "atr14": {
+          "atr": 0.7538831809076105,
+          "atrPctOfClose": 1.8847079522690262,
+          "asOf": "2025-12-31"
+        },
+        "drawdowns": [
+          {
+            "windowYears": 1,
+            "depthPct": 0.15257857796766633,
+            "peakDate": "2025-03-06",
+            "troughDate": "2025-03-21",
+            "recovered": true,
+            "insufficientHistory": false,
+            "asOf": "2025-12-31"
+          },
+          {
+            "windowYears": 3,
+            "depthPct": 0.16474464579901388,
+            "peakDate": "2024-11-29",
+            "troughDate": "2024-12-16",
+            "recovered": true,
+            "insufficientHistory": true,
+            "asOf": "2025-12-31"
+          },
+          {
+            "windowYears": 5,
+            "depthPct": 0.16474464579901388,
+            "peakDate": "2024-11-29",
+            "troughDate": "2024-12-16",
+            "recovered": true,
+            "insufficientHistory": true,
+            "asOf": "2025-12-31"
+          }
+        ],
+        "read": {
+          "trend": "uptrend",
+          "momentum": "overbought",
+          "keyLevels": {
+            "sma50": 39.26280000000003,
+            "sma200": 36.523700000000034,
+            "high52w": 40.43,
+            "low52w": 30
+          },
+          "relativeStrength": "unavailable",
+          "flags": [
+            "Price 9.5% above SMA200.",
+            "RSI-14 at 93.7 — overbought (house threshold 70).",
+            "Price within 1.1% of the 52-week high (40.43 on 2025-12-25)."
+          ]
+        },
+        "notes": [
+          "symbol: input rows were not sorted ASC by date — re-sorted defensively.",
+          "Relative strength uses split-adjusted close-to-close price returns; dividends unavailable in the EOD feed, so figures approximate total return.",
+          "House rules: trend = close & SMA50 vs SMA200; momentum = RSI-14 (overbought ≥70, oversold ≤30) + MACD histogram; volume trend rising/falling at 1.2×/0.8× of the 90-day average; “near 52-week high/low” within 5%/10%; deep-drawdown flag at 30% (1y)."
+        ],
+        "gaps": [
+          {
+            "field": "technicals.relativeStrength.sector",
+            "reason": "no XLK history supplied",
+            "severity": "info"
+          },
+          {
+            "field": "technicals.relativeStrength.SPY",
+            "reason": "no SPY benchmark history supplied",
+            "severity": "warn"
+          },
+          {
+            "field": "technicals.drawdown.3y",
+            "reason": "history does not span the full 3-year window — drawdown computed over available rows only",
+            "severity": "info"
+          },
+          {
+            "field": "technicals.drawdown.5y",
+            "reason": "history does not span the full 5-year window — drawdown computed over available rows only",
+            "severity": "info"
+          }
+        ]
+      },
+      "valuation": {
+        "kind": "dcf",
+        "route": "general",
+        "assumptions": {
+          "startRevenue": {
+            "value": 12500000000,
+            "basis": "latest annual FY 2025-12-31 revenue as of 2025-12-31"
+          },
+          "years": 10,
+          "growthPath": {
+            "value": [
+              7.888888888888889,
+              7.290123456790123,
+              6.691358024691358,
+              6.092592592592593,
+              5.493827160493828,
+              4.895061728395062,
+              4.296296296296296,
+              3.697530864197531,
+              3.098765432098766,
+              2.5
+            ],
+            "basis": "linear fade from 7.89% (analyst consensus revenue, avg implied growth over next 2 fiscal years (through 2027-12-31)) to terminal 2.5% by year 10"
+          },
+          "ebitMarginPath": {
+            "value": [
+              20,
+              20,
+              20,
+              20,
+              20,
+              20,
+              20,
+              20,
+              20,
+              20
+            ],
+            "basis": "held flat at current 20% under improving dated-margin regime (5y median 19%, slope 1pp/year)"
+          },
+          "taxRatePath": {
+            "value": [
+              27.083333333333332,
+              27.055103884372176,
+              27.02687443541102,
+              26.998644986449865,
+              26.97041553748871,
+              26.942186088527553,
+              26.913956639566397,
+              26.88572719060524,
+              26.857497741644085,
+              26.82926829268293
+            ],
+            "basis": "latest annual FY 2025-12-31 effective rate 27.08% fading to company historical median 26.83% by year 10"
+          },
+          "salesToCapital": {
+            "value": 2.6595744680851063,
+            "basis": "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, as of 2025-12-31)"
+          },
+          "terminal": {
+            "gTermPct": {
+              "value": 2.5,
+              "basis": "min(2.5%, risk-free 4%) — house rule: nothing grows faster than rf forever"
+            },
+            "roicTermPct": {
+              "value": 9.255946000000002,
+              "basis": "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)"
+            },
+            "reinvestmentRate": {
+              "value": 0.27009664922418514,
+              "basis": "terminal reinvestment = gTerm / ROICterm (Damodaran consistency rule)"
+            }
+          },
+          "midYear": {
+            "value": true,
+            "basis": "mid-year discounting convention ON by default (cash flows arrive through the year)"
+          },
+          "asOf": {
+            "statements": "2025-12-31",
+            "estimates": "2027-12-31"
+          },
+          "notes": [
+            "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%"
+          ]
+        },
+        "dcf": {
+          "enterpriseValue": 28677760654.031258,
+          "equityValue": 29977760654.031258,
+          "perShare": 146.23297880015247,
+          "pvExplicit": 14200057180.89785,
+          "pvTerminal": 14477703473.133406,
+          "terminalShare": 0.5048407945024906,
+          "terminalValue": 33568192262.428688,
+          "gTermUsedPct": 2.5,
+          "yearRows": [
+            {
+              "year": 1,
+              "revenue": 13486111111.11111,
+              "growthPct": 7.888888888888889,
+              "ebitMarginPct": 20,
+              "ebit": 2697222222.2222223,
+              "taxRatePct": 27.083333333333332,
+              "nopat": 1966724537.0370374,
+              "reinvestment": 370777777.7777776,
+              "fcff": 1595946759.2592597,
+              "discountFactor": 1.0452556912067017,
+              "pv": 1526848189.0941052
+            },
+            {
+              "year": 2,
+              "revenue": 14469265260.631,
+              "growthPct": 7.290123456790123,
+              "ebitMarginPct": 20,
+              "ebit": 2893853052.1262,
+              "taxRatePct": 27.055103884372176,
+              "nopat": 2110918102.6123817,
+              "reinvestment": 369665960.2194786,
+              "fcff": 1741252142.392903,
+              "discountFactor": 1.1420039935467208,
+              "pv": 1524733847.0201824
+            },
+            {
+              "year": 3,
+              "revenue": 15437455602.762112,
+              "growthPct": 6.691358024691358,
+              "ebitMarginPct": 20,
+              "ebit": 3087491120.5524225,
+              "taxRatePct": 27.02687443541102,
+              "nopat": 2253038772.1962547,
+              "reinvestment": 364039568.6412978,
+              "fcff": 1888999203.554957,
+              "discountFactor": 1.2477072665072486,
+              "pv": 1513976278.1400638
+            },
+            {
+              "year": 4,
+              "revenue": 16377996879.300764,
+              "growthPct": 6.092592592592593,
+              "ebitMarginPct": 20,
+              "ebit": 3275599375.860153,
+              "taxRatePct": 26.998644986449865,
+              "nopat": 2391231929.193303,
+              "reinvestment": 353643519.9785333,
+              "fcff": 2037588409.2147698,
+              "discountFactor": 1.3631943773332356,
+              "pv": 1494715972.3478506
+            },
+            {
+              "year": 5,
+              "revenue": 17277775720.20062,
+              "growthPct": 5.493827160493828,
+              "ebitMarginPct": 20,
+              "ebit": 3455555144.040124,
+              "taxRatePct": 26.97041553748871,
+              "nopat": 2523577562.565436,
+              "reinvestment": 338316844.1783454,
+              "fcff": 2185260718.3870907,
+              "discountFactor": 1.489370912774236,
+              "pv": 1467237408.5221174
+            },
+            {
+              "year": 6,
+              "revenue": 18123533506.998093,
+              "growthPct": 4.895061728395062,
+              "ebitMarginPct": 20,
+              "ebit": 3624706701.3996186,
+              "taxRatePct": 26.942186088527553,
+              "nopat": 2648131476.7452044,
+              "reinvestment": 318004927.8358502,
+              "fcff": 2330126548.909354,
+              "discountFactor": 1.6272262802003263,
+              "pv": 1431962215.2504165
+            },
+            {
+              "year": 7,
+              "revenue": 18902174205.81727,
+              "growthPct": 4.296296296296296,
+              "ebitMarginPct": 20,
+              "ebit": 3780434841.163454,
+              "taxRatePct": 26.913956639566397,
+              "nopat": 2762970247.2256613,
+              "reinvestment": 292768902.75601006,
+              "fcff": 2470201344.469651,
+              "discountFactor": 1.7778414659934771,
+              "pv": 1389438480.1567645
+            },
+            {
+              "year": 8,
+              "revenue": 19601087931.081745,
+              "growthPct": 3.697530864197531,
+              "ebitMarginPct": 20,
+              "ebit": 3920217586.216349,
+              "taxRatePct": 26.88572719060524,
+              "nopat": 2866238580.7080913,
+              "reinvestment": 262791560.69944328,
+              "fcff": 2603447020.008648,
+              "discountFactor": 1.9423975120514416,
+              "pv": 1340326582.9243398
+            },
+            {
+              "year": 9,
+              "revenue": 20208479668.20539,
+              "growthPct": 3.098765432098766,
+              "ebitMarginPct": 20,
+              "ebit": 4041695933.6410785,
+              "taxRatePct": 26.857497741644085,
+              "nopat": 2956197539.5393047,
+              "reinvestment": 228379293.1584908,
+              "fcff": 2727818246.380814,
+              "discountFactor": 2.1221847768722664,
+              "pv": 1285382062.9140253
+            },
+            {
+              "year": 10,
+              "revenue": 20713691659.910522,
+              "growthPct": 2.5,
+              "ebitMarginPct": 20,
+              "ebit": 4142738331.982105,
+              "taxRatePct": 26.82926829268293,
+              "nopat": 3031271950.2308083,
+              "reinvestment": 189959708.88112947,
+              "fcff": 2841312241.349679,
+              "discountFactor": 2.3186130538397838,
+              "pv": 1225436144.5279837
+            }
+          ],
+          "notes": [],
+          "gaps": []
+        },
+        "sensitivity": {
+          "waccPcts": [
+            8.255946000000002,
+            8.755946000000002,
+            9.255946000000002,
+            9.755946000000002,
+            10.255946000000002
+          ],
+          "gTermPcts": [
+            1.5,
+            2,
+            2.5,
+            3,
+            3.5
+          ],
+          "perShare": [
+            [
+              166.376092292583,
+              167.7149851175111,
+              169.2211734983775,
+              170.9424020912171,
+              172.94649343185347
+            ],
+            [
+              155.24133879734714,
+              156.0003561762538,
+              156.82318027878264,
+              157.72643914234646,
+              158.73308812865395
+            ],
+            [
+              145.54397447067558,
+              145.888476635414,
+              146.23297880015247,
+              146.57748096489092,
+              146.92198312962938
+            ],
+            [
+              137.02303327015306,
+              137.07019569277645,
+              137.07839478363584,
+              137.03897964504117,
+              136.940533723176
+            ],
+            [
+              129.477139616909,
+              129.31120340693457,
+              129.08313762406544,
+              128.78009840764705,
+              128.38543965803257
+            ]
+          ],
+          "notes": [
+            "grid cells with WACC - gTerm < 1.5pp rendered null (Gordon TV guard, spec §3)"
+          ],
+          "gaps": []
+        },
+        "reverseDcf": {
+          "method": "growth",
+          "impliedRevenueGrowthPct": -17.24609375,
+          "impliedTerminalMarginPct": null,
+          "notes": [
+            "implied CONSTANT revenue growth over 10 explicit years (no fade); all other assumptions frozen at base case"
+          ],
+          "gaps": []
+        },
+        "multiples": {
+          "multiples": [
+            {
+              "key": "peTtm",
+              "current": 4.685714285714285,
+              "basis": "price / epsDiluted (latest annual FY 2025-12-31 — TTM suppressed); fallback marketCap / netIncome (latest annual FY 2025-12-31 — TTM suppressed)",
+              "ownHistory": null,
+              "peers": null
+            },
+            {
+              "key": "evToEbitda",
+              "current": 2.392857142857143,
+              "basis": "EV (mcap + totalDebt + preferred + minority - cash&STI, latest quarterly balance sheet 2025-12-31) / (operatingIncome + D&A), latest annual FY 2025-12-31 — TTM suppressed-computed — vendor ebitda field not trusted",
+              "ownHistory": null,
+              "peers": null
+            },
+            {
+              "key": "evToSales",
+              "current": 0.536,
+              "basis": "EV / revenue (latest annual FY 2025-12-31 — TTM suppressed)",
+              "ownHistory": null,
+              "peers": null
+            },
+            {
+              "key": "priceToFcf",
+              "current": 4.444444444444445,
+              "basis": "marketCap / (operatingCashFlow + capitalExpenditure) (latest annual FY 2025-12-31 — TTM suppressed; FMP capex negative)",
+              "ownHistory": null,
+              "peers": null
+            },
+            {
+              "key": "priceToBook",
+              "current": 1.3333333333333333,
+              "basis": "marketCap / totalStockholdersEquity (latest quarterly balance sheet 2025-12-31)",
+              "ownHistory": null,
+              "peers": null
+            },
+            {
+              "key": "priceToTbv",
+              "current": 1.7777777777777777,
+              "basis": "marketCap / (equity - goodwill - intangibleAssets) (latest quarterly balance sheet 2025-12-31)",
+              "ownHistory": null,
+              "peers": null
+            }
+          ],
+          "sectorAppropriate": [
+            "peTtm",
+            "evToEbitda",
+            "evToSales",
+            "priceToFcf",
+            "priceToBook"
+          ],
+          "asOf": {
+            "quote": null,
+            "statements": "2025-12-31"
+          },
+          "notes": [
+            "income-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
+            "cash-flow-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)"
+          ],
+          "gaps": [
+            {
+              "field": "valuation.multiples.ownHistory",
+              "reason": "insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)",
+              "severity": "info"
+            }
+          ]
+        },
+        "notes": [
+          "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%",
+          "NET_DEBT_V1: net debt -1300000000 as of 2025-12-31; totalDebt 1200000000, cashAndShortTermInvestments 2500000000"
+        ],
+        "gaps": []
+      },
+      "runway": null,
+      "scores": {
+        "aspects": {
+          "fundamentals": {
+            "score": 67.9,
+            "band": "C",
+            "weightPct": 20,
+            "dataCompleteness": 1,
+            "drivers": [
+              {
+                "value": 9.11,
+                "unit": "%",
+                "source": "computed.scores.fundamentals.revenueCagr",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 1,
+                "unit": "pp/yr",
+                "source": "computed.scores.fundamentals.operatingMarginSlope",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 19,
+                "unit": "%",
+                "source": "computed.scores.fundamentals.epsCagr",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 16.13,
+                "unit": "%",
+                "source": "computed.scores.fundamentals.fcfCagr",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Growth + margin trajectory: revenue/EPS/FCF CAGRs and operating-margin slope. EPS CAGR is dropped where the route suppresses GAAP EPS growth (REITs)."
+          },
+          "valuation": {
+            "score": 91.14,
+            "band": "A",
+            "weightPct": 20,
+            "dataCompleteness": 0.7,
+            "drivers": [
+              {
+                "value": 265.58,
+                "unit": "%",
+                "source": "computed.scores.valuation.dcfUpside",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": -26.36,
+                "unit": "pp",
+                "source": "computed.scores.valuation.reverseImpliedVsAchievable",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Attractiveness vs intrinsic value: DCF upside, reverse-DCF implied vs achievable growth, and multiple percentile."
+          },
+          "quality": {
+            "score": 88.62,
+            "band": "A",
+            "weightPct": 15,
+            "dataCompleteness": 1,
+            "drivers": [
+              {
+                "value": 27.2,
+                "unit": "pp",
+                "source": "computed.scores.quality.roicVsWaccSpread",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 1,
+                "unit": "frac",
+                "source": "computed.scores.quality.piotroskiF",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 5.77,
+                "unit": "z",
+                "source": "computed.scores.quality.altmanZ",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 0.03,
+                "unit": "frac",
+                "source": "computed.scores.quality.accrualsRatioAbs",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": -2.68,
+                "unit": "m",
+                "source": "computed.scores.quality.beneishM",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Value creation (ROIC−WACC) and accounting integrity (Piotroski, Altman, accruals, Beneish)."
+          },
+          "balanceSheet": {
+            "score": 78.65,
+            "band": "B",
+            "weightPct": 15,
+            "dataCompleteness": 1,
+            "drivers": [
+              {
+                "value": -0.46,
+                "unit": "x",
+                "source": "computed.scores.balanceSheet.netDebtToEbitda",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 16.67,
+                "unit": "x",
+                "source": "computed.scores.balanceSheet.interestCoverage",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 1.03,
+                "unit": "frac",
+                "source": "computed.scores.balanceSheet.fcfConversion",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 13.89,
+                "unit": "%",
+                "source": "computed.scores.balanceSheet.sbcPctOfFcf",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": -0.96,
+                "unit": "%",
+                "source": "computed.scores.balanceSheet.shareCountTrend",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Financial strength: leverage, coverage, FCF conversion, dilution, and buyback cadence."
+          },
+          "moat": {
+            "score": 86.65,
+            "band": "A",
+            "weightPct": 15,
+            "dataCompleteness": 1,
+            "drivers": [
+              {
+                "value": 36.46,
+                "unit": "%",
+                "source": "computed.scores.moat.roicLevel",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 1.58,
+                "unit": "pp",
+                "source": "computed.scores.moat.roicStability",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 60,
+                "unit": "%",
+                "source": "computed.scores.moat.grossMarginLevel",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Quantitative moat proxy: level and durability of ROIC plus gross-margin (pricing-power) level. Gross margin is dropped where the route suppresses it (banks, pre-revenue)."
+          },
+          "leadership": {
+            "score": 76.97,
+            "band": "B",
+            "weightPct": 10,
+            "dataCompleteness": 0.7,
+            "drivers": [
+              {
+                "value": 27.2,
+                "unit": "pp",
+                "source": "computed.scores.leadership.capitalDeployment",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": -0.96,
+                "unit": "%",
+                "source": "computed.scores.leadership.shareCountTrend",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 2,
+                "unit": "%",
+                "source": "computed.scores.leadership.sbcPctOfRevenue",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Capital-stewardship proxy (buyback discipline, capital deployment above cost, dilution). Qualitative leadership assessed in the analyst grade."
+          },
+          "technicals": {
+            "score": 72.24,
+            "band": "B",
+            "weightPct": 5,
+            "dataCompleteness": 0.7,
+            "drivers": [
+              {
+                "value": 7.5,
+                "unit": "%",
+                "source": "computed.scores.technicals.smaGap",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 93.69,
+                "unit": "rsi",
+                "source": "computed.scores.technicals.rsi14",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 95.88,
+                "unit": "%",
+                "source": "computed.scores.technicals.position52w",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Trend + momentum: SMA50/200 gap, RSI-14, 52-week position, 6-month relative strength vs SPY."
+          }
+        },
+        "composite": {
+          "score": 77.59,
+          "band": "B",
+          "weights": {
+            "fundamentals": 20,
+            "valuation": 20,
+            "quality": 15,
+            "balanceSheet": 15,
+            "moat": 15,
+            "leadership": 10,
+            "technicals": 5
+          },
+          "methodology": "Route-adjusted, completeness-weighted mean of the seven aspect scores: each aspect enters at route weight × data completeness. The unsupported fraction is then shrunk to the neutral midpoint (50); completeness 89.5% is measured over route-applicable evidence (metrics the route suppresses or that are meaningless for it are excluded, not counted as missing). Fully observed scores are unchanged on any route, while sparse favorable data cannot create an extreme grade. Bands remain versioned house rules pending outcome backtesting."
+        },
+        "bandsVersion": "SCORE_BANDS_2026_07"
+      },
+      "projections": {
+        "horizonYears": 5,
+        "scenarioWeights": {
+          "bull": 0.25,
+          "base": 0.5,
+          "bear": 0.25
+        },
+        "weightsVersion": "UNBACKTESTED_SCENARIO_PRIOR_2026_07",
+        "series": [],
+        "notApplicableReason": "At least four consecutive annual revenue observations and three margin observations are required for sample dispersion; scenario fan suppressed rather than using house defaults."
+      },
+      "scenarioTargets": {
+        "status": "suppressed",
+        "method": "dcf-dispersion",
+        "methodVersion": "SCENARIO_TARGETS_2026_07B",
+        "basis": [
+          "Scenario targets unavailable: company-specific dispersion evidence is too thin."
+        ],
+        "dispersion": null,
+        "targets": [],
+        "missingReasons": [
+          {
+            "field": "valuation.scenarioTargets.dispersion",
+            "reason": "at least four consecutive annual revenue observations and three margin observations are required for sample dispersion — scenario targets suppressed instead of using house defaults",
+            "severity": "warn"
+          }
+        ]
+      },
+      "fairValue": {
+        "status": "available",
+        "method": "fcff-dcf",
+        "methodVersion": "FAIR_VALUE_2026_07",
+        "perShare": {
+          "value": 146.23,
+          "unit": "USD/share",
+          "source": "computed.valuation.dcf.perShare",
+          "asOf": "2026-07-06",
+          "verified": true
+        },
+        "upsidePct": 265.575,
+        "basis": [
+          "Intrinsic value per share = the deterministic FCFF discounted-cash-flow fair value (NOPAT − sales-to-capital reinvestment, Gordon terminal, EV→equity bridge).",
+          "Computed-derived (source computed.valuation.*), not a source-verified analyst target — the LLM interprets it but does not author the number."
+        ],
+        "reasons": []
+      },
+      "suppressed": [],
+      "notes": [
+        "insufficient historical coverage: only 3 quarterly statement(s) available (< 8), but verified ipoDate 2015-01-02 is older than 24 months — treated as incomplete data coverage, NOT a recent-IPO overlay (audit 2026-07-11 finding #4). Long-window CAGRs/technicals degrade via their own insufficiency flags."
+      ],
+      "gaps": [
+        {
+          "field": "edgar.item1a(DEMO)",
+          "reason": "submissions unavailable: submissions HTTP 404",
+          "severity": "critical"
+        },
+        {
+          "field": "edgar.mdna(DEMO)",
+          "reason": "submissions unavailable: submissions HTTP 404",
+          "severity": "critical"
+        },
+        {
+          "field": "edgar.auditorChange8Ks(DEMO)",
+          "reason": "submissions unavailable: submissions HTTP 404",
+          "severity": "warn"
+        },
+        {
+          "field": "edgar.companyFacts(0)",
+          "reason": "companyfacts HTTP 404",
+          "severity": "warn",
+          "attemptedSources": [
+            "https://data.sec.gov/api/xbrl/companyfacts/CIK0000000000.json"
+          ]
+        },
+        {
+          "field": "edgar.latestTenK(DEMO)",
+          "reason": "submissions unavailable: submissions HTTP 404",
+          "severity": "warn"
+        },
+        {
+          "field": "edgar.latestTenQ(DEMO)",
+          "reason": "submissions unavailable: submissions HTTP 404",
+          "severity": "warn"
+        },
+        {
+          "field": "edgar.nonReliance8Ks(DEMO)",
+          "reason": "submissions unavailable: submissions HTTP 404",
+          "severity": "warn"
+        },
+        {
+          "field": "edgar.tenQMdna(DEMO)",
+          "reason": "submissions unavailable: submissions HTTP 404",
+          "severity": "warn"
+        },
+        {
+          "field": "fmp.historicalMarketCap(DEMO)",
+          "reason": "no API key + no fixture",
+          "severity": "warn",
+          "attemptedSources": [
+            "/stable/historical-market-capitalization?from=2021-07-06&limit=5000&symbol=DEMO&to=2026-07-06",
+            "fixture:fixtures\\fmp\\historicalMarketCap\\DEMO_2021-07-06_2026-07-06.json",
+            "fixture:fixtures\\fmp\\historicalMarketCap\\DEMO.json",
+            "fixture:fixtures\\fmp\\historicalMarketCap\\default.json"
+          ]
+        },
+        {
+          "field": "fmp.historicalPriceEodFull(SPY)",
+          "reason": "no API key + no fixture",
+          "severity": "warn",
+          "attemptedSources": [
+            "/stable/historical-price-eod/full?from=2021-07-06&symbol=SPY&to=2026-07-06",
+            "fixture:fixtures\\fmp\\historicalPriceEodFull\\SPY_2021-07-06_2026-07-06.json",
+            "fixture:fixtures\\fmp\\historicalPriceEodFull\\SPY.json",
+            "fixture:fixtures\\fmp\\historicalPriceEodFull\\default.json"
+          ]
+        },
+        {
+          "field": "fmp.historicalPriceEodFull(XLK)",
+          "reason": "no API key + no fixture",
+          "severity": "warn",
+          "attemptedSources": [
+            "/stable/historical-price-eod/full?from=2021-07-06&symbol=XLK&to=2026-07-06",
+            "fixture:fixtures\\fmp\\historicalPriceEodFull\\XLK_2021-07-06_2026-07-06.json",
+            "fixture:fixtures\\fmp\\historicalPriceEodFull\\XLK.json",
+            "fixture:fixtures\\fmp\\historicalPriceEodFull\\default.json"
+          ]
+        },
+        {
+          "field": "fmp.institutionalHolderAnalytics(DEMO,2026Q1)",
+          "reason": "no API key + no fixture",
+          "severity": "warn",
+          "attemptedSources": [
+            "/stable/institutional-ownership/extract-analytics/holder?limit=50&page=0&quarter=1&symbol=DEMO&year=2026",
+            "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\DEMO_2026_Q1.json",
+            "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\DEMO.json",
+            "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\default.json"
+          ]
+        },
+        {
+          "field": "fmp.keyMetricsTtm(DEMO)",
+          "reason": "no API key + no fixture",
+          "severity": "warn",
+          "attemptedSources": [
+            "/stable/key-metrics-ttm?symbol=DEMO",
+            "fixture:fixtures\\fmp\\keyMetricsTtm\\DEMO.json",
+            "fixture:fixtures\\fmp\\keyMetricsTtm\\default.json"
+          ]
+        },
+        {
+          "field": "fmp.pressReleases(DEMO)",
+          "reason": "no API key + no fixture",
+          "severity": "warn",
+          "attemptedSources": [
+            "/stable/news/press-releases?from=2026-06-06&limit=50&page=0&symbols=DEMO&to=2026-07-06",
+            "fixture:fixtures\\fmp\\pressReleases\\DEMO.json",
+            "fixture:fixtures\\fmp\\pressReleases\\default.json"
+          ]
+        },
+        {
+          "field": "fmp.ratiosTtm(DEMO)",
+          "reason": "no API key + no fixture",
+          "severity": "warn",
+          "attemptedSources": [
+            "/stable/ratios-ttm?symbol=DEMO",
+            "fixture:fixtures\\fmp\\ratiosTtm\\DEMO.json",
+            "fixture:fixtures\\fmp\\ratiosTtm\\default.json"
+          ]
+        },
+        {
+          "field": "fmp.secFilingsSearch(DEMO)",
+          "reason": "no API key + no fixture",
+          "severity": "warn",
+          "attemptedSources": [
+            "/stable/sec-filings-search/symbol?from=2025-07-06&limit=100&page=0&symbol=DEMO&to=2026-07-06",
+            "fixture:fixtures\\fmp\\secFilingsSearch\\DEMO_2025-07-06_2026-07-06.json",
+            "fixture:fixtures\\fmp\\secFilingsSearch\\DEMO.json",
+            "fixture:fixtures\\fmp\\secFilingsSearch\\default.json"
+          ]
+        },
+        {
+          "field": "fmp.stockNews(DEMO)",
+          "reason": "no API key + no fixture",
+          "severity": "warn",
+          "attemptedSources": [
+            "/stable/news/stock?from=2026-06-06&limit=50&page=0&symbols=DEMO&to=2026-07-06",
+            "fixture:fixtures\\fmp\\stockNews\\DEMO.json",
+            "fixture:fixtures\\fmp\\stockNews\\default.json"
+          ]
+        },
+        {
+          "field": "fmp.symbolPositionsSummary(DEMO,2026Q1)",
+          "reason": "no API key + no fixture",
+          "severity": "warn",
+          "attemptedSources": [
+            "/stable/institutional-ownership/symbol-positions-summary?quarter=1&symbol=DEMO&year=2026",
+            "fixture:fixtures\\fmp\\symbolPositionsSummary\\DEMO_2026_Q1.json",
+            "fixture:fixtures\\fmp\\symbolPositionsSummary\\DEMO.json",
+            "fixture:fixtures\\fmp\\symbolPositionsSummary\\default.json"
+          ]
+        },
+        {
+          "field": "fmp.transcript(DEMO,2025Q4)",
+          "reason": "no API key + no fixture",
+          "severity": "warn",
+          "attemptedSources": [
+            "/stable/earning-call-transcript?quarter=4&symbol=DEMO&year=2025",
+            "fixture:fixtures\\fmp\\transcript\\DEMO_2025_Q4.json",
+            "fixture:fixtures\\fmp\\transcript\\DEMO.json",
+            "fixture:fixtures\\fmp\\transcript\\default.json"
+          ]
+        },
+        {
+          "field": "insiderSentiment.DEMO",
+          "reason": "Finnhub key missing",
+          "severity": "warn",
+          "attemptedSources": [
+            "finnhub"
+          ]
+        },
+        {
+          "field": "shortInterest.DEMO",
+          "reason": "latest FINRA short interest unavailable because trend fetch failed: short interest unavailable (FINRA access failed): HTTP 503 on GET /partitions/group/otcMarket/name/consolidatedShortInterest",
+          "severity": "warn",
+          "attemptedSources": [
+            "finra"
+          ]
+        },
+        {
+          "field": "shortInterest.trend.DEMO",
+          "reason": "short interest unavailable (FINRA access failed): HTTP 503 on GET /partitions/group/otcMarket/name/consolidatedShortInterest",
+          "severity": "warn",
+          "attemptedSources": [
+            "finra"
+          ]
+        },
+        {
+          "field": "technicals.relativeStrength.SPY",
+          "reason": "no SPY benchmark history supplied",
+          "severity": "warn"
+        },
+        {
+          "field": "earningsCalendarNext(DEMO)",
+          "reason": "no future-dated earnings row in /stable/earnings response",
+          "severity": "info",
+          "attemptedSources": [
+            "[FIXTURE] /stable/earnings?limit=40&symbol=DEMO"
+          ]
+        },
+        {
+          "field": "forensics.piotroski",
+          "reason": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7",
+          "severity": "info"
+        },
+        {
+          "field": "fred.BAMLH0A0HYM2",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.CPIAUCSL",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.CPILFESL",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.DFII10",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.DGS10",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.DGS2",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.EFFR",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.NASDAQCOM",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.PAYEMS",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.T10Y2Y",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.T10Y3M",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.T10YIE",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.UNRATE",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "fred.VIXCLS",
+          "reason": "offline fixture",
+          "severity": "info",
+          "attemptedSources": [
+            "fixture"
+          ]
+        },
+        {
+          "field": "route.insufficientHistory",
+          "reason": "only 3 quarterly statement(s) available (< 8); verified ipoDate 2015-01-02 is older than 24 months — insufficient historical coverage, not a recent IPO",
+          "severity": "info",
+          "attemptedSources": [
+            "fmp:/stable/income-statement?period=quarter",
+            "fmp:/stable/profile.ipoDate"
+          ]
+        },
+        {
+          "field": "technicals.drawdown.3y",
+          "reason": "history does not span the full 3-year window — drawdown computed over available rows only",
+          "severity": "info"
+        },
+        {
+          "field": "technicals.drawdown.5y",
+          "reason": "history does not span the full 5-year window — drawdown computed over available rows only",
+          "severity": "info"
+        },
+        {
+          "field": "technicals.relativeStrength.sector",
+          "reason": "no XLK history supplied",
+          "severity": "info"
+        }
+      ]
+    },
+    "report": {
+      "meta": {
+        "symbol": "DEMO",
+        "companyName": "Thesis Example Systems",
+        "generatedAt": "2026-07-06T12:00:00.000Z",
+        "specVersion": "1.2.0",
+        "model": "synthetic-fixture",
+        "pipelineVersion": "audit-fixture-comparison",
+        "costUsd": 0,
+        "verificationRate": 0.92,
+        "provenanceCoverage": {
+          "numeric": {
+            "supported": 48,
+            "total": 52,
+            "rate": 0.9230769230769231
+          },
+          "factualClaims": {
+            "supported": 22,
+            "total": 24,
+            "rate": 0.9166666666666666
+          },
+          "judgments": {
+            "cited": 5,
+            "total": 6,
+            "rate": 0.8333333333333334
+          }
+        },
+        "dataCompleteness": {
+          "state": "blocked",
+          "criticalCount": 2,
+          "warningCount": 22,
+          "edgar": "missing",
+          "xbrl": "skipped",
+          "forensicValidation": "provisional"
+        },
+        "execution": [],
+        "disclaimer": "Informational only — not investment advice.",
+        "asOfMap": {
+          "analystEstimates": "2026-07-06",
+          "compensation": "2025-04-01",
+          "earningsHistory": "2025-12-31",
+          "edgar.cik": "2026-07-06",
+          "enterpriseValues": "2025-12-31",
+          "eodPrices": "2025-12-31",
+          "executives": "2026-07-06",
+          "financialGrowth": "2025-12-31",
+          "financialScores": "2026-07-06",
+          "gradesConsensus": "2026-07-06",
+          "insiderStats": "2026-07-06",
+          "insiderTrades": "2025-11-15",
+          "keyMetrics": "2025-12-31",
+          "marketRiskPremium": "2026-07-06",
+          "peers": "2026-07-06",
+          "priceTargetConsensus": "2026-07-06",
+          "priceTargetSummary": "2026-07-06",
+          "profile": "2026-07-06",
+          "quote": "2025-12-31",
+          "ratios": "2025-12-31",
+          "segmentation.geographic": "2025-12-31",
+          "segmentation.product": "2025-12-31",
+          "sharesFloat": "2025-12-31",
+          "statements.balanceAnnual": "2025-12-31",
+          "statements.balanceQuarterly": "2025-12-31",
+          "statements.cashflowAnnual": "2025-12-31",
+          "statements.cashflowQuarterly": "2025-12-31",
+          "statements.incomeAnnual": "2025-12-31",
+          "statements.incomeQuarterly": "2025-12-31",
+          "transcript.meta": "2025-12-31",
+          "treasury": "2025-12-31"
+        }
+      },
+      "verdict": {
+        "synthesis": "SYNTHETIC DEMONSTRATION — no value represents a real issuer or current market observation. The report demonstrates a balanced fictional research case using deterministic contract data.",
+        "gradeStrip": {
+          "fundamentals": {
+            "grade": "A",
+            "oneLineWhy": "SYNTHETIC demonstration text for grade strip fundamentals one line why; it describes fictional inputs and is not a current market observation.",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for fundamentals reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "FACT",
+                "source": "computed.growth.margins.gross",
+                "asOf": "2025-12-31"
+              },
+              {
+                "text": "SYNTHETIC demonstration text for fundamentals reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "FACT",
+                "source": "computed.returns.roic",
+                "asOf": "2025-12-31"
+              },
+              {
+                "text": "SYNTHETIC demonstration text for fundamentals reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "JUDGMENT",
+                "source": "computed.growth.revenueCagr5y",
+                "asOf": "2025-12-31"
+              }
+            ],
+            "confidence": "high",
+            "keyNumbers": [
+              {
+                "value": 60,
+                "unit": "%",
+                "source": "computed.growth.margins.gross.latest",
+                "asOf": "2025-12-31",
+                "verified": true,
+                "verificationNote": "synthetic provenance example"
+              },
+              {
+                "value": 26,
+                "unit": "%",
+                "source": "computed.returns.roic.latest",
+                "asOf": "2025-12-31",
+                "verified": true
+              }
+            ]
+          },
+          "valuation": {
+            "grade": "C",
+            "oneLineWhy": "SYNTHETIC demonstration text for grade strip valuation one line why; it describes fictional inputs and is not a current market observation.",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for valuation reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "ESTIMATE",
+                "source": "computed.valuation.dcf.perShare",
+                "asOf": "2025-12-31"
+              },
+              {
+                "text": "SYNTHETIC demonstration text for valuation reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "ESTIMATE",
+                "source": "computed.valuation.reverseDcf",
+                "asOf": "2025-12-31"
+              }
+            ],
+            "confidence": "medium",
+            "keyNumbers": [
+              {
+                "value": 48,
+                "unit": "usd",
+                "source": "computed.valuation.dcf.perShare",
+                "asOf": "2025-12-31",
+                "verified": true
+              },
+              {
+                "value": 5.1,
+                "unit": "x",
+                "source": "computed.valuation.multiples.peNtm",
+                "asOf": "2025-12-31",
+                "verified": true
+              }
+            ]
+          },
+          "technicals": {
+            "grade": "B",
+            "oneLineWhy": "SYNTHETIC demonstration text for grade strip technicals one line why; it describes fictional inputs and is not a current market observation.",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for technicals reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "FACT",
+                "source": "computed.technicals.smaCross",
+                "asOf": "2025-12-31"
+              },
+              {
+                "text": "SYNTHETIC demonstration text for technicals reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "FACT",
+                "source": "computed.technicals.rsi14",
+                "asOf": "2025-12-31"
+              }
+            ],
+            "confidence": "medium",
+            "keyNumbers": [
+              {
+                "value": 55,
+                "unit": "number",
+                "source": "computed.technicals.rsi14",
+                "asOf": "2025-12-31",
+                "verified": true
+              }
+            ]
+          },
+          "quality": {
+            "grade": "A",
+            "oneLineWhy": "SYNTHETIC demonstration text for grade strip quality one line why; it describes fictional inputs and is not a current market observation.",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for quality reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "FACT",
+                "source": "computed.forensics.beneish",
+                "asOf": "2025-12-31"
+              },
+              {
+                "text": "SYNTHETIC demonstration text for quality reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "FACT",
+                "source": "computed.forensics.accruals",
+                "asOf": "2025-12-31"
+              }
+            ],
+            "confidence": "high",
+            "keyNumbers": [
+              {
+                "value": -2.4,
+                "unit": "number",
+                "source": "computed.forensics.beneish.score",
+                "asOf": "2025-12-31",
+                "verified": true
+              }
+            ]
+          },
+          "leadership": {
+            "grade": "A",
+            "oneLineWhy": "SYNTHETIC demonstration text for grade strip leadership one line why; it describes fictional inputs and is not a current market observation.",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for leadership reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "FACT",
+                "source": "computed.capital.shareCountTrend",
+                "asOf": "2025-12-31"
+              },
+              {
+                "text": "SYNTHETIC demonstration text for leadership reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "JUDGMENT",
+                "source": "synthetic:fmp-contract",
+                "asOf": "2025-12-31"
+              }
+            ],
+            "confidence": "high",
+            "keyNumbers": [
+              {
+                "value": -1,
+                "unit": "%",
+                "source": "computed.capital.shareCountTrend.fiveYear",
+                "asOf": "2025-12-31",
+                "verified": true
+              }
+            ]
+          },
+          "moat": {
+            "grade": "A",
+            "oneLineWhy": "SYNTHETIC demonstration text for grade strip moat one line why; it describes fictional inputs and is not a current market observation.",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for moat reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "JUDGMENT",
+                "source": "web:https://example.com/synthetic-research",
+                "asOf": "2025-12-31"
+              },
+              {
+                "text": "SYNTHETIC demonstration text for moat reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "JUDGMENT",
+                "source": "synthetic:filing-evidence",
+                "asOf": "2025-12-31"
+              }
+            ],
+            "confidence": "high",
+            "keyNumbers": [
+              {
+                "value": 7000000000,
+                "unit": "usd_large",
+                "source": "computed.installedBaseValue",
+                "asOf": "2025-12-31",
+                "verified": false,
+                "verificationNote": "synthetic provenance example"
+              }
+            ]
+          },
+          "balanceSheet": {
+            "grade": "B",
+            "oneLineWhy": "SYNTHETIC demonstration text for grade strip balance sheet one line why; it describes fictional inputs and is not a current market observation.",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for balance sheet reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "FACT",
+                "source": "computed.capital.netDebtToEbitda",
+                "asOf": "2025-12-31"
+              }
+            ],
+            "confidence": "high",
+            "keyNumbers": [
+              {
+                "value": -0.29,
+                "unit": "x",
+                "source": "computed.capital.netDebtToEbitda",
+                "asOf": "2025-12-31",
+                "verified": true
+              },
+              {
+                "value": 16.67,
+                "unit": "x",
+                "source": "computed.capital.interestCoverage",
+                "asOf": "2025-12-31",
+                "verified": true
+              }
+            ]
+          }
+        },
+        "executiveSummary": [
+          {
+            "text": "SYNTHETIC DEMONSTRATION — no value represents a real issuer or current market observation.",
+            "label": "JUDGMENT",
+            "source": "computed.scores.composite",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for verdict executive summary text; it describes fictional inputs and is not a current market observation.",
+            "label": "ESTIMATE",
+            "source": "computed.projections.revenue.weighted",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for verdict executive summary text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "computed.valuation.reverseDcf",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for verdict executive summary text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "computed.scores.composite",
+            "asOf": "2025-12-31"
+          }
+        ]
+      },
+      "business": {
+        "whatTheySell": [
+          {
+            "text": "SYNTHETIC demonstration text for business what they sell text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "synthetic:filing-evidence",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for business what they sell text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "synthetic:fmp-contract",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "segments": {
+          "product": [
+            {
+              "name": "Platform",
+              "revenue": {
+                "value": 7500000000,
+                "unit": "usd_large",
+                "source": "synthetic:segments.product.platform",
+                "asOf": "2025-12-31",
+                "verified": true
+              },
+              "sharePct": 60
+            },
+            {
+              "name": "Services",
+              "revenue": {
+                "value": 5000000000,
+                "unit": "usd_large",
+                "source": "synthetic:segments.product.services",
+                "asOf": "2025-12-31",
+                "verified": true
+              },
+              "sharePct": 40
+            }
+          ],
+          "geographic": [
+            {
+              "name": "Domestic test market",
+              "revenue": {
+                "value": 8000000000,
+                "unit": "usd_large",
+                "source": "synthetic:segments.geographic.1",
+                "asOf": "2025-12-31",
+                "verified": true
+              },
+              "sharePct": 64
+            },
+            {
+              "name": "International test market",
+              "revenue": {
+                "value": 4500000000,
+                "unit": "usd_large",
+                "source": "synthetic:segments.geographic.2",
+                "asOf": "2025-12-31",
+                "verified": true
+              },
+              "sharePct": 36
+            }
+          ]
+        },
+        "concentrationRisks": [
+          {
+            "text": "SYNTHETIC demonstration text for business concentration risks text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "synthetic:fmp-contract",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for business concentration risks text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "synthetic:filing-evidence",
+            "asOf": "2025-12-31"
+          }
+        ]
+      },
+      "fundamentals": {
+        "graded": {
+          "grade": "A",
+          "oneLineWhy": "SYNTHETIC demonstration text for fundamentals graded one line why; it describes fictional inputs and is not a current market observation.",
+          "reasoning": [
+            {
+              "text": "SYNTHETIC demonstration text for graded reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "FACT",
+              "source": "computed.cash.fcf",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "confidence": "high",
+          "keyNumbers": [
+            {
+              "value": 1800000000,
+              "unit": "usd_large",
+              "source": "computed.cash.fcf.latest",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          ],
+          "interpretation": "SYNTHETIC demonstration text for fundamentals graded interpretation; it describes fictional inputs and is not a current market observation."
+        },
+        "growthTable": [
+          {
+            "label": "Revenue CAGR",
+            "values": [
+              {
+                "period": "1yr",
+                "value": {
+                  "value": 18.4,
+                  "unit": "%",
+                  "source": "computed.growth.revenueCagr1y",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              },
+              {
+                "period": "3yr",
+                "value": {
+                  "value": 16.7,
+                  "unit": "%",
+                  "source": "computed.growth.revenueCagr3y",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              },
+              {
+                "period": "5yr",
+                "value": {
+                  "value": 22.2,
+                  "unit": "%",
+                  "source": "computed.growth.revenueCagr5y",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              }
+            ]
+          },
+          {
+            "label": "EPS diluted CAGR",
+            "values": [
+              {
+                "period": "3yr",
+                "value": {
+                  "value": 6.5,
+                  "unit": "%",
+                  "source": "computed.growth.epsDilutedCagr3y",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              },
+              {
+                "period": "5yr",
+                "value": {
+                  "value": 19.4,
+                  "unit": "%",
+                  "source": "computed.growth.epsDilutedCagr5y",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              }
+            ]
+          }
+        ],
+        "marginTrend": [
+          {
+            "label": "Gross margin",
+            "values": [
+              {
+                "period": "FY2023",
+                "value": {
+                  "value": 60,
+                  "unit": "%",
+                  "source": "computed.growth.margins.gross.2023",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              },
+              {
+                "period": "FY2024",
+                "value": {
+                  "value": 60,
+                  "unit": "%",
+                  "source": "computed.growth.margins.gross.2024",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              },
+              {
+                "period": "FY2025",
+                "value": {
+                  "value": 60,
+                  "unit": "%",
+                  "source": "computed.growth.margins.gross.2025",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              }
+            ]
+          },
+          {
+            "label": "Operating margin",
+            "values": [
+              {
+                "period": "FY2023",
+                "value": {
+                  "value": 20,
+                  "unit": "%",
+                  "source": "computed.growth.margins.operating.2023",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              },
+              {
+                "period": "FY2024",
+                "value": {
+                  "value": 20,
+                  "unit": "%",
+                  "source": "computed.growth.margins.operating.2024",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              },
+              {
+                "period": "FY2025",
+                "value": {
+                  "value": 20,
+                  "unit": "%",
+                  "source": "computed.growth.margins.operating.2025",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              }
+            ]
+          }
+        ],
+        "returns": [
+          {
+            "label": "ROIC",
+            "values": [
+              {
+                "period": "FY2025",
+                "value": {
+                  "value": 26,
+                  "unit": "%",
+                  "source": "computed.returns.roic.2025",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              }
+            ]
+          },
+          {
+            "label": "ROE (DuPont)",
+            "values": [
+              {
+                "period": "FY2025",
+                "value": {
+                  "value": 29,
+                  "unit": "%",
+                  "source": "computed.returns.dupont.roe.2025",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              }
+            ]
+          }
+        ],
+        "fcf": [
+          {
+            "label": "Free cash flow",
+            "values": [
+              {
+                "period": "FY2024",
+                "value": {
+                  "value": 1800000000,
+                  "unit": "usd_large",
+                  "source": "computed.cash.fcf.2024",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              },
+              {
+                "period": "FY2025",
+                "value": {
+                  "value": 1800000000,
+                  "unit": "usd_large",
+                  "source": "computed.cash.fcf.2025",
+                  "asOf": "2025-12-31",
+                  "verified": true
+                }
+              }
+            ]
+          }
+        ],
+        "commentary": [
+          {
+            "text": "SYNTHETIC demonstration text for fundamentals commentary text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "computed.growth.margins",
+            "asOf": "2025-12-31"
+          }
+        ]
+      },
+      "balanceSheet": {
+        "graded": {
+          "grade": "B",
+          "oneLineWhy": "SYNTHETIC demonstration text for balance sheet graded one line why; it describes fictional inputs and is not a current market observation.",
+          "reasoning": [
+            {
+              "text": "SYNTHETIC demonstration text for graded reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "FACT",
+              "source": "computed.capital.netDebtToEbitda",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "confidence": "high",
+          "keyNumbers": [
+            {
+              "value": -0.29,
+              "unit": "x",
+              "source": "computed.capital.netDebtToEbitda",
+              "asOf": "2025-12-31",
+              "verified": true
+            },
+            {
+              "value": 16.67,
+              "unit": "x",
+              "source": "computed.capital.interestCoverage",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          ],
+          "interpretation": "SYNTHETIC demonstration text for balance sheet graded interpretation; it describes fictional inputs and is not a current market observation."
+        },
+        "debtProfile": {
+          "commentary": [
+            {
+              "text": "SYNTHETIC demonstration text for debt profile commentary text; it describes fictional inputs and is not a current market observation.",
+              "label": "FACT",
+              "source": "computed.capital.netDebt",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "numbers": [
+            {
+              "value": -0.29,
+              "unit": "x",
+              "source": "computed.capital.netDebtToEbitda",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          ]
+        },
+        "coverage": {
+          "commentary": [
+            {
+              "text": "SYNTHETIC demonstration text for coverage commentary text; it describes fictional inputs and is not a current market observation.",
+              "label": "FACT",
+              "source": "computed.capital.interestCoverage",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "numbers": [
+            {
+              "value": 16.67,
+              "unit": "x",
+              "source": "computed.capital.interestCoverage",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          ]
+        },
+        "capexTrajectory": {
+          "commentary": [
+            {
+              "text": "SYNTHETIC demonstration text for capex trajectory commentary text; it describes fictional inputs and is not a current market observation.",
+              "label": "FACT",
+              "source": "computed.cash.capexIntensity",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "numbers": [
+            {
+              "value": 4.8,
+              "unit": "%",
+              "source": "computed.cash.capexIntensity.pctRevenue",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          ]
+        },
+        "capitalAllocation": [
+          {
+            "text": "SYNTHETIC demonstration text for balance sheet capital allocation text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "computed.capital.payout",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for balance sheet capital allocation text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "computed.capital.buybackTiming",
+            "asOf": "2025-12-31"
+          }
+        ]
+      },
+      "valuation": {
+        "graded": {
+          "grade": "C",
+          "oneLineWhy": "SYNTHETIC demonstration text for valuation graded one line why; it describes fictional inputs and is not a current market observation.",
+          "reasoning": [
+            {
+              "text": "SYNTHETIC demonstration text for graded reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "ESTIMATE",
+              "source": "computed.valuation.dcf",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "confidence": "medium",
+          "keyNumbers": [
+            {
+              "value": 48,
+              "unit": "usd",
+              "source": "computed.valuation.dcf.perShare",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          ],
+          "interpretation": "SYNTHETIC demonstration text for valuation graded interpretation; it describes fictional inputs and is not a current market observation."
+        },
+        "dcf": {
+          "perShare": {
+            "value": 146.23,
+            "unit": "USD/share",
+            "source": "computed.valuation.dcf.perShare",
+            "asOf": "2026-07-06",
+            "verified": true
+          },
+          "assumptions": [
+            {
+              "name": "start revenue",
+              "value": "12.50B",
+              "basis": "latest annual FY 2025-12-31 revenue as of 2025-12-31"
+            },
+            {
+              "name": "revenue growth (yr1 → yrN)",
+              "value": "7.9% → 2.5%",
+              "basis": "linear fade from 7.89% (analyst consensus revenue, avg implied growth over next 2 fiscal years (through 2027-12-31)) to terminal 2.5% by year 10"
+            },
+            {
+              "name": "EBIT margin (yr1 → yrN)",
+              "value": "20.0% → 20.0%",
+              "basis": "held flat at current 20% under improving dated-margin regime (5y median 19%, slope 1pp/year)"
+            },
+            {
+              "name": "sales-to-capital",
+              "value": "2.66",
+              "basis": "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, as of 2025-12-31)"
+            },
+            {
+              "name": "terminal growth",
+              "value": "2.5%",
+              "basis": "min(2.5%, risk-free 4%) — house rule: nothing grows faster than rf forever"
+            },
+            {
+              "name": "terminal ROIC",
+              "value": "9.3%",
+              "basis": "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)"
+            }
+          ],
+          "sensitivityGrid": [
+            {
+              "waccPct": 8.255946000000002,
+              "gTermPct": 1.5,
+              "perShare": 166.376092292583
+            },
+            {
+              "waccPct": 8.255946000000002,
+              "gTermPct": 2,
+              "perShare": 167.7149851175111
+            },
+            {
+              "waccPct": 8.255946000000002,
+              "gTermPct": 2.5,
+              "perShare": 169.2211734983775
+            },
+            {
+              "waccPct": 8.255946000000002,
+              "gTermPct": 3,
+              "perShare": 170.9424020912171
+            },
+            {
+              "waccPct": 8.255946000000002,
+              "gTermPct": 3.5,
+              "perShare": 172.94649343185347
+            },
+            {
+              "waccPct": 8.755946000000002,
+              "gTermPct": 1.5,
+              "perShare": 155.24133879734714
+            },
+            {
+              "waccPct": 8.755946000000002,
+              "gTermPct": 2,
+              "perShare": 156.0003561762538
+            },
+            {
+              "waccPct": 8.755946000000002,
+              "gTermPct": 2.5,
+              "perShare": 156.82318027878264
+            },
+            {
+              "waccPct": 8.755946000000002,
+              "gTermPct": 3,
+              "perShare": 157.72643914234646
+            },
+            {
+              "waccPct": 8.755946000000002,
+              "gTermPct": 3.5,
+              "perShare": 158.73308812865395
+            },
+            {
+              "waccPct": 9.255946000000002,
+              "gTermPct": 1.5,
+              "perShare": 145.54397447067558
+            },
+            {
+              "waccPct": 9.255946000000002,
+              "gTermPct": 2,
+              "perShare": 145.888476635414
+            },
+            {
+              "waccPct": 9.255946000000002,
+              "gTermPct": 2.5,
+              "perShare": 146.23297880015247
+            },
+            {
+              "waccPct": 9.255946000000002,
+              "gTermPct": 3,
+              "perShare": 146.57748096489092
+            },
+            {
+              "waccPct": 9.255946000000002,
+              "gTermPct": 3.5,
+              "perShare": 146.92198312962938
+            },
+            {
+              "waccPct": 9.755946000000002,
+              "gTermPct": 1.5,
+              "perShare": 137.02303327015306
+            },
+            {
+              "waccPct": 9.755946000000002,
+              "gTermPct": 2,
+              "perShare": 137.07019569277645
+            },
+            {
+              "waccPct": 9.755946000000002,
+              "gTermPct": 2.5,
+              "perShare": 137.07839478363584
+            },
+            {
+              "waccPct": 9.755946000000002,
+              "gTermPct": 3,
+              "perShare": 137.03897964504117
+            },
+            {
+              "waccPct": 9.755946000000002,
+              "gTermPct": 3.5,
+              "perShare": 136.940533723176
+            },
+            {
+              "waccPct": 10.255946000000002,
+              "gTermPct": 1.5,
+              "perShare": 129.477139616909
+            },
+            {
+              "waccPct": 10.255946000000002,
+              "gTermPct": 2,
+              "perShare": 129.31120340693457
+            },
+            {
+              "waccPct": 10.255946000000002,
+              "gTermPct": 2.5,
+              "perShare": 129.08313762406544
+            },
+            {
+              "waccPct": 10.255946000000002,
+              "gTermPct": 3,
+              "perShare": 128.78009840764705
+            },
+            {
+              "waccPct": 10.255946000000002,
+              "gTermPct": 3.5,
+              "perShare": 128.38543965803257
+            }
+          ],
+          "upsidePct": 265.575
+        },
+        "reverseDcf": {
+          "impliedMetric": "constant revenue growth (explicit horizon)",
+          "impliedValue": -17.24609375,
+          "narrative": "SYNTHETIC demonstration text for valuation reverse dcf narrative; it describes fictional inputs and is not a current market observation."
+        },
+        "multiples": [
+          {
+            "name": "P/E (TTM)",
+            "current": 4.685714285714285,
+            "peerMedian": null,
+            "own5yPercentile": null,
+            "sectorAppropriate": true
+          },
+          {
+            "name": "EV/EBITDA",
+            "current": 2.392857142857143,
+            "peerMedian": null,
+            "own5yPercentile": null,
+            "sectorAppropriate": true
+          },
+          {
+            "name": "EV/Sales",
+            "current": 0.536,
+            "peerMedian": null,
+            "own5yPercentile": null,
+            "sectorAppropriate": true
+          },
+          {
+            "name": "P/FCF",
+            "current": 4.444444444444445,
+            "peerMedian": null,
+            "own5yPercentile": null,
+            "sectorAppropriate": true
+          },
+          {
+            "name": "P/B",
+            "current": 1.3333333333333333,
+            "peerMedian": null,
+            "own5yPercentile": null,
+            "sectorAppropriate": true
+          },
+          {
+            "name": "P/TBV",
+            "current": 1.7777777777777777,
+            "peerMedian": null,
+            "own5yPercentile": null,
+            "sectorAppropriate": false
+          }
+        ],
+        "scenarios": [
+          {
+            "name": "bull",
+            "probability": 0.25,
+            "priceTarget": null,
+            "horizon": "12 months",
+            "assumptions": [
+              "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation.",
+              "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation.",
+              "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation."
+            ],
+            "whatWouldHaveToBeTrue": [
+              "SYNTHETIC demonstration text for valuation scenarios what would have to be true; it describes fictional inputs and is not a current market observation.",
+              "SYNTHETIC demonstration text for valuation scenarios what would have to be true; it describes fictional inputs and is not a current market observation."
+            ]
+          },
+          {
+            "name": "base",
+            "probability": 0.5,
+            "priceTarget": null,
+            "horizon": "12 months",
+            "assumptions": [
+              "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation.",
+              "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation.",
+              "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation."
+            ],
+            "whatWouldHaveToBeTrue": [
+              "SYNTHETIC demonstration text for valuation scenarios what would have to be true; it describes fictional inputs and is not a current market observation.",
+              "SYNTHETIC demonstration text for valuation scenarios what would have to be true; it describes fictional inputs and is not a current market observation."
+            ]
+          },
+          {
+            "name": "bear",
+            "probability": 0.25,
+            "priceTarget": null,
+            "horizon": "12 months",
+            "assumptions": [
+              "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation.",
+              "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation.",
+              "SYNTHETIC demonstration text for valuation scenarios assumptions; it describes fictional inputs and is not a current market observation."
+            ],
+            "whatWouldHaveToBeTrue": [
+              "SYNTHETIC demonstration text for valuation scenarios what would have to be true; it describes fictional inputs and is not a current market observation.",
+              "SYNTHETIC demonstration text for valuation scenarios what would have to be true; it describes fictional inputs and is not a current market observation."
+            ]
+          }
+        ]
+      },
+      "quality": {
+        "graded": {
+          "grade": "A",
+          "oneLineWhy": "SYNTHETIC demonstration text for quality graded one line why; it describes fictional inputs and is not a current market observation.",
+          "reasoning": [
+            {
+              "text": "SYNTHETIC demonstration text for graded reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "FACT",
+              "source": "computed.forensics",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "confidence": "high",
+          "keyNumbers": [
+            {
+              "value": -2.4,
+              "unit": "number",
+              "source": "computed.forensics.beneish.score",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          ],
+          "interpretation": "SYNTHETIC demonstration text for quality graded interpretation; it describes fictional inputs and is not a current market observation."
+        },
+        "forensicScores": {
+          "altman": {
+            "variant": "z2",
+            "score": 6.1338,
+            "zone": "safe"
+          },
+          "beneish": {
+            "variant": "m-score",
+            "score": -2.6827912496211668,
+            "zone": "unlikely"
+          },
+          "piotroski": {
+            "variant": "f-score",
+            "score": 7,
+            "zone": "7/7"
+          },
+          "accruals": {
+            "variant": "cash-flow",
+            "score": 0.03296703296703297,
+            "zone": "unremarkable"
+          }
+        },
+        "flags": [
+          {
+            "severity": "low",
+            "text": "SYNTHETIC demonstration text for quality flags text; it describes fictional inputs and is not a current market observation.",
+            "source": "computed.forensics.flags.receivables"
+          }
+        ]
+      },
+      "technicals": {
+        "graded": {
+          "grade": "B",
+          "oneLineWhy": "SYNTHETIC demonstration text for technicals graded one line why; it describes fictional inputs and is not a current market observation.",
+          "reasoning": [
+            {
+              "text": "SYNTHETIC demonstration text for graded reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "FACT",
+              "source": "computed.technicals.smaCross",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "confidence": "medium",
+          "keyNumbers": [
+            {
+              "value": 40,
+              "unit": "usd",
+              "source": "computed.technicals.lastClose",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          ],
+          "interpretation": "SYNTHETIC demonstration text for technicals graded interpretation; it describes fictional inputs and is not a current market observation."
+        },
+        "read": {
+          "trend": "SYNTHETIC demonstration text for technicals read trend; it describes fictional inputs and is not a current market observation.",
+          "momentum": "SYNTHETIC demonstration text for technicals read momentum; it describes fictional inputs and is not a current market observation.",
+          "keyLevels": "SYNTHETIC demonstration text for technicals read key levels; it describes fictional inputs and is not a current market observation.",
+          "relativeStrength": "SYNTHETIC demonstration text for technicals read relative strength; it describes fictional inputs and is not a current market observation."
+        },
+        "indicators": [
+          {
+            "value": 55,
+            "unit": "number",
+            "source": "computed.technicals.rsi14",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 39,
+            "unit": "usd",
+            "source": "computed.technicals.sma50",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 36,
+            "unit": "usd",
+            "source": "computed.technicals.sma200",
+            "asOf": "2025-12-31",
+            "verified": true
+          },
+          {
+            "value": 8.1,
+            "unit": "%",
+            "source": "computed.technicals.range52w.position",
+            "asOf": "2025-12-31",
+            "verified": true
+          }
+        ],
+        "flags": [
+          {
+            "severity": "low",
+            "text": "SYNTHETIC demonstration text for technicals flags text; it describes fictional inputs and is not a current market observation.",
+            "source": "computed.technicals.distanceFrom200"
+          }
+        ]
+      },
+      "leadership": {
+        "graded": {
+          "grade": "A",
+          "oneLineWhy": "SYNTHETIC demonstration text for leadership graded one line why; it describes fictional inputs and is not a current market observation.",
+          "reasoning": [
+            {
+              "text": "SYNTHETIC demonstration text for graded reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "computed.capital",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "confidence": "high",
+          "keyNumbers": [
+            {
+              "value": -1,
+              "unit": "%",
+              "source": "computed.capital.shareCountTrend.fiveYear",
+              "asOf": "2025-12-31",
+              "verified": true
+            }
+          ],
+          "interpretation": "SYNTHETIC demonstration text for leadership graded interpretation; it describes fictional inputs and is not a current market observation."
+        },
+        "executives": [
+          {
+            "name": "Morgan Example",
+            "title": "Chief Executive Officer",
+            "tenureYears": 6,
+            "grade": "A",
+            "credibilityGrade": "A",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for executives reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "JUDGMENT",
+                "source": "synthetic:fmp-contract",
+                "asOf": "2025-12-31"
+              }
+            ],
+            "evidence": {
+              "guidanceVsActuals": [
+                {
+                  "text": "SYNTHETIC demonstration text for evidence guidance vs actuals text; it describes fictional inputs and is not a current market observation.",
+                  "label": "JUDGMENT",
+                  "source": "synthetic:fmp-contract",
+                  "asOf": "2025-12-31"
+                }
+              ],
+              "capitalAllocation": [
+                {
+                  "text": "SYNTHETIC demonstration text for evidence capital allocation text; it describes fictional inputs and is not a current market observation.",
+                  "label": "FACT",
+                  "source": "computed.capital.shareCountTrend",
+                  "asOf": "2025-12-31"
+                }
+              ]
+            }
+          },
+          {
+            "name": "Avery Example",
+            "title": "Chief Financial Officer",
+            "tenureYears": 4,
+            "grade": "A",
+            "credibilityGrade": "A",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for executives reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "JUDGMENT",
+                "source": "synthetic:fmp-contract",
+                "asOf": "2025-12-31"
+              }
+            ],
+            "evidence": {
+              "compensation": [
+                {
+                  "text": "SYNTHETIC demonstration text for evidence compensation text; it describes fictional inputs and is not a current market observation.",
+                  "label": "FACT",
+                  "source": "synthetic:filing-evidence",
+                  "asOf": "2025-12-31"
+                }
+              ]
+            }
+          }
+        ],
+        "insiderSummary": [
+          {
+            "text": "SYNTHETIC demonstration text for leadership insider summary text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "synthetic:fmp-contract",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for leadership insider summary text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "finnhub:insider-sentiment",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "governanceNotes": [
+          {
+            "text": "SYNTHETIC demonstration text for leadership governance notes text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "synthetic:filing-evidence",
+            "asOf": "2025-12-31"
+          }
+        ]
+      },
+      "competitive": {
+        "moatGraded": {
+          "grade": "A",
+          "oneLineWhy": "SYNTHETIC demonstration text for competitive moat graded one line why; it describes fictional inputs and is not a current market observation.",
+          "reasoning": [
+            {
+              "text": "SYNTHETIC demonstration text for moat graded reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "synthetic:filing-evidence",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "confidence": "high",
+          "keyNumbers": [
+            {
+              "value": 12.4,
+              "unit": "%",
+              "source": "computed.customerRetention",
+              "asOf": "2025-12-31",
+              "verified": false,
+              "verificationNote": "synthetic provenance example"
+            }
+          ],
+          "interpretation": "SYNTHETIC demonstration text for competitive moat graded interpretation; it describes fictional inputs and is not a current market observation."
+        },
+        "peerTable": [
+          {
+            "name": "Alpha Example Software",
+            "symbol": "ALFA",
+            "metrics": [
+              {
+                "value": 8,
+                "unit": "x",
+                "source": "peer.synthetic-peer.peNtm",
+                "asOf": "2025-12-31",
+                "verified": true
+              },
+              {
+                "value": 14.7,
+                "unit": "%",
+                "source": "peer.synthetic-peer.grossMargin",
+                "asOf": "2025-12-31",
+                "verified": true
+              }
+            ]
+          },
+          {
+            "name": "Beta Sample Systems",
+            "symbol": "BETA",
+            "metrics": [
+              {
+                "value": 5.5,
+                "unit": "x",
+                "source": "peer.synthetic-peer.peNtm",
+                "asOf": "2025-12-31",
+                "verified": true
+              },
+              {
+                "value": 25.2,
+                "unit": "%",
+                "source": "peer.synthetic-peer.grossMargin",
+                "asOf": "2025-12-31",
+                "verified": true
+              }
+            ]
+          },
+          {
+            "name": "Gamma Fictional Cloud",
+            "symbol": "GAMM",
+            "metrics": [
+              {
+                "value": 8.2,
+                "unit": "x",
+                "source": "peer.synthetic-peer.peNtm",
+                "asOf": "2025-12-31",
+                "verified": true
+              },
+              {
+                "value": 16.5,
+                "unit": "%",
+                "source": "peer.synthetic-peer.grossMargin",
+                "asOf": "2025-12-31",
+                "verified": true
+              }
+            ]
+          }
+        ],
+        "moatAssessment": [
+          {
+            "source": "switchingCosts",
+            "strength": "wide",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for moat assessment reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "JUDGMENT",
+                "source": "synthetic:filing-evidence",
+                "asOf": "2025-12-31"
+              }
+            ]
+          },
+          {
+            "source": "brand",
+            "strength": "wide",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for moat assessment reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "JUDGMENT",
+                "source": "web:https://example.com/synthetic-research",
+                "asOf": "2025-12-31"
+              }
+            ]
+          },
+          {
+            "source": "scale",
+            "strength": "narrow",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for moat assessment reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "JUDGMENT",
+                "source": "computed.scale",
+                "asOf": "2025-12-31"
+              }
+            ]
+          },
+          {
+            "source": "networkEffects",
+            "strength": "narrow",
+            "reasoning": [
+              {
+                "text": "SYNTHETIC demonstration text for moat assessment reasoning text; it describes fictional inputs and is not a current market observation.",
+                "label": "JUDGMENT",
+                "source": "computed.network",
+                "asOf": "2025-12-31"
+              }
+            ]
+          }
+        ],
+        "marketShareDirection": "SYNTHETIC demonstration text for competitive market share direction; it describes fictional inputs and is not a current market observation."
+      },
+      "catalystsRisks": {
+        "catalysts": [
+          {
+            "title": "Synthetic catalyst 1",
+            "expectedDate": "2025-12-31",
+            "direction": "positive",
+            "significance": "high",
+            "reasoning": {
+              "text": "SYNTHETIC demonstration text for catalysts reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "web:https://example.com/synthetic-research",
+              "asOf": "2025-12-31"
+            }
+          },
+          {
+            "title": "Synthetic catalyst 2",
+            "expectedDate": "2025-12-31",
+            "direction": "negative",
+            "significance": "high",
+            "reasoning": {
+              "text": "SYNTHETIC demonstration text for catalysts reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "web:https://example.com/synthetic-research",
+              "asOf": "2025-12-31"
+            }
+          },
+          {
+            "title": "Synthetic catalyst 3",
+            "expectedDate": "2025-12-31",
+            "direction": "mixed",
+            "significance": "medium",
+            "reasoning": {
+              "text": "SYNTHETIC demonstration text for catalysts reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "synthetic:fmp-contract",
+              "asOf": "2025-12-31"
+            }
+          },
+          {
+            "title": "Synthetic catalyst 4",
+            "expectedDate": null,
+            "direction": "positive",
+            "significance": "medium",
+            "reasoning": {
+              "text": "SYNTHETIC demonstration text for catalysts reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "web:https://example.com/synthetic-research",
+              "asOf": "2025-12-31"
+            }
+          }
+        ],
+        "risks": [
+          {
+            "title": "Synthetic risk 1",
+            "severity": "high",
+            "probability": "medium",
+            "source": "synthetic:filing-evidence",
+            "reasoning": {
+              "text": "SYNTHETIC demonstration text for risks reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "synthetic:filing-evidence",
+              "asOf": "2025-12-31"
+            }
+          },
+          {
+            "title": "Synthetic risk 2",
+            "severity": "high",
+            "probability": "medium",
+            "source": "synthetic:filing-evidence",
+            "reasoning": {
+              "text": "SYNTHETIC demonstration text for risks reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "synthetic:filing-evidence",
+              "asOf": "2025-12-31"
+            }
+          },
+          {
+            "title": "Synthetic risk 3",
+            "severity": "medium",
+            "probability": "high",
+            "source": "computed.growth",
+            "reasoning": {
+              "text": "SYNTHETIC demonstration text for risks reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "computed.growth.revenueCagr5y",
+              "asOf": "2025-12-31"
+            }
+          },
+          {
+            "title": "Synthetic risk 4",
+            "severity": "medium",
+            "probability": "medium",
+            "source": "computed.valuation",
+            "reasoning": {
+              "text": "SYNTHETIC demonstration text for risks reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "computed.valuation.multiples",
+              "asOf": "2025-12-31"
+            }
+          },
+          {
+            "title": "Synthetic risk 5",
+            "severity": "low",
+            "probability": "medium",
+            "source": "computed.macro",
+            "reasoning": {
+              "text": "SYNTHETIC demonstration text for risks reasoning text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "computed.macro.fxSensitivity",
+              "asOf": "2025-12-31"
+            }
+          }
+        ]
+      },
+      "outlook": {
+        "segmentTrajectories": [
+          {
+            "text": "SYNTHETIC demonstration text for outlook segment trajectories text; it describes fictional inputs and is not a current market observation.",
+            "label": "ESTIMATE",
+            "source": "synthesis.outlook.services",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for outlook segment trajectories text; it describes fictional inputs and is not a current market observation.",
+            "label": "ESTIMATE",
+            "source": "synthesis.outlook.synthetic-product",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "tam": [
+          {
+            "text": "SYNTHETIC demonstration text for outlook tam text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "synthesis.outlook.tam",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "estimateRevisionTrend": [
+          {
+            "text": "SYNTHETIC demonstration text for outlook estimate revision trend text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "synthetic:fmp-contract",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "guidanceCredibility": [
+          {
+            "text": "SYNTHETIC demonstration text for outlook guidance credibility text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "synthetic:fmp-contract",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "scenarioNarratives": {
+          "y1": [
+            {
+              "text": "SYNTHETIC demonstration text for scenario narratives y1 text; it describes fictional inputs and is not a current market observation.",
+              "label": "ESTIMATE",
+              "source": "synthesis.outlook.y1",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "y3": [
+            {
+              "text": "SYNTHETIC demonstration text for scenario narratives y3 text; it describes fictional inputs and is not a current market observation.",
+              "label": "ESTIMATE",
+              "source": "synthesis.outlook.y3",
+              "asOf": "2025-12-31"
+            }
+          ],
+          "y5": [
+            {
+              "text": "SYNTHETIC demonstration text for scenario narratives y5 text; it describes fictional inputs and is not a current market observation.",
+              "label": "JUDGMENT",
+              "source": "synthesis.outlook.y5",
+              "asOf": "2025-12-31"
+            }
+          ]
+        }
+      },
+      "macro": {
+        "relevantSeries": [
+          {
+            "seriesId": "DGS10",
+            "name": "Synthetic macro series 1",
+            "latest": {
+              "value": 4,
+              "unit": "%",
+              "source": "fred:DGS10",
+              "asOf": "2025-12-31",
+              "verified": true
+            },
+            "relevance": "SYNTHETIC demonstration text for macro relevant series relevance; it describes fictional inputs and is not a current market observation."
+          },
+          {
+            "seriesId": "UNRATE",
+            "name": "Synthetic macro series 2",
+            "latest": {
+              "value": 4.5,
+              "unit": "%",
+              "source": "fred:UNRATE",
+              "asOf": "2025-12-31",
+              "verified": true
+            },
+            "relevance": "SYNTHETIC demonstration text for macro relevant series relevance; it describes fictional inputs and is not a current market observation."
+          },
+          {
+            "seriesId": "CPIAUCSL",
+            "name": "Synthetic macro series 3",
+            "latest": {
+              "value": 3,
+              "unit": "%",
+              "source": "fred:CPIAUCSL",
+              "asOf": "2025-12-31",
+              "verified": true
+            },
+            "relevance": "SYNTHETIC demonstration text for macro relevant series relevance; it describes fictional inputs and is not a current market observation."
+          },
+          {
+            "seriesId": "DTWEXBGS",
+            "name": "Synthetic macro series 4",
+            "latest": {
+              "value": 100,
+              "unit": "number",
+              "source": "fred:DTWEXBGS",
+              "asOf": "2025-12-31",
+              "verified": true
+            },
+            "relevance": "SYNTHETIC demonstration text for macro relevant series relevance; it describes fictional inputs and is not a current market observation."
+          }
+        ],
+        "sensitivityNotes": [
+          {
+            "text": "SYNTHETIC demonstration text for macro sensitivity notes text; it describes fictional inputs and is not a current market observation.",
+            "label": "JUDGMENT",
+            "source": "computed.macro.rateSensitivity",
+            "asOf": "2025-12-31"
+          },
+          {
+            "text": "SYNTHETIC demonstration text for macro sensitivity notes text; it describes fictional inputs and is not a current market observation.",
+            "label": "FACT",
+            "source": "synthetic:fmp-contract",
+            "asOf": "2025-12-31"
+          }
+        ],
+        "fredAttribution": "This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis."
+      },
+      "appendix": {
+        "sources": "<raw provider source envelopes verified by dedicated provenance suites>",
+        "missingData": [
+          {
+            "field": "edgar.item1a(DEMO)",
+            "reason": "submissions unavailable: submissions HTTP 404",
+            "severity": "critical"
+          },
+          {
+            "field": "edgar.mdna(DEMO)",
+            "reason": "submissions unavailable: submissions HTTP 404",
+            "severity": "critical"
+          },
+          {
+            "field": "edgar.auditorChange8Ks(DEMO)",
+            "reason": "submissions unavailable: submissions HTTP 404",
+            "severity": "warn"
+          },
+          {
+            "field": "edgar.companyFacts(0)",
+            "reason": "companyfacts HTTP 404",
+            "severity": "warn",
+            "attemptedSources": [
+              "https://data.sec.gov/api/xbrl/companyfacts/CIK0000000000.json"
+            ]
+          },
+          {
+            "field": "edgar.latestTenK(DEMO)",
+            "reason": "submissions unavailable: submissions HTTP 404",
+            "severity": "warn"
+          },
+          {
+            "field": "edgar.latestTenQ(DEMO)",
+            "reason": "submissions unavailable: submissions HTTP 404",
+            "severity": "warn"
+          },
+          {
+            "field": "edgar.nonReliance8Ks(DEMO)",
+            "reason": "submissions unavailable: submissions HTTP 404",
+            "severity": "warn"
+          },
+          {
+            "field": "edgar.tenQMdna(DEMO)",
+            "reason": "submissions unavailable: submissions HTTP 404",
+            "severity": "warn"
+          },
+          {
+            "field": "fmp.historicalMarketCap(DEMO)",
+            "reason": "no API key + no fixture",
+            "severity": "warn",
+            "attemptedSources": [
+              "/stable/historical-market-capitalization?from=2021-07-06&limit=5000&symbol=DEMO&to=2026-07-06",
+              "fixture:fixtures\\fmp\\historicalMarketCap\\DEMO_2021-07-06_2026-07-06.json",
+              "fixture:fixtures\\fmp\\historicalMarketCap\\DEMO.json",
+              "fixture:fixtures\\fmp\\historicalMarketCap\\default.json"
+            ]
+          },
+          {
+            "field": "fmp.historicalPriceEodFull(SPY)",
+            "reason": "no API key + no fixture",
+            "severity": "warn",
+            "attemptedSources": [
+              "/stable/historical-price-eod/full?from=2021-07-06&symbol=SPY&to=2026-07-06",
+              "fixture:fixtures\\fmp\\historicalPriceEodFull\\SPY_2021-07-06_2026-07-06.json",
+              "fixture:fixtures\\fmp\\historicalPriceEodFull\\SPY.json",
+              "fixture:fixtures\\fmp\\historicalPriceEodFull\\default.json"
+            ]
+          },
+          {
+            "field": "fmp.historicalPriceEodFull(XLK)",
+            "reason": "no API key + no fixture",
+            "severity": "warn",
+            "attemptedSources": [
+              "/stable/historical-price-eod/full?from=2021-07-06&symbol=XLK&to=2026-07-06",
+              "fixture:fixtures\\fmp\\historicalPriceEodFull\\XLK_2021-07-06_2026-07-06.json",
+              "fixture:fixtures\\fmp\\historicalPriceEodFull\\XLK.json",
+              "fixture:fixtures\\fmp\\historicalPriceEodFull\\default.json"
+            ]
+          },
+          {
+            "field": "fmp.institutionalHolderAnalytics(DEMO,2026Q1)",
+            "reason": "no API key + no fixture",
+            "severity": "warn",
+            "attemptedSources": [
+              "/stable/institutional-ownership/extract-analytics/holder?limit=50&page=0&quarter=1&symbol=DEMO&year=2026",
+              "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\DEMO_2026_Q1.json",
+              "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\DEMO.json",
+              "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\default.json"
+            ]
+          },
+          {
+            "field": "fmp.keyMetricsTtm(DEMO)",
+            "reason": "no API key + no fixture",
+            "severity": "warn",
+            "attemptedSources": [
+              "/stable/key-metrics-ttm?symbol=DEMO",
+              "fixture:fixtures\\fmp\\keyMetricsTtm\\DEMO.json",
+              "fixture:fixtures\\fmp\\keyMetricsTtm\\default.json"
+            ]
+          },
+          {
+            "field": "fmp.pressReleases(DEMO)",
+            "reason": "no API key + no fixture",
+            "severity": "warn",
+            "attemptedSources": [
+              "/stable/news/press-releases?from=2026-06-06&limit=50&page=0&symbols=DEMO&to=2026-07-06",
+              "fixture:fixtures\\fmp\\pressReleases\\DEMO.json",
+              "fixture:fixtures\\fmp\\pressReleases\\default.json"
+            ]
+          },
+          {
+            "field": "fmp.ratiosTtm(DEMO)",
+            "reason": "no API key + no fixture",
+            "severity": "warn",
+            "attemptedSources": [
+              "/stable/ratios-ttm?symbol=DEMO",
+              "fixture:fixtures\\fmp\\ratiosTtm\\DEMO.json",
+              "fixture:fixtures\\fmp\\ratiosTtm\\default.json"
+            ]
+          },
+          {
+            "field": "fmp.secFilingsSearch(DEMO)",
+            "reason": "no API key + no fixture",
+            "severity": "warn",
+            "attemptedSources": [
+              "/stable/sec-filings-search/symbol?from=2025-07-06&limit=100&page=0&symbol=DEMO&to=2026-07-06",
+              "fixture:fixtures\\fmp\\secFilingsSearch\\DEMO_2025-07-06_2026-07-06.json",
+              "fixture:fixtures\\fmp\\secFilingsSearch\\DEMO.json",
+              "fixture:fixtures\\fmp\\secFilingsSearch\\default.json"
+            ]
+          },
+          {
+            "field": "fmp.stockNews(DEMO)",
+            "reason": "no API key + no fixture",
+            "severity": "warn",
+            "attemptedSources": [
+              "/stable/news/stock?from=2026-06-06&limit=50&page=0&symbols=DEMO&to=2026-07-06",
+              "fixture:fixtures\\fmp\\stockNews\\DEMO.json",
+              "fixture:fixtures\\fmp\\stockNews\\default.json"
+            ]
+          },
+          {
+            "field": "fmp.symbolPositionsSummary(DEMO,2026Q1)",
+            "reason": "no API key + no fixture",
+            "severity": "warn",
+            "attemptedSources": [
+              "/stable/institutional-ownership/symbol-positions-summary?quarter=1&symbol=DEMO&year=2026",
+              "fixture:fixtures\\fmp\\symbolPositionsSummary\\DEMO_2026_Q1.json",
+              "fixture:fixtures\\fmp\\symbolPositionsSummary\\DEMO.json",
+              "fixture:fixtures\\fmp\\symbolPositionsSummary\\default.json"
+            ]
+          },
+          {
+            "field": "fmp.transcript(DEMO,2025Q4)",
+            "reason": "no API key + no fixture",
+            "severity": "warn",
+            "attemptedSources": [
+              "/stable/earning-call-transcript?quarter=4&symbol=DEMO&year=2025",
+              "fixture:fixtures\\fmp\\transcript\\DEMO_2025_Q4.json",
+              "fixture:fixtures\\fmp\\transcript\\DEMO.json",
+              "fixture:fixtures\\fmp\\transcript\\default.json"
+            ]
+          },
+          {
+            "field": "insiderSentiment.DEMO",
+            "reason": "Finnhub key missing",
+            "severity": "warn",
+            "attemptedSources": [
+              "finnhub"
+            ]
+          },
+          {
+            "field": "shortInterest.DEMO",
+            "reason": "latest FINRA short interest unavailable because trend fetch failed: short interest unavailable (FINRA access failed): HTTP 503 on GET /partitions/group/otcMarket/name/consolidatedShortInterest",
+            "severity": "warn",
+            "attemptedSources": [
+              "finra"
+            ]
+          },
+          {
+            "field": "shortInterest.trend.DEMO",
+            "reason": "short interest unavailable (FINRA access failed): HTTP 503 on GET /partitions/group/otcMarket/name/consolidatedShortInterest",
+            "severity": "warn",
+            "attemptedSources": [
+              "finra"
+            ]
+          },
+          {
+            "field": "technicals.relativeStrength.SPY",
+            "reason": "no SPY benchmark history supplied",
+            "severity": "warn"
+          },
+          {
+            "field": "validation.xbrlCrossCheck",
+            "reason": "FMP↔XBRL cross-check skipped — companyfacts unavailable (companyfacts HTTP 404)",
+            "severity": "warn"
+          },
+          {
+            "field": "earningsCalendarNext(DEMO)",
+            "reason": "no future-dated earnings row in /stable/earnings response",
+            "severity": "info",
+            "attemptedSources": [
+              "[FIXTURE] /stable/earnings?limit=40&symbol=DEMO"
+            ]
+          },
+          {
+            "field": "forensics.piotroski",
+            "reason": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7",
+            "severity": "info"
+          },
+          {
+            "field": "fred.BAMLH0A0HYM2",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.CPIAUCSL",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.CPILFESL",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.DFII10",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.DGS10",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.DGS2",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.EFFR",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.NASDAQCOM",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.PAYEMS",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.T10Y2Y",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.T10Y3M",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.T10YIE",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.UNRATE",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "fred.VIXCLS",
+            "reason": "offline fixture",
+            "severity": "info",
+            "attemptedSources": [
+              "fixture"
+            ]
+          },
+          {
+            "field": "route.insufficientHistory",
+            "reason": "only 3 quarterly statement(s) available (< 8); verified ipoDate 2015-01-02 is older than 24 months — insufficient historical coverage, not a recent IPO",
+            "severity": "info",
+            "attemptedSources": [
+              "fmp:/stable/income-statement?period=quarter",
+              "fmp:/stable/profile.ipoDate"
+            ]
+          },
+          {
+            "field": "technicals.drawdown.3y",
+            "reason": "history does not span the full 3-year window — drawdown computed over available rows only",
+            "severity": "info"
+          },
+          {
+            "field": "technicals.drawdown.5y",
+            "reason": "history does not span the full 5-year window — drawdown computed over available rows only",
+            "severity": "info"
+          },
+          {
+            "field": "technicals.relativeStrength.sector",
+            "reason": "no XLK history supplied",
+            "severity": "info"
+          }
+        ],
+        "verificationRate": 0.92,
+        "provenanceCoverage": {
+          "numeric": {
+            "supported": 48,
+            "total": 52,
+            "rate": 0.9230769230769231
+          },
+          "factualClaims": {
+            "supported": 22,
+            "total": 24,
+            "rate": 0.9166666666666666
+          },
+          "judgments": {
+            "cited": 5,
+            "total": 6,
+            "rate": 0.8333333333333334
+          }
+        },
+        "verificationLog": [],
+        "costBreakdown": []
+      },
+      "disagreements": [
+        {
+          "topic": "Synthetic operating-case range",
+          "bullView": "SYNTHETIC demonstration text for disagreements bull view; it describes fictional inputs and is not a current market observation.",
+          "bearView": "SYNTHETIC demonstration text for disagreements bear view; it describes fictional inputs and is not a current market observation.",
+          "kind": "interpretation",
+          "judgeResolution": "SYNTHETIC demonstration text for disagreements judge resolution; it describes fictional inputs and is not a current market observation."
+        },
+        {
+          "topic": "Synthetic operating-case range",
+          "bullView": "SYNTHETIC demonstration text for disagreements bull view; it describes fictional inputs and is not a current market observation.",
+          "bearView": "SYNTHETIC demonstration text for disagreements bear view; it describes fictional inputs and is not a current market observation.",
+          "kind": "fact",
+          "judgeResolution": "SYNTHETIC demonstration text for disagreements judge resolution; it describes fictional inputs and is not a current market observation."
+        }
+      ],
+      "scores": {
+        "aspects": {
+          "fundamentals": {
+            "score": 67.9,
+            "band": "C",
+            "weightPct": 20,
+            "dataCompleteness": 1,
+            "drivers": [
+              {
+                "value": 9.11,
+                "unit": "%",
+                "source": "computed.scores.fundamentals.revenueCagr",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 1,
+                "unit": "pp/yr",
+                "source": "computed.scores.fundamentals.operatingMarginSlope",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 19,
+                "unit": "%",
+                "source": "computed.scores.fundamentals.epsCagr",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 16.13,
+                "unit": "%",
+                "source": "computed.scores.fundamentals.fcfCagr",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Growth + margin trajectory: revenue/EPS/FCF CAGRs and operating-margin slope. EPS CAGR is dropped where the route suppresses GAAP EPS growth (REITs)."
+          },
+          "valuation": {
+            "score": 91.14,
+            "band": "A",
+            "weightPct": 20,
+            "dataCompleteness": 0.7,
+            "drivers": [
+              {
+                "value": 265.58,
+                "unit": "%",
+                "source": "computed.scores.valuation.dcfUpside",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": -26.36,
+                "unit": "pp",
+                "source": "computed.scores.valuation.reverseImpliedVsAchievable",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Attractiveness vs intrinsic value: DCF upside, reverse-DCF implied vs achievable growth, and multiple percentile."
+          },
+          "quality": {
+            "score": 88.62,
+            "band": "A",
+            "weightPct": 15,
+            "dataCompleteness": 1,
+            "drivers": [
+              {
+                "value": 27.2,
+                "unit": "pp",
+                "source": "computed.scores.quality.roicVsWaccSpread",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 1,
+                "unit": "frac",
+                "source": "computed.scores.quality.piotroskiF",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 5.77,
+                "unit": "z",
+                "source": "computed.scores.quality.altmanZ",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 0.03,
+                "unit": "frac",
+                "source": "computed.scores.quality.accrualsRatioAbs",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": -2.68,
+                "unit": "m",
+                "source": "computed.scores.quality.beneishM",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Value creation (ROIC−WACC) and accounting integrity (Piotroski, Altman, accruals, Beneish)."
+          },
+          "balanceSheet": {
+            "score": 78.65,
+            "band": "B",
+            "weightPct": 15,
+            "dataCompleteness": 1,
+            "drivers": [
+              {
+                "value": -0.46,
+                "unit": "x",
+                "source": "computed.scores.balanceSheet.netDebtToEbitda",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 16.67,
+                "unit": "x",
+                "source": "computed.scores.balanceSheet.interestCoverage",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 1.03,
+                "unit": "frac",
+                "source": "computed.scores.balanceSheet.fcfConversion",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 13.89,
+                "unit": "%",
+                "source": "computed.scores.balanceSheet.sbcPctOfFcf",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": -0.96,
+                "unit": "%",
+                "source": "computed.scores.balanceSheet.shareCountTrend",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Financial strength: leverage, coverage, FCF conversion, dilution, and buyback cadence."
+          },
+          "moat": {
+            "score": 86.65,
+            "band": "A",
+            "weightPct": 15,
+            "dataCompleteness": 1,
+            "drivers": [
+              {
+                "value": 36.46,
+                "unit": "%",
+                "source": "computed.scores.moat.roicLevel",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 1.58,
+                "unit": "pp",
+                "source": "computed.scores.moat.roicStability",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 60,
+                "unit": "%",
+                "source": "computed.scores.moat.grossMarginLevel",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Quantitative moat proxy: level and durability of ROIC plus gross-margin (pricing-power) level. Gross margin is dropped where the route suppresses it (banks, pre-revenue)."
+          },
+          "leadership": {
+            "score": 76.97,
+            "band": "B",
+            "weightPct": 10,
+            "dataCompleteness": 0.7,
+            "drivers": [
+              {
+                "value": 27.2,
+                "unit": "pp",
+                "source": "computed.scores.leadership.capitalDeployment",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": -0.96,
+                "unit": "%",
+                "source": "computed.scores.leadership.shareCountTrend",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 2,
+                "unit": "%",
+                "source": "computed.scores.leadership.sbcPctOfRevenue",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Capital-stewardship proxy (buyback discipline, capital deployment above cost, dilution). Qualitative leadership assessed in the analyst grade."
+          },
+          "technicals": {
+            "score": 72.24,
+            "band": "B",
+            "weightPct": 5,
+            "dataCompleteness": 0.7,
+            "drivers": [
+              {
+                "value": 7.5,
+                "unit": "%",
+                "source": "computed.scores.technicals.smaGap",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 93.69,
+                "unit": "rsi",
+                "source": "computed.scores.technicals.rsi14",
+                "asOf": "2026-07-06",
+                "verified": true
+              },
+              {
+                "value": 95.88,
+                "unit": "%",
+                "source": "computed.scores.technicals.position52w",
+                "asOf": "2026-07-06",
+                "verified": true
+              }
+            ],
+            "notApplicableReason": null,
+            "note": "Trend + momentum: SMA50/200 gap, RSI-14, 52-week position, 6-month relative strength vs SPY."
+          }
+        },
+        "composite": {
+          "score": 77.59,
+          "band": "B",
+          "weights": {
+            "fundamentals": 20,
+            "valuation": 20,
+            "quality": 15,
+            "balanceSheet": 15,
+            "moat": 15,
+            "leadership": 10,
+            "technicals": 5
+          },
+          "methodology": "Route-adjusted, completeness-weighted mean of the seven aspect scores: each aspect enters at route weight × data completeness. The unsupported fraction is then shrunk to the neutral midpoint (50); completeness 89.5% is measured over route-applicable evidence (metrics the route suppresses or that are meaningless for it are excluded, not counted as missing). Fully observed scores are unchanged on any route, while sparse favorable data cannot create an extreme grade. Bands remain versioned house rules pending outcome backtesting."
+        },
+        "bandsVersion": "SCORE_BANDS_2026_07"
+      },
+      "projections": {
+        "horizonYears": 5,
+        "scenarioWeights": {
+          "bull": 0.25,
+          "base": 0.5,
+          "bear": 0.25
+        },
+        "weightsVersion": "UNBACKTESTED_SCENARIO_PRIOR_2026_07",
+        "series": [],
+        "notApplicableReason": "At least four consecutive annual revenue observations and three margin observations are required for sample dispersion; scenario fan suppressed rather than using house defaults."
+      },
+      "scenarioTargets": {
+        "status": "suppressed",
+        "method": "dcf-dispersion",
+        "methodVersion": "SCENARIO_TARGETS_2026_07B",
+        "basis": [
+          "Scenario targets unavailable: company-specific dispersion evidence is too thin."
+        ],
+        "dispersion": null,
+        "targets": [],
+        "missingReasons": [
+          {
+            "field": "valuation.scenarioTargets.dispersion",
+            "reason": "at least four consecutive annual revenue observations and three margin observations are required for sample dispersion — scenario targets suppressed instead of using house defaults",
+            "severity": "warn"
+          }
+        ]
+      },
+      "fairValue": {
+        "status": "available",
+        "method": "fcff-dcf",
+        "methodVersion": "FAIR_VALUE_2026_07",
+        "perShare": {
+          "value": 146.23,
+          "unit": "USD/share",
+          "source": "computed.valuation.dcf.perShare",
+          "asOf": "2026-07-06",
+          "verified": true
+        },
+        "upsidePct": 265.575,
+        "basis": [
+          "Intrinsic value per share = the deterministic FCFF discounted-cash-flow fair value (NOPAT − sales-to-capital reinvestment, Gordon terminal, EV→equity bridge).",
+          "Computed-derived (source computed.valuation.*), not a source-verified analyst target — the LLM interprets it but does not author the number."
+        ],
+        "reasons": []
+      }
+    }
+  }
+}

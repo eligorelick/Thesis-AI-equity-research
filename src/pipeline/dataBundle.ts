@@ -409,6 +409,39 @@ export function makeCachedFinnhubInsiderSentiment(cfg: FinnhubConfig): FinnhubIn
 // Small helpers
 // ---------------------------------------------------------------------------
 
+type DataBundleCore = Omit<DataBundle, "sourceManifest" | "asOf" | "gaps">;
+
+function isFetchResult(value: unknown): value is FetchResult<unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return candidate.ok === true
+    ? Object.prototype.hasOwnProperty.call(candidate, "value")
+    : candidate.ok === false && Object.prototype.hasOwnProperty.call(candidate, "gap");
+}
+
+/** Derive dot-path producer identities from the object that is actually returned. */
+function collectFetchResultRegistry(bundleCore: DataBundleCore): Record<string, FetchResult<unknown>> {
+  const registry: Record<string, FetchResult<unknown>> = {};
+
+  const visit = (value: unknown, memberPath: string): void => {
+    if (isFetchResult(value)) {
+      registry[memberPath] = value;
+      return;
+    }
+    if (value === null || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      value.forEach((child, index) => visit(child, `${memberPath}.${index}`));
+      return;
+    }
+    for (const [member, child] of Object.entries(value)) {
+      visit(child, memberPath === "" ? member : `${memberPath}.${member}`);
+    }
+  };
+
+  visit(bundleCore, "");
+  return registry;
+}
+
 function gapResult<T>(
   field: string,
   reason: string,
@@ -1404,159 +1437,9 @@ export async function buildDataBundle(
 
   progress("assemble: source + missing-data manifests");
 
-  // ---- source manifest + legacy asOf view --------------------------------------
-  const sourceManifest: Record<string, SourceManifestEntry> = {};
-  const put = (name: string, r: FetchResult<unknown>): void => {
-    if (!r.ok) return;
-    sourceManifest[name] = {
-      provider: r.value.source,
-      endpoint: r.value.endpoint,
-      asOf: r.value.asOf,
-      fetchedAt: r.value.fetchedAt,
-      stale: r.value.stale === true,
-    };
-  };
-  put("profile", profile);
-  put("quote", quote);
-  put("statements.incomeAnnual", statements.incomeAnnual);
-  put("statements.incomeQuarterly", statements.incomeQuarterly);
-  put("statements.balanceAnnual", statements.balanceAnnual);
-  put("statements.balanceQuarterly", statements.balanceQuarterly);
-  put("statements.cashflowAnnual", statements.cashflowAnnual);
-  put("statements.cashflowQuarterly", statements.cashflowQuarterly);
-  put("keyMetrics", keyMetrics);
-  put("keyMetricsTtm", keyMetricsTtm);
-  put("ratios", ratios);
-  put("ratiosTtm", ratiosTtm);
-  put("financialGrowth", financialGrowth);
-  put("financialScores", financialScores);
-  put("enterpriseValues", enterpriseValues);
-  put("analystEstimates", analystEstimates);
-  put("priceTargetConsensus", priceTargetConsensus);
-  put("priceTargetSummary", priceTargetSummary);
-  put("gradesConsensus", gradesConsensus);
-  put("earningsHistory", earningsHistory);
-  put("earningsCalendarNext", earningsCalendarNext);
-  put("transcript.meta", transcript.meta);
-  put("transcript.latest", transcript.latest);
-  put("insiderTrades", insiderTrades);
-  put("insiderStats", insiderStats);
-  put("institutional.positionsSummary", positionsSummary);
-  put("institutional.topHolders", topHolders);
-  put("peers", peers);
-  put("segmentation.product", segProduct);
-  put("segmentation.geographic", segGeo);
-  put("executives", executives);
-  put("compensation", compensation);
-  put("marketCapHistory", marketCapHistory);
-  put("sharesFloat", sharesFloat);
-  put("secFilings", secFilings);
-  put("news", news);
-  put("pressReleases", pressReleases);
-  put("eodPrices", eodPrices);
-  put("benchmarkPrices.spy", benchmarkPrices.spy);
-  put("benchmarkPrices.sectorEtf", benchmarkPrices.sectorEtf);
-  put("shortInterest", shortInterestRes);
-  put("shortInterestTrend", shortInterestTrendRes);
-  put("insiderSentiment", insiderSentimentRes);
-  put("treasury", treasury);
-  put("marketRiskPremium", marketRiskPremium);
-  put("edgar.cik", edgarBundle.cik);
-  put("edgar.latestTenK", edgarBundle.latestTenK);
-  put("edgar.latestTenQ", edgarBundle.latestTenQ);
-  put("edgar.item1a", edgarBundle.item1a);
-  put("edgar.mdna", edgarBundle.mdna);
-  put("edgar.tenQMdna", edgarBundle.tenQMdna);
-  put("edgar.auditorChange8Ks", edgarBundle.auditorChange8Ks);
-  put("edgar.nonReliance8Ks", edgarBundle.nonReliance8Ks);
-  put("edgar.companyFacts", edgarBundle.companyFacts);
-  for (const [id, res] of Object.entries(macro.core)) put(`macro.core.${id}`, res);
-  for (const [id, res] of Object.entries(macro.sector)) put(`macro.sector.${id}`, res);
-  const asOf = Object.fromEntries(
-    Object.entries(sourceManifest).map(([field, entry]) => [field, entry.asOf]),
-  );
-
-  // ---- gaps ---------------------------------------------------------------------
-  const allResults: FetchResult<unknown>[] = [
-    profile,
-    quote,
-    statements.incomeAnnual,
-    statements.incomeQuarterly,
-    statements.balanceAnnual,
-    statements.balanceQuarterly,
-    statements.cashflowAnnual,
-    statements.cashflowQuarterly,
-    keyMetrics,
-    keyMetricsTtm,
-    ratios,
-    ratiosTtm,
-    financialGrowth,
-    financialScores,
-    enterpriseValues,
-    analystEstimates,
-    priceTargetConsensus,
-    priceTargetSummary,
-    gradesConsensus,
-    earningsHistory,
-    earningsCalendarNext,
-    transcript.meta,
-    transcript.latest,
-    insiderTrades,
-    insiderStats,
-    positionsSummary,
-    topHolders,
-    peers,
-    segProduct,
-    segGeo,
-    executives,
-    compensation,
-    marketCapHistory,
-    sharesFloat,
-    secFilings,
-    news,
-    pressReleases,
-    eodPrices,
-    benchmarkPrices.spy,
-    benchmarkPrices.sectorEtf,
-    shortInterestRes,
-    shortInterestTrendRes,
-    insiderSentimentRes,
-    treasury,
-    marketRiskPremium,
-    edgarBundle.cik,
-    edgarBundle.latestTenK,
-    edgarBundle.latestTenQ,
-    edgarBundle.item1a,
-    edgarBundle.mdna,
-    edgarBundle.tenQMdna,
-    edgarBundle.auditorChange8Ks,
-    edgarBundle.nonReliance8Ks,
-    edgarBundle.companyFacts,
-    ...Object.values(macro.core),
-    ...Object.values(macro.sector),
-  ];
-  const gaps = mergeManifest(
-    [
-      ...allResults.filter((r): r is { ok: false; gap: ManifestEntry } => !r.ok).map((r) => r.gap),
-      ...allResults.flatMap((result): ManifestEntry[] =>
-        result.ok && result.value.staleReason === "empty-refresh-preserved"
-          ? [
-              {
-                field: `cache.${result.value.source}.${result.value.endpoint}`,
-                reason:
-                  "provider refresh returned an anomalous empty body; retained last-good data within the absolute seven-day stale ceiling",
-                severity: "warn",
-                attemptedSources: [result.value.source, result.value.endpoint],
-              },
-            ]
-          : [],
-      ),
-    ],
-  );
-
-  progress(`done: bundle for ${sym} (${gaps.length} gap(s))`);
-
-  return {
+  // The producer registry is discovered from the exact object returned below.
+  // There is no independently keyed inventory that can drift or be mistyped.
+  const bundleCore: DataBundleCore = {
     symbol: sym,
     builtAt,
     profile,
@@ -1603,6 +1486,54 @@ export async function buildDataBundle(
     treasury,
     marketRiskPremium,
     edgar: edgarBundle,
+  };
+  const discoveredEntries = Object.entries(collectFetchResultRegistry(bundleCore));
+  const resultRegistry = Object.fromEntries([
+    ...discoveredEntries.filter(([memberPath]) => !memberPath.startsWith("macro.")),
+    ...discoveredEntries.filter(([memberPath]) => memberPath.startsWith("macro.")),
+  ]);
+
+  // ---- source manifest + legacy asOf view --------------------------------------
+  const sourceManifest: Record<string, SourceManifestEntry> = {};
+  for (const [name, result] of Object.entries(resultRegistry)) {
+    if (!result.ok) continue;
+    sourceManifest[name] = {
+      provider: result.value.source,
+      endpoint: result.value.endpoint,
+      asOf: result.value.asOf,
+      fetchedAt: result.value.fetchedAt,
+      stale: result.value.stale === true,
+    };
+  }
+  const asOf = Object.fromEntries(
+    Object.entries(sourceManifest).map(([field, entry]) => [field, entry.asOf]),
+  );
+
+  // ---- gaps ---------------------------------------------------------------------
+  const allResults = Object.values(resultRegistry);
+  const gaps = mergeManifest(
+    [
+      ...allResults.filter((r): r is { ok: false; gap: ManifestEntry } => !r.ok).map((r) => r.gap),
+      ...allResults.flatMap((result): ManifestEntry[] =>
+        result.ok && result.value.staleReason === "empty-refresh-preserved"
+          ? [
+              {
+                field: `cache.${result.value.source}.${result.value.endpoint}`,
+                reason:
+                  "provider refresh returned an anomalous empty body; retained last-good data within the absolute seven-day stale ceiling",
+                severity: "warn",
+                attemptedSources: [result.value.source, result.value.endpoint],
+              },
+            ]
+          : [],
+      ),
+    ],
+  );
+
+  progress(`done: bundle for ${sym} (${gaps.length} gap(s))`);
+
+  return {
+    ...bundleCore,
     sourceManifest,
     asOf,
     gaps,

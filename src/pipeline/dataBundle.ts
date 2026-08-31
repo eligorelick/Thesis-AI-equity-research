@@ -986,6 +986,7 @@ async function buildEdgarBundle(
       nonReliance8Ks: dep("nonReliance8Ks", "warn"),
       companyFacts: dep("companyFacts", "warn"),
       xbrlSummary: null,
+      sic: null,
     };
   }
 
@@ -1184,6 +1185,9 @@ async function buildEdgarBundle(
     nonReliance8Ks,
     companyFacts,
     xbrlSummary,
+    // Altman's variant selection is SIC-decisive; FMP's profile has no SIC, so
+    // the submissions payload is the only source and was previously discarded.
+    sic: sub.ok ? sub.value.data.sic : null,
   };
 }
 

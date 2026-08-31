@@ -129,6 +129,14 @@ export interface EdgarBundle {
   companyFacts: FetchResult<CompanyFacts>;
   /** Derived from companyFacts when available (report-renderable). */
   xbrlSummary: XbrlSummary | null;
+  /**
+   * SEC Standard Industrial Classification code from the submissions payload.
+   * Altman's variant selection is SIC-decisive (2000-3999 = manufacturer =>
+   * the original 1968 Z, which uses MARKET equity in X4; everything else => Z"),
+   * and FMP's profile carries no SIC, so this is the only source. Null when
+   * submissions were unavailable.
+   */
+  sic: string | null;
 }
 
 /** 13F data resolved to a specific reporting quarter (see resolve13FQuarter). */

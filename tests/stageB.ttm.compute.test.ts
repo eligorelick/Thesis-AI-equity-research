@@ -495,6 +495,8 @@ interface WiringOpts {
   zeroQuarterlyShares?: boolean;
   /** Route a bank instead of a general company. */
   bank?: boolean;
+  /** SEC SIC code carried on the EDGAR bundle (Altman variant selection). */
+  sic?: string;
   /** Remove every risk-free-rate source (treasury + FRED DGS10). */
   noRiskFree?: boolean;
   /** Null interestExpense on 2 of the latest 4 quarters (completeness gate → TTM field null). */
@@ -605,6 +607,9 @@ function wiringBundle(opts: WiringOpts = {}): DataBundle {
     marketRiskPremium: fmpP([{ totalEquityRiskPremium: 4.5 }], "2026-07-01", "market-risk-premium"),
     asOf: {},
     gaps: [],
+    // The SIC reaches Stage B only through the EDGAR bundle; FMP's profile has
+    // none. Altman's variant selection is SIC-decisive.
+    edgar: { sic: opts.sic ?? null },
   } as unknown as DataBundle;
   return bundle;
 }
@@ -935,6 +940,28 @@ describe("runStageB wiring — net debt convention + point-in-time anchors (audi
     const pb = computed.valuation.multiples.multiples.find((m) => m.key === "priceToBook");
     expect(pb?.basis).toMatch(/annual/i);
     expect(pb?.current).toBeCloseTo(10000 / 500, 9);
+  });
+});
+
+describe("runStageB wiring — the SEC SIC reaches Altman variant selection", () => {
+  // Altman's variant branch is SIC-decisive, but compute.ts passed no SIC to
+  // either routeCompany or the forensics classification, and FMP's profile
+  // carries none — so the branch was dead code and every company fell to a
+  // sector/industry string heuristic. The original 1968 Z is estimated on
+  // MANUFACTURERS and puts MARKET equity in X4; Z" drops X5 and uses BOOK
+  // equity, so the wrong variant swaps the single largest term in the score.
+  it("routes a SIC 3571 manufacturer to the original 1968 Z despite a Technology sector", () => {
+    const computed = runStageB(wiringBundle({ sic: "3571" }));
+
+    expect(computed.route.evidence.sic).toBe("3571");
+    expect(computed.forensics.altmanSelection.variant).toBe("original");
+  });
+
+  it("falls back to the sector heuristic (non-manufacturer) when no SIC is available", () => {
+    const computed = runStageB(wiringBundle());
+
+    expect(computed.route.evidence.sic ?? null).toBeNull();
+    expect(computed.forensics.altmanSelection.variant).not.toBe("original");
   });
 });
 

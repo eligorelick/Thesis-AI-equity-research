@@ -797,6 +797,10 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
       ipoDate: str(profile?.ipoDate),
       country: str(profile?.country),
       currency: str(profile?.currency),
+      // SEC SIC from the EDGAR submissions payload. FMP's profile carries no
+      // SIC, so without this the routing evidence and Altman's SIC-decisive
+      // variant branch were both permanently blind.
+      sic: str(bundle.edgar?.sic),
     },
     {
       incomeTtm: routingIncomeTtm,
@@ -850,6 +854,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     classification: {
       sector: str(profile?.sector),
       industry: str(profile?.industry),
+      sicCode: str(bundle.edgar?.sic),
     },
   });
 

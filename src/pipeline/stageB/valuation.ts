@@ -2121,6 +2121,12 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
           ],
         },
       };
+      // Hoist the model-level gaps on this path too. Suppressing the per-share
+      // does not make the CoE/bookValue/payout/ROE gaps irrelevant — an ADR is
+      // exactly where the reader needs to see everything else that was missing,
+      // so returning early without them made a degraded model MORE opaque than
+      // the unguarded path below.
+      gaps.push(...er.gaps);
       return { kind: "excess-return", route: route.base, excessReturn: guarded, multiples, notes, gaps };
     }
     // Hoist model-level gaps (CoE/bookValue/payout/ROE suppression, …) so

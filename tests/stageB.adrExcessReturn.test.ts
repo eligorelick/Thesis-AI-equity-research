@@ -131,4 +131,49 @@ describe("ADR currency guard on the excess-return route", () => {
     expect(r.excessReturn.perShare).not.toBeNull();
     expect(r.gaps.some((g) => g.field === "valuation.excessReturn.currency")).toBe(false);
   });
+
+  /**
+   * The currency guard returns early, BEFORE the `gaps.push(...er.gaps)` that
+   * the unguarded path runs. Without hoisting on this path too, an ADR bank
+   * that ALSO lost its cost of equity reported only the currency gap and the
+   * model's own critical gaps vanished from the manifest — the appendix said
+   * less about a more degraded report.
+   */
+  it("still hoists the model's own gaps when the currency guard fires", () => {
+    const r = valueCompany(route("bank"), {
+      currentPrice: 100,
+      waccPct: 9,
+      netDebt: 200,
+      dilutedShares: 100,
+      dcfInputs: null,
+      multiples: adrMultiples(),
+      excessReturn: { ...EXCESS_RETURN_INPUTS, costOfEquityPct: null },
+      reit: null,
+    });
+
+    expect(r.kind).toBe("excess-return");
+    if (r.kind !== "excess-return") return;
+
+    expect(r.gaps.some((g) => g.field === "valuation.excessReturn.currency")).toBe(true);
+    // The model-level gap must survive the guarded return.
+    expect(r.gaps.some((g) => g.field === "valuation.excessReturn.costOfEquity")).toBe(true);
+  });
+
+  it("hoists the same model gap on the unguarded (same-currency) path", () => {
+    const same = adrMultiples();
+    same.reportedCurrency = "USD";
+
+    const r = valueCompany(route("bank"), {
+      currentPrice: 100,
+      waccPct: 9,
+      netDebt: 200,
+      dilutedShares: 100,
+      dcfInputs: null,
+      multiples: same,
+      excessReturn: { ...EXCESS_RETURN_INPUTS, costOfEquityPct: null },
+      reit: null,
+    });
+
+    expect(r.gaps.some((g) => g.field === "valuation.excessReturn.costOfEquity")).toBe(true);
+  });
 });

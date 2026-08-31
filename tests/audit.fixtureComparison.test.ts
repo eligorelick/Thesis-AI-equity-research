@@ -68,6 +68,42 @@ const NEW_BALANCE_BASIS =
   "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)";
 
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
+  // Added 2026-08-31 (second audit pass): multiplesFramework now emits an
+  // explicit valuation.multiples.peers gap. Peer comparison is fully specified
+  // and rendered downstream, but nothing ever populates `peers`, so a
+  // permanently empty peer column read as "no comparable peers found" — a claim
+  // about the market that was never evaluated. The new gap sorts first, which
+  // shifts the pre-existing ownHistory gap down one index.
+  {
+    path: "stageB.valuation.multiples.gaps.0.field",
+    before: "valuation.multiples.ownHistory",
+    after: "valuation.multiples.peers",
+  },
+  {
+    path: "stageB.valuation.multiples.gaps.0.reason",
+    before: "insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)",
+    after: "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)",
+  },
+  {
+    path: "stageB.valuation.multiples.gaps.1",
+    beforeMissing: true,
+    after: {"field": "valuation.multiples.ownHistory", "reason": "insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)", "severity": "info"},
+  },
+  {
+    path: "stageB.valuation.multiples.notes.0",
+    before: "income-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
+    after: "Peer multiples are not supplied by the pipeline in this version — the peer median/IQR columns are unavailable for every multiple. This is a missing input, NOT a finding that the company has no peers.",
+  },
+  {
+    path: "stageB.valuation.multiples.notes.1",
+    before: "cash-flow-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
+    after: "income-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
+  },
+  {
+    path: "stageB.valuation.multiples.notes.2",
+    beforeMissing: true,
+    after: "cash-flow-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
+  },
   // Added 2026-08-31: range52w now reports whether the price history
   // actually spans 12 months, and nulls the range when it does not, so a
   // three-month high/low is never presented (or scored) as a 52-week one.
@@ -77,6 +113,13 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
     beforeMissing: true,
     after: false,
   },
+  // Added 2026-08-31 (second pass): multiplesFramework now emits an explicit
+  // `valuation.multiples.peers` gap. Peer comparison is fully specified and
+  // rendered downstream but nothing ever populates `peers`, so a permanently
+  // empty peer column read as "no comparable peers found" — a claim about the
+  // market that was never evaluated. The new gap is inserted first, which
+  // shifts the existing ownHistory gap down one index.
+  //
   // Added 2026-08-31: ROIC invested capital now nets cash + short-term
   // investments via the house net-debt resolver, instead of
   // cashAndCashEquivalents alone. The DCF's sales-to-capital basis string

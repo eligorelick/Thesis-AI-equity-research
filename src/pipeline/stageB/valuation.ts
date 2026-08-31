@@ -1611,6 +1611,26 @@ export function multiplesFramework(
     gaps.push(gapEntry("valuation.multiples.priceToFfo", "FFO (approx.) not provided by caller — P/FFO unavailable", "warn"));
   }
 
+  // Peer comparison is fully specified downstream — PeerStats, the n/m + IQR
+  // trim, the minimum-peer house rule, and both export surfaces render it — but
+  // nothing upstream ever populates `peers`, so every peer median is null on
+  // every report. Disclose that as a typed gap rather than let a permanently
+  // empty section read as "no comparable peers found", which is a factual claim
+  // about the market that was never actually evaluated.
+  if ((inputs.peers ?? []).length === 0) {
+    notes.push(
+      "Peer multiples are not supplied by the pipeline in this version — the peer median/IQR columns are " +
+        "unavailable for every multiple. This is a missing input, NOT a finding that the company has no peers.",
+    );
+    gaps.push(
+      gapEntry(
+        "valuation.multiples.peers",
+        "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)",
+        "info",
+      ),
+    );
+  }
+
   // --- Own-history bands ------------------------------------------------------
   // Equity REITs are scored on P/FFO and P/AFFO alone, so those must be derived
   // for them; deriving them for every issuer would make the window scan chase

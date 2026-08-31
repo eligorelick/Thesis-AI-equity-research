@@ -813,12 +813,18 @@ export function degradationPlan(
           "(BV0 + sum of (ROTE − CoE) · TCE / (1 + CoE)^t) — bank FCF swings with loan growth and deposit flows.",
       },
       {
+        // "suppress", not "replace": nothing in the pipeline computes CET1,
+        // TCE/assets or a provisions trend — grading.ts states plainly that
+        // capital adequacy is "not modelled in v1". Promising a replacement
+        // battery that does not exist told the reader a bank had been screened
+        // for solvency when it had not been screened at all, which is worse
+        // than disclosing the absence.
         target: "forensics",
-        action: "replace",
-        replacement: "bank-health-metrics",
+        action: "suppress",
         disclosure:
-          "Altman Z and Beneish M are not computed for financials — bank health metrics shown instead " +
-          "(CET1 as reported by the company, TCE/assets, provisions trend).",
+          "Altman Z, Beneish M and the accrual ratios are not computed for financials (their models are " +
+          "estimated on non-financial firms). Bank-specific capital-adequacy metrics — CET1, TCE/assets, " +
+          "provisions trend — are NOT modelled in this version, so no replacement solvency screen is shown.",
       },
       {
         target: "leadership.cet1Ratio",
@@ -904,9 +910,16 @@ export function degradationPlan(
             "of the 52-week range.",
         },
         {
-          target: "technicals.beta",
+          // Retargeted: the pipeline computes no `technicals.beta` at all, so
+          // the old item promised to grey out a field that does not exist —
+          // while the beta that IS consumed (the vendor profile beta feeding
+          // CAPM) went undegraded and undisclosed. Name the real one.
+          target: "returns.wacc.beta",
           action: "annotate",
-          disclosure: 'Beta is unreliable with under ~1–2 years of returns — greyed out with "insufficient history".',
+          disclosure:
+            "Cost of equity uses the vendor-supplied beta, which is unreliable with under ~1–2 years of " +
+            "returns; it is NOT re-estimated or degraded for a recent listing, so the WACC and every " +
+            "discount rate built on it inherit that uncertainty.",
         },
         {
           target: "forensics",

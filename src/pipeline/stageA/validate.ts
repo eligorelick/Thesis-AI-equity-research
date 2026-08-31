@@ -869,6 +869,85 @@ function normCurrency(v: unknown): string | null {
  * suppression here would double-flag; withholding the disclosure would leave the
  * ADR condition visible only in the computed sections, not the integrity panel.
  */
+/**
+ * Reporting currency stability ACROSS periods and statements.
+ *
+ * `checkCurrencyConsistency` samples exactly one point — the latest annual
+ * income row against the profile — so a currency that CHANGED partway through
+ * the history passed silently. Multi-year arithmetic then compared figures in
+ * two different denominations as if they were one series: a CAGR spanning a
+ * redenomination, a margin trend across a reporting-currency switch, a Beneish
+ * index built from one year in EUR and the prior in USD. The single sample
+ * cannot see any of that.
+ *
+ * Stage A is disclosure-only by design, so this reports rather than suppresses.
+ */
+function checkCurrencyStability(bundle: ValidatableBundle, c: Collector): void {
+  const sets: Array<{ label: string; res: FetchResult<unknown> }> = [
+    { label: "incomeAnnual", res: bundle.statements.incomeAnnual },
+    { label: "incomeQuarterly", res: bundle.statements.incomeQuarterly },
+    { label: "balanceAnnual", res: bundle.statements.balanceAnnual },
+  ];
+
+  const seen = new Map<string, string[]>();
+  let observed = 0;
+  for (const { label, res } of sets) {
+    if (!res.ok) continue;
+    for (const row of (res.value as { data: { rows: Record<string, unknown>[] } }).data.rows) {
+      const currency = normCurrency(row.reportedCurrency);
+      if (currency === null) continue;
+      observed += 1;
+      const where = seen.get(currency) ?? [];
+      const period = typeof row.date === "string" ? row.date : "?";
+      where.push(`${label} ${period}`);
+      seen.set(currency, where);
+    }
+  }
+
+  if (observed === 0) {
+    c.checks.push({
+      id: "currencyStability",
+      name: "Reporting currency stable across periods",
+      status: "skipped",
+      detail: "no statement row carried a reportedCurrency",
+    });
+    return;
+  }
+
+  const currencies = [...seen.keys()];
+  if (currencies.length <= 1) {
+    c.checks.push({
+      id: "currencyStability",
+      name: "Reporting currency stable across periods",
+      status: "pass",
+      detail: `all ${observed} statement rows report in ${currencies[0]}`,
+    });
+    return;
+  }
+
+  const summary = currencies
+    .map((currency) => `${currency} (${(seen.get(currency) ?? []).slice(0, 3).join(", ")})`)
+    .join("; ");
+  c.checks.push({
+    id: "currencyStability",
+    name: "Reporting currency stable across periods",
+    status: "fail",
+    detail: `statements report in more than one currency: ${summary}`,
+  });
+  addFlag(
+    c,
+    `REPORTING CURRENCY CHANGED: ${bundle.symbol} statements span ${currencies.join(" and ")} — ` +
+      "multi-year figures (CAGRs, margin trends, YoY forensic indices) compare different denominations.",
+  );
+  c.gaps.push(
+    gapEntry(
+      "validation.currencyStability",
+      `statements span multiple reporting currencies (${currencies.join(", ")}) — multi-period arithmetic mixes denominations`,
+      "warn",
+    ),
+  );
+}
+
 function checkCurrencyConsistency(bundle: ValidatableBundle, c: Collector): void {
   const profileRow = bundle.profile?.ok ? bundle.profile.value.data.rows[0] : undefined;
   const tradingCurrency = normCurrency(profileRow?.currency);
@@ -927,6 +1006,7 @@ export function validateBundle(
   checkStaleness(bundle, now, c);
   sweepImplausibleZeros(bundle, c);
   checkCurrencyConsistency(bundle, c);
+  checkCurrencyStability(bundle, c);
 
   return { checks: c.checks, flags: c.flags, gaps: c.gaps };
 }

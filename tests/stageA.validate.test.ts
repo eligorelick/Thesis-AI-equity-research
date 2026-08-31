@@ -947,3 +947,35 @@ describe("validateBundle", () => {
     expect(c.deltaPct).toBeCloseTo(100 / 3000, 10);
   });
 });
+
+/**
+ * `checkCurrencyConsistency` samples ONE point — the latest annual income row
+ * against the profile — so a reporting currency that changed partway through
+ * the history passed silently, and multi-year arithmetic then compared two
+ * denominations as one series.
+ */
+describe("reporting currency stability across periods", () => {
+  const usdRows = () => [
+    { date: "2025-09-27", revenue: 400_000, reportedCurrency: "USD" },
+    { date: "2024-09-28", revenue: 380_000, reportedCurrency: "USD" },
+    { date: "2023-09-30", revenue: 360_000, reportedCurrency: "USD" },
+  ];
+
+  it("passes when every statement row reports one currency", () => {
+    const bundle = makeBundle({ incomeAnnual: ok({ rows: usdRows() }, "2025-09-27") });
+    expect(check(bundle, "currencyStability").check.status).toBe("pass");
+  });
+
+  it("fails and flags when the reporting currency changes mid-history", () => {
+    const rows = usdRows();
+    rows[2].reportedCurrency = "EUR";
+    const bundle = makeBundle({ incomeAnnual: ok({ rows }, "2025-09-27") });
+
+    const result = validateBundle(bundle, { now: NOW });
+    const c = result.checks.find((x) => x.id === "currencyStability");
+
+    expect(c?.status).toBe("fail");
+    expect(result.flags.join(" ")).toMatch(/REPORTING CURRENCY CHANGED/);
+    expect(result.gaps.some((g) => g.field === "validation.currencyStability")).toBe(true);
+  });
+});

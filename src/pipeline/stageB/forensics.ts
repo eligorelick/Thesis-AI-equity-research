@@ -823,37 +823,59 @@ export function computeBeneish(current: ForensicsPeriod, prior: ForensicsPeriod)
   const sgiRaw = salesT / salesP;
 
   // DEPI — depreciation rate slowdown ⇒ DEPI > 1; CF D&A preferred, IS fallback
-  const depRate = (p: ForensicsPeriod): number | null => {
-    const da =
-      posOrNull(p.cashFlow?.depreciationAndAmortization) ??
-      posOrNull(p.income?.depreciationAndAmortization);
+  // The D&A source is chosen ONCE for the pair, mirroring DSRI. Resolving it
+  // per row let year t use the cash-flow figure while year t-1 fell back to the
+  // income-statement one; the two are routinely different (the CF statement
+  // includes amortisation of intangibles the IS may report separately), so the
+  // ratio measured a change of SOURCE as if it were a change of depreciation
+  // policy — and DEPI > 1 is read as an overstatement red flag.
+  const depRate = (p: ForensicsPeriod, useCashFlow: boolean): number | null => {
+    const da = useCashFlow
+      ? posOrNull(p.cashFlow?.depreciationAndAmortization)
+      : posOrNull(p.income?.depreciationAndAmortization);
     const ppe = nv(p.balance?.propertyPlantEquipmentNet);
     if (da === null || ppe === null) return null;
     const den = da + ppe;
     return den > 0 ? da / den : null;
   };
-  const drT = depRate(current);
-  const drP = depRate(prior);
+  const depiUsesCashFlow =
+    posOrNull(current.cashFlow?.depreciationAndAmortization) !== null &&
+    posOrNull(prior.cashFlow?.depreciationAndAmortization) !== null;
+  if (!depiUsesCashFlow) {
+    notes.push(
+      "DEPI: depreciation rate built from the income statement for BOTH years (cash-flow D&A unavailable in one or both) — one basis, never mixed.",
+    );
+  }
+  const drT = depRate(current, depiUsesCashFlow);
+  const drP = depRate(prior, depiUsesCashFlow);
   const depiRaw = drT !== null && drP !== null && drT > 0 ? drP / drT : null;
 
   // SGAI — SG&A zero treated as undisclosed; fallback G&A + S&M
-  const sgaOf = (row: ForensicsIncomeRow | null | undefined): number | null => {
-    const combined = zeroAsNull(row?.sellingGeneralAndAdministrativeExpenses);
-    if (combined !== null) return combined;
+  // Basis chosen ONCE for the pair, mirroring DSRI. Resolving it per row let one
+  // year use the combined SG&A field while the other summed G&A + S&M; those
+  // rarely tie out, so the index measured a change of DEFINITION as a change in
+  // overhead discipline.
+  const combinedT = zeroAsNull(current.income?.sellingGeneralAndAdministrativeExpenses);
+  const combinedP = zeroAsNull(prior.income?.sellingGeneralAndAdministrativeExpenses);
+  const componentsOf = (row: ForensicsIncomeRow | null | undefined): number | null => {
     const ga = zeroAsNull(row?.generalAndAdministrativeExpenses);
     const sm = zeroAsNull(row?.sellingAndMarketingExpenses);
     if (ga === null && sm === null) return null;
     return (ga ?? 0) + (sm ?? 0);
   };
-  const sgaT = sgaOf(current.income);
-  const sgaP = sgaOf(prior.income);
-  if (
-    sgaT !== null &&
-    zeroAsNull(current.income?.sellingGeneralAndAdministrativeExpenses) === null
-  ) {
-    notes.push(
-      "SGAI: SG&A built from generalAndAdministrativeExpenses + sellingAndMarketingExpenses (combined field unavailable/zero).",
-    );
+  let sgaT: number | null;
+  let sgaP: number | null;
+  if (combinedT !== null && combinedP !== null) {
+    sgaT = combinedT;
+    sgaP = combinedP;
+  } else {
+    sgaT = componentsOf(current.income);
+    sgaP = componentsOf(prior.income);
+    if (sgaT !== null && sgaP !== null) {
+      notes.push(
+        "SGAI: SG&A built from generalAndAdministrativeExpenses + sellingAndMarketingExpenses for BOTH years (combined field unavailable/zero in one or both) — one basis, never mixed.",
+      );
+    }
   }
   const sgaiRaw = div(div(sgaT, salesT), div(sgaP, salesP));
 
@@ -1020,6 +1042,19 @@ export interface PiotroskiSignal {
 
 export interface PiotroskiOptions {
   /**
+   * True for bank / insurer / mortgage-REIT and other financial classifications.
+   * Two of the nine signals are fed by ratios this codebase HARD-SUPPRESSES for
+   * financials elsewhere — the current ratio (an unclassified financial balance
+   * sheet has no meaningful current/non-current split) and the gross margin
+   * (FMP's revenue − costOfRevenue is meaningless on a net-interest-spread or
+   * premium income statement). Scoring them produced two coin-flips inside a
+   * 9-point score that the report then presents as a solvency read. When set,
+   * those two signals report not-applicable and the F-score is reported out of
+   * the signals that remain, exactly as it already is when a prior year is
+   * missing.
+   */
+  financialsSuppressed?: boolean;
+  /**
    * Equity-issuance de-minimis (statement currency units). Default 0 =
    * paper-strict "no common equity issued". The research notes leave a 1%-of-
    * market-cap tolerance as an open question — any non-zero value is a house
@@ -1135,10 +1170,12 @@ export function computePiotroski(
   }
 
   // 6. F_ΔLIQUID — current ratio rose
+  const finSuppressed = options?.financialsSuppressed === true;
   const crT = div(nv(current.balance?.totalCurrentAssets), posOrNull(current.balance?.totalCurrentLiabilities));
   const crP = div(nv(prior.balance?.totalCurrentAssets), posOrNull(prior.balance?.totalCurrentLiabilities));
-  const s6 =
-    crT !== null && crP !== null
+  const s6 = finSuppressed
+    ? na("current ratio not meaningful for a financial company (no current/non-current split) — signal withheld")
+    : crT !== null && crP !== null
       ? sig(crT > crP, `current ratio ${crP.toFixed(2)} → ${crT.toFixed(2)}`)
       : na("current assets/liabilities missing");
 
@@ -1172,8 +1209,9 @@ export function computePiotroski(
   // 8. F_ΔMARGIN — gross margin ratio rose
   const gmT = grossMarginRatio(current.income, revT);
   const gmP = grossMarginRatio(prior.income, revP);
-  const s8 =
-    gmT !== null && gmP !== null
+  const s8 = finSuppressed
+    ? na("gross margin not meaningful on a financial income statement — signal withheld")
+    : gmT !== null && gmP !== null
       ? sig(gmT > gmP, `gross margin ${(gmP * 100).toFixed(2)}% → ${(gmT * 100).toFixed(2)}%`)
       : na("gross margin not computable (revenue/grossProfit/costOfRevenue missing)");
 
@@ -1948,6 +1986,10 @@ export function runForensics(route: CompanyRoute, inputs: ForensicsInputs): Fore
   } else {
     piotroski = computePiotroski(cur, pri, pri2, {
       equityIssuanceDeMinimis: inputs.equityIssuanceDeMinimis ?? undefined,
+      // Withhold the two signals fed by ratios this route hard-suppresses
+      // everywhere else, rather than scoring a bank on a current ratio and a
+      // gross margin the report refuses to print.
+      financialsSuppressed: suppressed,
     });
     if (suppressed) {
       notes.push(

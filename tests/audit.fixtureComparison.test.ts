@@ -68,6 +68,15 @@ const NEW_BALANCE_BASIS =
   "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)";
 
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
+  // Added 2026-08-31: range52w now reports whether the price history
+  // actually spans 12 months, and nulls the range when it does not, so a
+  // three-month high/low is never presented (or scored) as a 52-week one.
+  // This fixture has full history, so only the new flag appears.
+  {
+    path: "stageB.technicals.range52w.insufficientHistory",
+    beforeMissing: true,
+    after: false,
+  },
   // Added 2026-08-31: ROIC invested capital now nets cash + short-term
   // investments via the house net-debt resolver, instead of
   // cashAndCashEquivalents alone. The DCF's sales-to-capital basis string

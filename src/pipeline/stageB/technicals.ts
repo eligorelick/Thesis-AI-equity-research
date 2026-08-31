@@ -404,6 +404,14 @@ export interface Range52w {
   distanceFromLow: number | null;
   /** (close − low)/(high − low)·100; null when high == low */
   positionPct: number | null;
+  /**
+   * True when the price history does not actually span 12 months, so a
+   * "52-week" high/low would describe a shorter window than its own label
+   * claims. Mirrors DrawdownResult.insufficientHistory. When true, every field
+   * above is null: a 3-month range presented as a 52-week range is a false
+   * statement, and `positionPct` feeds a 0.25-weight momentum signal.
+   */
+  insufficientHistory: boolean;
   asOf: string | null;
 }
 
@@ -419,11 +427,21 @@ export function range52w(rows: readonly OhlcvRow[]): Range52w {
     distanceFromHigh: null,
     distanceFromLow: null,
     positionPct: null,
+    insufficientHistory: false,
     asOf: null,
   };
   if (rows.length === 0) return empty;
   const last = rows[rows.length - 1];
   const cutoff = shiftMonths(last.date, -12);
+  // The first available bar may legitimately sit a few days after the exact
+  // 12-month boundary (weekend/holiday), the same allowance relative strength
+  // makes via RS_START_TOLERANCE_DAYS.
+  const toleratedStart = new Date(Date.parse(`${cutoff}T00:00:00Z`) + RANGE_52W_START_TOLERANCE_DAYS * CALENDAR_DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+  if (rows[0].date > toleratedStart) {
+    return { ...empty, insufficientHistory: true, asOf: last.date };
+  }
   let high = Number.NEGATIVE_INFINITY;
   let low = Number.POSITIVE_INFINITY;
   let highDate: string | null = null;
@@ -451,6 +469,7 @@ export function range52w(rows: readonly OhlcvRow[]): Range52w {
     distanceFromHigh: c - high,
     distanceFromLow: c - low,
     positionPct: high > low ? ((c - low) / (high - low)) * 100 : null,
+    insufficientHistory: false,
     asOf: last.date,
   };
 }
@@ -480,6 +499,8 @@ export interface RelativeStrengthSet {
   asOf: string | null;
 }
 
+/** Weekend/holiday allowance when testing whether history spans a full year. */
+export const RANGE_52W_START_TOLERANCE_DAYS = 7;
 export const RS_START_TOLERANCE_DAYS = 7;
 export const RS_END_TOLERANCE_DAYS = 7;
 

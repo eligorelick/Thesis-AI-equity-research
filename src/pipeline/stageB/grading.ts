@@ -706,7 +706,11 @@ export function computeScores(inputs: ScoringInputs): Scoring {
     [
       { name: "smaGap", raw: smaGap, unit: "%", weight: 0.25, band: SMA_GAP_BAND },
       { name: "rsi14", raw: technicals.rsi14, unit: "rsi", weight: 0.2, band: RSI_BAND },
-      { name: "position52w", raw: technicals.range52w.positionPct, unit: "%", weight: 0.25, band: POSITION_BAND },
+      // suppressedBy: the recent-ipo route already lists "fiftyTwoWeekRange" in
+      // its suppress set, but no signal carried the tag, so the policy was
+      // inert and a company with a few months of trading was still scored on a
+      // "52-week" position it cannot have.
+      { name: "position52w", raw: technicals.range52w.positionPct, unit: "%", weight: 0.25, band: POSITION_BAND, suppressedBy: "fiftyTwoWeekRange" },
       { name: "relStrength6m", raw: rs6, unit: "pp", weight: 0.3, band: REL_STRENGTH_BAND },
     ],
     weights.technicals,

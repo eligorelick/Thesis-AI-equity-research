@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getEntityRegistry, validateEntityText } from "@/pipeline/stageC/entityValidation";
+import { getEntityRegistry, validateEntityText, type EntityRegistry } from "@/pipeline/stageC/entityValidation";
 
 /**
  * Several curated LLY trial programs are acronyms that are also ordinary
@@ -60,5 +60,30 @@ describe("entity alias matching vs ordinary English", () => {
     );
 
     expect(r.mentions.map((m) => m.canonicalName)).toContain("Orna Therapeutics");
+  });
+});
+
+/**
+ * `relationship-conflict` fired once per (mentioned trial x every OTHER
+ * mentioned drug), with no requirement that the trial's own registered drug be
+ * absent. So a factually correct sentence naming two programmes side by side
+ * produced a conflict, and the judge pass then withheld correct prose from the
+ * stored report. A conflict now requires the registered drug to be MISSING.
+ */
+describe("relationship-conflict requires an actual conflict, not co-occurrence", () => {
+  it("does not flag correct prose that names the registered drug alongside another", () => {
+    const text =
+      "ATTAIN-1 showed orforglipron delivered 12 percent weight loss, while " +
+      "retatrutide delivered 24 percent in TRIUMPH-4.";
+    const { issues } = validateEntityText(text, getEntityRegistry("LLY") as EntityRegistry, "test-source");
+
+    expect(issues.filter((i) => i.code === "relationship-conflict")).toHaveLength(0);
+  });
+
+  it("still flags a trial attributed to a drug when its own drug is absent", () => {
+    const text = "ATTAIN-1 showed retatrutide delivered 24 percent weight loss.";
+    const { issues } = validateEntityText(text, getEntityRegistry("LLY") as EntityRegistry, "test-source");
+
+    expect(issues.some((i) => i.code === "relationship-conflict")).toBe(true);
   });
 });

@@ -259,19 +259,26 @@ export function validateEntityText(
     (record) => record.kind === "trial-program" && mentionedEntityIds.has(record.id),
   )) {
     if (!trial.relatedEntityId || mentionedDrugs.length === 0) continue;
-    for (const drug of mentionedDrugs) {
-      if (drug.id === trial.relatedEntityId) continue;
-      const expected = registry.records.find((record) => record.id === trial.relatedEntityId);
-      issues.push({
-        code: "relationship-conflict",
-        text: `${trial.canonicalName} is registered to ${expected?.canonicalName ?? trial.relatedEntityId}, not ${drug.canonicalName}`,
-        canonicalName: `${trial.canonicalName} / ${expected?.canonicalName ?? trial.relatedEntityId}`,
-        observed: `${trial.canonicalName} / ${drug.canonicalName}`,
-        sourceId,
-        recordId: trial.id,
-        expectedEntityId: trial.relatedEntityId,
-      });
-    }
+    // Co-occurrence is NOT a conflict. This fired once per (trial x every other
+    // mentioned drug), so a factually correct sentence naming two programmes —
+    // "ATTAIN-1 showed orforglipron delivered 12%, while retatrutide's TRIUMPH-4
+    // delivered 24%" — was reported as a relationship conflict, and the judge
+    // pass then withheld correct prose from the stored report. A conflict
+    // requires the trial's OWN registered drug to be ABSENT while some other
+    // drug is present; if the right drug is named alongside others, the text is
+    // consistent and nothing is claimed about the others.
+    if (mentionedDrugs.some((drug) => drug.id === trial.relatedEntityId)) continue;
+    const expected = registry.records.find((record) => record.id === trial.relatedEntityId);
+    const observed = mentionedDrugs.map((drug) => drug.canonicalName).join(", ");
+    issues.push({
+      code: "relationship-conflict",
+      text: `${trial.canonicalName} is registered to ${expected?.canonicalName ?? trial.relatedEntityId}, which is not mentioned; the text names ${observed} instead`,
+      canonicalName: `${trial.canonicalName} / ${expected?.canonicalName ?? trial.relatedEntityId}`,
+      observed: `${trial.canonicalName} / ${observed}`,
+      sourceId,
+      recordId: trial.id,
+      expectedEntityId: trial.relatedEntityId,
+    });
   }
   return { mentions, issues: dedupeIssues(issues) };
 }

@@ -1344,6 +1344,7 @@ const OWN_HISTORY_EV_MAX_AGE_DAYS = 45;
 function deriveOwnHistory(
   quarters: QuarterlyFundamentalsRow[] | undefined,
   evRows: EnterpriseValuesRow[] | undefined,
+  derivedKeys: readonly MultipleKey[] = DERIVED_HISTORY_KEYS,
 ): OwnHistoryDerivation {
   const series: HistorySeries = {};
   const normalized = normalizeQuarterRows(quarters ?? []);
@@ -1363,7 +1364,7 @@ function deriveOwnHistory(
     if (values.length < FULL_OWN_HISTORY_OBS) values.push(value);
   };
   for (const window of candidates.windows) {
-    if (DERIVED_HISTORY_KEYS.every((key) => (series[key]?.length ?? 0) >= FULL_OWN_HISTORY_OBS)) break;
+    if (derivedKeys.every((key) => (series[key]?.length ?? 0) >= FULL_OWN_HISTORY_OBS)) break;
     const ev = latestOnOrBeforeWithin(
       evRows ?? [],
       window[0].date,
@@ -1413,17 +1414,29 @@ function deriveOwnHistory(
           (isNum(b.minorityInterest) ? b.minorityInterest : 0) -
           b.cashAndShortTermInvestments
         : null;
+    // FFO/AFFO, derived exactly as the CURRENT values are (compute.ts builds
+    // ffoApprox = netIncome + D&A and affoApprox = ffoApprox - |capex|). Without
+    // these, `priceToFfo`/`priceToAffo` had no derived source at all, so every
+    // equity REIT's only two multiples carried no own-history band, its
+    // valuation aspect scored null, and its composite was permanently shrunk
+    // for evidence the pipeline could have computed all along.
+    const ttmDa = sum((r) => r.depreciationAndAmortization);
+    const ttmCapex = sum((r) => r.capitalExpenditure);
+    const ttmFfo = isNum(ttmNi) && isNum(ttmDa) ? ttmNi + ttmDa : null;
+    const ttmAffo = isNum(ttmFfo) && isNum(ttmCapex) ? ttmFfo - Math.abs(ttmCapex) : null;
     const values: Partial<Record<MultipleKey, number | null>> = {
       evToSales: safeDiv(evVal, ttmRev),
       evToEbitda: safeDiv(evVal, posOrNull(ttmEbitda)),
       peTtm: safeDiv(mcap, posOrNull(ttmNi)),
       priceToFcf: safeDiv(mcap, posOrNull(ttmFcf)),
       priceToBook: safeDiv(mcap, posOrNull(equity)),
+      priceToFfo: safeDiv(mcap, posOrNull(ttmFfo)),
+      priceToAffo: safeDiv(mcap, posOrNull(ttmAffo)),
     };
-    const stillNeeded = DERIVED_HISTORY_KEYS.filter(
+    const stillNeeded = derivedKeys.filter(
       (key) => (series[key]?.length ?? 0) < FULL_OWN_HISTORY_OBS,
     );
-    const unavailable = DERIVED_HISTORY_KEYS.filter((key) => {
+    const unavailable = derivedKeys.filter((key) => {
       const value = values[key];
       return value === null || value === undefined || value <= 0;
     });
@@ -1599,7 +1612,16 @@ export function multiplesFramework(
   }
 
   // --- Own-history bands ------------------------------------------------------
-  const derived = deriveOwnHistory(inputs.quarterlyFundamentals, inputs.enterpriseValuesHistory);
+  // Equity REITs are scored on P/FFO and P/AFFO alone, so those must be derived
+  // for them; deriving them for every issuer would make the window scan chase
+  // series no other route consumes.
+  const derivedKeys: readonly MultipleKey[] =
+    route === "reit" ? [...DERIVED_HISTORY_KEYS, "priceToFfo", "priceToAffo"] : DERIVED_HISTORY_KEYS;
+  const derived = deriveOwnHistory(
+    inputs.quarterlyFundamentals,
+    inputs.enterpriseValuesHistory,
+    derivedKeys,
+  );
   const windowGap = ownHistoryWindowGap(derived);
   if (windowGap) gaps.push(windowGap);
   const history: HistorySeries = {};

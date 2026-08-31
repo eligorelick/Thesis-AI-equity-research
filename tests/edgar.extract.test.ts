@@ -818,3 +818,52 @@ describe("cross-reference rejection does not eat genuine headers", () => {
     expect(findHeaderCandidates(text, RISK)).toHaveLength(0);
   });
 });
+
+/**
+ * Route 1's boundary rule. The all-caps peer test used to sit on equal footing
+ * with the named BOUNDARY_SYNONYMS, but inside an exhibit a section's own
+ * SUBSECTIONS are usually all-caps too, so the slice ended at the first
+ * subsection and returned that fragment as ok:true with no note. It is now a
+ * fallback, used only when no named boundary follows the start.
+ */
+describe("extractFromExhibit — all-caps boundary is a fallback, not a peer rule", () => {
+  const X = "ixaaaabbbbccccdddd";
+  const build = (headings: readonly string[]): string =>
+    [
+      "<table>",
+      ...headings.map(
+        (title, i) => `<tr><td><a href="#${X}_${i}">${title}</a></td></tr>`,
+      ),
+      "</table>",
+      ...headings.flatMap((title, i) => [
+        `<div id="${X}_${i}"></div><div><span>${title}</span></div>`,
+        para(4000, `BODY${i}`),
+      ]),
+    ].join("\n");
+
+  it("discloses the fallback when no named boundary follows the start", () => {
+    // No BOUNDARY_SYNONYMS entry follows, so the all-caps peer rule is all that
+    // is left. Period-end dates alone cannot tell a subsection from a section,
+    // so the slice still bounds conservatively — but it now SAYS so, instead of
+    // returning a possibly-truncated fragment as ok:true in silence.
+    const exhibit = build(["FINANCIAL REVIEW", "RESULTS OF OPERATIONS", "LIQUIDITY"]);
+    const r = extractFromExhibit(exhibit, { section: "mdna", quotedTitles: ["Financial Review"] });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.diagnostics.notes.join(" ")).toMatch(/ALL-CAPS|truncated/i);
+  });
+
+  it("stops at a NAMED boundary and does not fall back", () => {
+    const exhibit = build(["FINANCIAL REVIEW", "RESULTS OF OPERATIONS", "RISK FACTORS"]);
+    const r = extractFromExhibit(exhibit, { section: "mdna", quotedTitles: ["Financial Review"] });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // Bounded by the named boundary, so the risk-factor body is excluded...
+    expect(r.text).not.toContain("BODY2");
+    // ...and the subsection between start and boundary is retained.
+    expect(r.text).toContain("BODY1");
+    expect(r.diagnostics.notes.join(" ")).not.toMatch(/ALL-CAPS/i);
+  });
+});

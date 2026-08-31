@@ -181,17 +181,36 @@ function weightedPath(bull: number[], base: number[], bear: number[]): number[] 
 }
 
 /** Historical annualized revenue growth from dated oldest→newest observations. */
-function annualizedGrowthPct(revenues: Array<{ date: string; value: number }>): number[] {
-  const out: number[] = [];
+/**
+ * Year-over-year growth for each ANNUAL step, skipping pairs that are not
+ * annual steps.
+ *
+ * A sigma of annual growth must be built from annual intervals: annualizing
+ * across a four-year gap yields a smoothed rate whose variance means something
+ * else entirely. Skipping the odd pair is right; vetoing the WHOLE estimate
+ * because one pair anywhere in the history was irregular — which is what the
+ * caller used to do — throws away every good pair with it and suppresses the
+ * entire projections fan.
+ */
+function annualizedGrowthPct(revenues: Array<{ date: string; value: number }>): {
+  values: number[];
+  skippedPairs: number;
+} {
+  const values: number[] = [];
+  let skippedPairs = 0;
   for (let i = 1; i < revenues.length; i++) {
     const prior = revenues[i - 1];
     const current = revenues[i];
     const years = yearsBetweenDates(prior.date, current.date);
-    if (prior.value > 0 && current.value > 0 && years !== null && years > 0) {
-      out.push((Math.pow(current.value / prior.value, 1 / years) - 1) * 100);
+    if (years === null || years < 0.7 || years > 1.3) {
+      skippedPairs += 1;
+      continue;
+    }
+    if (prior.value > 0 && current.value > 0) {
+      values.push((Math.pow(current.value / prior.value, 1 / years) - 1) * 100);
     }
   }
-  return out;
+  return { values, skippedPairs };
 }
 
 /* ------------------------------------------------------------------------ *
@@ -232,10 +251,17 @@ export function scenarioDispersion(incomeHistory: ProjectionIncomeRow[]): Scenar
     isNum(r.ebit) && isNum(r.revenue) && r.revenue > 0
       ? [{ date: r.date, value: (r.ebit / r.revenue) * 100 }]
       : []);
-  const growthIrregular = hasIrregularAnnualSpacing(revenueSeries.map((p) => p.date));
-  const marginIrregular = hasIrregularAnnualSpacing(marginSeries.map((p) => p.date));
-  const rawSigmaG = growthIrregular ? null : stdev(annualizedGrowthPct(revenueSeries));
-  const rawSigmaM = marginIrregular ? null : stdev(marginSeries.map((p) => p.value));
+  // Per-pair, not all-or-nothing. `hasIrregularAnnualSpacing` returns true if ANY
+  // adjacent interval anywhere in the history is off-annual, and that single
+  // boolean used to null the entire sigma — suppressing the whole projections
+  // fan and the scenario targets built on it. A restated fiscal year (two rows
+  // for one period, a zero-length interval) was enough to trigger it, which is
+  // why the duplicate collapse above matters here too. Growth now skips the
+  // non-annual pairs and keeps the rest; the margin sigma is a stdev of LEVELS,
+  // which does not depend on spacing at all once duplicates are gone.
+  const growth = annualizedGrowthPct(revenueSeries);
+  const rawSigmaG = stdev(growth.values);
+  const rawSigmaM = stdev(marginSeries.map((p) => p.value));
   const marginByDate = new Map(marginSeries.map((point) => [point.date, point.value]));
   const paired: Array<{ x: number; y: number }> = [];
   for (let i = 1; i < revenueSeries.length; i++) {
@@ -243,7 +269,15 @@ export function scenarioDispersion(incomeHistory: ProjectionIncomeRow[]): Scenar
     const current = revenueSeries[i];
     const years = yearsBetweenDates(prior.date, current.date);
     const margin = marginByDate.get(current.date);
-    if (years !== null && years > 0 && prior.value > 0 && current.value > 0 && margin !== undefined) {
+    // Annual steps only, for the same reason the growth sigma uses them.
+    if (
+      years !== null &&
+      years >= 0.7 &&
+      years <= 1.3 &&
+      prior.value > 0 &&
+      current.value > 0 &&
+      margin !== undefined
+    ) {
       paired.push({
         x: (Math.pow(current.value / prior.value, 1 / years) - 1) * 100,
         y: margin,
@@ -253,11 +287,15 @@ export function scenarioDispersion(incomeHistory: ProjectionIncomeRow[]): Scenar
   return {
     sigmaGrowth: rawSigmaG === null ? null : clamp(rawSigmaG, 0, SIGMA_GROWTH_MAX),
     sigmaMargin: rawSigmaM === null ? null : clamp(rawSigmaM, 0, SIGMA_MARGIN_MAX),
-    growthMarginCorrelation:
-      growthIrregular || marginIrregular ? null : correlation(paired),
+    // `paired` now contains only annual steps, so the correlation no longer
+    // needs an all-or-nothing veto either.
+    growthMarginCorrelation: correlation(paired),
     growthDefaulted: rawSigmaG === null,
     marginDefaulted: rawSigmaM === null,
-    irregularHistory: growthIrregular || marginIrregular,
+    // Retained as a DISCLOSURE — the history did contain off-annual intervals
+    // and the reader should know some pairs were excluded — but it no longer
+    // suppresses the estimate built from the pairs that were usable.
+    irregularHistory: growth.skippedPairs > 0,
   };
 }
 

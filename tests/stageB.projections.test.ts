@@ -162,10 +162,41 @@ describe("projections — scenarios", () => {
       { date: "2024-12-31", revenue: 135, ebit: 29, netIncome: null, epsDiluted: null },
       { date: "2025-12-31", revenue: 180, ebit: 36, netIncome: null, epsDiluted: null },
     ]);
+    // CONTRACT CHANGED 2026-08-31. `hasIrregularAnnualSpacing` returns true if
+    // ANY adjacent interval anywhere in the history is off-annual, and that one
+    // boolean used to null the ENTIRE sigma — discarding every good annual pair
+    // because of a single gap, and suppressing the whole projections fan and
+    // the scenario targets built on it. Off-annual pairs are now skipped
+    // individually and the rest are used; the module's own 3-observation
+    // minimum (stdev) still decides whether an estimate exists.
     expect(consecutive.growthDefaulted).toBe(false);
+    expect(consecutive.irregularHistory).toBe(false);
+
+    // This gapped history leaves only TWO annual steps (2019→2020, 2024→2025),
+    // which is below the 3-observation minimum — so it still defaults, for a
+    // statistical reason rather than a veto, and the skip is disclosed.
     expect(gapped.growthDefaulted).toBe(true);
-    expect(gapped.marginDefaulted).toBe(true);
     expect(gapped.irregularHistory).toBe(true);
+  });
+
+  it("keeps the annual steps that survive a single gap, instead of vetoing them all", () => {
+    // Five consecutive years, then a four-year hole, then two more. Four annual
+    // steps survive — comfortably above the minimum — so a dispersion IS
+    // produced. Under the old whole-series veto this returned nothing at all.
+    const withOneGap = scenarioDispersion([
+      { date: "2015-12-31", revenue: 100, ebit: 20, netIncome: null, epsDiluted: null },
+      { date: "2016-12-31", revenue: 120, ebit: 26, netIncome: null, epsDiluted: null },
+      { date: "2017-12-31", revenue: 132, ebit: 27, netIncome: null, epsDiluted: null },
+      { date: "2018-12-31", revenue: 160, ebit: 35, netIncome: null, epsDiluted: null },
+      { date: "2019-12-31", revenue: 168, ebit: 36, netIncome: null, epsDiluted: null },
+      { date: "2024-12-31", revenue: 200, ebit: 41, netIncome: null, epsDiluted: null },
+      { date: "2025-12-31", revenue: 230, ebit: 49, netIncome: null, epsDiluted: null },
+    ]);
+
+    expect(withOneGap.growthDefaulted).toBe(false);
+    expect(withOneGap.sigmaGrowth).not.toBeNull();
+    // The excluded pair is still disclosed to the reader.
+    expect(withOneGap.irregularHistory).toBe(true);
   });
 
   it("bull >= base >= bear for revenue and the weighted path is the documented blend", () => {

@@ -223,6 +223,10 @@ export function selectUsEquityRiskPremium(
 function toGrowthIncome(r: FmpIncomeStatementRow): GrowthIncomeRow {
   return {
     date: String(r.date ?? ""),
+    // Restatement recency: without these, a duplicated fiscal period is
+    // ambiguous and gets rejected wholesale instead of resolved.
+    acceptedDate: str(r.acceptedDate),
+    filingDate: str(r.filingDate),
     revenue: num(r.revenue),
     grossProfit: num(r.grossProfit),
     operatingIncome: num(r.operatingIncome),
@@ -234,6 +238,8 @@ function toGrowthIncome(r: FmpIncomeStatementRow): GrowthIncomeRow {
 function toGrowthCashFlow(r: FmpCashFlowRow): GrowthCashFlowRow {
   return {
     date: String(r.date ?? ""),
+    acceptedDate: str(r.acceptedDate),
+    filingDate: str(r.filingDate),
     freeCashFlow: num(r.freeCashFlow),
     operatingCashFlow: num(r.operatingCashFlow),
     capitalExpenditure: num(r.capitalExpenditure),

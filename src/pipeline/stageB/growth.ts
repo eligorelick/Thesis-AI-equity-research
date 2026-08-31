@@ -16,6 +16,7 @@
 
 import type { ManifestEntry } from "@/types/core";
 import { deriveFcf } from "@/pipeline/stageB/financialValues";
+import { normalizeQuarterRows } from "@/pipeline/stageB/quarterWindows";
 
 // ---------------------------------------------------------------------------
 // Input interfaces — field names exactly as FMP returns them (the provider data contract §2.3)
@@ -24,6 +25,9 @@ import { deriveFcf } from "@/pipeline/stageB/financialValues";
 export interface GrowthIncomeRow {
   /** Fiscal period end, ISO yyyy-mm-dd. */
   date: string;
+  /** Filing recency, used ONLY to pick the surviving row of a restated period. */
+  acceptedDate?: string | null;
+  filingDate?: string | null;
   revenue?: number | null;
   grossProfit?: number | null;
   operatingIncome?: number | null;
@@ -34,6 +38,9 @@ export interface GrowthIncomeRow {
 export interface GrowthCashFlowRow {
   /** Fiscal period end, ISO yyyy-mm-dd. */
   date: string;
+  /** Filing recency, used ONLY to pick the surviving row of a restated period. */
+  acceptedDate?: string | null;
+  filingDate?: string | null;
   freeCashFlow?: number | null;
   operatingCashFlow?: number | null;
   /** FMP reports capex NEGATIVE (freeCashFlow = operatingCashFlow + capitalExpenditure). */
@@ -291,8 +298,33 @@ export function computeGrowth(
   const notes: string[] = [];
   const gaps: ManifestEntry[] = [];
 
-  const inc = sortNewestFirst(income);
-  const cf = sortNewestFirst(cashflow);
+  // Collapse restated/duplicate fiscal periods BEFORE any series is built.
+  // FMP can return the same fiscal year twice (an original and its
+  // restatement). Left in place, both rows entered every series: the CAGR
+  // window counted one fiscal year as two, so an "N-year" CAGR spanned N-1
+  // actual years and could anchor on the SUPERSEDED figure. The house rule is
+  // the one `normalizeQuarterRows` already implements for quarters — whole
+  // row, provably-latest filing wins, ambiguous duplicates rejected outright
+  // rather than guessed at — and it is period-agnostic, so annual rows use it
+  // unchanged.
+  const incNorm = normalizeQuarterRows(income);
+  const cfNorm = normalizeQuarterRows(cashflow);
+  for (const { period, reason } of incNorm.rejected) {
+    gaps.push({ field: "growth.incomeStatement.period", reason: `annual income period ${period} dropped: ${reason}`, severity: "warn" });
+  }
+  for (const { period, reason } of cfNorm.rejected) {
+    gaps.push({ field: "growth.cashFlow.period", reason: `annual cash-flow period ${period} dropped: ${reason}`, severity: "warn" });
+  }
+  if (incNorm.rows.length !== income.length || cfNorm.rows.length !== cashflow.length) {
+    notes.push(
+      `Duplicate/restated annual periods collapsed before the growth series were built ` +
+        `(income ${income.length}->${incNorm.rows.length}, cash flow ${cashflow.length}->${cfNorm.rows.length}); ` +
+        "the most recently filed row wins.",
+    );
+  }
+
+  const inc = sortNewestFirst(incNorm.rows);
+  const cf = sortNewestFirst(cfNorm.rows);
 
   if (inc.length === 0) {
     gaps.push({

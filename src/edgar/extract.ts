@@ -191,11 +191,16 @@ export function stripHiddenBlocks(html: string): string {
   //     previously truncated at the colon so iXBRL hidden blocks survived.
   // The leading `\s` before `style` keeps `data-style="display:none"` — a
   // decoy attribute on VISIBLE content — from being treated as hidden.
+  // `display` must also START a declaration (value start, or after `;`/space),
+  // so a property that merely ENDS in it — `--display:none`, `mso-display:none`
+  // — cannot match. Those do not hide anything, and since the scan below
+  // deletes through the matching close tag, one false positive on a wrapper
+  // <div> would silently drop a whole visible section of the filing.
   const openRe = new RegExp(
     `<([a-zA-Z][a-zA-Z0-9:._-]*)\\b[^>]*\\sstyle\\s*=\\s*(?:` +
-      `"[^"]*display\\s*:\\s*none[^"]*"` +
-      `|'[^']*display\\s*:\\s*none[^']*'` +
-      `|[^\\s>"']*display:none[^\\s>]*` +
+      `"(?:[^"]*[;\\s])?display\\s*:\\s*none[^"]*"` +
+      `|'(?:[^']*[;\\s])?display\\s*:\\s*none[^']*'` +
+      `|(?:[^\\s>"']*;)?display\\s*:\\s*none[^\\s>]*` +
       `)[^>]*>`,
     "gi",
   );
@@ -211,8 +216,11 @@ export function stripHiddenBlocks(html: string): string {
       cursor = openEnd;
       continue;
     }
-    // Balanced scan for the matching close tag.
-    const scanRe = new RegExp(`<${tag}\\b[^>]*?(/?)>|</${tag}\\s*>`, "gi");
+    // Balanced scan for the matching close tag. The tag name is escaped: the
+    // name class admits `.`, which is a regex metacharacter and would otherwise
+    // let one tag's scan match a different tag.
+    const tagRe = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const scanRe = new RegExp(`<${tagRe}\\b[^>]*?(/?)>|</${tagRe}\\s*>`, "gi");
     scanRe.lastIndex = openEnd;
     let depth = 1;
     let end = -1;

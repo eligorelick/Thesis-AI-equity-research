@@ -55,4 +55,24 @@ describe("stripHiddenBlocks recognizes every valid display:none spelling", () =>
     const out = text(`<div data-style="display:none">${visible}</div>`);
     expect(out).toContain(visible);
   });
+
+  /**
+   * `display` must START a declaration. A property that merely ENDS in it hides
+   * nothing, and because the strip deletes through the matching close tag, a
+   * false positive on a wrapper <div> would drop a whole visible section.
+   */
+  it.each([
+    ["custom property", `style="--display:none"`],
+    ["vendor-prefixed", `style="mso-display:none"`],
+    ["prefixed after another declaration", `style="color:red;mso-display:none"`],
+  ])("keeps visible content when a property merely ends in display (%s)", (_label, attr) => {
+    const out = text(`<div ${attr}>${visible}</div>`);
+    expect(out).toContain(visible);
+  });
+
+  it("still strips a real declaration that follows another one", () => {
+    const out = text(`<p>${visible}</p><div style="color:red;display:none">${hidden}</div>`);
+    expect(out).toContain(visible);
+    expect(out).not.toContain(hidden);
+  });
 });

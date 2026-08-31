@@ -662,8 +662,8 @@ function ExcessReturnBlock({
       <StatCell label="vs price" value={up === null ? "n/a" : fmtSignedPct(up)} tone={up === null ? "muted" : up >= 0 ? "pos" : "neg"} />
       <StatCell label="implied P/BV" value={fmtX(er.impliedPToBv)} tone="muted" />
       <StatCell
-        label="reverse steady ROE"
-        value={fmtPct(er.reverseSolve.impliedSteadyRoePct)}
+        label="reverse implied ROE"
+        value={fmtPct(er.reverseSolve.impliedCurrentRoePct)}
         tone="muted"
       />
     </div>

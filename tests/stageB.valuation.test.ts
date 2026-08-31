@@ -1333,38 +1333,91 @@ describe("excessReturnModel (banks / insurers)", () => {
     expect(r.roePathPct.basis).toMatch(/competitive fade/i);
   });
 
-  it("reverse-solves the constant steady-state ROE matching market cap", () => {
-    // Build the model, take its equityValue as the market cap, and confirm the
-    // reverse solve recovers a constant ROE that reproduces it. With a constant
-    // ROE the model is monotone, so this is a clean round-trip.
+  it("reverse-solves the starting ROE that reproduces market cap, inverting the forward model", () => {
+    // CONTRACT CHANGED 2026-08-31. This previously solved for a ROE held
+    // CONSTANT for `years` with no continuing value — neither the fade the
+    // forward model assumes nor the perpetuity "steady state" promises, so it
+    // inverted no model at all. The solved figure is fed straight into
+    // grading.ts and subtracted from `roePathPct.value[0]` (the current ROE) at
+    // 0.5 weight of the valuation aspect, and a flat path is worth more than a
+    // fading one, so less ROE was needed to reach any given price: the number
+    // came out systematically LOW and biased every bank, insurer and mortgage
+    // REIT toward "market too pessimistic ⇒ cheap".
+    //
+    // Now it inverts the forward model exactly, so the round-trip is exact:
+    // price the company off its own model, hand that back as the market cap,
+    // and the solver returns the ROE you started from.
     const bookValue = 1000;
     const coe = 10;
     const payout = 50;
     const years = 10;
-    // value at constant ROE 13%:
+
     const forward = excessReturnModel({
       bookValue,
       currentRoePct: 13,
-      analystImpliedRoePct: 13, // fade 13->13 = constant 13
       costOfEquityPct: coe,
       years,
       payoutRatioPct: payout,
       dilutedShares: 100,
-      marketCap: undefined,
     });
     const mcap = forward.equityValue as number;
+
     const solved = excessReturnModel({
       bookValue,
       currentRoePct: 13,
-      analystImpliedRoePct: 13,
       costOfEquityPct: coe,
       years,
       payoutRatioPct: payout,
       dilutedShares: 100,
       marketCap: mcap,
     });
-    expect(solved.reverseSolve.impliedSteadyRoePct).not.toBeNull();
-    expect(solved.reverseSolve.impliedSteadyRoePct as number).toBeCloseTo(13, 2);
+
+    expect(solved.reverseSolve.impliedCurrentRoePct).not.toBeNull();
+    // 1 decimal: the bisection bracket is [0, 40], so the solver's own
+    // granularity is ~0.01pp — far finer than the displayed percentage.
+    expect(solved.reverseSolve.impliedCurrentRoePct as number).toBeCloseTo(13, 1);
+  });
+
+  it("solves to exactly the cost of equity for a company priced at book value", () => {
+    // The residual-income identity: zero excess return over the whole path means
+    // value == book. So an issuer trading at 1.0x book implies ROE == CoE. This
+    // is the property the old constant-ROE solve could not satisfy.
+    const solved = excessReturnModel({
+      bookValue: 1000,
+      currentRoePct: 13,
+      costOfEquityPct: 10,
+      years: 10,
+      payoutRatioPct: 50,
+      dilutedShares: 100,
+      marketCap: 1000,
+    });
+
+    expect(solved.reverseSolve.impliedCurrentRoePct as number).toBeCloseTo(10, 1);
+  });
+
+  it("implies a HIGHER starting ROE than the old flat-path solve for the same price", () => {
+    // A fading path is worth less than a flat one, so matching the same market
+    // cap requires more starting ROE. This is the direction of the correction.
+    const flat = excessReturnModel({
+      bookValue: 1000,
+      currentRoePct: 13,
+      analystImpliedRoePct: 13, // flat 13% path
+      costOfEquityPct: 10,
+      years: 10,
+      payoutRatioPct: 50,
+      dilutedShares: 100,
+    });
+    const solved = excessReturnModel({
+      bookValue: 1000,
+      currentRoePct: 13,
+      costOfEquityPct: 10,
+      years: 10,
+      payoutRatioPct: 50,
+      dilutedShares: 100,
+      marketCap: flat.equityValue as number,
+    });
+
+    expect(solved.reverseSolve.impliedCurrentRoePct as number).toBeGreaterThan(13);
   });
 
   it("uses NO WACC (equity-only) and flags implied P/B outside [0.3, 3]", () => {
@@ -1442,7 +1495,7 @@ describe("excessReturnModel (banks / insurers)", () => {
     expect(r.perShare).toBeNull();
     expect(r.impliedPToBv).toBeNull();
     expect(r.bookValuePath).toEqual([]);
-    expect(r.reverseSolve.impliedSteadyRoePct).toBeNull();
+    expect(r.reverseSolve.impliedCurrentRoePct).toBeNull();
     expect(
       r.gaps.some(
         (g) => g.field === "valuation.excessReturn.costOfEquity" && g.severity === "critical",

@@ -1733,7 +1733,7 @@ export interface ExcessReturnResult {
    * ROE via analystImpliedRoePct. Computed, never assumed.
    */
   terminalExcess: number | null;
-  reverseSolve: { impliedSteadyRoePct: number | null; notes: string[] };
+  reverseSolve: { impliedCurrentRoePct: number | null; notes: string[] };
   asOf: string | null;
   notes: string[];
   gaps: ManifestEntry[];
@@ -1796,7 +1796,7 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
       payoutRatioPct: { value: null, basis: "not built (no cost of equity)" },
       bookValuePath: [],
       terminalExcess: null,
-      reverseSolve: { impliedSteadyRoePct: null, notes: ["skipped: no cost of equity"] },
+      reverseSolve: { impliedCurrentRoePct: null, notes: ["skipped: no cost of equity"] },
       asOf: inputs.asOf ?? null,
       notes,
       gaps,
@@ -1817,7 +1817,7 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
       payoutRatioPct: { value: null, basis: "not built (no book value)" },
       bookValuePath: [],
       terminalExcess: null,
-      reverseSolve: { impliedSteadyRoePct: null, notes: ["skipped: no book value"] },
+      reverseSolve: { impliedCurrentRoePct: null, notes: ["skipped: no book value"] },
       asOf: inputs.asOf ?? null,
       notes,
       gaps,
@@ -1840,7 +1840,7 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
       payoutRatioPct: { value: null, basis: "not built (no payout history)" },
       bookValuePath: [],
       terminalExcess: null,
-      reverseSolve: { impliedSteadyRoePct: null, notes: ["skipped: no payout history"] },
+      reverseSolve: { impliedCurrentRoePct: null, notes: ["skipped: no payout history"] },
       asOf: inputs.asOf ?? null,
       notes,
       gaps,
@@ -1876,7 +1876,7 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
       payoutRatioPct: { value: payout, basis: payoutBasis },
       bookValuePath: [],
       terminalExcess: null,
-      reverseSolve: { impliedSteadyRoePct: null, notes: ["skipped: no current ROE"] },
+      reverseSolve: { impliedCurrentRoePct: null, notes: ["skipped: no current ROE"] },
       asOf: inputs.asOf ?? null,
       notes,
       gaps,
@@ -1902,26 +1902,46 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
     notes.push(`implied P/B ${fmtNum(impliedPToBv)} outside [0.3, 3] sanity band — review assumptions (house-rule flag)`);
   }
 
-  // Reverse solve: constant steady-state ROE matching market cap (monotone in ROE).
-  let impliedSteadyRoePct: number | null = null;
+  // Reverse solve: the STARTING ROE which, under this model's own competitive
+  // fade, reproduces the market cap. Monotone in the starting ROE.
+  //
+  // It previously held ROE CONSTANT for `years` and then stopped accruing
+  // residual income — neither a fade (what the forward model assumes) nor a
+  // perpetuity (what "steady state" promises), so it inverted no model at all.
+  // Two things make the fade the right choice rather than the Gordon closed
+  // form:
+  //   - Empirically, ROE mean-reverts toward the cost of capital (Fama-French
+  //     2000; Nissim-Penman 2001). A perpetual constant excess ROE is the
+  //     assumption the forward path explicitly refuses.
+  //   - grading.ts compares this number DIRECTLY against `roePathPct.value[0]`
+  //     (the current ROE) at 0.5 weight of the valuation aspect. That
+  //     subtraction is only meaningful if both sides are the same quantity —
+  //     a starting ROE under identical dynamics. Holding ROE constant made the
+  //     solved value systematically LOW (a flat path is worth more than a
+  //     fading one, so less ROE was needed to reach the price), which biased
+  //     every bank, insurer and mortgage REIT toward "market too pessimistic".
+  //
+  // A clean property follows: the model returns exactly book value when ROE
+  // equals the cost of equity, so an issuer priced at book solves to CoE.
+  let impliedCurrentRoePct: number | null = null;
   const mcap = posOrNull(inputs.marketCap);
   if (mcap === null) {
     reverseNotes.push("skipped: market cap not provided");
   } else {
     const [lo, hi] = REVERSE_ROE_RANGE_PCT;
     const f = (roe: number): number =>
-      excessReturnValue(bv0, Array.from({ length: years }, () => roe), coe, payout).equityValue - mcap;
+      excessReturnValue(bv0, fadePath(roe, coe, years), coe, payout).equityValue - mcap;
     const fLo = f(lo);
     const fHi = f(hi);
     if (fLo > 0) {
-      reverseNotes.push(`market cap below the ${lo}% ROE value — implied steady-state ROE < ${lo}%`);
+      reverseNotes.push(`market cap below the ${lo}% starting-ROE value — implied ROE < ${lo}%`);
     } else if (fHi < 0) {
-      reverseNotes.push(`market cap above the ${hi}% ROE value — implied steady-state ROE > ${hi}% (price not justifiable on book returns)`);
+      reverseNotes.push(`market cap above the ${hi}% starting-ROE value — implied ROE > ${hi}% (price not justifiable on book returns)`);
     } else {
       const root = bisect(f, { lo, hi, fLo, fHi }, mcap);
-      impliedSteadyRoePct = root;
+      impliedCurrentRoePct = root;
       if (root !== null) {
-        reverseNotes.push(`constant ROE over ${years} years (payout ${fmtNum(payout)}%, CoE ${fmtNum(coe)}%) matching market cap`);
+        reverseNotes.push(`starting ROE fading to CoE ${fmtNum(coe)}% over ${years} years (payout ${fmtNum(payout)}%) matching market cap — comparable to the current ROE, same dynamics as the forward path`);
       }
     }
   }
@@ -1945,7 +1965,7 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
     payoutRatioPct: { value: payout, basis: payoutBasis },
     bookValuePath,
     terminalExcess,
-    reverseSolve: { impliedSteadyRoePct, notes: reverseNotes },
+    reverseSolve: { impliedCurrentRoePct, notes: reverseNotes },
     asOf: inputs.asOf ?? null,
     notes,
     gaps,
@@ -2161,7 +2181,7 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
         ...er,
         perShare: null,
         reverseSolve: {
-          impliedSteadyRoePct: null,
+          impliedCurrentRoePct: null,
           notes: [
             ...er.reverseSolve.notes,
             `reverse solve suppressed: market cap is in ${erQuote} while book value is in ${erReported}`,

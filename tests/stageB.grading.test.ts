@@ -429,7 +429,7 @@ describe("grading — sector routing", () => {
         valuation: {
           kind: "excess-return",
           route: "bank",
-          excessReturn: { roePathPct: { value: [14, 12], basis: "" }, reverseSolve: { impliedSteadyRoePct: 10, notes: [] } } as never,
+          excessReturn: { roePathPct: { value: [14, 12], basis: "" }, reverseSolve: { impliedCurrentRoePct: 10, notes: [] } } as never,
           multiples: { multiples: [{ key: "priceToTbv", current: 1.3, basis: "", ownHistory: { percentileRank: 35, p5: null, p25: null, p50: null, p75: null, p95: null, observations: 10, basis: "" }, peers: null }], sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
           notes: [],
           gaps: [],
@@ -474,7 +474,7 @@ describe("grading — sector routing", () => {
     return {
       kind: "excess-return",
       route: "bank",
-      excessReturn: { roePathPct: { value: [curRoe, curRoe - 1], basis: "" }, reverseSolve: { impliedSteadyRoePct: impliedRoe, notes: [] } } as never,
+      excessReturn: { roePathPct: { value: [curRoe, curRoe - 1], basis: "" }, reverseSolve: { impliedCurrentRoePct: impliedRoe, notes: [] } } as never,
       multiples: { multiples: [{ key: "priceToTbv", current: 1.2, basis: "", ownHistory: { percentileRank: tbvPercentile, p5: null, p25: null, p50: null, p75: null, p95: null, observations: 10, basis: "" }, peers: null }], sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
       notes: [],
       gaps: [],
@@ -602,7 +602,7 @@ describe("grading — composite completeness excludes route-inapplicable evidenc
     return {
       kind: "excess-return",
       route: "bank",
-      excessReturn: { roePathPct: { value: [curRoe, curRoe - 1], basis: "" }, reverseSolve: { impliedSteadyRoePct: impliedRoe, notes: [] } } as never,
+      excessReturn: { roePathPct: { value: [curRoe, curRoe - 1], basis: "" }, reverseSolve: { impliedCurrentRoePct: impliedRoe, notes: [] } } as never,
       multiples: { multiples: [{ key: "priceToTbv", current: 1.2, basis: "", ownHistory: { percentileRank: tbvPercentile, p5: null, p25: null, p50: null, p75: null, p95: null, observations: 10, basis: "" }, peers: null }], sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
       notes: [],
       gaps: [],
@@ -704,7 +704,7 @@ describe("grading — bank moat never scores on suppressed gross margin (finding
       valuation: {
         kind: "excess-return",
         route: "bank",
-        excessReturn: { roePathPct: { value: [14, 13], basis: "" }, reverseSolve: { impliedSteadyRoePct: 10, notes: [] } } as never,
+        excessReturn: { roePathPct: { value: [14, 13], basis: "" }, reverseSolve: { impliedCurrentRoePct: 10, notes: [] } } as never,
         multiples: { multiples: [{ key: "priceToTbv", current: 1.2, basis: "", ownHistory: { percentileRank: 40, p5: null, p25: null, p50: null, p75: null, p95: null, observations: 10, basis: "" }, peers: null }], sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
         notes: [],
         gaps: [],

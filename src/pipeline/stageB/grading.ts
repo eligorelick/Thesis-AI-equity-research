@@ -583,10 +583,13 @@ export function computeScores(inputs: ScoringInputs): Scoring {
     valuationSignals.push({ name: "peOwnPercentile", raw: multiplePercentile(valuation, ["peTtm", "evToEbitda", "priceToFcf"]), unit: "pctile", weight: 0.3, band: MULTIPLE_PERCENTILE_BAND });
   } else if (valuation.kind === "excess-return") {
     const cur = valuation.excessReturn?.roePathPct?.value?.[0] ?? null; // current/achievable ROE (path start)
-    const implied = valuation.excessReturn?.reverseSolve?.impliedSteadyRoePct ?? null;
+    const implied = valuation.excessReturn?.reverseSolve?.impliedCurrentRoePct ?? null;
     // Match IMPLIED_VS_ACHIEVABLE_BAND's convention: (market-implied − achievable).
-    // When the market implies a LOWER steady-state ROE than the bank actually
-    // earns, it is too pessimistic ⇒ cheap ⇒ high score (negative input → high).
+    // When the market implies a LOWER starting ROE than the bank actually earns,
+    // it is too pessimistic ⇒ cheap ⇒ high score (negative input → high).
+    // Both sides are now the SAME quantity — a starting ROE that fades to the
+    // cost of equity — so the subtraction is apples-to-apples. It was not while
+    // the reverse solve held ROE constant.
     const impliedVsAchievable = isNum(cur) && isNum(implied) ? implied - cur : null;
     valuationSignals.push({ name: "roeImpliedVsAchievable", raw: impliedVsAchievable, unit: "pp", weight: 0.5, band: IMPLIED_VS_ACHIEVABLE_BAND });
     valuationSignals.push({ name: "priceToTbvPercentile", raw: multiplePercentile(valuation, ["priceToTbv", "priceToBook"]), unit: "pctile", weight: 0.5, band: MULTIPLE_PERCENTILE_BAND });

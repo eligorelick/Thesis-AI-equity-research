@@ -2,7 +2,11 @@
 
 **Date:** 2026-08-31
 
-**Status:** proposed; nothing here is started.
+**Status:** partially resolved. Tasks **B1** and **B3** are CLOSED — see
+[`../audits/2026-08-31-analytical-integrity-verification.md`](../audits/2026-08-31-analytical-integrity-verification.md)
+for the record. Tasks A1, A2 and B2 remain open; A1 is largely subsumed by that
+verification document. The per-task checklists below are left as written so the
+closure notes can be read against what was originally proposed.
 
 **Scope:** the work that repository audit/plan documents still list as required
 but which is genuinely not done, plus the repository-state items found while
@@ -126,7 +130,26 @@ record the result of actually trying it.
 These are not listed in any audit. They are recorded here because they affect
 whether the audited state is the state anyone else will see.
 
-### Task B1: Land the current working tree
+### Task B1: Land the current working tree — **CLOSED 2026-08-31**
+
+> **Resolution.** The working tree was landed, but NOT as this task proposed.
+> It had already been committed as a single 81-file commit (`7d4966c`,
+> "cleaning") and pushed to `origin/main` before the work below could be done,
+> so Steps 1–3 could not be applied to it: a pushed commit cannot be split
+> retroactively, and its message cannot carry the behaviour-change callouts.
+>
+> What was done instead: the change set was re-derived from
+> `git show 7d4966c` and reviewed as code (Step 1's intent), and every
+> subsequent change landed in small reviewable commits with the behaviour
+> changes stated in the message (Steps 2–3's intent). `npm run verify` was run
+> on the committed tree at every commit (Step 4).
+>
+> One of the three behaviour changes this task lists was also **stated
+> incorrectly** in it: the accrual suppression does not move
+> bank/insurer/mortgage-REIT grades downward. 78.97 → 75.07 is the
+> route-applicable *ceiling*, and lowering it RAISES completeness and therefore
+> REDUCES shrinkage toward 50 — good banks grade higher. See the verification
+> document.
 
 **Problem.** `git status --porcelain` reports 80 entries and `git log -1` is
 still `8ff1671`. Every fix and every document correction described in the
@@ -169,7 +192,25 @@ be resolved should say where it points.
       Option (a) is recommended.
 - [ ] **Step 2: Apply the chosen change and re-run the release contract test.**
 
-### Task B3: Decide the fate of the unmerged branches
+### Task B3: Decide the fate of the unmerged branches — **CLOSED 2026-08-31**
+
+> **Decision: both `codex/*` branches are SUPERSEDED and RETAINED. Neither is
+> to be merged; neither is deleted.**
+>
+> Step 2's concern — "a merge could silently revert a repaired invariant" — is
+> exactly what the evidence shows. `codex/financial-integrity` contains NONE of
+> the 38 defect fixes since verified on `main`, and `returns.ts:904` there
+> codifies the WRONG ROIC cash convention as a documented house rule. Conflicts
+> against `main` have grown from 15 files to 26 and now cover every core
+> analytical file.
+>
+> Its distinct themes (statement-currency provenance, forensic evidence
+> provenance, judgment-safety boundaries) are worth mining as individually
+> re-audited cherry-picks onto current `main` — never as a merge. Full evidence
+> in the verification document.
+>
+> Step 4 is done: the fully-merged `codex/audit-remediation` worktree has been
+> removed.
 
 **Problem.** `codex/financial-integrity` is 113 commits ahead of `main` and
 `codex/provider-temporal-integrity` is 24 ahead; both have `main` as an

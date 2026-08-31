@@ -704,7 +704,16 @@ const REJECT_BEFORE_RE = /(see|refer(?:s|red)?[\s]+to|described[\s]+in|discussed
 // "above|below" gets a TIGHT window: cross-references put it immediately after
 // the quoted title (MXC: «"Item 1A. Risk Factors" above»), while real headers
 // can legitimately say "The discussion below addresses..." (BAC F16) further out.
-const REJECT_AFTER_100_RE = /^[\s\S]{0,100}?\b((?:in|of)[\s]+this[\s]+(?:form|report|annual[\s]+report)|for[\s]+(?:a[\s]+)?discussion)\b/i;
+// Bound to the ITEM REFERENCE, not to a 100-character prose window. A
+// cross-reference attaches these words directly to the reference — «"Item 1A.
+// Risk Factors" in this Annual Report», «see Item 1A. Risk Factors for a
+// discussion of…» — so only quotes, brackets, punctuation and whitespace may
+// intervene. A REAL header is followed by a sentence, and the standard SEC
+// risk-factor preamble routinely reaches these same words within 100 chars
+// ("You should carefully consider the risks described below … in this Annual
+// Report on Form 10-K"), which used to reject the genuine header and leave the
+// item with zero candidates.
+const REJECT_AFTER_100_RE = /^[\s"'“”‘’)\](.,;:—–-]{0,12}\b((?:in|of)[\s]+this[\s]+(?:form|report|annual[\s]+report)|for[\s]+(?:a[\s]+)?discussion)\b/i;
 const REJECT_AFTER_10_RE = /^[\s\S]{0,10}?\b(above|below)\b/i;
 const REJECT_AFTER_60_RE = /^[\s\S]{0,60}?\bon[\s]+page[s]?[\s]+\d/i;
 

@@ -770,3 +770,51 @@ describe("parseTocEntries", () => {
     expect(entries[0].title).toContain("Discussion and Analysis");
   });
 });
+
+/**
+ * REJECT_AFTER_100_RE scanned a 100-character prose window after the item
+ * reference for "in this report" / "for a discussion". The standard SEC
+ * risk-factor preamble reaches those exact words well inside 100 characters,
+ * so a GENUINE Item 1A header was rejected as a cross-reference and the item
+ * was left with zero candidates. The marker is now bound to the reference
+ * itself: only quotes, punctuation and whitespace may intervene.
+ */
+describe("cross-reference rejection does not eat genuine headers", () => {
+  const RISK = { id: "1A", title: /Risk[\s]+Factors/i };
+
+  it("keeps a real Item 1A header whose preamble mentions this Annual Report", () => {
+    const text = [
+      "Item 1A. Risk Factors",
+      "",
+      "You should carefully consider the risks and uncertainties described below,",
+      "together with all of the other information included in this Annual Report on",
+      "Form 10-K, before deciding to invest in our common stock.",
+    ].join("\n");
+
+    expect(findHeaderCandidates(text, RISK).length).toBeGreaterThan(0);
+  });
+
+  it("keeps a real header whose preamble says 'for a discussion'", () => {
+    const text = [
+      "Item 1A. Risk Factors",
+      "",
+      "Our operations are subject to numerous risks. See the following pages for a",
+      "discussion of the principal factors affecting our business.",
+    ].join("\n");
+
+    expect(findHeaderCandidates(text, RISK).length).toBeGreaterThan(0);
+  });
+
+  it("still rejects a quoted cross-reference attached to the reference", () => {
+    const text =
+      'Additional detail appears under "Item 1A. Risk Factors" in this Annual Report on Form 10-K.';
+
+    expect(findHeaderCandidates(text, RISK)).toHaveLength(0);
+  });
+
+  it("still rejects a bare cross-reference followed by 'for a discussion'", () => {
+    const text = "See Item 1A. Risk Factors for a discussion of these matters.";
+
+    expect(findHeaderCandidates(text, RISK)).toHaveLength(0);
+  });
+});

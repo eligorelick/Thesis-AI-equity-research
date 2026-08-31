@@ -35,7 +35,7 @@ export interface FairValueInputs {
   /** Current price for upside %; null ⇒ upside unknown (never defaulted). */
   currentPrice: number | null;
   /** Currency label for the per-share unit. */
-  currency: string;
+  currency: string | null;
   asOf: string;
 }
 
@@ -54,6 +54,17 @@ function suppressed(reasons: ManifestEntry[], basis: string[]): FairValue {
     basis,
     reasons,
   };
+}
+
+/**
+ * Per-share unit label. The trading currency is NOT defaulted to USD: it
+ * becomes the printed unit, so assuming it would denominate a foreign issuer's
+ * figures in dollars on no evidence. Unknown reads as unknown.
+ */
+export function perShareUnit(currency: string | null): string {
+  return currency !== null && currency.trim().length > 0
+    ? `${currency}/share`
+    : "per share (currency unknown)";
 }
 
 export function computeFairValue(inputs: FairValueInputs): FairValue {
@@ -96,7 +107,7 @@ export function computeFairValue(inputs: FairValueInputs): FairValue {
 
   const perShare: TracedNumber = {
     value: round2(perShareValue),
-    unit: `${currency}/share`,
+    unit: perShareUnit(currency),
     // computed.* ⇒ the verify pass classifies this computed-derived (provenance,
     // not correctness). verified:true == "traced to computed inputs", the same
     // convention projections/scenarioTargets use — NOT a factual claim.

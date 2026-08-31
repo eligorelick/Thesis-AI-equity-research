@@ -36,6 +36,7 @@ import {
   type DcfYearRow,
   type ValuationResult,
 } from "@/pipeline/stageB/valuation";
+import { perShareUnit } from "@/pipeline/stageB/fairValue";
 import type { ManifestEntry } from "@/types/core";
 import type {
   Projections,
@@ -140,7 +141,7 @@ export interface ProjectionsInputs {
   /** Annualised share-count change (percent; negative = buybacks). */
   shareCountAnnualizedPct: number | null;
   /** Currency label for revenue/FCF/EPS units. */
-  currency: string;
+  currency: string | null;
   asOf: string;
 }
 
@@ -372,7 +373,9 @@ export function computeProjections(inputs: ProjectionsInputs): Projections {
   ];
 
   // --- Build series --------------------------------------------------------
-  const revUnit = currency;
+  // Absolute-currency series (revenue, FCF). Unknown currency must not silently
+  // read as USD downstream, so it is stated rather than defaulted.
+  const revUnit = currency !== null && currency.trim().length > 0 ? currency : "currency unknown";
   const series: ProjectionSeries[] = [];
 
   // Historical helpers (last up to 4 actual years, oldest→newest).
@@ -536,7 +539,7 @@ function buildEpsSeries(
     .slice(-4)
     .map((r) => ({ period: fyLabel(r.date), value: r.epsDiluted as number }));
 
-  const unit = `${inputs.currency}/share`;
+  const unit = perShareUnit(inputs.currency);
   const weighted = weightedPath(bull, base, bear);
   const mk = (arr: number[], scenario: string): ProjectionPoint[] =>
     arr.map((v, i) => point(fwdPeriod(i + 1), v, unit, "epsDiluted", scenario, asOf));

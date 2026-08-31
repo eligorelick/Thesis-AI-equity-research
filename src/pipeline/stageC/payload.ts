@@ -340,7 +340,20 @@ function quoteSection(bundle: DataBundle): PayloadSection {
 }
 
 /** Stage B computed-metrics sections — the analytical spine of the payload. */
-function computedSections(computed: ComputedMetrics): PayloadSection[] {
+/**
+ * @param reportingCurrency Statements' reportedCurrency. The provenance
+ * registry's single default is the profile TRADING currency, which is right for
+ * price-derived figures (last close, SMA, 52-week range, quote) but WRONG for
+ * anything derived from the statements. For an ADR the two differ, so a DCF
+ * per-share computed in the reporting currency was stamped as the trading one —
+ * contradicting the statement cells registered from the same numbers. Figures
+ * below tag their own currency where they know it; `registerFigure` honours
+ * `figure.currency ?? default`.
+ */
+function computedSections(
+  computed: ComputedMetrics,
+  reportingCurrency: string | null,
+): PayloadSection[] {
   const sections: PayloadSection[] = [];
   const g = computed.growth;
   const gAsOf = g.asOf;
@@ -416,7 +429,7 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
   // --- Capital -------------------------------------------------------------
   const cap = computed.capital;
   const capFigures: PayloadFigureInput[] = [
-    { label: "latest FCF", value: cap.fcf.latestFcf, unit: "currency", source: "computed.capital.fcf", asOf: cap.asOf },
+    { label: "latest FCF", value: cap.fcf.latestFcf, unit: "currency", currency: reportingCurrency, source: "computed.capital.fcf", asOf: cap.asOf },
     { label: "FCF conversion (latest)", value: cap.fcf.latestConversion, unit: "x", source: "computed.capital.fcf.conversion", asOf: cap.asOf },
     { label: "capex/revenue (latest)", value: cap.capexIntensity.latestPct, unit: "%", source: "computed.capital.capexIntensity", asOf: cap.asOf },
     { label: "capex/revenue slope", value: cap.capexIntensity.slopePctPtsPerYear, unit: "pp/yr", source: "computed.capital.capexIntensity", asOf: cap.asOf },
@@ -468,13 +481,13 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
   const valFigures: PayloadFigureInput[] = [{ label: "valuation model", value: val.kind, unit: "", source: "computed.valuation.kind", asOf: null }];
   if (val.kind === "dcf") {
     valFigures.push(
-      { label: "DCF per share", value: val.dcf?.perShare ?? null, unit: "currency/share", source: "computed.valuation.dcf", asOf: null },
+      { label: "DCF per share", value: val.dcf?.perShare ?? null, unit: "currency/share", currency: reportingCurrency, source: "computed.valuation.dcf", asOf: null },
       { label: "DCF terminal value share", value: val.dcf?.terminalShare ?? null, unit: "fraction", source: "computed.valuation.dcf.terminalShare", asOf: null },
       { label: "reverse-DCF implied revenue growth", value: val.reverseDcf?.impliedRevenueGrowthPct ?? null, unit: "%", source: "computed.valuation.reverseDcf", asOf: null },
       { label: "reverse-DCF implied terminal margin", value: val.reverseDcf?.impliedTerminalMarginPct ?? null, unit: "%", source: "computed.valuation.reverseDcf", asOf: null },
     );
   } else if (val.kind === "excess-return") {
-    valFigures.push({ label: "excess-return per share", value: val.excessReturn.perShare ?? null, unit: "currency/share", source: "computed.valuation.excessReturn", asOf: null });
+    valFigures.push({ label: "excess-return per share", value: val.excessReturn.perShare ?? null, unit: "currency/share", currency: reportingCurrency, source: "computed.valuation.excessReturn", asOf: null });
   } else if (val.kind === "reit") {
     valFigures.push(
       { label: "REIT P/FFO", value: val.reit.pToFfo ?? null, unit: "x", source: "computed.valuation.reit", asOf: val.reit.asOf },
@@ -576,8 +589,8 @@ function computedSections(computed: ComputedMetrics): PayloadSection[] {
     sections.push(payloadSection({
       title: "Runway (computed — pre-revenue/unprofitable overlay)",
       figures: [
-        { label: "avg quarterly burn", value: rw.avgQuarterlyBurn, unit: "currency", source: "computed.runway", asOf: rw.liquidAssetsAsOf },
-        { label: "liquid assets", value: rw.liquidAssets, unit: "currency", source: "computed.runway.liquidAssets", asOf: rw.liquidAssetsAsOf },
+        { label: "avg quarterly burn", value: rw.avgQuarterlyBurn, unit: "currency", currency: reportingCurrency, source: "computed.runway", asOf: rw.liquidAssetsAsOf },
+        { label: "liquid assets", value: rw.liquidAssets, unit: "currency", currency: reportingCurrency, source: "computed.runway.liquidAssets", asOf: rw.liquidAssetsAsOf },
         { label: "runway (quarters)", value: rw.runwayQuarters, unit: "quarters", source: "computed.runway", asOf: rw.liquidAssetsAsOf },
         { label: "estimated exhaustion date", value: rw.estimatedExhaustionDate, unit: "", source: "computed.runway", asOf: rw.liquidAssetsAsOf },
       ],
@@ -1348,7 +1361,7 @@ export function assembleContextPayload(
       industry: computed.route.evidence.industry,
     },
     quote: quoteSection(bundle),
-    computed: computedSections(computed),
+    computed: computedSections(computed, isoCurrency(firstRow(bundle.statements.incomeAnnual)?.reportedCurrency)),
     statements: statementExtracts(bundle),
     estimates: estimatesSection(bundle),
     peers: peersSection(bundle),

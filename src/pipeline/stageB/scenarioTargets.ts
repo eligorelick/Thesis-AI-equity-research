@@ -37,6 +37,7 @@ import {
   type ProjectionIncomeRow,
 } from "@/pipeline/stageB/projections";
 import type { CompanyRouteResult } from "@/pipeline/stageB/sectorRouting";
+import { perShareUnit } from "@/pipeline/stageB/fairValue";
 import type { ManifestEntry } from "@/types/core";
 import type { ScenarioTarget, ScenarioTargets, TracedNumber } from "@/report/schema";
 
@@ -60,7 +61,7 @@ export interface ScenarioTargetsInputs {
   /** Current price for upside %; null ⇒ upside unknown (never defaulted). */
   currentPrice: number | null;
   /** Currency label for the per-share unit. */
-  currency: string;
+  currency: string | null;
   asOf: string;
 }
 
@@ -206,7 +207,7 @@ export function computeScenarioTargets(inputs: ScenarioTargetsInputs): ScenarioT
 
   const tn = (name: ScenarioTarget["name"], value: number): TracedNumber => ({
     value: round2(value),
-    unit: `${currency}/share`,
+    unit: perShareUnit(currency),
     // computed.* ⇒ the verify pass classifies this computed-derived (provenance,
     // not correctness). verified:true == "traced to computed inputs", the same
     // convention projections.ts uses for its estimates — NOT a factual claim.

@@ -1007,7 +1007,13 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
       epsDiluted: num(r.epsDiluted),
     }),
   );
-  const projectionCurrency = str(profile?.currency) ?? "USD";
+  // Never default a currency. This used to be `?? "USD"`, and the value becomes
+  // the printed UNIT on the fair-value per-share and on every projection point
+  // (`${currency}/share`) — so an issuer whose profile carries no currency had
+  // its figures labelled US dollars on no evidence at all. That is the same
+  // false-denomination defect the report formatter was fixed for; a missing
+  // currency must read as unknown, not as USD.
+  const projectionCurrency = str(profile?.currency);
   const projections = computeProjections({
     route,
     valuation,

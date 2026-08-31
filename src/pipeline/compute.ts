@@ -1549,6 +1549,11 @@ function mergeQuarterly(
       operatingCashFlow: cf ? num(cf.operatingCashFlow) : null,
       capitalExpenditure: cf ? num(cf.capitalExpenditure) : null,
       totalStockholdersEquity: bal ? num(bal.totalStockholdersEquity) : null,
+      // House-EV components, so own-history EV matches the current definition.
+      totalDebt: bal ? num(bal.totalDebt) : null,
+      cashAndShortTermInvestments: bal ? num(bal.cashAndShortTermInvestments) : null,
+      preferredStock: bal ? num(bal.preferredStock) : null,
+      minorityInterest: bal ? num(bal.minorityInterest) : null,
     };
   });
 }

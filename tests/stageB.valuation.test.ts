@@ -790,6 +790,12 @@ describe("multiplesFramework", () => {
     operatingCashFlow: 6,
     capitalExpenditure: -1,
     totalStockholdersEquity: 100,
+    // House-EV components. The paired evHistory fixture has EV == market cap,
+    // i.e. zero net debt, so these reproduce it exactly.
+    totalDebt: 0,
+    cashAndShortTermInvestments: 0,
+    preferredStock: 0,
+    minorityInterest: 0,
   }));
   const flatEvHistory = (dates: readonly string[]): EnterpriseValuesRow[] => dates.map((date) => ({
     date,
@@ -1119,7 +1125,11 @@ describe("multiplesFramework", () => {
     const quarters = flatHistoryQuarters(27);
     const evRows = flatEvHistory(quarters.map((quarter) => quarter.date));
     for (let index = 0; index < 4; index++) {
-      evRows[index] = { ...evRows[index], enterpriseValue: null };
+      // EV is now built from the house components (mcap + debt + preferred +
+      // minority - cash), not the vendor `enterpriseValue`, so a window is made
+      // EV-unavailable by removing a COMPONENT. Market cap stays present, which
+      // is what keeps the equity-based multiples available.
+      quarters[index] = { ...quarters[index], totalDebt: null };
     }
 
     const r = multiplesFramework("general", {
@@ -1143,7 +1153,8 @@ describe("multiplesFramework", () => {
   it("chooses raw or vendor history per multiple when their usable counts differ", () => {
     const quarters = flatHistoryQuarters(11);
     const evRows = flatEvHistory(quarters.map((quarter) => quarter.date));
-    evRows[0] = { ...evRows[0], enterpriseValue: null };
+    // See above: EV availability is now a component question, not a vendor-field one.
+    quarters[0] = { ...quarters[0], totalDebt: null };
 
     const r = multiplesFramework("general", {
       ...baseInputs,
@@ -1196,7 +1207,8 @@ describe("multiplesFramework", () => {
     const quarters = flatHistoryQuarters(27);
     quarters[23] = { ...quarters[23], netIncome: null };
     const evRows = flatEvHistory(historyQuarterDates(27));
-    evRows[0] = { ...evRows[0], enterpriseValue: null };
+    // See above: EV availability is now a component question, not a vendor-field one.
+    quarters[0] = { ...quarters[0], totalDebt: null };
     const r = multiplesFramework("general", {
       ...baseInputs,
       quarterlyFundamentals: quarters,

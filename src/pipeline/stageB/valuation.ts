@@ -1195,6 +1195,17 @@ export interface QuarterlyFundamentalsRow {
   operatingCashFlow: number | null;
   capitalExpenditure: number | null;
   totalStockholdersEquity: number | null;
+  /**
+   * Balance components of the HOUSE enterprise value, so the own-history EV is
+   * built from the same definition as the current one. FMP's
+   * `enterpriseValue` omits preferred stock and minority interest and nets only
+   * cash, so ranking today's house EV against a history of vendor EVs compared
+   * two different quantities.
+   */
+  totalDebt?: number | null;
+  cashAndShortTermInvestments?: number | null;
+  preferredStock?: number | null;
+  minorityInterest?: number | null;
 }
 
 /** FMP /stable/enterprise-values row (quarterly history). */
@@ -1384,8 +1395,24 @@ function deriveOwnHistory(
     const ttmNi = sum((r) => r.netIncome);
     const ttmFcf = sum((r) => deriveFcf(r.operatingCashFlow, r.capitalExpenditure));
     const equity = window[0].totalStockholdersEquity;
-    const evVal = ev.enterpriseValue;
     const mcap = ev.marketCapitalization;
+    // Build the historical EV from the SAME components as the current one
+    // rather than trusting the vendor field, which omits preferred stock and
+    // minority interest and nets cash only. Ranking a house EV against a
+    // history of vendor EVs put a definitional gap into every EV percentile.
+    // Undisclosed preferred/minority are treated as 0, matching the current
+    // path's FMP convention; debt and cash are required, and when they are
+    // absent the EV-based multiples for this window are simply not produced
+    // (the equity-based ones below are unaffected because they use mcap).
+    const b = window[0];
+    const evVal =
+      isNum(mcap) && isNum(b.totalDebt) && isNum(b.cashAndShortTermInvestments)
+        ? mcap +
+          b.totalDebt +
+          (isNum(b.preferredStock) ? b.preferredStock : 0) +
+          (isNum(b.minorityInterest) ? b.minorityInterest : 0) -
+          b.cashAndShortTermInvestments
+        : null;
     const values: Partial<Record<MultipleKey, number | null>> = {
       evToSales: safeDiv(evVal, ttmRev),
       evToEbitda: safeDiv(evVal, posOrNull(ttmEbitda)),

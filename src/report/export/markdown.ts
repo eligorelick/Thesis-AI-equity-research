@@ -138,7 +138,7 @@ function tracedValue(n: TracedNumber): string {
   // appended) and rendered plain "usd" without magnitude scaling, so the same
   // value printed as $13,500,000,000.00 in Markdown and $13.50B everywhere
   // else.
-  return formatFinancialValue(n.value, n.unit);
+  return formatFinancialValue(n.value, n.unit, n.currency);
 }
 
 /** Signed percent for deltas (e.g. +7.3% / -4.0%). */

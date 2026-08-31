@@ -65,13 +65,38 @@ export function formatMultiple(value: number | null | undefined, digits = 1): st
   return `${value.toFixed(digits)}×`;
 }
 
-export function formatFinancialValue(value: number, unit: string): string {
+/**
+ * Render a monetary magnitude in its ACTUAL currency.
+ *
+ * The canonical unit is named "usd" for historical reasons, but the figure it
+ * carries is denominated in the statements' reportedCurrency — TWD for TSM, CHF
+ * for Nestlé. Printing those with a "$" is a false statement about the number,
+ * not a formatting nit. A non-USD code is appended (ISO-4217) rather than
+ * guessed at a symbol, because symbols are ambiguous across currencies ($ alone
+ * is used by a dozen of them).
+ *
+ * A null/absent currency keeps the dollar sign: `TracedNumber.currency` is
+ * documented as optional ONLY for legacy reports, so this is the legacy path,
+ * not a silent default for current data.
+ */
+function formatMoney(value: number, currency: string | null | undefined, large: boolean): string {
+  const magnitude = large ? formatLargeNumber(value) : formatNumber(value, 2);
+  const code = (currency ?? "").trim().toUpperCase();
+  if (code === "" || code === "USD") return `$${magnitude}`;
+  return `${magnitude} ${code}`;
+}
+
+export function formatFinancialValue(
+  value: number,
+  unit: string,
+  currency?: string | null,
+): string {
   const canonical = normalizeFinancialUnit(unit);
   switch (canonical) {
     case "percent": return formatPct(value);
     case "multiple": return formatMultiple(value);
-    case "usd": return Math.abs(value) >= 1e6 ? `$${formatLargeNumber(value)}` : formatCurrency(value);
-    case "usd-per-share": return formatCurrency(value);
+    case "usd": return formatMoney(value, currency, Math.abs(value) >= 1e6);
+    case "usd-per-share": return formatMoney(value, currency, false);
     case "large-count": return formatLargeNumber(value);
     case "basis-points": return `${formatNumber(value, 0)} bps`;
     case "years": return `${formatNumber(value, 1)}y`;
@@ -81,7 +106,7 @@ export function formatFinancialValue(value: number, unit: string): string {
 }
 
 export function formatTracedValue(number: TracedNumber): string {
-  return formatFinancialValue(number.value, number.unit);
+  return formatFinancialValue(number.value, number.unit, number.currency);
 }
 
 /** Format machine-oriented verification-log claims for human display. */

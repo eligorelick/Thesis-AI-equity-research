@@ -150,7 +150,7 @@ function num(v: number | null | undefined, digits = 2): string {
 }
 
 function tracedValue(n: TracedNumber): string {
-  return formatFinancialValue(n.value, n.unit);
+  return formatFinancialValue(n.value, n.unit, n.currency);
 }
 
 function signedPct(v: number | null | undefined, digits = 1): string {

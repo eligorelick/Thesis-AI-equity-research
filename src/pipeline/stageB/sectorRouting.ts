@@ -29,6 +29,14 @@ import type {
   SectorRoute,
 } from "@/types/core";
 import { deriveFcf } from "@/pipeline/stageB/financialValues";
+import { isFinancialForensicsSuppressed } from "@/pipeline/stageB/forensics";
+
+/**
+ * The signals `isFinancialForensicsSuppressed` nulls out in the forensic layer.
+ * Piotroski is deliberately NOT here: it is still computed for financials, with
+ * a validation-sample caveat (research §6.3).
+ */
+const FINANCIAL_FORENSIC_SIGNALS = ["altmanZ", "beneishM", "accrualsRatio"] as const;
 
 // ---------------------------------------------------------------------------
 // House-rule constants (every one of these is annotated in returned notes)
@@ -699,6 +707,19 @@ export function metricPolicy(route: SectorRoute | CompanyRoute): MetricPolicy {
 
   const suppress = new Set<string>(BASE_POLICIES[base].suppress);
   const lead: string[] = [...BASE_POLICIES[base].lead];
+  // The forensic batteries are suppressed by CLASSIFICATION, not by base route
+  // alone: `isFinancialForensicsSuppressed` also fires on sector "Financial
+  // Services" and on SIC 6000-6799. Those companies can still route to
+  // "general" (FIN-OTHER: asset managers, exchanges, brokers — sectorRouting
+  // sends them there deliberately), and the general policy suppresses nothing.
+  // Untagged, three signals the forensic layer REFUSES to compute still counted
+  // toward the quality aspect's applicable weight, so 43% of it was scored as
+  // phantom-missing data. Share the one predicate so the policy and the
+  // forensic layer cannot disagree. A bare SectorRoute carries no evidence to
+  // classify on, so it keeps the base policy unchanged.
+  if (typeof route !== "string" && isFinancialForensicsSuppressed(route)) {
+    for (const signal of FINANCIAL_FORENSIC_SIGNALS) suppress.add(signal);
+  }
   for (const overlay of overlays) {
     for (const s of OVERLAY_POLICIES[overlay].suppress) suppress.add(s);
     lead.push(...OVERLAY_POLICIES[overlay].lead);

@@ -173,7 +173,15 @@ describe("computeAltman — verified coefficients", () => {
     expect(r.gaps.some((g) => g.reason.includes("unclassified balance sheet"))).toBe(true);
   });
 
-  it("null retainedEarnings -> treated as 0 with an explicit caveat, score still computed", () => {
+  // CONTRACT CHANGED 2026-08-31. This previously asserted the research §1.5
+  // zero-fallback: retainedEarnings missing -> X2 = 0, score still computed.
+  // That fallback was withdrawn because it fails in the unsafe direction: X2
+  // carries the second-largest coefficient (1.4 original, 3.26 Z″), so a
+  // company with an accumulated DEFICIT — whose true X2 is strongly negative —
+  // was pushed TOWARD the safe zone by the substitution. Its only mitigation
+  // was a note, and runForensics was dropping this model's notes before they
+  // reached the report, so the "explicit caveat" was never shown to anyone.
+  it("null retainedEarnings -> Z-score suppressed, not scored with an assumed 0", () => {
     const r = computeAltman(
       {
         balance: {
@@ -189,10 +197,12 @@ describe("computeAltman — verified coefficients", () => {
       },
       "original",
     );
-    expect(r.score).not.toBeNull();
-    expect(r.components.x2).toBe(0);
-    expect(r.notes.some((n) => n.includes("treated as 0"))).toBe(true);
-    expect(r.gaps.some((g) => g.field === "forensics.altman.retainedEarnings")).toBe(true);
+    expect(r.score).toBeNull();
+    expect(r.zone).toBeNull();
+    expect(r.components.x2).toBeNull();
+    const gap = r.gaps.find((g) => g.field === "forensics.altman.retainedEarnings");
+    expect(gap).toBeDefined();
+    expect(gap?.severity).toBe("warn");
   });
 
   it("marketCap missing for the original variant -> null score + gap (no silent degrade)", () => {

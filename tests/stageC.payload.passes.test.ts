@@ -480,8 +480,15 @@ describe("payload determinism + provenance", () => {
       projectionPathPeriodHash: fnv1a32(JSON.stringify(projectionPathPeriodMatrix)),
       financeHash: fnv1a32(JSON.stringify(finance)),
     }).toEqual({
-      fingerprint: "1.3.0:4fd05db1",
-      promptBytes: 82_306,
+      // Changed 2026-08-31 (+1,580 prompt bytes): runForensics now aggregates
+      // the four models' own house-rule notes into ForensicsReport.notes,
+      // mirroring the gaps aggregation it already did. Those caveats — the
+      // Altman variant rationale and X4 clamp, Beneish/Piotroski/accruals
+      // thresholds — were previously dropped, so the Stage C passes reasoned
+      // about forensic scores without seeing the conditions attached to them.
+      // The larger prompt is the point of the fix, not a side effect.
+      fingerprint: "1.3.0:e19c3791",
+      promptBytes: 83_886,
       provenanceCount: 306,
       provenanceHash: "e02408ee",
       provenanceIdsHash: "1e316594",

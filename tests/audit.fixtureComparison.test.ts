@@ -68,6 +68,56 @@ const NEW_BALANCE_BASIS =
   "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)";
 
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
+  // Added 2026-08-31: runForensics now aggregates the four models' own
+  // house-rule notes into ForensicsReport.notes, mirroring the gaps
+  // aggregation it already performed. These caveats - the Altman variant
+  // rationale, the Z-double-prime X5 drop, the Hribar-Collins TATA
+  // construction, Beneish's one-sided detection, and Sloan's lack of a
+  // canonical bright line - were previously computed and then discarded, so
+  // neither the reader nor the Stage C passes ever saw the conditions
+  // attached to the forensic scores.
+  {
+    path: "stageB.forensics.notes.0",
+    beforeMissing: true,
+    after:
+      "House heuristic: no SIC code available — manufacturer status inferred from sector/industry strings (non-manufacturer → Z″).",
+  },
+  {
+    path: "stageB.forensics.notes.1",
+    beforeMissing: true,
+    after:
+      "X5 (sales/TA) is dropped by the Z″ model to remove industry asset-turnover effects.",
+  },
+  {
+    path: "stageB.forensics.notes.2",
+    beforeMissing: true,
+    after:
+      "TATA uses the cash-flow construction (NI from continuing ops − CFO)/TA_t (Hribar–Collins 2002); balance-sheet construction reported as diagnostic only.",
+  },
+  {
+    path: "stageB.forensics.notes.3",
+    beforeMissing: true,
+    after:
+      "Diagnostic balance-sheet TATA uses shortTermDebt as a proxy for current maturities of LTD (broader — includes notes payable).",
+  },
+  {
+    path: "stageB.forensics.notes.4",
+    beforeMissing: true,
+    after:
+      "The model detects overstatement, not understatement — a very negative M does not prove conservative accounting.",
+  },
+  {
+    path: "stageB.forensics.notes.5",
+    beforeMissing: true,
+    after:
+      "ΔLEVER: prior-year average TA proxied by end-of-year TA (no t−2 balance sheet) — annotated proxy.",
+  },
+  {
+    path: "stageB.forensics.notes.6",
+    beforeMissing: true,
+    after:
+      "House-rule bands: |ratio| < 10% unremarkable, 10–20% elevated, > 20% red flag (heuristic — Sloan 1996 is a decile-ranking result with no canonical bright line).",
+  },
   {
     path: "report.appendix.missingData.22.reason",
     before: "no SPY benchmark history supplied",

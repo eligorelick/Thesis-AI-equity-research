@@ -362,22 +362,27 @@ export function computeAltman(inputs: AltmanInputs, variant: AltmanVariant): Alt
     components.x1 = (ca - cl) / ta;
   }
 
-  // X2 — retained earnings / TA (null → 0 with explicit caveat, research §1.5)
-  let re = nv(b.retainedEarnings);
+  // X2 — retained earnings / TA. Absent is NOT zero. X2 carries the
+  // second-largest coefficient (1.4 original, 3.26 Z″), and a company with an
+  // accumulated DEFICIT has a strongly negative X2, so substituting 0 moves the
+  // score toward SAFE — the single direction a solvency screen must never fail
+  // in. The old zero-fallback's only mitigation was a note, and runForensics
+  // was discarding this model's notes before they reached the report, so the
+  // "explicit caveat" was never actually shown. Fail closed like every sibling
+  // component instead.
+  const re = nv(b.retainedEarnings);
   if (re === null) {
-    re = 0;
-    notes.push(
-      "retainedEarnings missing — treated as 0 for X2 (field-missing caveat; research §1.5 fallback).",
-    );
+    missing = true;
     gaps.push(
       gapEntry(
         "forensics.altman.retainedEarnings",
-        "retainedEarnings missing — X2 computed with 0",
-        "info",
+        "retainedEarnings missing — X2 not computable; Z-score suppressed rather than assuming zero retained earnings",
+        "warn",
       ),
     );
+  } else {
+    components.x2 = re / ta;
   }
-  components.x2 = re / ta;
 
   // X3 — EBIT / TA with fallback chain ebit → operatingIncome → NI + tax + interest
   let ebit = nv(inc.ebit);
@@ -1978,7 +1983,19 @@ export function runForensics(route: CompanyRoute, inputs: ForensicsInputs): Fore
     { periodsConsecutive: priorConsecutive },
   );
   const flags = [...support.flags];
-  notes.push(...support.notes);
+  // Mirror the gaps aggregation below. `notes` is the ONLY notes channel the
+  // report consumes, and taking just `support.notes` silently dropped every
+  // house-rule caveat the four models produce — the Altman variant rationale,
+  // its X4 clamp, Beneish/Piotroski/accruals thresholds — so a score could be
+  // published while the reason it was qualified was discarded.
+  notes.push(
+    ...support.notes,
+    ...altmanSelection.notes,
+    ...(altman?.notes ?? []),
+    ...(beneish?.notes ?? []),
+    ...(piotroski?.notes ?? []),
+    ...(accruals?.notes ?? []),
+  );
 
   // DSRI tie-in (research §5.1): surface receivables behavior even if M is benign.
   if (

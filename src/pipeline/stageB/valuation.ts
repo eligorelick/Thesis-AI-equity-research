@@ -2186,11 +2186,13 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
     typeof dcfIn.reportedCurrency === "string" &&
     typeof dcfIn.quoteCurrency === "string" &&
     dcfIn.reportedCurrency.toUpperCase() !== dcfIn.quoteCurrency.toUpperCase();
-  if (dcfIn === null || !isNum(inputs.waccPct)) {
-    gaps.push(
-      gapEntry("valuation.dcf", dcfIn === null ? "DCF inputs not provided by caller" : "WACC unavailable — DCF suppressed", "critical"),
-    );
-  } else if (dcfCurrencyMismatch) {
+  // Currency is checked FIRST because it is the root cause, not a symptom: an
+  // ADR's WACC is itself suppressed for the same mismatch (the equity weight
+  // would divide a quote-currency market cap by a reporting-currency debt
+  // balance), so testing `waccPct` first would report the generic "WACC
+  // unavailable" and hide the specific, actionable reason from the valuation
+  // section entirely.
+  if (dcfCurrencyMismatch) {
     notes.push(
       `ADR/currency mismatch: statements in ${dcfIn.reportedCurrency}, quote in ${dcfIn.quoteCurrency} — DCF, sensitivity grid and reverse DCF suppressed ` +
         `(per-share intrinsic value would be in ${dcfIn.reportedCurrency} against a ${dcfIn.quoteCurrency} price; no FX conversion attempted). ` +
@@ -2202,6 +2204,10 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
         `reportedCurrency ${dcfIn.reportedCurrency} != quote currency ${dcfIn.quoteCurrency} (ADR case) — DCF/reverse-DCF suppressed rather than comparing mixed-currency per-share vs price`,
         "critical",
       ),
+    );
+  } else if (dcfIn === null || !isNum(inputs.waccPct)) {
+    gaps.push(
+      gapEntry("valuation.dcf", dcfIn === null ? "DCF inputs not provided by caller" : "WACC unavailable — DCF suppressed", "critical"),
     );
   } else {
     const built = buildDcfAssumptions(dcfIn);

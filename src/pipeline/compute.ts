@@ -258,6 +258,9 @@ function toReturnsBalance(r: FmpBalanceSheetRow): ReturnsBalanceRow {
     totalDebt: num(r.totalDebt),
     totalStockholdersEquity: num(r.totalStockholdersEquity),
     cashAndCashEquivalents: num(r.cashAndCashEquivalents),
+    // Invested capital nets the same cash the house net-debt resolver does.
+    shortTermInvestments: num(r.shortTermInvestments),
+    cashAndShortTermInvestments: num(r.cashAndShortTermInvestments),
     totalAssets: num(r.totalAssets),
   };
 }
@@ -1120,6 +1123,10 @@ function computeReturns(
     analysisDate: isoDay(bundle.builtAt) ?? undefined,
     isFinancial,
     totalAssets: bal0 ? num(bal0.totalAssets) : null,
+    // ADR guard: market cap is quoted in the trading currency while totalDebt
+    // is a reporting-currency balance, so the E/D weights must not mix them.
+    reportedCurrency: str(ttmInc?.reportedCurrency ?? incomeAnnual[0]?.reportedCurrency),
+    quoteCurrency: str(profile?.currency),
     asOf: {
       riskFreeRate: rf.asOf ?? undefined,
       statements: isoDay(incomeAnnual[0]?.date) ?? undefined,

@@ -480,6 +480,9 @@ describe("payload determinism + provenance", () => {
       projectionPathPeriodHash: fnv1a32(JSON.stringify(projectionPathPeriodMatrix)),
       financeHash: fnv1a32(JSON.stringify(finance)),
     }).toEqual({
+      // Changed 2026-08-31 again: ROIC invested capital now nets cash +
+      // short-term investments, which moves financeHash/provenanceHash and the
+      // ROIC-derived figures in the prompt. See the audit fixture allowlist.
       // Changed 2026-08-31 (+1,580 prompt bytes): runForensics now aggregates
       // the four models' own house-rule notes into ForensicsReport.notes,
       // mirroring the gaps aggregation it already did. Those caveats — the
@@ -487,10 +490,10 @@ describe("payload determinism + provenance", () => {
       // thresholds — were previously dropped, so the Stage C passes reasoned
       // about forensic scores without seeing the conditions attached to them.
       // The larger prompt is the point of the fix, not a side effect.
-      fingerprint: "1.3.0:e19c3791",
-      promptBytes: 83_886,
+      fingerprint: "1.3.0:43251967",
+      promptBytes: 83_889,
       provenanceCount: 306,
-      provenanceHash: "e02408ee",
+      provenanceHash: "148db083",
       provenanceIdsHash: "1e316594",
       citationCount: 11,
       citationHash: "7ebe5276",
@@ -502,7 +505,7 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "642331a5",
+      financeHash: "1eaff9b5",
     });
   });
 

@@ -24,6 +24,7 @@
 
 import type { ManifestEntry } from "@/types/core";
 import { isFiniteNumber, sortNewestFirst } from "@/pipeline/stageB/growth";
+import { resolveNetDebt } from "@/pipeline/stageB/netDebt";
 
 // ---------------------------------------------------------------------------
 // SPREADS_2026_01 — Damodaran synthetic-rating spread table (verbatim)
@@ -181,6 +182,16 @@ export interface WaccInputs {
   isFinancial?: boolean;
   /** Latest totalAssets — enables the 2%-of-assets de-minimis debt test when provided. */
   totalAssets?: number | null;
+  /** Statements' reported currency (e.g. inc0.reportedCurrency). */
+  reportedCurrency?: string | null;
+  /**
+   * Trading currency of `marketCap` (e.g. profile.currency). When it differs
+   * from `reportedCurrency` — the ADR case — the equity weight would divide a
+   * quote-currency market cap by a reporting-currency debt balance, so the
+   * E/D mix is off by the FX rate. The weights are then suppressed rather than
+   * silently mixed; no FX conversion is attempted.
+   */
+  quoteCurrency?: string | null;
   /** Optional provenance passthrough (as-of dates of the inputs), echoed in the result. */
   asOf?: { riskFreeRate?: string; statements?: string; marketCap?: string };
 }
@@ -600,6 +611,41 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
       weightEquity: null,
       weightDebt: null,
     };
+  } else if (
+    typeof inputs.reportedCurrency === "string" &&
+    typeof inputs.quoteCurrency === "string" &&
+    inputs.reportedCurrency.toUpperCase() !== inputs.quoteCurrency.toUpperCase()
+  ) {
+    // ADR case. `mcap` is in the trading currency and `debtAvg` in the
+    // reporting currency, so E/(E+D) is off by the FX rate — and with it the
+    // WACC, the DCF discount rate, and the ROIC-vs-WACC spread. Suppress rather
+    // than publish a mixed-currency weighting; no FX conversion is attempted.
+    // Only reachable when debt exists: a debt-free issuer never touches mcap.
+    notes.push(
+      `ADR/currency mismatch: statements in ${inputs.reportedCurrency}, market cap in ${inputs.quoteCurrency} — ` +
+        "E/D weights would divide a quote-currency market cap by a reporting-currency debt balance; WACC suppressed " +
+        "(cost of equity and cost of debt are currency-free and remain reported).",
+    );
+    gaps.push({
+      field: "returns.wacc.weights.currency",
+      reason:
+        `reportedCurrency ${inputs.reportedCurrency} != quote currency ${inputs.quoteCurrency} (ADR case) — ` +
+        "market-value equity weight needs FX conversion (pending); WACC suppressed rather than mixing currencies",
+      severity: "critical",
+    });
+    return {
+      ...base,
+      waccPct: null,
+      waccRawPct: null,
+      costOfEquityPct: re,
+      costOfDebtPct,
+      costOfDebtMethod,
+      syntheticRating,
+      syntheticSpreadPct,
+      interestCoverageRatio,
+      weightEquity: null,
+      weightDebt: null,
+    };
   } else {
     weightEquity = mcap / (mcap + debtAvg);
     weightDebt = debtAvg / (mcap + debtAvg);
@@ -691,6 +737,10 @@ export interface ReturnsBalanceRow {
   totalDebt?: number | null;
   totalStockholdersEquity?: number | null;
   cashAndCashEquivalents?: number | null;
+  /** Short-term investments, so invested capital can net the same cash the house net-debt resolver does. */
+  shortTermInvestments?: number | null;
+  /** Vendor's combined cash + short-term investments; preferred when present. */
+  cashAndShortTermInvestments?: number | null;
   totalAssets?: number | null;
 }
 
@@ -763,7 +813,16 @@ function yearTaxRate(row: ReturnsIncomeRow, notes: string[]): number | null {
   return t;
 }
 
-/** Invested capital = totalDebt + totalStockholdersEquity − cash (research S2C definition). */
+/**
+ * Invested capital = totalDebt + totalStockholdersEquity − cash, which is
+ * exactly `netDebt + equity`. It therefore routes through the house net-debt
+ * resolver rather than open-coding a cash convention: netting
+ * cashAndCashEquivalents ALONE (the old behaviour) overstated invested capital
+ * by the short-term-investment balance for any issuer holding liquidity in
+ * T-bills or commercial paper, understating its ROIC — while the DCF's
+ * sales-to-capital and the valuation equity bridge netted cash + short-term
+ * investments. One company, two invested-capital definitions.
+ */
 function investedCapital(b: ReturnsBalanceRow, notes: string[]): number | null {
   if (!isFiniteNumber(b.totalStockholdersEquity)) {
     notes.push(`totalStockholdersEquity missing on ${b.date} — invested capital uncomputable`);
@@ -777,10 +836,31 @@ function investedCapital(b: ReturnsBalanceRow, notes: string[]): number | null {
     notes.push(`totalDebt is negative on ${b.date} — invested capital uncomputable`);
     return null;
   }
+
+  const resolution = resolveNetDebt({
+    date: b.date,
+    totalDebt: b.totalDebt,
+    cashAndCashEquivalents: b.cashAndCashEquivalents ?? null,
+    shortTermInvestments: b.shortTermInvestments ?? null,
+    cashAndShortTermInvestments: b.cashAndShortTermInvestments ?? null,
+  });
+  if (resolution.value !== null) {
+    return resolution.value + b.totalStockholdersEquity;
+  }
+
+  // Short-term investments are genuinely unreported. Cash alone is then the
+  // best available liquidity figure — no other metric has a better one either —
+  // so disclose the narrower basis rather than suppress a 0.35-weight quality
+  // signal. The defect this replaces was using cash-only even when short-term
+  // investments WERE reported, which overstated invested capital.
   if (!isFiniteNumber(b.cashAndCashEquivalents)) {
     notes.push(`cashAndCashEquivalents missing on ${b.date} — invested capital uncomputable`);
     return null;
   }
+  notes.push(
+    `short-term investments unreported on ${b.date} — invested capital nets cash only ` +
+      "(narrower than the house cash + short-term-investments basis)",
+  );
   return b.totalDebt + b.totalStockholdersEquity - b.cashAndCashEquivalents;
 }
 

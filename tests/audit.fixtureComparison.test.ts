@@ -68,6 +68,110 @@ const NEW_BALANCE_BASIS =
   "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)";
 
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
+  // Added 2026-08-31: ROIC invested capital now nets cash + short-term
+  // investments via the house net-debt resolver, instead of
+  // cashAndCashEquivalents alone. The DCF's sales-to-capital basis string
+  // (see OLD_BALANCE_BASIS above) already documented the cash + STI
+  // definition, so one company carried two invested-capital conventions and
+  // ROIC was understated for any issuer holding liquidity in T-bills or
+  // commercial paper. This fixture's invested capital falls 4.80bn -> 4.40bn
+  // and its ROIC rises 36.46% -> 40.06%, which flows into the ROIC-vs-WACC
+  // spread and the quality/moat/leadership aspects and the composite.
+  {
+    path: "report.scores.aspects.leadership.drivers.0.value",
+    before: 27.2,
+    after: 30.81,
+  },
+  {
+    path: "report.scores.aspects.moat.drivers.0.value",
+    before: 36.46,
+    after: 40.06,
+  },
+  {
+    path: "report.scores.aspects.moat.drivers.1.value",
+    before: 1.58,
+    after: 1.86,
+  },
+  {
+    path: "report.scores.aspects.moat.score",
+    before: 86.65,
+    after: 87.25,
+  },
+  {
+    path: "report.scores.aspects.quality.drivers.0.value",
+    before: 27.2,
+    after: 30.81,
+  },
+  {
+    path: "report.scores.composite.score",
+    before: 77.59,
+    after: 77.68,
+  },
+  {
+    path: "stageB.returns.roic.latestRoicPct",
+    before: 36.458333333333336,
+    after: 40.06410256410257,
+  },
+  {
+    path: "stageB.returns.roic.series.1.investedCapitalAvg",
+    before: 4800000000,
+    after: 4400000000,
+  },
+  {
+    path: "stageB.returns.roic.series.1.roicPct",
+    before: 33.30792682926829,
+    after: 36.33592017738359,
+  },
+  {
+    path: "stageB.returns.roic.series.2.investedCapitalAvg",
+    before: 5000000000,
+    after: 4550000000,
+  },
+  {
+    path: "stageB.returns.roic.series.2.roicPct",
+    before: 36.458333333333336,
+    after: 40.06410256410257,
+  },
+  {
+    path: "stageB.returns.roicVsWacc.note",
+    before: "spread = ROIC 36.4583% − WACC 9.2559% (positive = returns above cost of capital)",
+    after: "spread = ROIC 40.0641% − WACC 9.2559% (positive = returns above cost of capital)",
+  },
+  {
+    path: "stageB.returns.roicVsWacc.spreadPctPts",
+    before: 27.202387333333334,
+    after: 30.808156564102568,
+  },
+  {
+    path: "stageB.scores.aspects.leadership.drivers.0.value",
+    before: 27.2,
+    after: 30.81,
+  },
+  {
+    path: "stageB.scores.aspects.moat.drivers.0.value",
+    before: 36.46,
+    after: 40.06,
+  },
+  {
+    path: "stageB.scores.aspects.moat.drivers.1.value",
+    before: 1.58,
+    after: 1.86,
+  },
+  {
+    path: "stageB.scores.aspects.moat.score",
+    before: 86.65,
+    after: 87.25,
+  },
+  {
+    path: "stageB.scores.aspects.quality.drivers.0.value",
+    before: 27.2,
+    after: 30.81,
+  },
+  {
+    path: "stageB.scores.composite.score",
+    before: 77.59,
+    after: 77.68,
+  },
   // Added 2026-08-31: runForensics now aggregates the four models' own
   // house-rule notes into ForensicsReport.notes, mirroring the gaps
   // aggregation it already performed. These caveats - the Altman variant

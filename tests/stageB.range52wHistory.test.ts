@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { range52w } from "@/pipeline/stageB/technicals";
+import { maxDrawdown, range52w } from "@/pipeline/stageB/technicals";
 import { metricPolicy } from "@/pipeline/stageB/sectorRouting";
 
 /**
@@ -84,5 +84,38 @@ describe("the recent-ipo 52-week suppression is actually wired", () => {
     expect(recentIpo.suppress).toContain("fiftyTwoWeekRange");
     // A seasoned issuer is still scored on its 52-week position.
     expect(metricPolicy("general").suppress).not.toContain("fiftyTwoWeekRange");
+  });
+});
+
+/**
+ * `maxDrawdown`'s insufficient-history guard compared rows[0].date to an exact
+ * cutoff with no tolerance. The EOD price fetch window is exactly 5 years, so
+ * the first available bar can never precede a 5-year cutoff and the 5y guard
+ * was structurally ALWAYS true — every report emitted a false
+ * `technicals.drawdown.5y` gap, which is noise that trains the reader to
+ * ignore real ones.
+ */
+describe("maxDrawdown's history guard tolerates the exact fetch window", () => {
+  it("does not flag insufficient history for a full 5-year window", () => {
+    // Exactly five years of bars, as the EOD fetch supplies.
+    const rows = [];
+    const end = Date.parse("2026-06-30T00:00:00Z");
+    for (let d = Math.round(5 * 365.25); d >= 0; d -= 5) {
+      const iso = new Date(end - d * 86_400_000).toISOString().slice(0, 10);
+      rows.push({ date: iso, open: 100, high: 101, low: 99, close: 100, volume: 1000 });
+    }
+
+    expect(maxDrawdown(rows, 5).insufficientHistory).toBe(false);
+  });
+
+  it("still flags a genuinely short window", () => {
+    const rows = [];
+    const end = Date.parse("2026-06-30T00:00:00Z");
+    for (let d = 400; d >= 0; d -= 5) {
+      const iso = new Date(end - d * 86_400_000).toISOString().slice(0, 10);
+      rows.push({ date: iso, open: 100, high: 101, low: 99, close: 100, volume: 1000 });
+    }
+
+    expect(maxDrawdown(rows, 5).insufficientHistory).toBe(true);
   });
 });

@@ -983,7 +983,18 @@ export function maxDrawdown(rows: readonly OhlcvRow[], windowYears: number): Dra
   if (rows.length === 0 || windowYears <= 0) return empty;
   const last = rows[rows.length - 1];
   const cutoff = shiftMonths(last.date, -Math.round(windowYears * 12));
-  const insufficientHistory = rows[0].date > cutoff;
+  // Apply the same weekend/holiday allowance range52w uses. Without it the
+  // 5-year guard was structurally ALWAYS true: the EOD price fetch window is
+  // exactly 5 years, so the first available bar can never precede a 5-year
+  // cutoff, and every report emitted a false `technicals.drawdown.5y`
+  // insufficient-history gap. The tolerance applies to the GUARD only — the
+  // window filter still uses the exact cutoff.
+  const toleratedStart = new Date(
+    Date.parse(`${cutoff}T00:00:00Z`) + RANGE_52W_START_TOLERANCE_DAYS * CALENDAR_DAY_MS,
+  )
+    .toISOString()
+    .slice(0, 10);
+  const insufficientHistory = rows[0].date > toleratedStart;
   const win = rows.filter((r) => r.date >= cutoff);
   if (win.length === 0) return { ...empty, asOf: last.date };
   let peak = Number.NEGATIVE_INFINITY;
@@ -1280,7 +1291,10 @@ export function computeTechnicals(
     });
   }
   for (const dd of drawdowns) {
-    if (dd.insufficientHistory && dd.windowYears > 1) {
+    // The 1-year window was excluded from this disclosure, yet it is the ONLY
+    // window whose depth becomes a published flag (the deep-drawdown flag), so
+    // it is precisely the one whose short history the reader must be told about.
+    if (dd.insufficientHistory) {
       gaps.push({
         field: `technicals.drawdown.${dd.windowYears}y`,
         reason: `history does not span the full ${dd.windowYears}-year window — drawdown computed over available rows only`,

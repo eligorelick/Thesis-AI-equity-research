@@ -157,8 +157,20 @@ export function normalizeQuarterRows<T extends FiscalDatedRow>(
 }
 
 /** Return why a newest-first window is not exactly four contiguous quarters. */
+/**
+ * @param priorRow The period-end immediately BEFORE the window, when the caller
+ * has it. The gap checks below validate the three intervals BETWEEN the four
+ * rows, which proves the window's internal spacing but says nothing about the
+ * duration of the OLDEST quarter itself — that is the interval from the period
+ * before it. A transition or stub period sitting in the oldest slot therefore
+ * entered the TTM sum unchecked, understating every trailing-twelve-month
+ * figure built on it. Supplying the prior row closes that hole; omitting it
+ * preserves the previous behaviour for callers that genuinely have no earlier
+ * row (the start of history).
+ */
 export function quarterWindowViolation(
   rows: readonly { date?: unknown }[],
+  priorRow?: { date?: unknown } | null,
 ): string | null {
   if (rows.length !== 4) return `quarter window must contain exactly 4 rows (received ${rows.length})`;
 
@@ -181,6 +193,25 @@ export function quarterWindowViolation(
     }
     if (gapDays < QUARTER_GAP_DAYS[0] || gapDays > QUARTER_GAP_DAYS[1]) {
       return `non-contiguous quarters: ${gapDays}-day gap between ${older.label} and ${newer.label} (accepted ${QUARTER_GAP_DAYS[0]}–${QUARTER_GAP_DAYS[1]} for 52/53-week calendars)`;
+    }
+  }
+
+  // Duration of the OLDEST quarter in the window, which the loop above cannot
+  // see. Only checked when the caller supplied the preceding period.
+  if (priorRow !== undefined && priorRow !== null) {
+    const oldest = parsed[parsed.length - 1];
+    const before = strictFiscalDay(priorRow.date);
+    if (before) {
+      const gapDays = (oldest.epochMs - before.epochMs) / DAY_MS;
+      if (gapDays === 0) return `duplicate quarter period-end ${oldest.label}`;
+      // Only a TOO-SHORT interval is disqualifying. A short span means the
+      // oldest slot covers less than a quarter — a transition or stub period
+      // whose value understates the TTM sum. A LONG interval means the earlier
+      // history is simply missing, which says nothing about the oldest
+      // quarter's own duration and must not reject an otherwise sound window.
+      if (gapDays > 0 && gapDays < QUARTER_GAP_DAYS[0]) {
+        return `oldest quarter ${oldest.label} spans only ${gapDays} days from ${before.label} (a quarter is ${QUARTER_GAP_DAYS[0]}–${QUARTER_GAP_DAYS[1]} days) — a transition/stub period would understate the TTM sum`;
+      }
     }
   }
 
@@ -208,7 +239,8 @@ export function contiguousQuarterWindows<T extends { date?: unknown }>(
 
   for (let index = 0; index + 4 <= rows.length && windows.length < limit; index++) {
     const window = rows.slice(index, index + 4);
-    const violation = quarterWindowViolation(window);
+    // rows is newest-first, so the period BEFORE the window is the next element.
+    const violation = quarterWindowViolation(window, rows[index + 4] ?? null);
     if (violation === null) {
       windows.push(window);
     } else {

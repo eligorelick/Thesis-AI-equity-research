@@ -246,3 +246,40 @@ describe("contiguousQuarterWindows", () => {
     expect(contiguousQuarterWindows(input, 0)).toEqual({ windows: [], rejected: [] });
   });
 });
+
+/**
+ * The gap checks validate the three intervals BETWEEN a window's four rows,
+ * which proves internal spacing but says nothing about the duration of the
+ * OLDEST quarter — that is the interval from the period before it. A
+ * transition or stub period sitting in the oldest slot therefore entered the
+ * TTM sum unchecked and understated every trailing-twelve-month figure.
+ */
+describe("the oldest quarter's own duration is validated when the prior row is known", () => {
+  const row = (date: string) => ({ date });
+
+  it("rejects a window whose oldest slot is a short transition period", () => {
+    // 2025-02-28 sits only ~59 days after 2024-12-31: a stub, not a quarter.
+    const window = [row("2025-11-30"), row("2025-08-31"), row("2025-05-31"), row("2025-02-28")];
+
+    expect(quarterWindowViolation(window, row("2024-12-31"))).toMatch(/stub|transition|spans only/i);
+  });
+
+  it("accepts the same window when the prior row is a normal quarter", () => {
+    const window = [row("2025-12-31"), row("2025-09-30"), row("2025-06-30"), row("2025-03-31")];
+
+    expect(quarterWindowViolation(window, row("2024-12-31"))).toBeNull();
+  });
+
+  it("does NOT reject when earlier history is merely missing", () => {
+    // A distant prior row means absent history, not a short quarter.
+    const window = [row("2025-12-31"), row("2025-09-30"), row("2025-06-30"), row("2025-03-31")];
+
+    expect(quarterWindowViolation(window, row("2022-12-31"))).toBeNull();
+  });
+
+  it("is unchanged when no prior row is supplied", () => {
+    const window = [row("2025-12-31"), row("2025-09-30"), row("2025-06-30"), row("2025-03-31")];
+
+    expect(quarterWindowViolation(window)).toBeNull();
+  });
+});

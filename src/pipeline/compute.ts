@@ -559,7 +559,9 @@ function ttmIncomeFromNormalized(
   const q = normalized.rows.slice(0, 4);
 
   // Contiguity gate (audit M1): a non-TTM window must never be labeled TTM.
-  const violation = quarterWindowViolation(q);
+  // The 5th row (when present) lets the gate check the OLDEST quarter's own
+  // duration, so a transition/stub period cannot enter the TTM sum unchecked.
+  const violation = quarterWindowViolation(q, normalized.rows[4] ?? null);
   if (violation !== null) {
     gaps?.push({
       field: "compute.ttmIncome",

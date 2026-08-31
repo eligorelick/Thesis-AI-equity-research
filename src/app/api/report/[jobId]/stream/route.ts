@@ -48,6 +48,26 @@ function streamHeaders(): Record<string, string> {
   };
 }
 
+/**
+ * Next answers HEAD by running GET and dropping the body, which for this route
+ * would build the stream, register a job subscriber and arm the poll/heartbeat
+ * timers that a bodiless response never cancels. Handle HEAD explicitly so a
+ * probe allocates nothing: same status and headers, no body, no subscription.
+ */
+export async function HEAD(
+  _request: Request,
+  { params }: { params: Promise<{ jobId: string }> },
+): Promise<Response> {
+  const { jobId } = await params;
+  if (!jobExists(jobId)) {
+    return new Response(null, {
+      status: 404,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return new Response(null, { status: 200, headers: streamHeaders() });
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ jobId: string }> },

@@ -175,7 +175,13 @@ export function runCorrectedExport({
 
     fs.mkdirSync(path.dirname(outputHtml), { recursive: true });
     fs.writeFileSync(outputHtml, reportToPrintHtml(validated), "utf8");
-    const outputJson = outputHtml.replace(/\.html?$/i, ".json");
+    // Replacing an .html/.htm suffix only works when there is one. Without this
+    // guard an `--out` like "corrected-report" makes the replace a no-op, so the
+    // JSON write lands on the path the HTML was just written to and destroys the
+    // HTML deliverable the summary still advertises.
+    const outputJson = /\.html?$/i.test(outputHtml)
+      ? outputHtml.replace(/\.html?$/i, ".json")
+      : `${outputHtml}.json`;
     fs.writeFileSync(
       outputJson,
       `${JSON.stringify(validated, null, 2)}\n`,

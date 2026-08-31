@@ -1169,6 +1169,22 @@ export class FmpClient {
           const identityError = validateEntityBody(body, expectedEntityScope, true);
           if (identityError !== null) throw new FmpEntityIdentityError(identityError);
         }
+        // Prove the endpoint contract BEFORE the body reaches the cache. These
+        // same checks also run after retrieval (defense in depth for a legacy or
+        // corrupted row), but running them only there meant a schema-drifted
+        // 200 was already stored and then served as fresh for the full TTL —
+        // and, being non-empty, it also overwrote the last-good row.
+        // A legitimately empty response is NOT drift and stays cacheable.
+        if (Array.isArray(body) && body.some((row) => !isRecord(row))) {
+          throw new FmpSchemaError(
+            `FMP provider schema drift in ${spec.method}: response array contains a non-object row`,
+          );
+        }
+        const admitted = normalizeRows<TRow>(body, spec.allowObjectBody === true);
+        if (admitted.length > 0) {
+          const admittedValidation = validateCriticalRows<TRow>(spec.method, admitted);
+          if (!admittedValidation.ok) throw new FmpSchemaError(admittedValidation.reason);
+        }
         return {
           body,
           status: res.status,
@@ -1184,6 +1200,9 @@ export class FmpClient {
         return gap(spec.gapField, `FMP error (HTTP ${err.status}): ${err.message}`, "warn", [endpointPath]);
       }
       if (err instanceof FmpBodyParseError) {
+        return gap(spec.gapField, err.message, "warn", [endpointPath]);
+      }
+      if (err instanceof FmpSchemaError) {
         return gap(spec.gapField, err.message, "warn", [endpointPath]);
       }
       if (err instanceof HttpTransportError) throw err; // hard transport failure after retries
@@ -2076,6 +2095,20 @@ class FmpEntityIdentityError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "FmpEntityIdentityError";
+  }
+}
+
+/**
+ * Schema drift detected INSIDE the cache loader, so a body that fails its
+ * endpoint contract is never admitted to memory or SQLite. Thrown rather than
+ * returned for the same reason `FmpApiError` is: a throw aborts admission,
+ * whereas a return would hand the payload to the cache first and only reject it
+ * afterwards — leaving a poisoned row to be served as fresh for the whole TTL.
+ */
+class FmpSchemaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FmpSchemaError";
   }
 }
 

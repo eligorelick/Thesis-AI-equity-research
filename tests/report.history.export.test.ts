@@ -46,6 +46,7 @@ import {
   FRED_ATTRIBUTION_TEXT,
 } from "@/report/export/markdown";
 import { reportToPrintHtml } from "@/report/export/printHtml";
+import { formatFinancialValue } from "@/report/format";
 import {
   listReportsForSymbol,
   listRunRefsForSymbol,
@@ -555,7 +556,10 @@ describe("reportToMarkdown", () => {
     const eps = reordered.projections!.series.find((series) => series.metric === "epsDiluted")!;
     reordered.projections!.series = [eps, revenue, fcf, duplicateRevenue, operatingMargin];
     const paths = ["bull", "base", "bear", "weighted"] as const;
-    const fmt = (value: number) => `$${value.toFixed(2)}`;
+    // This test pins ORDERING (period-joined forward paths), not number
+    // formatting, so defer to the canonical formatter the export now shares
+    // with the on-screen and print surfaces rather than restating it here.
+    const fmt = (value: number) => formatFinancialValue(value, "USD");
     const expectedByPath = Object.fromEntries(paths.map((projectionPath, pathIndex) => {
       const byPeriod = new Map<string, string>();
       revenue[projectionPath].forEach((point, index) => {
@@ -602,7 +606,7 @@ describe("reportToMarkdown", () => {
       ].join(" | ").trim());
     }
     expect(revenueBlock.split("\n").find((line) => line.startsWith("| FY2099 |"))).toBe(
-      ["", "FY2099", "\u2014", "\u2014", "\u2014", "$2099.00", ""].join(" | ").trim(),
+      ["", "FY2099", "\u2014", "\u2014", "\u2014", fmt(2_099), ""].join(" | ").trim(),
     );
 
     const printed = reportToPrintHtml(reordered);
@@ -622,12 +626,11 @@ describe("reportToMarkdown", () => {
     expect(printed).toContain("<th>Bull</th><th>Base</th><th>Bear</th><th>Weighted</th>");
     expect(printed).toContain("FY2099");
     expect(printed).toContain("$2,099.00");
-    const printFmt = (value: string | undefined) => value === undefined
-      ? undefined
-      : `$${Number(value.slice(1)).toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`;
+    // The Markdown export and the print HTML now share one canonical financial
+    // formatter, so a figure renders identically on both surfaces. This used to
+    // re-parse the Markdown string and re-group it for print; that conversion is
+    // exactly the divergence that was removed.
+    const printFmt = (value: string | undefined) => value;
     for (const period of [...expectedByPath.base.keys()].sort()) {
       const row = printed.match(new RegExp(`<tr>(?:(?!</tr>)[\\s\\S])*?${period}(?:(?!</tr>)[\\s\\S])*?</tr>`))?.[0];
       expect(row, period).toBeDefined();

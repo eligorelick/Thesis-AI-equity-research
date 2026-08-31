@@ -672,6 +672,60 @@ function checkStaleness(bundle: ValidatableBundle, now: Date, c: Collector): voi
     });
   }
 
+  // -- fundamentals cache freshness --------------------------------------------
+  // The cadence check above measures the newest fiscal PERIOD END, which says
+  // nothing about whether those rows came from a stale-while-revalidate cache.
+  // A report can therefore be built entirely from stale cache rows whose fiscal
+  // periods are recent and read as fresh. Report the envelopes' own stale state
+  // separately, exactly as the quote check below already does.
+  const statementEnvelopes: readonly { label: string; res: FetchResult<unknown> }[] = [
+    { label: "incomeAnnual", res: bundle.statements.incomeAnnual },
+    { label: "incomeQuarterly", res: bundle.statements.incomeQuarterly },
+    { label: "balanceAnnual", res: bundle.statements.balanceAnnual },
+  ];
+  // Fixture-mode envelopes carry stale:true as a synthetic "never current data"
+  // marker, not a cache-TTL overrun; demo mode already discloses itself through
+  // the "[FIXTURE]" endpoint annotation and the synthetic-mode banners. Judging
+  // them here would report a cache failure for data that was never cached.
+  const isFixtureEnvelope = (res: FetchResult<unknown>): boolean =>
+    res.ok && typeof res.value.endpoint === "string" && res.value.endpoint.startsWith("[FIXTURE]");
+  const availableEnvelopes = statementEnvelopes.filter(
+    (entry) => entry.res.ok && !isFixtureEnvelope(entry.res),
+  );
+  if (availableEnvelopes.length === 0) {
+    c.checks.push({
+      id: "staleness.fundamentalsCache",
+      name: "Fundamentals cache freshness",
+      status: "skipped",
+      detail: "no statement envelope was available",
+    });
+  } else {
+    const staleLabels = availableEnvelopes
+      .filter((entry) => entry.res.ok && entry.res.value.stale === true)
+      .map((entry) => entry.label);
+    c.checks.push({
+      id: "staleness.fundamentalsCache",
+      name: "Fundamentals cache freshness",
+      status: staleLabels.length > 0 ? "fail" : "pass",
+      detail:
+        staleLabels.length > 0
+          ? `served past TTL (stale-while-revalidate): ${staleLabels.join(", ")}`
+          : `all ${availableEnvelopes.length} statement envelopes served fresh`,
+    });
+    if (staleLabels.length > 0) {
+      c.flags.push(
+        `STALE FUNDAMENTALS CACHE: ${bundle.symbol} ${staleLabels.join(", ")} served past TTL — the figures may predate the newest filing.`,
+      );
+      c.gaps.push(
+        gapEntry(
+          "validation.staleness.fundamentalsCache",
+          `statement envelopes served from a stale cache (${staleLabels.join(", ")}) — fiscal-period recency alone does not prove freshness`,
+          "warn",
+        ),
+      );
+    }
+  }
+
   // -- quote --------------------------------------------------------------------
   if (bundle.quote.ok) {
     const q = bundle.quote.value;

@@ -9,12 +9,13 @@
 
 import "server-only";
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import { getDb } from "@/db";
 import { reports } from "@/db/schema";
 import type { Report } from "@/report/schema";
 import { parseStoredReport } from "@/report/history";
+import { canonicalEntitySymbol } from "@/symbol";
 
 export interface LatestReport {
   reportId: number;
@@ -35,10 +36,20 @@ export interface LatestReport {
  * exists. Never throws on a malformed row: `report` is null in that case.
  */
 export function getLatestDoneReport(symbol: string): LatestReport | null {
+  // Match `listReportsForSymbol`: fold case and the dot/hyphen share-class alias
+  // in SQL. Raw equality here made History list a report that this lookup — the
+  // one the company page and the watchlist row use — reported as missing.
+  const canonical = canonicalEntitySymbol(symbol);
+  if (canonical === null) return null;
   const row = getDb()
     .select()
     .from(reports)
-    .where(and(eq(reports.symbol, symbol), eq(reports.status, "done")))
+    .where(
+      and(
+        sql`upper(replace(${reports.symbol}, '-', '.')) = ${canonical}`,
+        eq(reports.status, "done"),
+      ),
+    )
     .orderBy(desc(reports.createdAt), desc(reports.id))
     .limit(1)
     .get();

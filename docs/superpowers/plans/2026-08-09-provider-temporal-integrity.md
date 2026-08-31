@@ -2,6 +2,25 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status: all eight defects fixed on `main` (2026-08-31), by a different
+> implementation than this plan prescribes.** Each defect in Scope is closed and
+> covered by a regression test; see the "Second pass" table in
+> [`../audits/2026-08-30-code-and-docs-audit.md`](../audits/2026-08-30-code-and-docs-audit.md).
+>
+> The repairs were made at the same boundaries this plan identifies, but the
+> named artifacts below were NOT created: there is no `fmpLiveExchangeProblem`
+> and no `validateValue` cache option. FMP instead proves its endpoint contract
+> inside the existing `cachedFetch` loader and throws `FmpSchemaError`, which
+> mirrors how `validateEntityBody` already kept wrong-symbol bodies out of the
+> cache. EDGAR JSON uses the transport's existing `validateBody` hook via
+> per-operation validators, and the eligible-fact resolver is
+> `latestEligibleFactEnd` in `src/edgar/xbrl.ts`. Read the task steps below as
+> the original design intent, not as a description of the shipped code.
+>
+> The unmerged branch `codex/provider-temporal-integrity` contains an
+> independent implementation of the same workstream; it is no longer needed to
+> close these defects, though it may still carry other work.
+
 **Goal:** Admit provider data only after entity, schema, domain, cache, and observation-time validation, while preserving typed gaps and valid stale fallback behavior.
 
 **Architecture:** Keep the existing `FetchResult`, `Sourced`, provider-client, and generic cache boundaries. Provider operations supply pure semantic admission functions to the existing cache validators, revalidate decoded hits, and preserve observation dates separately from fetch/event dates. Each defect is fixed at its earliest reliable boundary and protected by an adversarial regression.
@@ -234,7 +253,9 @@ return async <T>(
       ? {}
       : { validateBody: options.validateValue }),
     isEmptyBody: (value: T): boolean => {
+      if (typeof value !== "object" || value === null || !("body" in value)) return false;
       const inner = (value as { body?: unknown }).body;
+      if (inner === null || inner === undefined) return true;
       return Array.isArray(inner) && inner.length === 0;
     },
   });
@@ -242,7 +263,10 @@ return async <T>(
 };
 ```
 
-Keep this existing `isEmptyBody` behavior unchanged.
+Keep this existing `isEmptyBody` behavior unchanged. (It recognizes a
+zero-length 200 body, which the FMP loader parses to `body: null`, as empty
+alongside `[]`; a value that is not a `LiveExchange` envelope at all is never
+empty. See `tests/dataBundle.emptyRefresh.test.ts`.)
 
 - [ ] **Step 4: Run focused and adjacent tests**
 
@@ -431,9 +455,9 @@ git commit -m "fix: validate EDGAR JSON before cache admission"
 ### Task 3: Finnhub insider-sentiment identity and domain enforcement
 
 **Files:**
-- Modify: `src/providers/finnhub.ts:45-58, 219-276`
+- Modify: `src/providers/finnhub.ts:57-65, 219-277`
 - Modify: `tests/risk.providers.coverage.test.ts:232-390`
-- Modify: `tests/dataBundle.providerCache.test.ts:130-190`
+- Modify: `tests/dataBundle.providerCache.test.ts:179-208`
 
 **Interfaces:**
 - Consumes: requested normalized symbol and ISO `from`/`to` dates.

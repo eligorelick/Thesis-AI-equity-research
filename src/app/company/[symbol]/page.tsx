@@ -718,7 +718,13 @@ function RunwayPanel({ computed }: { computed: ComputedMetrics }) {
   return (
     <Panel title="runway · burn & liquidity" right={rw.liquidAssetsAsOf ? <AsOf date={rw.liquidAssetsAsOf} /> : null}>
       <div className="flex flex-wrap items-stretch divide-x divide-edge border border-edge">
-        <StatCell label="burning?" value={rw.burning === null ? "unknown" : rw.burning ? "yes" : "no"} tone={rw.burning ? "warn" : "pos"} />
+        {/* Three states, not two: an unknown burn status must not borrow the
+            positive tone, which reads as a confirmed "not burning cash". */}
+        <StatCell
+          label="burning?"
+          value={rw.burning === null ? "unknown" : rw.burning ? "yes" : "no"}
+          tone={rw.burning === null ? "muted" : rw.burning ? "warn" : "pos"}
+        />
         <StatCell label="liquid assets" value={fmtBig(rw.liquidAssets)} />
         <StatCell label="avg qtr burn" value={fmtBig(rw.avgQuarterlyBurn)} tone="muted" />
         <StatCell label="runway" value={rw.runwayQuarters === null ? "n/a" : `${rw.runwayQuarters.toFixed(1)} Q`} tone={rw.runwayQuarters !== null && rw.runwayQuarters < 4 ? "neg" : "neutral"} />

@@ -181,9 +181,24 @@ function acquisition(
   };
 }
 
+/**
+ * An ALL-CAPS alias is an acronym — trial codes such as ACHIEVE, ATTAIN,
+ * TRIUMPH and TRANSCEND — whose letters spell ordinary English verbs. Matching
+ * those case-insensitively turned prose like "expects to achieve mid-teens
+ * margins" into a trial mention, which raised a spurious
+ * `primary-source-required` issue and withheld correct analyst text. Real
+ * mentions capitalize the acronym, so match it case-sensitively; mixed-case
+ * aliases (drug and company names like retatrutide or Orna Therapeutics) keep
+ * case-insensitive matching.
+ */
+function isAcronymAlias(term: string): boolean {
+  return /^[A-Z][A-Z0-9-]{2,}$/.test(term);
+}
+
 function exactTerm(text: string, term: string): boolean {
   const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^A-Za-z0-9])${escaped}($|[^A-Za-z0-9])`, "i").test(text);
+  const flags = isAcronymAlias(term) ? "" : "i";
+  return new RegExp(`(^|[^A-Za-z0-9])${escaped}($|[^A-Za-z0-9])`, flags).test(text);
 }
 
 function mentionsIn(text: string, registry: EntityRegistry): EntityMention[] {

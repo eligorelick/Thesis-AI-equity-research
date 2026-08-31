@@ -25,7 +25,7 @@
 import "server-only";
 
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
-import { companyFactsSchema, type CompanyFacts } from "@/edgar/xbrl";
+import { companyFactsSchema, latestEligibleFactEnd, type CompanyFacts } from "@/edgar/xbrl";
 import {
   HttpRequestAbortedError,
   HttpTransportError,
@@ -1190,6 +1190,64 @@ export class EdgarClient {
     return Math.max(0, this.cooldownUntil - Date.now());
   }
 
+  /**
+   * Pre-admission validators for the JSON endpoints.
+   *
+   * Filing text already supplies one, but tickers/submissions/companyFacts did
+   * not, so a malformed or wrong-entity HTTP 200 was written to memory and
+   * SQLite and only rejected after retrieval — leaving the bad row to be served
+   * for its whole TTL. These run the same JSON parse, schema and identity
+   * checks the operations perform afterwards, just early enough to keep the
+   * body out of the cache. Retrieval keeps its own checks as defense in depth.
+   */
+  private static tickersBodyProblem(body: string): string | null {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return "company_tickers.json was not valid JSON";
+    }
+    return z.record(z.string(), z.unknown()).safeParse(parsed).success
+      ? null
+      : "company_tickers.json shape unexpected";
+  }
+
+  private static submissionsBodyProblem(cik: number | string): (body: string) => string | null {
+    return (body: string): string | null => {
+      let json: unknown;
+      try {
+        json = JSON.parse(body);
+      } catch {
+        return "submissions response was not valid JSON";
+      }
+      const parsed = submissionsSchema.safeParse(json);
+      if (!parsed.success) {
+        return `submissions shape unexpected: ${parsed.error.issues[0]?.message ?? "?"}`;
+      }
+      return sameCik(cik, parsed.data.cik)
+        ? null
+        : `submissions CIK ${parsed.data.cik} did not match requested CIK ${padCik(cik)}`;
+    };
+  }
+
+  private static companyFactsBodyProblem(cik: number | string): (body: string) => string | null {
+    return (body: string): string | null => {
+      let json: unknown;
+      try {
+        json = JSON.parse(body);
+      } catch {
+        return "companyfacts response was not valid JSON";
+      }
+      const parsed = companyFactsSchema.safeParse(json);
+      if (!parsed.success) {
+        return `companyfacts shape unexpected: ${parsed.error.issues[0]?.message ?? "?"}`;
+      }
+      return sameCik(cik, parsed.data.cik)
+        ? null
+        : `companyfacts CIK ${parsed.data.cik} did not match requested CIK ${padCik(cik)}`;
+    };
+  }
+
   private async request(
     url: string,
     ttlMs: number,
@@ -1249,7 +1307,7 @@ export class EdgarClient {
     const mapExpired =
       this.tickerMap !== null && Date.now() - Date.parse(this.tickerMap.fetchedAt) > EDGAR_TTL.tickers;
     if (this.tickerMap === null || mapExpired) {
-      const res = await this.request(url, EDGAR_TTL.tickers);
+      const res = await this.request(url, EDGAR_TTL.tickers, EdgarClient.tickersBodyProblem);
       if (!res.ok) return this.gap(`edgar.tickerToCik(${symbol})`, `company_tickers.json HTTP ${res.status}`, [url], "critical");
       let parsedJson: unknown;
       try {
@@ -1298,7 +1356,7 @@ export class EdgarClient {
    */
   async submissions(cik: number | string): Promise<FetchResult<EdgarSubmissions>> {
     const url = `${EDGAR_HOSTS.data}/submissions/CIK${padCik(cik)}.json`;
-    const res = await this.request(url, EDGAR_TTL.submissions);
+    const res = await this.request(url, EDGAR_TTL.submissions, EdgarClient.submissionsBodyProblem(cik));
     if (!res.ok) return this.gap(`edgar.submissions(${cik})`, `submissions HTTP ${res.status}`, [url]);
     let parsedJson: unknown;
     try {
@@ -1520,7 +1578,7 @@ export class EdgarClient {
   /** https://data.sec.gov/api/xbrl/companyfacts/CIK{10digit}.json (~6h TTL; can be multi-MB). */
   async companyFacts(cik: number | string): Promise<FetchResult<CompanyFacts>> {
     const url = `${EDGAR_HOSTS.data}/api/xbrl/companyfacts/CIK${padCik(cik)}.json`;
-    const res = await this.request(url, EDGAR_TTL.companyFacts);
+    const res = await this.request(url, EDGAR_TTL.companyFacts, EdgarClient.companyFactsBodyProblem(cik));
     if (!res.ok) return this.gap(`edgar.companyFacts(${cik})`, `companyfacts HTTP ${res.status}`, [url]);
     let parsedJson: unknown;
     try {
@@ -1544,7 +1602,14 @@ export class EdgarClient {
       entityName: parsed.data.entityName,
       facts: parsed.data.facts,
     };
-    return { ok: true, value: this.sourced(facts, url, res.fetchedAt.slice(0, 10), res.fetchedAt, res.stale) };
+    // Observation date = the newest period end the facts actually contain, not
+    // the moment we fetched them. The fetch date made the envelope look newly
+    // observed on every cache refresh and dated a company that last reported a
+    // year ago the same as one that reported yesterday. Fall back to the fetch
+    // date only when the payload holds no eligible core-form fact.
+    const fetchedDay = res.fetchedAt.slice(0, 10);
+    const observedAsOf = latestEligibleFactEnd(facts, fetchedDay) ?? fetchedDay;
+    return { ok: true, value: this.sourced(facts, url, observedAsOf, res.fetchedAt, res.stale) };
   }
 
   // -- full-text search --------------------------------------------------------

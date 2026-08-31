@@ -545,7 +545,7 @@ function persistSteps(state: RunState, status?: JobStatus, error?: string | null
             return {
               ...step,
               status: "skipped",
-              detail: `not reached â€” ${error ?? "job failed"}`,
+              detail: `not reached — ${error ?? "job failed"}`,
             };
           }
           return step;
@@ -1330,6 +1330,8 @@ export interface PreparedJobResume {
   synthesize: PassResultLike<JudgeOutput> | null;
   verify: PassResultLike<Report> | null;
   payloadFingerprint: string | null;
+  /** Analyst web-search evidence, preserved when bull/bear are superseded. */
+  analystFetchedUrls: string[];
 }
 
 const globalWithPreparedResumes = globalThis as typeof globalThis & {
@@ -1440,6 +1442,7 @@ function buildPreparedJobResume(
     synthesize: plan.synthesize,
     verify: plan.verify,
     payloadFingerprint: plan.payloadFingerprint,
+    analystFetchedUrls: plan.analystFetchedUrls,
   };
 }
 
@@ -1479,6 +1482,7 @@ export function prepareQueuedJobResumeInTransaction(
     synthesize: stored.plan.synthesize,
     verify: stored.plan.verify,
     payloadFingerprint: stored.plan.payloadFingerprint,
+    analystFetchedUrls: stored.plan.analystFetchedUrls,
   });
 }
 
@@ -2670,13 +2674,23 @@ export async function runJob<TPayload = unknown>(
           jobSignal,
           jobController,
         );
+        // Verification measures citation coverage against the evidence the run
+        // actually gathered. On a synthesize-reuse resume `bull`/`bear` are null
+        // by design (synthesize already holds their conclusion), so their
+        // web-search URLs come from the durable artifacts instead — without them
+        // verify checked against a smaller evidence set and understated the
+        // coverage of a report whose analysts had fetched those sources.
         const fetchedUrls = [
           ...new Set(
-            [...(bull?.fetchedUrls ?? []), ...(bear?.fetchedUrls ?? []), ...(judge.fetchedUrls ?? [])]
-              .flatMap((value) => {
-                const canonical = canonicalizeFetchedUrl(value);
-                return canonical ? [canonical] : [];
-              }),
+            [
+              ...(bull?.fetchedUrls ?? []),
+              ...(bear?.fetchedUrls ?? []),
+              ...(bull === null && bear === null ? (preparedResume?.analystFetchedUrls ?? []) : []),
+              ...(judge.fetchedUrls ?? []),
+            ].flatMap((value) => {
+              const canonical = canonicalizeFetchedUrl(value);
+              return canonical ? [canonical] : [];
+            }),
           ),
         ].sort();
         try {
@@ -3361,6 +3375,20 @@ function persistDataOnly(
   now: () => Date,
   hasKey: boolean,
 ): RunJobResult {
+  // No job may be persisted terminal while a step still reads as live. The
+  // callers mark the steps they know about, but `markSkipped` only moves a
+  // PENDING step, so a pass that failed while RUNNING (an analyst failure on a
+  // partial resume, for instance) stayed "running" forever on a job the client
+  // was told is done. Sweep every non-terminal step at this single common exit.
+  for (const step of LLM_STEPS) {
+    const s = findStep(state, step);
+    if (s.status === "running") {
+      finishStep(state, step, "error", s.detail ?? "pass did not complete before the run ended");
+    } else if (s.status === "pending") {
+      markSkipped(state, step, s.detail ?? "pass not reached — data-only report");
+    }
+  }
+
   const generatedAt = now().toISOString();
   const model = hasKey ? "unavailable" : "none (no ANTHROPIC_API_KEY)";
   const dataOnlyInput: DataOnlyInput = {

@@ -11,8 +11,8 @@
  *   - documented never-throws degradation: a done row whose reportJson is
  *     malformed JSON OR schema-invalid → metadata returned with report: null;
  *   - reportJson NULL (generation persisted no body) → report: null;
- *   - symbol matching is exact/case-sensitive (runner stores uppercase; the
- *     caller uppercases before querying);
+ *   - symbol matching canonicalizes case and the dot/hyphen share-class alias,
+ *     matching listReportsForSymbol / listRunRefsForSymbol;
  *   - createdAt-tie behavior pinned AS IT CURRENTLY EXISTS (no id tiebreak in
  *     the query — see the test comment).
  */
@@ -409,12 +409,24 @@ describe("getLatestDoneReport", () => {
     expect(latest!.report).toBeNull();
   });
 
-  it("symbol matching is exact (case-sensitive at the query layer)", () => {
+  it("symbol matching canonicalizes case and the share-class alias", () => {
     seedReport({ symbol: "AAPL" });
-    // The runner stores uppercase and callers uppercase before querying; the
-    // query itself does NOT case-fold.
-    expect(getLatestDoneReport("aapl")).toBeNull();
+    // Changed 2026-08-31: this previously required an exact, case-sensitive
+    // match on the grounds that callers uppercase first. That left this lookup
+    // disagreeing with its two siblings — listReportsForSymbol and
+    // listRunRefsForSymbol both fold case AND the dot/hyphen share-class alias
+    // in SQL — so History and the watchlist could list runs for a report that
+    // the company page reported as missing. All three now share one contract.
+    expect(getLatestDoneReport("aapl")).not.toBeNull();
     expect(getLatestDoneReport("AAPL")).not.toBeNull();
+    // A genuinely different ticker still misses.
+    expect(getLatestDoneReport("MSFT")).toBeNull();
+  });
+
+  it("matches a share-class ticker written with either separator", () => {
+    seedReport({ symbol: "BRK.B" });
+    expect(getLatestDoneReport("BRK-B")?.symbol).toBe("BRK.B");
+    expect(getLatestDoneReport("BRK.B")?.symbol).toBe("BRK.B");
   });
 
   it("createdAt tie: pins CURRENT behavior — the higher-id (later-inserted) row wins", () => {

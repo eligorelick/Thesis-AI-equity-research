@@ -208,7 +208,12 @@ export function parseShortInterestRows(payload: unknown): ShortInterestPoint[] |
       notes,
     });
   }
-  if (out.length === 0) return null;
+  // A valid empty array means "no short-interest rows for this issuer/cycle" —
+  // an informational no-data result, NOT a malformed payload. Only a response
+  // whose rows were all unparseable is a parse failure. Collapsing both to null
+  // made the caller report a provider access failure and left its own
+  // informational no-data branch unreachable.
+  if (out.length === 0) return malformedRows > 0 ? null : [];
   if (malformedRows > 0) {
     const note = `${malformedRows} malformed FINRA row${malformedRows === 1 ? " was" : "s were"} discarded; valid rows retained`;
     for (const row of out) row.notes.push(note);

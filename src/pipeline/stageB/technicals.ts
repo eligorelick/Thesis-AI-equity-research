@@ -1248,10 +1248,13 @@ export function computeTechnicals(
       severity: "warn",
     });
   }
-  if (px.length < 35) {
+  // MACD(12,26,9) needs 26 closes for the MACD line plus 9 MACD values for its
+  // signal EMA, so the signal exists from the 34th row. Disclosing it as
+  // unavailable at 34 contradicted the value actually computed.
+  if (px.length < 34) {
     gaps.push({
       field: "technicals.macd",
-      reason: `only ${px.length} rows (<35) — MACD signal line unavailable`,
+      reason: `only ${px.length} rows (<34) — MACD signal line unavailable`,
       severity: "warn",
     });
   }

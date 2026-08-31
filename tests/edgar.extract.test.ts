@@ -589,6 +589,32 @@ describe("MXC 10-K (F3/F7/F11)", () => {
     expect(r.text).not.toContain("UNRESOLVED STAFF COMMENTS");
   });
 
+  it("title-only slice stops at an ITEM-numbered anchor, not only the next title link", () => {
+    // The title-only branch runs whenever no item-numbered entry matched the
+    // WANTED item — which does not mean no item-numbered entries exist. Bounding
+    // only by title links let the slice run through a later item's heading and
+    // return that item's body as part of this section.
+    const doc = [
+      "<table>",
+      titleOnlyRow("s_004", "Risk Factors"),
+      // A linked item row for a DIFFERENT item, anchored between the two titles.
+      itemRow("s_005", "Item 1B.", "Unresolved Staff Comments"),
+      "</table>",
+      sample("mxc_10k_item1a_header_in_table.html"),
+      para(4000, "MXCRISK"),
+      `<span id="s_005"></span><table><tr><td><b>ITEM 1B.</b></td><td><b>UNRESOLVED STAFF COMMENTS</b></td></tr></table>`,
+      para(3000, "LATERITEMBODY"),
+    ].join("\n");
+
+    const r = extractSection(doc, { form: "10-K", item: "1A" });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.text).toContain("MXCRISK");
+    expect(r.text).not.toContain("LATERITEMBODY");
+    expect(r.text).not.toContain("UNRESOLVED STAFF COMMENTS");
+  });
+
   it("Layer 2 rejects title-bearing cross-references appearing after later headers (F7 last-match trap)", () => {
     const doc = [
       body,

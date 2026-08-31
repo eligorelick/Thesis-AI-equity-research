@@ -30,7 +30,7 @@ import {
 } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 
-import { compactCurrency, fiscalYear, pct, signedPct } from "./format";
+import { compactCurrency, currencyAxisTick, fiscalYear, pct, signedPct } from "./format";
 
 // ---------------------------------------------------------------------------
 // Theme
@@ -206,7 +206,7 @@ export function RevenueTrendChart({ rows }: { rows: readonly RevenueRow[] }) {
             <YAxis
               yAxisId="rev"
               tick={{ fill: THEME.fgFaint, fontSize: AXIS_FONT, fontFamily: MONO }}
-              tickFormatter={(v: number) => compactCurrency(v, 0)}
+              tickFormatter={(v: number) => currencyAxisTick(v)}
               axisLine={{ stroke: THEME.border }}
               tickLine={{ stroke: THEME.border }}
               width={48}
@@ -309,7 +309,7 @@ export function FcfChart({ rows }: { rows: readonly FcfRow[] }) {
             <YAxis
               yAxisId="fcf"
               tick={{ fill: THEME.fgFaint, fontSize: AXIS_FONT, fontFamily: MONO }}
-              tickFormatter={(v: number) => compactCurrency(v, 0)}
+              tickFormatter={(v: number) => currencyAxisTick(v)}
               axisLine={{ stroke: THEME.border }}
               tickLine={{ stroke: THEME.border }}
               width={48}

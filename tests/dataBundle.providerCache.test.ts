@@ -178,10 +178,13 @@ describe("dataBundle provider cache wrappers", () => {
 
   it("caches successful Finnhub insider sentiment responses", async () => {
     const fetchImpl = vi.fn(async () =>
+      // Finnhub echoes the issuer at the top level and on every row; the client
+      // now binds the payload to the requested symbol, so fixtures carry it.
       jsonResponse({
+        symbol: "AAPL",
         data: [
-          { year: 2026, month: 5, change: -10_000, mspr: -4.2 },
-          { year: 2026, month: 6, change: 15_000, mspr: 6.5 },
+          { symbol: "AAPL", year: 2026, month: 5, change: -10_000, mspr: -4.2 },
+          { symbol: "AAPL", year: 2026, month: 6, change: 15_000, mspr: 6.5 },
         ],
       }),
     );

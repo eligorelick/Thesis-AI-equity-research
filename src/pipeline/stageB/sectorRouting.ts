@@ -616,6 +616,7 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
       "fcfYield",
       "altmanZ",
       "beneishM",
+      "accrualsRatio",
     ],
     lead: [
       "pTbv",
@@ -633,7 +634,7 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
     // grossMargin: FMP's revenue−costOfRevenue is meaningless on a premium/claims
     // income statement (insurers are judged on combined/loss/expense ratios), same
     // rationale as the bank route — do not let it drive the moat score.
-    suppress: ["evEbitda", "evToSales", "fcfDcf", "currentRatio", "quickRatio", "grossMargin", "altmanZ", "beneishM"],
+    suppress: ["evEbitda", "evToSales", "fcfDcf", "currentRatio", "quickRatio", "grossMargin", "altmanZ", "beneishM", "accrualsRatio"],
     lead: [
       "combinedRatio",
       "lossRatio",
@@ -661,7 +662,7 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
   // grossMargin is meaningless on a net-interest-spread income statement (same as
   // the bank/insurer routes) — suppress so it cannot drive the moat score.
   "reit-mortgage": {
-    suppress: ["evEbitda", "currentRatio", "fcfDcf", "ffoApprox", "affoApprox", "pFfo", "grossMargin", "altmanZ", "beneishM"],
+    suppress: ["evEbitda", "currentRatio", "fcfDcf", "ffoApprox", "affoApprox", "pFfo", "grossMargin", "altmanZ", "beneishM", "accrualsRatio"],
     lead: ["priceToBook", "bookValuePerShare", "dividendYield", "netInterestSpread", "leverageAssetsToEquity"],
   },
 };

@@ -886,7 +886,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     route.overlays.includes("unprofitable") ||
     route.overlays.includes("recent-ipo");
   if (needsRunway) {
-    const b0 = balanceQuarterly[0] ?? balanceAnnual[0];
+    const b0 = newestBalanceRow(balanceQuarterly[0], balanceAnnual[0]);
     if (b0) {
       runway = computeRunway(
         {
@@ -1462,6 +1462,28 @@ function netDebtFromBalance(
  * unusable (missing ≠ zero); fewer than 2 usable years returns null so the
  * excess-return valuation is suppressed rather than assigned a house payout.
  */
+/**
+ * Newest liquidity anchor for the runway model.
+ *
+ * Preferring the quarterly row unconditionally anchored runway on stale cash
+ * whenever the latest annual row was newer — the ordinary case once the 10-K is
+ * filed but the matching quarter is not yet published, or when quarterly
+ * coverage lags. Runway must measure the most recent balance actually known, so
+ * pick by date and fall back to whichever row exists.
+ */
+export function newestBalanceRow<TRow extends { date?: unknown }>(
+  quarterly: TRow | undefined,
+  annual: TRow | undefined,
+): TRow | undefined {
+  if (quarterly === undefined) return annual;
+  if (annual === undefined) return quarterly;
+  const q = typeof quarterly.date === "string" ? quarterly.date : "";
+  const a = typeof annual.date === "string" ? annual.date : "";
+  // Ties keep the quarterly row: same period end, but quarterly is the
+  // finer-grained statement the rest of the runway model is built from.
+  return a > q ? annual : quarterly;
+}
+
 export function payoutRatioPct3y(cashflowAnnual: FmpCashFlowRow[]): number | null {
   const ratios: number[] = [];
   for (const r of cashflowAnnual.slice(0, 3)) {

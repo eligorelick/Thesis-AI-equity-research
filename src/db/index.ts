@@ -380,11 +380,23 @@ export function createDatabase(file: string = defaultDbPath()): DatabaseHandle {
     fs.mkdirSync(path.dirname(file), { recursive: true });
   }
   const sqlite = new Database(file);
-  sqlite.pragma("journal_mode = WAL"); // no-op ("memory") for :memory: databases
-  sqlite.pragma("synchronous = NORMAL");
-  sqlite.pragma("busy_timeout = 5000");
-  sqlite.pragma("foreign_keys = ON");
-  bootstrapSchema(sqlite);
+  // A pragma or bootstrap failure (a corrupt file, a disk error) must not strand
+  // the connection: getDb() only memoizes `handle` on success, so every later
+  // call would open — and leak — another handle, each holding a file lock.
+  try {
+    sqlite.pragma("journal_mode = WAL"); // no-op ("memory") for :memory: databases
+    sqlite.pragma("synchronous = NORMAL");
+    sqlite.pragma("busy_timeout = 5000");
+    sqlite.pragma("foreign_keys = ON");
+    bootstrapSchema(sqlite);
+  } catch (err) {
+    try {
+      sqlite.close();
+    } catch {
+      // Closing a half-open handle is best-effort; report the original failure.
+    }
+    throw err;
+  }
   if (file !== ":memory:") {
     // Compress/purge/VACUUM sweep, guarded to once per 24h. Maintenance must
     // never block or break startup — the cache is rebuildable by design.

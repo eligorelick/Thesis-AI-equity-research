@@ -41,6 +41,7 @@ import {
 } from "@/report/surfaceManifest";
 import {
   canonicalizeTracedUnit,
+  isIsoDate,
   validateCitationRegistry,
   validateProvenanceRegistry,
   type CitationProvenanceRecord,
@@ -1037,10 +1038,17 @@ function attachProvenanceRegistry(
   const idCounts = new Map<string, number>();
 
   const registerCitation = (id: string, asOf: string | null, origin = id): void => {
-    const key = `${id}\u0000${asOf ?? ""}`;
+    // Provider dates reach this boundary unvalidated. validateCitationRegistry
+    // is deliberately fail-loud on a malformed date, and its throw is not caught
+    // before the runner unexpected-failure path — so one bad provider date
+    // terminated the whole job instead of degrading. Normalize here, at the
+    // producer, so the assembler invariant stays strict: the source is still
+    // citable, its untrustworthy date simply becomes unknown.
+    const safeAsOf = asOf !== null && isIsoDate(asOf) ? asOf : null;
+    const key = `${id}\u0000${safeAsOf ?? ""}`;
     if (!id.trim() || citationKeys.has(key)) return;
     citationKeys.add(key);
-    citationRegistry.push({ id, kind: "payload-text", asOf, origin });
+    citationRegistry.push({ id, kind: "payload-text", asOf: safeAsOf, origin });
   };
 
   const uniqueId = (base: string): string => {

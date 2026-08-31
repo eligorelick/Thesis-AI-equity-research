@@ -780,6 +780,31 @@ describe("staleness", () => {
     expect(c.status).toBe("pass");
   });
 
+  it("flags fundamentals whose statement envelopes were served from a stale cache", () => {
+    // The cadence check only looks at the newest fiscal PERIOD END, so a report
+    // built entirely from stale-while-revalidate cache rows passed as fresh
+    // while the quote check right beside it already reports `stale: true`.
+    const { report, check: c } = check(
+      makeBundle({
+        incomeAnnual: ok(
+          { rows: [{ date: "2025-09-27", period: "FY", revenue: 1e9, netIncome: 1e8 }] },
+          "2025-09-27",
+          { stale: true },
+        ),
+      }),
+      "staleness.fundamentalsCache",
+    );
+
+    expect(c.status).toBe("fail");
+    expect(c.detail).toMatch(/stale/i);
+    expect(report.gaps.some((g) => g.field === "validation.staleness.fundamentalsCache")).toBe(true);
+  });
+
+  it("passes the fundamentals cache check when every envelope is fresh", () => {
+    const { check: c } = check(makeBundle(), "staleness.fundamentalsCache");
+    expect(c.status).toBe("pass");
+  });
+
   it("flags a quote served past its TTL (stale-while-revalidate)", () => {
     const { report, check: c } = check(
       makeBundle({ quote: ok({ rows: [] }, "2026-07-03", { stale: true }) }),

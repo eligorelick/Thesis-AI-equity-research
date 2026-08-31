@@ -43,6 +43,19 @@ export function compactCurrency(v: number | null | undefined, digits = 1): strin
   return `${sign}$${body}`;
 }
 
+/**
+ * Currency tick for a value axis.
+ *
+ * Axis ticks land on values like 1.5e9 as often as on round ones, and rounding
+ * the label to whole units printed that gridline as "$2B" — a label that
+ * misstates the line it sits on, and that collides with the neighbouring tick
+ * when two round to the same figure. One decimal keeps every tick label true to
+ * its own gridline and still fits the narrow axis gutter.
+ */
+export function currencyAxisTick(v: number | null | undefined): string {
+  return compactCurrency(v, 1);
+}
+
 /** Percent tick: "12.3%" (no forced sign). */
 export function pct(v: number | null | undefined, digits = 1): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return EM_DASH;

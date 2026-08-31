@@ -80,7 +80,7 @@ credential is optional.
 | `FRED_API_KEY` | Macroeconomic series | Uses supported keyless CSV data where available |
 | `FINNHUB_API_KEY` | Insider sentiment | Records the source as unavailable |
 | `EDGAR_CONTACT` | Honest name and email for SEC request identification | Live EDGAR requests fail closed |
-| `ANALYSIS_MODEL` | Anthropic model ID or `auto` | Defaults to `auto` |
+| `ANALYSIS_MODEL` | `auto` or one priced model alias | Defaults to `auto` |
 | `ANALYSIS_EFFORT` | `low`, `medium`, `high`, `xhigh`, or `max` | Defaults to `high` |
 | `THESIS_MAX_ACTIVE_JOBS` | Durable cross-process job concurrency | Defaults to `1` |
 | `THESIS_MAX_ACTIVE_LLM_CALLS` | Durable cross-process paid-call concurrency | Defaults to `2` |
@@ -96,6 +96,15 @@ credential is optional.
 EDGAR does not require a key, but it does require a truthful contact identity.
 Placeholder or missing identities disable live EDGAR acquisition and create a
 visible data gap.
+
+`ANALYSIS_MODEL` is not a free-form Anthropic model ID. It accepts `auto` or one
+of the four priced aliases — `claude-opus-4-8`, `claude-sonnet-5`,
+`claude-fable-5`, `claude-haiku-4-5` — optionally as an eight-digit dated
+snapshot such as `claude-opus-4-8-20260115`. The scheduler cannot prove a spend
+bound for anything else, so any other value is rejected at model resolution and
+the run degrades to a data-only report with the AI passes marked skipped.
+`auto` resolves against the models your key can reach, preferring
+`claude-opus-4-8`, then `claude-sonnet-5`, then `claude-fable-5`.
 
 The Settings page can override the analysis model and effort. Stored settings
 take precedence over environment variables, which take precedence over

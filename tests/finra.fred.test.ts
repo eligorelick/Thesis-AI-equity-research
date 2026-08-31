@@ -175,7 +175,10 @@ describe("provider transport timeouts", () => {
           status: 200,
           json: async () => {
             clearedBeforeBody = tracker.wasCleared();
-            return { data: [{ year: 2026, month: 6, change: 10, mspr: 0.4 }] };
+            return {
+              symbol: "AAPL",
+              data: [{ symbol: "AAPL", year: 2026, month: 6, change: 10, mspr: 0.4 }],
+            };
           },
         } as Response);
 
@@ -249,6 +252,14 @@ describe("finra daysToCover sentinel handling", () => {
   it("returns null for malformed row payloads", () => {
     expect(parseShortInterestRows({ error: "nope" })).toBeNull();
     expect(parseShortInterestRows([{ symbolCode: "AAPL" }])).toBeNull(); // missing required fields
+  });
+
+  it("distinguishes a VALID EMPTY response from a malformed one", () => {
+    // FINRA legitimately returns [] when an issuer has no short-interest rows
+    // for the requested cycles. Collapsing that to null made the caller report
+    // "FINRA access failed" — a provider outage — and left its informational
+    // no-data branch unreachable.
+    expect(parseShortInterestRows([])).toEqual([]);
   });
 
   it("keeps valid rows when one FINRA row is malformed and discloses the discard", () => {
@@ -334,6 +345,23 @@ describe("finra response scope", () => {
       expect(result.ok).toBe(false);
     },
   );
+
+  it("reports a valid empty FINRA response as informational no-data, not access failure", async () => {
+    // Previously the empty array collapsed to null and surfaced as a warn
+    // "FINRA access failed" gap, which reads as a provider outage and made the
+    // informational branch below unreachable.
+    const result = await shortInterestTrend(
+      "AAPL",
+      2,
+      config(["2026-06-15", "2026-05-29"], []),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gap.severity).toBe("info");
+    expect(result.gap.reason).toMatch(/no FINRA short interest rows/i);
+    expect(result.gap.reason).not.toMatch(/unrecognized payload|access failed/i);
+  });
 
   it("short interest trend rejects dates outside requested partitions", async () => {
     const result = await shortInterestTrend(

@@ -6776,6 +6776,15 @@ describe("runJob — resume from persisted analyst snapshots", () => {
     expect(byStep.get("bear")?.detail).toContain("still overloaded");
     expect(byStep.get("synthesize")?.status).toBe("skipped");
 
+    // A terminal job must never report a live step. `markSkipped` only moves a
+    // PENDING step, so a pass that failed while RUNNING used to stay "running"
+    // on a job the client had been told was done, with no way out of that state
+    // in the UI. persistDataOnly sweeps every non-terminal LLM step.
+    for (const step of ["bull", "bear", "synthesize", "verify"] as const) {
+      expect(byStep.get(step)?.status, step).not.toBe("running");
+      expect(byStep.get(step)?.status, step).not.toBe("pending");
+    }
+
     // The failed retry attempt's spend is on the ledger.
     const costRows = handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all();
     const bearRows = costRows.filter((r) => r.step === "bear");

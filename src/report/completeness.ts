@@ -23,11 +23,25 @@ export function buildDataCompleteness(
   const warningCount = actionableGaps.filter((gap) => gap.severity === "warn").length;
   const edgarGaps = actionableGaps.filter((gap) => /edgar|company.?facts/i.test(`${gap.field} ${gap.reason}`));
   const xbrlGaps = actionableGaps.filter((gap) => /xbrl/i.test(`${gap.field} ${gap.reason}`));
+  // "failed" must mean the cross-check RAN and disagreed — not that it could
+  // not be performed. Stage A already encodes that distinction in severity: a
+  // not-checkable period (no XBRL fact resolved, mixed currency) files an
+  // `info` gap, while a real FMP↔XBRL disagreement files a `warn`. Classifying
+  // on prose alone reported "failed" for reports that were merely never
+  // cross-checked (e.g. a legacy report's "No XBRL/company-facts cross-check is
+  // recorded", or "no XBRL fact matched period end=…").
+  const xbrlCheckFailed = xbrlGaps.some(
+    (gap) =>
+      (gap.severity === "warn" || gap.severity === "critical") &&
+      !/skip|not run|not checked|not checkable|no[t]?\s[^.]*\bcross-check\b|no xbrl fact/i.test(
+        gap.reason,
+      ),
+  );
   const xbrl = xbrlGaps.length === 0
     ? "checked" as const
-    : xbrlGaps.every((gap) => /skip|not run|not checked/i.test(gap.reason))
-      ? "skipped" as const
-      : "failed" as const;
+    : xbrlCheckFailed
+      ? "failed" as const
+      : "skipped" as const;
   const edgar = edgarGaps.length > 0 ? "missing" as const : "available" as const;
 
   return {

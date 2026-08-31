@@ -26,7 +26,13 @@ describe("deriveNextEarnings", () => {
       "AAPL",
     );
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.asOf).toBe("2026-08-01");
+    if (!result.ok) return;
+    // The malformed row must not be selected — assert the SELECTED ROW, not the
+    // envelope's asOf. Since 2026-08-31 `asOf` is the observation date the
+    // derivation inherits from its parent envelope; the future event date lives
+    // in the datum, so it is the datum that pins the selection.
+    expect(result.value.data.date).toBe("2026-08-01T00:00:00Z");
+    expect(result.value.asOf).toBe("2026-07-05");
   });
 
   it("does not accept impossible calendar dates", () => {

@@ -319,7 +319,22 @@ async function fredRequest(url: string, config: FredConfig): Promise<HttpText> {
             ? AbortSignal.any([controller.signal, config.signal])
             : controller?.signal ?? config.signal,
       }, fetchImpl);
-      const text = await res.text().catch(() => "");
+      // The body is still streaming here, so the per-attempt timeout, a caller
+      // abort, a mid-body reset, or a decompression error all surface as a
+      // rejection from text(). Swallowing that into an empty string would
+      // fabricate a successful empty response: it returns out of this retry
+      // loop, and on the keyed path it strands the request before the keyless
+      // fredgraph.csv fallback. Retry it like the sibling clients do.
+      let text: string;
+      try {
+        text = await res.text();
+      } catch (err) {
+        config.signal?.throwIfAborted();
+        lastFailure = `HTTP ${res.status} with unreadable body: ${
+          err instanceof Error ? err.message : String(err)
+        }`;
+        continue;
+      }
       if (res.ok) return { ok: true, status: res.status, text };
       lastFailure = `HTTP ${res.status}`;
       // 429 (rate) / 423 (locked) / 5xx are transient; other 4xx will not improve.

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -58,8 +58,20 @@ export function main() {
   });
 }
 
+// Node resolves symlinks when it builds `import.meta.url`, so comparing it to a
+// merely path.resolve()d argv[1] fails whenever the checkout is reached through
+// a symlink or junction (CI caches, macOS /tmp). This gate must never silently
+// no-op and exit 0, so resolve argv[1] the same way before comparing.
+function realpathOrSelf(target) {
+  try {
+    return realpathSync(target);
+  } catch {
+    return target;
+  }
+}
+
 const invokedPath = process.argv[1]
-  ? pathToFileURL(path.resolve(process.argv[1])).href
+  ? pathToFileURL(realpathOrSelf(path.resolve(process.argv[1]))).href
   : undefined;
 if (invokedPath === import.meta.url) {
   try {

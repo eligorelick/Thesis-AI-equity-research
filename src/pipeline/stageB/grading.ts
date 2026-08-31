@@ -626,7 +626,14 @@ export function computeScores(inputs: ScoringInputs): Scoring {
       { name: "roicVsWaccSpread", raw: roicVsWacc.spreadPctPts, unit: "pp", weight: 0.35, band: SPREAD_BAND },
       { name: "piotroskiF", raw: piotroskiFrac, unit: "frac", weight: 0.22, band: PIOTROSKI_BAND, suppressedBy: "piotroskiF" },
       { name: "altmanZ", raw: forensics.altman && isNum(forensics.altman.score) ? normalizeAltmanForBanding(forensics.altman.score, forensics.altman.variant) : null, unit: "z", weight: 0.16, band: ALTMAN_Z_BAND, suppressedBy: "altmanZ" },
-      { name: "accrualsRatioAbs", raw: forensics.accruals && isNum(forensics.accruals.cashFlowAccrualRatio) ? Math.abs(forensics.accruals.cashFlowAccrualRatio) : null, unit: "frac", weight: 0.15, band: ACCRUALS_ABS_BAND },
+      // suppressedBy, like its three sibling accounting-integrity signals: the
+      // Sloan accrual ratio is scaled by net operating assets, and NOA subtracts
+      // (totalLiabilities − totalDebt) — for a bank that is deposits, its raw
+      // material. Scoring it there is the same category error the route already
+      // avoids for netDebt, fcfDcf, Altman and Beneish. Untagged, no route
+      // policy could exclude it, so financials were graded on a meaningless
+      // ratio.
+      { name: "accrualsRatioAbs", raw: forensics.accruals && isNum(forensics.accruals.cashFlowAccrualRatio) ? Math.abs(forensics.accruals.cashFlowAccrualRatio) : null, unit: "frac", weight: 0.15, band: ACCRUALS_ABS_BAND, suppressedBy: "accrualsRatio" },
       { name: "beneishM", raw: forensics.beneish?.score ?? null, unit: "m", weight: 0.12, band: BENEISH_M_BAND, suppressedBy: "beneishM" },
     ],
     weights.quality,

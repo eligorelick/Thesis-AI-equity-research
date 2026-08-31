@@ -2,13 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status: complete and merged.** All 32 tasks were executed on
+> `codex/audit-remediation`, whose head `7b2eb51` is an ancestor of `main`, so
+> every change described below is present in the current tree. Evidence is in
+> [`../audits/2026-08-07-remediation-verification.md`](../audits/2026-08-07-remediation-verification.md),
+> which records two independent final reviews returning C0 / I0 / M0 — READY.
+> The `- [ ]` boxes below were never ticked during execution; read them as the
+> plan as authored, not as outstanding work.
+
 **Goal:** Correct H1-H6, M1-M13, and L1-L3 from the 2026-08-07 independent audit while preserving financially sound deterministic analysis and legacy report readability.
 
 **Implementation workspace:** `.worktrees/audit-remediation` on `codex/audit-remediation`.
 
 **Architecture:** Strengthen the existing provider → bundle → validation → deterministic compute → optional LLM → persistence → report pipeline at its seams. Entity, unit, time, snapshot, and paid-attempt metadata become explicit contracts; invalid or missing financial inputs fail closed. Changes are incremental and protected by cross-layer regression tests rather than a valuation-engine rewrite.
 
-**Tech Stack:** TypeScript 6, Next.js 16 App Router, React 19, Vitest 4, Drizzle ORM, better-sqlite3, Zod 4, GitHub Actions on Node 20.
+**Tech Stack:** TypeScript 6, Next.js 16 App Router, React 19, Vitest 4, Drizzle ORM, better-sqlite3, Zod 4, GitHub Actions on Node 24 LTS with a Node 20 compatibility lane.
 
 ## Global Constraints
 
@@ -118,7 +126,7 @@ git commit -m "chore: patch audited dependency vulnerabilities"
 - Produces:
 
 ```ts
-export function canonicalEntitySymbol(value: string): string;
+export function canonicalEntitySymbol(value: string): string | null;
 export function sameEntitySymbol(expected: string, actual: string): boolean;
 
 interface FmpEntityScope {
@@ -440,8 +448,12 @@ it("rejects exact-period and accession-lineage mismatches", () => {
 });
 
 it("preserves a compatible bank fallback", () => {
-  expect(result).toMatchObject({ ok: true, value: 150, unit: "USD" });
-  expect(result.components).toHaveLength(2);
+  // getConcept returns FetchResult<ConceptValue>, so the success arm carries a
+  // Sourced envelope: the concept fields live at result.value.data.
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.value.data).toMatchObject({ value: 150, unit: "USD", computed: true });
+  expect(result.value.data.components).toHaveLength(2);
 });
 ```
 
@@ -553,7 +565,7 @@ it("preserves last-good filing when refresh is blank", async () => {
 
 it("marks only confirmed 6-K structural MD&A omission expected", () => {
   expect(gap).toMatchObject({ field: "edgar.tenQMdna", expected: true });
-  expect(completeness.status).toBe("complete");
+  expect(completeness.state).toBe("complete");
 });
 ```
 
@@ -826,14 +838,15 @@ git commit -m "fix: preserve missing cash flow and liquidity inputs"
 - Test: `tests/stageB.projections.test.ts`
 
 **Interfaces:**
-- Reuse the existing required `Projections.disclosures: ManifestEntry[]`; do not add a second warning channel or loosen the saved-report schema.
+- Reuse the existing required `ProjectionSeries.disclosures: ManifestEntry[]` (`ProjectionSeriesSchema` in `src/report/schema.ts`) by pushing the warning onto the revenue series. There is no top-level `Projections.disclosures`, and `ProjectionsSchema` is `.strict()`, so do not add a second warning channel or loosen the saved-report schema.
 
 - [ ] **Step 1: Write the failing missing-share-trend test**
 
 ```ts
 const p = computeProjections(makeInputs({ shareCountAnnualizedPct: null }));
 expect(p.series.some((s) => s.metric === "epsDiluted")).toBe(false);
-expect(p.disclosures).toContainEqual(
+const revenue = p.series.find((s) => s.metric === "revenue")!;
+expect(revenue.disclosures).toContainEqual(
   expect.objectContaining({
     field: "projections.eps.shareCountTrend",
     severity: "warn",
@@ -1093,10 +1106,14 @@ Sparse two-point histories from the audit must return null for 3m/6m/12m returns
 Hand-derived aligned expectations:
 
 ```ts
-expect(rs.threeMonth.differentialPct).toBeCloseTo(4.329004329, 8);
+// RelativeStrength exposes `points: RelativeStrengthPoint[]` keyed by
+// `months: 3 | 6 | 12`, and the differential field is `differentialPctPoints`.
+const at = (months: 3 | 6 | 12) => rs.points.find((p) => p.months === months);
+
+expect(at(3)?.differentialPctPoints).toBeCloseTo(4.329004329, 8);
 // security 120/110 - 1 = 9.090909%; benchmark 110/105 - 1 = 4.761905%.
-expect(rs.sixMonth.differentialPct).toBeCloseTo(10, 10);
-expect(rs.twelveMonth.differentialPct).toBeCloseTo(40, 10);
+expect(at(6)?.differentialPctPoints).toBeCloseTo(10, 10);
+expect(at(12)?.differentialPctPoints).toBeCloseTo(40, 10);
 ```
 
 A stale benchmark end invalidates the window. Null 6m differential creates neither an outperformance flag nor a `relStrength6m` grade driver.
@@ -1196,7 +1213,7 @@ export type PassSettlementHook<T> =
 Add tests named:
 
 - `persists bull artifact and cost before unresolved bear settles`
-- `late settlement after cancellation cannot mutate a newer generation`
+- `late settlement after cancellation only invalidates a newer queued generation`
 - `duplicate settlement callback bills exactly once`
 - `persists schema-valid judge artifact before verify starts`
 
@@ -1296,21 +1313,63 @@ export interface SchedulerLimits {
   maxRollingCostUsd: number | null;
   rollingCostWindowMs: number;
   paidPassLeaseTtlMs: number;
+  jobLeaseTtlMs: number;
 }
 
-export function claimNextQueuedJob(workerId: string, now: Date): ClaimedJob | null;
-export function renewJobLease(claim: JobClaim, now: Date): boolean;
-export function releaseJobLease(claim: JobClaim): void;
+export type PaidPassAcquireResult =
+  | { acquired: true; lease: PaidPassLease }
+  | {
+      acquired: false;
+      reason:
+        | "capacity"
+        | "job-budget"
+        | "job-budget-pending"
+        | "revision-headroom"
+        | "rolling-budget"
+        | "rolling-budget-pending";
+    };
+
+export function claimNextQueuedJob(
+  workerId: string,
+  now: Date | undefined,
+  limits: SchedulerLimits,
+  db?: ThesisDb,
+): ClaimedJob | null;
+export function renewJobLease(
+  claim: JobClaim,
+  now: Date | undefined,
+  limits: SchedulerLimits,
+  db?: ThesisDb,
+): boolean;
+// A job claim's lease is released only through fence-checked terminalization,
+// which carries the terminal status and returns false when the fence lost.
+export function terminalizeClaim(
+  claim: JobClaim,
+  status: "done" | "error" | "unsupported",
+  message: string | null,
+  now: Date | undefined,
+  db?: ThesisDb,
+): boolean;
 export function acquirePaidPassLease(
   claim: JobClaim,
   pass: DurablePass,
+  attemptId: string,
   maximumNextPassUsd: number,
-  now: Date,
+  now: Date | undefined,
   limits: SchedulerLimits,
-): { acquired: true; lease: PaidPassLease } |
-   { acquired: false; reason: "capacity" | "job-budget" | "rolling-budget" };
-export function renewPaidPassLease(lease: PaidPassLease, now: Date): boolean;
-export function releaseUnbilledPaidPassLease(lease: PaidPassLease): void;
+  db?: ThesisDb,
+): PaidPassAcquireResult;
+export function renewPaidPassLease(
+  lease: PaidPassLease,
+  now: Date | undefined,
+  limits: SchedulerLimits,
+  db?: ThesisDb,
+): boolean;
+export function releaseUnbilledPaidPassLease(
+  lease: PaidPassLease,
+  db?: ThesisDb,
+  now?: Date,
+): boolean;
 ```
 
 - [ ] **Step 1: Write failing concurrency/recovery/spend tests**
@@ -1358,17 +1417,18 @@ git commit -m "feat: schedule report jobs with durable backpressure"
 
 Add tests named:
 
-- `does not emit a stale pre-subscribe snapshot`
-- `drops duplicate and regressing revisions`
-- `closes immediately when request signal is already aborted`
-- `reader cancel unsubscribes and clears heartbeat exactly once`
+- `subscribes before its authoritative read and never emits a stale handshake snapshot`
+- `collapses same-revision local hints and ignores their fabricated payloads`
+- `drops a terminal database regression without closing, then emits and closes a newer terminal`
+- `allocates no subscriber or timers when the request is already aborted`
+- `reader cancel unsubscribes and clears every stream timer exactly once`
 
 Force a queued→running transition in the handshake gap and assert the client receives running revision, not only queued.
 
 - [ ] **Step 2: Run RED**
 
 ```powershell
-npx vitest run tests/api.routes.stream.test.ts -t "stale pre-subscribe|revision|already aborted|reader cancel"
+npx vitest run tests/api.routes.stream.test.ts -t "stale handshake|revision|already aborted|reader cancel"
 ```
 
 - [ ] **Step 3: Subscribe before replay and unify cleanup**
@@ -1638,11 +1698,25 @@ export interface WritableSettings {
   analysisEffort: EffortLevel;
 }
 
-export function createSettingsWriteQueue(options: {
-  write(state: WritableSettings): Promise<WritableSettings>;
-  recover(): Promise<WritableSettings>;
+export interface SettingsWriteQueueOptions {
+  initial: WritableSettingsAuthority;
+  write(
+    desired: WritableSettings,
+    ifMatch: string,
+  ): Promise<WritableSettingsAuthority>;
+  recover(signal: AbortSignal): Promise<WritableSettingsAuthority>;
   onState(state: WriterState): void;
-}): { setDesired(state: WritableSettings): void; flush(): Promise<void> };
+}
+
+export interface SettingsWriteQueue {
+  setDesired(state: WritableSettings): void;
+  flush(): Promise<void>;
+  dispose(): void;
+}
+
+export function createSettingsWriteQueue(
+  options: SettingsWriteQueueOptions,
+): SettingsWriteQueue;
 ```
 
 - [ ] **Step 1: Write failing deferred-response/transaction tests**
@@ -1772,7 +1846,7 @@ Expected: workflow/scripts/config are absent before implementation.
 
 - [ ] **Step 3: Add CI and expand risk-based coverage**
 
-GitHub Actions on Node 20 runs clean install, dependency-shape check, typecheck, lint, product tests, integration tests, both coverage contracts, build, and `npm audit --audit-level=low`. Keep the current `vitest.config.ts` include and thresholds as the core contract while excluding `tests/db.cli.test.ts` and restoring `isolate:true`. Add `vitest.risk.config.ts` for provider identity, Stage A/C provenance, job artifacts/scheduler/state, report query/diff/export, settings queue, and request security at exactly 85/75/85/85, also excluding the DB CLI file and using `isolate:true`. Make `vitest.integration.config.ts` include only `tests/db.cli.test.ts`; add a config/list-files assertion proving the product and integration pools do not overlap. If a module cannot meet a floor, add behavioral tests; do not exclude the audited module or reduce either contract.
+GitHub Actions runs a `full` job on Node 24 LTS with clean install, dependency-shape check, typecheck, lint, product tests, integration tests, both coverage contracts, build, and `npm run audit:security` (`npm audit --include=dev --audit-level=low`); a Node 20 `compatibility` job and a Windows Node 24 `windows-smoke` job each run clean install plus the product and integration suites only. Keep the current `vitest.config.ts` include and thresholds as the core contract while excluding `tests/db.cli.test.ts` and restoring `isolate:true`. Add `vitest.risk.config.ts` for provider identity, Stage A/C provenance, job artifacts/scheduler/state, report query/diff/export, settings queue, and request security at exactly 85/75/85/85, also excluding the DB CLI file and using `isolate:true`. Make `vitest.integration.config.ts` include only `tests/db.cli.test.ts`; add a config/list-files assertion proving the product and integration pools do not overlap. If a module cannot meet a floor, add behavioral tests; do not exclude the audited module or reduce either contract.
 
 - [ ] **Step 4: Verify DB flake isolation**
 

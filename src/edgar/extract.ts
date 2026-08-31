@@ -181,7 +181,24 @@ export function stripHiddenBlocks(html: string): string {
     .replace(/<ix:header\b[\s\S]*?<\/ix:header>/gi, " ")
     .replace(/<ix:hidden\b[\s\S]*?<\/ix:hidden>/gi, " ");
 
-  const openRe = /<([a-zA-Z][a-zA-Z0-9]*)\b[^>]*style\s*=\s*"[^"]*display\s*:\s*none[^"]*"[^>]*>/g;
+  // Match every spelling a filer may legitimately emit, not just the
+  // double-quoted all-lowercase one:
+  //   - the value quoted with " or ', or unquoted;
+  //   - any casing of the `style` attribute and of `display`/`none` (the `i`
+  //     flag), with optional whitespace around the colon;
+  //   - `display:none` anywhere in a semicolon-separated declaration list;
+  //   - namespaced/hyphenated tag names (`ix:nonFraction`), whose names were
+  //     previously truncated at the colon so iXBRL hidden blocks survived.
+  // The leading `\s` before `style` keeps `data-style="display:none"` — a
+  // decoy attribute on VISIBLE content — from being treated as hidden.
+  const openRe = new RegExp(
+    `<([a-zA-Z][a-zA-Z0-9:._-]*)\\b[^>]*\\sstyle\\s*=\\s*(?:` +
+      `"[^"]*display\\s*:\\s*none[^"]*"` +
+      `|'[^']*display\\s*:\\s*none[^']*'` +
+      `|[^\\s>"']*display:none[^\\s>]*` +
+      `)[^>]*>`,
+    "gi",
+  );
   const parts: string[] = [];
   let cursor = 0;
   let m: RegExpExecArray | null;
@@ -622,7 +639,15 @@ function layer1Slice(html: string, entries: TocEntry[], spec: SectionSpec, notes
   const cand = titleEntries.find((e) => titleMatchesKind(e.title, kind) && (pos.get(e.target) ?? -1) >= 0);
   if (cand === undefined) return null;
   const start = pos.get(cand.target) as number;
-  const ordered = titleEntries.filter((e) => (pos.get(e.target) ?? -1) >= 0).sort((a, b) => (pos.get(a.target) as number) - (pos.get(b.target) as number));
+  // Bound by the next anchor of ANY entry, not just the next title-only one.
+  // This branch is reached whenever no item-numbered entry matched the wanted
+  // item, which does not mean none EXIST — so ignoring item anchors let the
+  // slice run straight through a later item's heading and return that item's
+  // text as part of this section. The item-numbered branch above already bounds
+  // this way.
+  const ordered = entries
+    .filter((e) => (pos.get(e.target) ?? -1) >= 0)
+    .sort((a, b) => (pos.get(a.target) as number) - (pos.get(b.target) as number));
   let end = html.length;
   for (const e of ordered) {
     const p = pos.get(e.target) as number;
@@ -794,10 +819,19 @@ const EXHIBIT_PHRASE_RE = /annual[\s]+report[\s]+to[\s]+(?:share|stock)holders|e
 /** Section titles quoted inside a stub (WFC names its EX-13 target "Financial Review"). */
 export function parseQuotedTitles(stub: string): string[] {
   const out: string[] = [];
-  const re = /[“"']([^“”"']{3,140})[”"']/g;
+  // Pair each quote style with its own closer. A single character class for all
+  // of them lets a straight apostrophe close a double-quoted run, so
+  // `"Management's Discussion and Analysis…"` would yield the fragment
+  // "Management" — and buildSynonyms ranks stub titles ABOVE the generic
+  // synonyms, so that fragment becomes a high-priority substring matcher that
+  // can select the wrong exhibit section. `&quot;`/`&apos;` both decode to
+  // ASCII, so this shape arrives from ordinary filings.
+  // The straight-apostrophe pair additionally requires non-letter boundaries so
+  // possessives ("the Company's … shareholders'") cannot fabricate a title.
+  const re = /“([^“”]{3,140})”|"([^"]{3,140})"|(?<![A-Za-z])'([^']{3,140})'(?![A-Za-z])/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(stub)) !== null) {
-    const t = m[1].trim();
+    const t = (m[1] ?? m[2] ?? m[3] ?? "").trim();
     if (/[a-zA-Z]{3,}/.test(t) && !out.includes(t)) out.push(t);
   }
   return out;

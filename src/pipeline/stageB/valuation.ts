@@ -1620,6 +1620,12 @@ export function multiplesFramework(
   for (const m of multiples) {
     if (m.current !== null && m.current <= 0) {
       m.current = null;
+      // The own-history rank was computed from this value before it was ruled
+      // not-meaningful, so it must go too — otherwise the report shows a
+      // percentile (typically 0th) for a multiple it prints as n/m. The
+      // distribution (p5..p95, observations) is independent of `current` and
+      // stays.
+      if (m.ownHistory !== null) m.ownHistory = { ...m.ownHistory, percentileRank: null };
       notes.push(`${m.key}: negative/zero multiple rendered n/m`);
     }
   }
@@ -2078,6 +2084,44 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
       : excessReturnModel({ bookValue: null, currentRoePct: null, costOfEquityPct: null });
     if (!inputs.excessReturn) {
       gaps.push(gapEntry("valuation.excessReturn", "excess-return inputs not provided by caller", "critical"));
+    }
+    // ADR currency guard, the excess-return twin of the DCF guard below. The
+    // per-share value is in the statements' reportedCurrency while the price it
+    // is graded against is the quote currency, so on a mismatch the upside is
+    // off by the FX rate. Suppress the per-share (and the market-cap reverse
+    // solve, which compares equity value to a quote-currency market cap) rather
+    // than publish a mixed-currency comparison. No FX conversion attempted.
+    const erReported = inputs.multiples.reportedCurrency;
+    const erQuote = inputs.multiples.quote.currency;
+    if (
+      typeof erReported === "string" &&
+      typeof erQuote === "string" &&
+      erReported.toUpperCase() !== erQuote.toUpperCase()
+    ) {
+      notes.push(
+        `ADR/currency mismatch: statements in ${erReported}, quote in ${erQuote} — excess-return per-share and reverse solve suppressed ` +
+          `(per-share intrinsic value would be in ${erReported} against a ${erQuote} price; no FX conversion attempted). ` +
+          "See multiples (flagged) for relative valuation.",
+      );
+      gaps.push(
+        gapEntry(
+          "valuation.excessReturn.currency",
+          `reportedCurrency ${erReported} != quote currency ${erQuote} (ADR case) — excess-return per-share suppressed rather than comparing mixed-currency per-share vs price`,
+          "critical",
+        ),
+      );
+      const guarded: ExcessReturnResult = {
+        ...er,
+        perShare: null,
+        reverseSolve: {
+          impliedSteadyRoePct: null,
+          notes: [
+            ...er.reverseSolve.notes,
+            `reverse solve suppressed: market cap is in ${erQuote} while book value is in ${erReported}`,
+          ],
+        },
+      };
+      return { kind: "excess-return", route: route.base, excessReturn: guarded, multiples, notes, gaps };
     }
     // Hoist model-level gaps (CoE/bookValue/payout/ROE suppression, …) so
     // they reach the merged manifest, mirroring the general branch's

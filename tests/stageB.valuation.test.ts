@@ -858,6 +858,28 @@ describe("multiplesFramework", () => {
     expect(r.notes.some((n) => /EV multiples suppressed/i.test(n))).toBe(true);
   });
 
+  it("drops the own-history percentile for a multiple rendered n/m", () => {
+    // Net cash exceeds market cap -> EV < 0 -> evToEbitda is negative and the
+    // framework renders it n/m. The percentile was computed from that same
+    // negative value BEFORE the n/m nulling, so the report showed a rank (0th)
+    // for a multiple it simultaneously declared meaningless.
+    const quarters = flatHistoryQuarters(12);
+    const evRows = flatEvHistory(quarters.map((quarter) => quarter.date));
+    const r = multiplesFramework("general", {
+      ...baseInputs,
+      quote: { price: 100, marketCap: 1000, currency: "USD" },
+      balance: { ...baseInputs.balance!, totalDebt: 0, cashAndShortTermInvestments: 5000 },
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: evRows,
+    });
+
+    const evEbitda = r.multiples.find((m) => m.key === "evToEbitda");
+    expect(evEbitda?.current).toBeNull();
+    // The distribution itself is still real and stays; only the rank of a
+    // now-meaningless current value goes.
+    expect(evEbitda?.ownHistory?.percentileRank ?? null).toBeNull();
+  });
+
   it("builds exactly nine own-history observations from twelve contiguous TTM windows", () => {
     const quarters = flatHistoryQuarters(12);
     const evRows = flatEvHistory(quarters.map((quarter) => quarter.date));

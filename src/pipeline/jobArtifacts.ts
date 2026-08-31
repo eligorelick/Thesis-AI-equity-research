@@ -141,6 +141,17 @@ export interface ComputedJobResumePlan {
   synthesize: ReusableSynthesizePass | null;
   verify: ReusableVerifyPass | null;
   payloadFingerprint: string | null;
+  /**
+   * Web-search URLs the analyst passes fetched, carried forward even when the
+   * passes themselves are superseded by a reusable synthesize artifact.
+   *
+   * Verification measures citation coverage against the evidence the run
+   * actually gathered. On a synthesize-reuse resume `bull`/`bear` are null by
+   * design — synthesize already contains their conclusion — but dropping their
+   * URLs shrank the evidence set verify checked against, understating coverage
+   * for a report whose analysts had in fact fetched those sources.
+   */
+  analystFetchedUrls: string[];
 }
 
 export interface PassCostDetails {
@@ -380,7 +391,28 @@ function notResumable(reason: string): ComputedJobResumePlan {
     synthesize: null,
     verify: null,
     payloadFingerprint: null,
+    analystFetchedUrls: [],
   };
+}
+
+/**
+ * Every canonical URL the analyst passes fetched in this generation.
+ *
+ * Collected from the artifacts directly rather than from the reusable-pass
+ * projection, because the synthesize- and verify-reuse plans deliberately null
+ * `bull`/`bear` — their analysis is superseded — while verification still needs
+ * the evidence those passes gathered.
+ */
+function analystFetchedUrlsFrom(input: ResumeArtifacts): string[] {
+  const urls = new Set<string>();
+  for (const artifact of input.currentArtifacts) {
+    if (artifact.pass !== "bull" && artifact.pass !== "bear") continue;
+    for (const raw of artifact.telemetry.fetchedUrls) {
+      const canonical = canonicalizeFetchedUrl(raw);
+      if (canonical) urls.add(canonical);
+    }
+  }
+  return [...urls].sort();
 }
 
 function singleSuccessfulArtifact(
@@ -428,6 +460,7 @@ export function computeJobResumePlan(input: ResumeArtifacts): ComputedJobResumeP
       synthesize: null,
       verify: reusableResultFromArtifact<Report>(verifyArtifact),
       payloadFingerprint: verifyArtifact.envelope.payloadFingerprint,
+      analystFetchedUrls: analystFetchedUrlsFrom(input),
     };
   }
   const synthesizeArtifact = singleSuccessfulArtifact(input, "synthesize");
@@ -446,6 +479,7 @@ export function computeJobResumePlan(input: ResumeArtifacts): ComputedJobResumeP
       synthesize: reusableResultFromArtifact<JudgeOutput>(synthesizeArtifact),
       verify: null,
       payloadFingerprint: synthesizeArtifact.envelope.payloadFingerprint,
+      analystFetchedUrls: analystFetchedUrlsFrom(input),
     };
   }
 
@@ -493,6 +527,7 @@ export function computeJobResumePlan(input: ResumeArtifacts): ComputedJobResumeP
     synthesize: null,
     verify: null,
     payloadFingerprint: bull?.fingerprint ?? bear?.fingerprint ?? null,
+    analystFetchedUrls: analystFetchedUrlsFrom(input),
   };
 }
 

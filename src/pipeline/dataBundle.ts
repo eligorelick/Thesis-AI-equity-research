@@ -199,8 +199,17 @@ export function makeFmpCachedFetch(): CachedFetchFn {
       // A transient 200-`[]` (body === []) must never overwrite a previously
       // cached non-empty statement/price body for the whole TTL (M6). First
       // fetches still cache (segmentation expected-empty caching unaffected).
+      // A zero-length 200 body parses to `body: null` in the FMP loader, which
+      // carries even less than `[]`, so it counts as empty here too. An object
+      // body is NOT treated as empty: `allowObjectBody` endpoints return one
+      // legitimately, and for the rest the loader already rejects it before
+      // storage.
+      // A value that is not a LiveExchange at all is never "empty" — only an
+      // envelope that really carries an empty body qualifies.
       isEmptyBody: (value: T): boolean => {
+        if (typeof value !== "object" || value === null || !("body" in value)) return false;
         const inner = (value as { body?: unknown }).body;
+        if (inner === null || inner === undefined) return true;
         return Array.isArray(inner) && inner.length === 0;
       },
     });
@@ -593,7 +602,12 @@ export function deriveNextEarnings(
   }
   const value: Sourced<FmpEarningsRow> = {
     data: next.row,
-    asOf: next.date,
+    // `asOf` is the OBSERVATION date — when this calendar was observed — which
+    // the derivation inherits from its parent envelope. Using `next.date` here
+    // stamped the datum with the FUTURE event date, so every downstream
+    // freshness and as-of comparison saw it as newer than data observed later.
+    // The event date itself stays in the datum (`data.date`).
+    asOf: earnings.value.asOf,
     source: earnings.value.source,
     endpoint: `${earnings.value.endpoint} (derived: earliest future row)`,
     fetchedAt: earnings.value.fetchedAt,

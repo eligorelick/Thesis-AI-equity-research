@@ -76,6 +76,22 @@ describe("read-only legacy export safety", () => {
     expect(ReportSchema.safeParse(result.report).success).toBe(true);
   });
 
+  it("does not withhold prose that merely uses an acronym alias as an ordinary verb", () => {
+    // The real LLY registry carries trial acronyms that are also English verbs
+    // (ACHIEVE, ATTAIN, TRIUMPH, TRANSCEND). Matching them case-insensitively
+    // made ordinary analyst prose look like an entity conflict and replaced the
+    // whole sentence with a "Legacy statement withheld" placeholder.
+    const report = fixtureReport("DEMO");
+    const prose =
+      "Management expects to achieve mid-teens margins and attain its cost targets.";
+    report.verdict.synthesis = prose;
+
+    const result = sanitizeLegacyEntityConflicts(report, SYNTHETIC_ENTITY_REGISTRY);
+
+    expect(result.report.verdict.synthesis).toBe(prose);
+    expect(JSON.stringify(result.report)).not.toContain("Legacy statement withheld");
+  });
+
   it("legacy entity safety preserves rendered citation correction and marks ambiguity unsupported", () => {
     const report = fixtureReport("DEMO");
     const rendered = report.verdict.gradeStrip.fundamentals.reasoning[0];

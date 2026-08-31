@@ -21,7 +21,7 @@
 
 import "server-only";
 
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 
 import { getDb } from "@/db";
 import { watchlist, type WatchlistRow } from "@/db/schema";
@@ -35,7 +35,7 @@ import {
   type GradeSurfaceKey,
 } from "@/report/surfaceManifest";
 import type { GradeStrip } from "@/report/schema";
-import { normalizeSymbol as normalizeTickerSymbol } from "@/symbol";
+import { canonicalEntitySymbol, normalizeSymbol as normalizeTickerSymbol } from "@/symbol";
 import type { Grade } from "@/types/core";
 
 /* ------------------------------------------------------------------------ *
@@ -98,7 +98,22 @@ export function normalizeSymbol(symbol: string): string {
  */
 export function addToWatchlist(symbol: string): string {
   const normalized = normalizeSymbol(symbol);
-  getDb()
+  const canonical = canonicalEntitySymbol(normalized);
+  const db = getDb();
+  // `normalizeSymbol` only uppercases, so BRK.B and BRK-B used to create two
+  // rows for one company — and since every report and run read folds that
+  // share-class alias, both rows resolved to the same report and the sidebar
+  // listed the company twice. Keep the spelling already stored (provider
+  // lookups use it) and never add a second row for the same entity.
+  if (canonical !== null) {
+    const existing = db
+      .select({ symbol: watchlist.symbol })
+      .from(watchlist)
+      .where(sql`upper(replace(${watchlist.symbol}, '-', '.')) = ${canonical}`)
+      .get();
+    if (existing !== undefined) return existing.symbol;
+  }
+  db
     .insert(watchlist)
     .values({ symbol: normalized, addedAt: new Date().toISOString() })
     .onConflictDoNothing({ target: watchlist.symbol })
@@ -109,7 +124,16 @@ export function addToWatchlist(symbol: string): string {
 /** Remove a symbol from the watchlist (idempotent — no-op when absent). */
 export function removeFromWatchlist(symbol: string): void {
   const normalized = normalizeSymbol(symbol);
-  getDb().delete(watchlist).where(eq(watchlist.symbol, normalized)).run();
+  const canonical = canonicalEntitySymbol(normalized);
+  // Remove by entity, so an entry added as BRK.B is removable as BRK-B.
+  getDb()
+    .delete(watchlist)
+    .where(
+      canonical === null
+        ? eq(watchlist.symbol, normalized)
+        : sql`upper(replace(${watchlist.symbol}, '-', '.')) = ${canonical}`,
+    )
+    .run();
 }
 
 /** Raw watchlist rows, oldest-added first. */

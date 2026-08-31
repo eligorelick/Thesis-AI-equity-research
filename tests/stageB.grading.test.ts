@@ -449,6 +449,27 @@ describe("grading — sector routing", () => {
     expect(s.composite.weights.quality).toBe(26);
   });
 
+  it("the real financial routes also suppress the NOA-scaled accrual ratio", () => {
+    // The Sloan accrual ratio is scaled by net operating assets, and NOA
+    // subtracts (totalLiabilities − totalDebt) — for a bank that is deposits,
+    // its raw material. Scoring a bank on it is the same category error the
+    // route already avoids for netDebt, fcfDcf, Altman and Beneish.
+    for (const base of ["bank", "insurer", "reit-mortgage"] as const) {
+      expect(metricPolicy(base).suppress).toContain("accrualsRatio");
+    }
+    // A general (non-financial) issuer is still scored on it.
+    expect(metricPolicy("general").suppress).not.toContain("accrualsRatio");
+  });
+
+  it("a bank is not scored on the accrual ratio even when one is reported", () => {
+    const s = computeScores(
+      makeInputs({ route: route("bank"), policy: metricPolicy("bank") }),
+    );
+
+    const qNames = s.aspects.quality.drivers.map((d) => d.source);
+    expect(qNames.some((n) => n.includes("accrualsRatioAbs"))).toBe(false);
+  });
+
   function excessReturnVal(curRoe: number, impliedRoe: number, tbvPercentile = 40): ValuationResult {
     return {
       kind: "excess-return",
@@ -629,8 +650,15 @@ describe("grading — composite completeness excludes route-inapplicable evidenc
 
     // compWeight can never reach 100 on a bank: balanceSheet (10) is dropped and
     // quality/moat lose their suppressed signals. Hand-derived route-applicable
-    // weight = 15 + 22 + 26·0.72 + 15·0.75 + 7 + 5 = 78.97.
-    expect(round2(compWeight)).toBe(78.97);
+    // weight = 15 + 22 + 26·0.57 + 15·0.75 + 7 + 5 = 75.07.
+    //
+    // Quality's applicable share fell from 0.72 to 0.57 on 2026-08-31 when
+    // accrualsRatioAbs (0.15) joined altmanZ (0.16) and beneishM (0.12) in the
+    // bank suppression list: the Sloan ratio is scaled by net operating assets,
+    // and NOA subtracts (totalLiabilities − totalDebt), which for a bank is
+    // deposits — its raw material. That is the same category error the route
+    // already avoids for netDebt and fcfDcf.
+    expect(round2(compWeight)).toBe(75.07);
 
     // The OLD denominator (a fixed 100) would have shrunk this identical bank
     // by ×0.7897 toward 50 — a structural cap the fix removes.

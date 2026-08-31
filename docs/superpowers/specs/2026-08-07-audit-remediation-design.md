@@ -8,6 +8,17 @@
 
 **Implementation branch:** `codex/audit-remediation`
 
+> **Status: complete and merged.** Every finding below (H1-H6, M1-M13, L1-L3,
+> and the adjacent A1-A4 risks) was implemented on `codex/audit-remediation`,
+> whose head `7b2eb51` is an ancestor of `main`. Evidence is in
+> [`../audits/2026-08-07-remediation-verification.md`](../audits/2026-08-07-remediation-verification.md),
+> which records every row GREEN and two independent final reviews at
+> C0 / I0 / M0 — READY. Two residual limitations recorded there remain open and
+> are tracked in
+> [`../plans/2026-08-31-outstanding-audit-items.md`](../plans/2026-08-31-outstanding-audit-items.md):
+> the external audit report this design names is absent from the workspace, and
+> branch protection requiring `CI / full` is documented but still NOT OBSERVED.
+
 ## Goal
 
 Correct every high, medium, and low finding in the independent audit without
@@ -343,9 +354,12 @@ it cannot mirror the implementation.
 
 #### M12: CI, coverage, and deterministic test pools
 
-- Add checked-in GitHub Actions CI on supported Node 20 with clean install,
-  typecheck, lint, product tests, risk-based coverage, production build, and
-  audit.
+- Add checked-in GitHub Actions CI whose primary `full` job runs on Node 24 LTS
+  with clean install, dependency-shape check, typecheck, lint, product tests,
+  integration tests, risk-based coverage, production build, and audit; plus a
+  Node 20 compatibility job at the minimum supported engine (`>=20.9.0`) and a
+  Windows Node 24 smoke job, each running clean install and the product and
+  integration suites only.
 - Make `npm run verify` execute the same required gates, including coverage.
 - Keep explicit typecheck as a required predecessor even if Next build remains
   configured to avoid duplicate checking.

@@ -238,10 +238,13 @@ describe("Finnhub adapters", () => {
       requestedUrls.push(requested);
       const path = requested.pathname;
       if (path.endsWith("/stock/insider-sentiment")) {
+        // Finnhub echoes the issuer at the top level and on every row; the
+        // client binds the payload to the requested symbol.
         return jsonResponse({
+          symbol: "AAPL",
           data: [
-            { year: 2026, month: 6, change: null, mspr: 3.5 },
-            { year: 2025, month: 12 },
+            { symbol: "AAPL", year: 2026, month: 6, change: null, mspr: 3.5 },
+            { symbol: "AAPL", year: 2025, month: 12 },
           ],
         });
       }
@@ -348,7 +351,7 @@ describe("Finnhub adapters", () => {
   it("distinguishes empty, malformed, auth, premium, transient, and retry outcomes", async () => {
     const empty = await insiderSentiment("AAPL", "2026-01-01", "2026-07-31", {
       ...FAST_FINNHUB,
-      fetchImpl: async () => jsonResponse({ data: [] }),
+      fetchImpl: async () => jsonResponse({ symbol: "AAPL", data: [] }),
     });
     expect(empty).toMatchObject({ ok: false, gap: { severity: "info" } });
 
@@ -377,7 +380,7 @@ describe("Finnhub adapters", () => {
         attempts += 1;
         return attempts === 1
           ? jsonResponse({ busy: true }, 503)
-          : jsonResponse({ data: [{ year: 2026, month: 7, change: 1, mspr: 2 }] });
+          : jsonResponse({ symbol: "AAPL", data: [{ symbol: "AAPL", year: 2026, month: 7, change: 1, mspr: 2 }] });
       },
     });
     expect(retry.ok).toBe(true);
@@ -849,7 +852,15 @@ describe("data-bundle provider boundaries", () => {
       "2026-08-01",
       "AAPL",
     );
-    expect(result).toMatchObject({ ok: true, value: { asOf: "2026-08-15", stale: true } });
+    // Changed 2026-08-31: `asOf` is the OBSERVATION date — when the earnings
+    // calendar was observed — not the future event date. Stamping a datum with
+    // a date in the future made every freshness and as-of comparison downstream
+    // treat it as newer than data that had actually been observed later. The
+    // event date stays where it belongs, in the datum itself.
+    expect(result).toMatchObject({
+      ok: true,
+      value: { asOf: "2026-06-30", stale: true, data: { date: "2026-08-15" } },
+    });
     expect(rows).toEqual(before);
 
     const upstreamGap = deriveNextEarnings(

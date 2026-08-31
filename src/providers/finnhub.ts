@@ -19,6 +19,7 @@ import "server-only";
 import { z } from "zod";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
 import { fetchWithRedirectPolicy } from "@/providers/http";
+import { sameEntitySymbol } from "@/symbol";
 
 /** Cache TTL for insider sentiment, seconds (24 h). */
 export const FINNHUB_TTL_SECONDS = 86400;
@@ -216,13 +217,22 @@ function assertIsoDate(value: string, param: string): void {
 // Insider sentiment (MSPR) — always-on adapter
 // ---------------------------------------------------------------------------
 
+/**
+ * The response contract, not just its shape. Finnhub echoes the issuer at the
+ * top level and on every row; discarding those made a wrong-issuer payload
+ * indistinguishable from this company's data. `year`/`month` and MSPR are
+ * bounded to their documented domains so an impossible month or an out-of-range
+ * ratio becomes a typed gap instead of a forensic signal.
+ */
 const insiderSentimentSchema = z.object({
+  symbol: z.string().min(1),
   data: z.array(
     z.object({
-      year: z.number(),
-      month: z.number(),
-      change: z.number().nullish(),
-      mspr: z.number().nullish(),
+      symbol: z.string().min(1),
+      year: z.number().int().min(1900).max(2100),
+      month: z.number().int().min(1).max(12),
+      change: z.number().finite().nullish(),
+      mspr: z.number().finite().min(-100).max(100).nullish(),
     }),
   ),
 });
@@ -257,6 +267,30 @@ export async function insiderSentiment(
     return {
       ok: false,
       gap: finnhubGap(field, "insider sentiment payload had an unrecognized shape", "warn"),
+    };
+  }
+  // Bind the payload to the issuer that was requested. A response echoing a
+  // different symbol — at the top level or on any row — is another company's
+  // data and must never be filed under this one.
+  if (!sameEntitySymbol(sym, parsed.data.symbol)) {
+    return {
+      ok: false,
+      gap: finnhubGap(
+        field,
+        `insider sentiment returned issuer ${parsed.data.symbol} for requested ${sym}`,
+        "warn",
+      ),
+    };
+  }
+  const wrongRow = parsed.data.data.find((m) => !sameEntitySymbol(sym, m.symbol));
+  if (wrongRow !== undefined) {
+    return {
+      ok: false,
+      gap: finnhubGap(
+        field,
+        `insider sentiment row reported issuer ${wrongRow.symbol} for requested ${sym}`,
+        "warn",
+      ),
     };
   }
   const months: InsiderSentimentMonth[] = parsed.data.data

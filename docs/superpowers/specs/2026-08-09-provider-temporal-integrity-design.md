@@ -6,6 +6,14 @@
 
 **Workstream:** 1 of 4
 
+> **Status: all eight Scope defects fixed on `main` (2026-08-31)**, though by a
+> different implementation than the Architecture section prescribes. See the
+> status note in
+> [`../plans/2026-08-09-provider-temporal-integrity.md`](../plans/2026-08-09-provider-temporal-integrity.md)
+> for what shipped, and the "Second pass" table in
+> [`../audits/2026-08-30-code-and-docs-audit.md`](../audits/2026-08-30-code-and-docs-audit.md)
+> for the per-defect regression tests.
+
 ## Goal
 
 Ensure that provider data enters the research pipeline only when its entity,
@@ -31,7 +39,9 @@ This workstream corrects the following reproduced defects:
 1. Finnhub insider sentiment accepts a wrong issuer, invalid month/year values,
    and MSPR outside its documented range.
 2. EDGAR extraction retains valid `display:none` variants that use single
-   quotes, unquoted attributes, capitalization, or spacing.
+   quotes, unquoted attributes, or non-lowercase spelling of `style`,
+   `display`, or `none`. Whitespace variants around the `=` and the `:`, and
+   declarations where `display:none` is not the first one, already match.
 3. FMP admits schema-invalid HTTP-200 payloads to memory or SQLite cache before
    endpoint validation.
 4. EDGAR tickers, submissions, and company-facts endpoints admit malformed or
@@ -162,9 +172,12 @@ and exhibit extraction, but replace its double-quote/lowercase-only style match
 with attribute parsing that recognizes:
 
 - double-quoted, single-quoted, and unquoted `style` values;
-- case-insensitive `display` and `none` tokens;
-- optional whitespace around the colon;
-- semicolon-delimited declarations where `display:none` is not first.
+- a case-insensitive `style` attribute name and case-insensitive `display` and
+  `none` tokens.
+
+The existing regex already tolerates whitespace around the `=` and the colon
+and already matches semicolon-delimited declarations where `display:none` is
+not first; the replacement must preserve both.
 
 Remove the entire hidden element block before `htmlToText` and before section
 heading selection. Existing `hidden` attributes and hidden-tag handling remain

@@ -47,6 +47,7 @@ import {
   deriveReportCompletenessPresentation,
   type ReportCompletenessPresentation,
 } from "@/report/completeness";
+import { formatCostUsd, formatFinancialValue, roundedDisplayedCostTotal } from "@/report/format";
 import {
   markdownBlockquote,
   markdownHeading,
@@ -126,36 +127,18 @@ function num(v: number | null | undefined, digits = 2): string {
   return v.toFixed(digits);
 }
 
-/** Compact magnitude with a fixed scale suffix (deterministic, no grouping). */
-function large(v: number | null | undefined): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return DASH;
-  const abs = Math.abs(v);
-  const sign = v < 0 ? "-" : "";
-  if (abs >= 1e12) return `${sign}${(abs / 1e12).toFixed(2)}T`;
-  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`;
-  return `${sign}${abs.toFixed(2)}`;
-}
-
 /**
  * Render a {@link TracedNumber}'s value per its declared `unit`, mirroring the
  * on-screen `formatTracedValue`. Unit strings are as-reported free-text.
  */
 function tracedValue(n: TracedNumber): string {
-  const u = n.unit.trim().toLowerCase();
-  if (u === "%" || u === "pct" || u === "percent") return `${num(n.value, 1)}%`;
-  if (u === "x" || u === "×" || u === "multiple") return `${num(n.value, 1)}×`;
-  if (u === "usd" || u === "$" || u === "usd/share" || u === "$/share")
-    return `$${num(n.value, 2)}`;
-  if (u === "usd_large" || u === "usd-large" || u === "$_large")
-    return `$${large(n.value)}`;
-  if (u === "large" || u === "count_large") return large(n.value);
-  if (u === "bps") return `${num(n.value, 0)} bps`;
-  if (u === "years" || u === "yr" || u === "y") return `${num(n.value, 1)}y`;
-  if (u === "" || u === "number" || u === "count")
-    return num(n.value, Number.isInteger(n.value) ? 0 : 2);
-  return `${num(n.value)} ${n.unit}`;
+  // Delegate to the single canonical formatter the on-screen and print surfaces
+  // use. The previous hand-rolled table drifted from it: it had no "currency"
+  // alias (so those figures rendered as a bare number with the word "currency"
+  // appended) and rendered plain "usd" without magnitude scaling, so the same
+  // value printed as $13,500,000,000.00 in Markdown and $13.50B everywhere
+  // else.
+  return formatFinancialValue(n.value, n.unit);
 }
 
 /** Signed percent for deltas (e.g. +7.3% / -4.0%). */
@@ -713,14 +696,24 @@ function renderQuality(q: Quality): string {
   lines.push(
     "### Forensic scores",
     "",
+    // The "Not applicable" column carries the reason a battery was skipped for
+    // this route (Altman and Beneish are suppressed for financials, for
+    // example). The on-screen report shows it; without the column an export
+    // reader saw only a bare dash and no explanation.
     table(
-      ["Battery", "Variant", "Score", "Zone"],
+      ["Battery", "Variant", "Score", "Zone", "Not applicable"],
       [
-        ["Altman Z", fs.altman.variant, num(fs.altman.score, 2), fs.altman.zone ?? DASH],
-        ["Beneish M", fs.beneish.variant, num(fs.beneish.score, 2), fs.beneish.zone ?? DASH],
-        ["Piotroski F", fs.piotroski.variant, num(fs.piotroski.score, 0), fs.piotroski.zone ?? DASH],
-        ["Accruals", fs.accruals.variant, num(fs.accruals.score, 2), fs.accruals.zone ?? DASH],
-      ],
+        ["Altman Z", fs.altman, num(fs.altman.score, 2)] as const,
+        ["Beneish M", fs.beneish, num(fs.beneish.score, 2)] as const,
+        ["Piotroski F", fs.piotroski, num(fs.piotroski.score, 0)] as const,
+        ["Accruals", fs.accruals, num(fs.accruals.score, 2)] as const,
+      ].map(([label, entry, score]) => [
+        label,
+        entry.variant,
+        score,
+        entry.zone ?? DASH,
+        entry.notApplicableReason ?? DASH,
+      ]),
     ),
     "",
   );
@@ -1002,16 +995,20 @@ function renderAppendix(
       "",
     );
   }
-  const totalCost = a.costBreakdown.reduce((s, e) => s + e.costUsd, 0);
+  // Use the shared cost formatter and the shared total, which sums the ROUNDED
+  // row values. Rendering rows at four decimals and totalling the unrounded
+  // ones printed sub-cent steps as $0.0000 and let the Total disagree with the
+  // rows beside it — on a ledger the reader is expected to be able to add up.
+  const totalCost = roundedDisplayedCostTotal(a.costBreakdown.map((e) => e.costUsd));
   lines.push(
     "### Cost breakdown",
     "",
     table(
       ["Step", "Model", "Cost (USD)"],
-      a.costBreakdown.map((e) => [e.step, e.model, `$${e.costUsd.toFixed(4)}`]),
+      a.costBreakdown.map((e) => [e.step, e.model, formatCostUsd(e.costUsd)]),
     ),
     "",
-    `Total: **$${totalCost.toFixed(4)}**`,
+    `Total: **${formatCostUsd(totalCost)}**`,
   );
   return lines.join("\n");
 }
@@ -1040,7 +1037,7 @@ function renderHeader(
         ...(m.verifyModel !== undefined ? [["Verify model", m.verifyModel]] : []),
         ["Spec version", m.specVersion],
         ["Pipeline version", m.pipelineVersion],
-        ["Cost (USD)", `$${m.costUsd.toFixed(4)}`],
+        ["Cost (USD)", formatCostUsd(m.costUsd)],
         ["Data completeness", completeness.statusText],
         [
           "Citation coverage",

@@ -626,14 +626,22 @@ function scenarioCard(sc: Scenario): string {
 
 function sectionQuality(q: Quality): string {
   const fs = q.forensicScores;
+  // "Not applicable" carries the reason a battery was skipped for this route,
+  // which the on-screen report shows and the export previously dropped.
   const forensic = table(
-    ["Battery", "Variant", "Score", "Zone"],
-    [
-      ["Altman Z", fs.altman.variant, num(fs.altman.score, 2), fs.altman.zone ?? DASH],
-      ["Beneish M", fs.beneish.variant, num(fs.beneish.score, 2), fs.beneish.zone ?? DASH],
-      ["Piotroski F", fs.piotroski.variant, num(fs.piotroski.score, 0), fs.piotroski.zone ?? DASH],
-      ["Accruals", fs.accruals.variant, num(fs.accruals.score, 2), fs.accruals.zone ?? DASH],
-    ].map((r) => r.map((c) => esc(String(c)))),
+    ["Battery", "Variant", "Score", "Zone", "Not applicable"],
+    (
+      [
+        ["Altman Z", fs.altman, num(fs.altman.score, 2)],
+        ["Beneish M", fs.beneish, num(fs.beneish.score, 2)],
+        ["Piotroski F", fs.piotroski, num(fs.piotroski.score, 0)],
+        ["Accruals", fs.accruals, num(fs.accruals.score, 2)],
+      ] as const
+    ).map(([label, entry, score]) =>
+      [label, entry.variant, score, entry.zone ?? DASH, entry.notApplicableReason ?? DASH].map(
+        (c) => esc(String(c)),
+      ),
+    ),
   );
   const flags =
     q.flags.length > 0

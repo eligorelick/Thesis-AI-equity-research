@@ -489,7 +489,13 @@ describe("payload determinism + provenance", () => {
       citationHash: "7ebe5276",
       computedFigureLabelHash: "2162c1ed",
       projectionPathPeriodHash: "45ce96a4",
-      financeHash: "b421c36e",
+      // Changed 2026-08-31: the projections fcf series now states that its
+      // HISTORICAL points are the reported levered figure while the PROJECTED
+      // points are unlevered FCFF, instead of claiming the whole series is
+      // FCFF. That is a deliberate content correction to the finance payload;
+      // fingerprint and promptBytes are unchanged, so the model prompt is not
+      // affected. See tests/stageB.projections.test.ts "FCF basis change".
+      financeHash: "642331a5",
     });
   });
 

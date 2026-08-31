@@ -152,7 +152,10 @@ export function canonicalizeTracedUnit(
   return null;
 }
 
-function isIsoDate(value: string): boolean {
+/** Exact calendar-valid YYYY-MM-DD. Exported so producers can normalize a
+ * provider date BEFORE it reaches the registry, keeping the validators below
+ * free to stay fail-loud. */
+export function isIsoDate(value: string): boolean {
   const match = ISO_DATE.exec(value);
   if (!match) return false;
   const [, year, month, day] = match;

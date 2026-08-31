@@ -419,13 +419,26 @@ export function computeProjections(inputs: ProjectionsInputs): Projections {
       fwdPeriod,
       [
         ...assumptionLines,
-        "FCF shown is unlevered free cash flow (FCFF), consistent with the DCF (NOPAT − reinvestment).",
+        "PROJECTED FCF is unlevered free cash flow (FCFF), consistent with the DCF (NOPAT − reinvestment).",
+        "HISTORICAL FCF on this series is the reported levered figure (freeCashFlow, or operatingCashFlow + capitalExpenditure), which is stated AFTER interest. The two segments are therefore different measures: for a leveraged issuer the level steps at the history→forecast seam by roughly after-tax interest, and that step is a change of basis, not a forecast of improvement.",
         "Scenario paths can cross: the higher-growth (bull) case reinvests more up front, so its near-term FCF may sit BELOW the lower-growth (bear) case before overtaking it as growth matures. The shaded band is the scenario range, not a strict bull-over-bear ordering.",
       ],
       disclosures,
       asOf,
     ),
   );
+
+  // The fcf series splices reported LEVERED history onto UNLEVERED (FCFF)
+  // forecasts, so the seam is a change of measure. Disclose it on the series
+  // itself, not only in the assumption prose, so the manifest carries it.
+  if (fcfAsc.length > 0) {
+    series.find((candidate) => candidate.metric === "fcf")?.disclosures.push({
+      field: "projections.fcf.basisChange",
+      reason:
+        "Historical FCF is the reported levered figure (after interest) while projected FCF is unlevered FCFF; the history→forecast step reflects that change of basis, not a forecast improvement.",
+      severity: "info",
+    });
+  }
 
   if (!isNum(inputs.shareCountAnnualizedPct)) {
     series.find((candidate) => candidate.metric === "revenue")?.disclosures.push({

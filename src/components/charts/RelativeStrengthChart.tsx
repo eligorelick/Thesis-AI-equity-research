@@ -98,10 +98,48 @@ function sortedUnique(rows: readonly RsRow[]): DatedClose[] {
   return out;
 }
 
-/** Rebased LineData for one series, dropping null-valued points. */
-export function rebasedLineData(rows: readonly RsRow[]): LineData<Time>[] {
+/** First date at which a series has a usable (finite, positive) close. */
+function firstUsableDate(rows: readonly RsRow[]): string | null {
+  for (const r of sortedUnique(rows)) {
+    if (Number.isFinite(r.close) && r.close > 0) return r.date;
+  }
+  return null;
+}
+
+/**
+ * The latest first-usable date across every series — the earliest date on which
+ * they can all be compared.
+ *
+ * Rebasing each series at its OWN first bar makes the chart lie whenever the
+ * histories differ in length: a stock with 3 years of data and a benchmark with
+ * 10 would both start at 100, but on different dates, so their divergence is
+ * measured from unrelated origins. Returns null when no series has data.
+ */
+export function commonStartDate(series: readonly { rows: readonly RsRow[] }[]): string | null {
+  let latest: string | null = null;
+  for (const s of series) {
+    const first = firstUsableDate(s.rows);
+    if (first === null) continue;
+    if (latest === null || first > latest) latest = first;
+  }
+  return latest;
+}
+
+/**
+ * Rebased LineData for one series, dropping null-valued points. When
+ * `startDate` is given the series is trimmed to it first, so every line is
+ * indexed to 100 on the same date.
+ */
+export function rebasedLineData(
+  rows: readonly RsRow[],
+  startDate?: string | null,
+): LineData<Time>[] {
   const sorted = sortedUnique(rows);
-  const rebased = rebaseTo100(sorted);
+  const scoped =
+    startDate === undefined || startDate === null
+      ? sorted
+      : sorted.filter((r) => r.date >= startDate);
+  const rebased = rebaseTo100(scoped);
   const out: LineData<Time>[] = [];
   for (const p of rebased) {
     if (p.value !== null) out.push({ time: p.date as Time, value: p.value });
@@ -168,8 +206,12 @@ export function RelativeStrengthChart({ series, height = 300 }: RelativeStrength
     });
     chartRef.current = chart;
 
+    // One shared origin for every line, so the chart shows relative
+    // performance over a comparable window rather than each series' own
+    // history-length artifact.
+    const startDate = commonStartDate(resolved);
     for (const s of resolved) {
-      const data = rebasedLineData(s.rows);
+      const data = rebasedLineData(s.rows, startDate);
       if (data.length === 0) continue;
       const line = chart.addSeries(LineSeries, {
         color: s.color,

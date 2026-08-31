@@ -44,6 +44,10 @@ const ALLOWED_MARKDOWN = new Set([
   "docs/superpowers/plans/2026-08-07-audit-remediation.md",
   "docs/superpowers/specs/2026-08-07-audit-remediation-design.md",
   "docs/superpowers/audits/2026-08-07-remediation-verification.md",
+  "docs/superpowers/plans/2026-08-09-provider-temporal-integrity.md",
+  "docs/superpowers/specs/2026-08-09-provider-temporal-integrity-design.md",
+  "docs/superpowers/audits/2026-08-30-code-and-docs-audit.md",
+  "docs/superpowers/plans/2026-08-31-outstanding-audit-items.md",
 ]);
 const VERIFY_GATES = [
   "npm run check:dependencies",

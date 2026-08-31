@@ -259,6 +259,37 @@ describe("projections — EPS derivation", () => {
   });
 });
 
+describe("projections — FCF basis change", () => {
+  /**
+   * The fcf series splices REPORTED LEVERED history (freeCashFlow, after
+   * interest) onto UNLEVERED FCFF forecasts. The assumption text previously
+   * asserted the whole series was FCFF, which is false for the historical half
+   * and hides a level step at the seam that is a change of measure, not a
+   * forecast of improvement.
+   */
+  it("labels the projected half FCFF and the historical half levered", () => {
+    const fcf = byMetric(computeProjections(makeInputs()), "fcf");
+    const assumptions = fcf.assumptions.join(" ");
+
+    expect(assumptions).toMatch(/PROJECTED FCF is unlevered free cash flow \(FCFF\)/);
+    expect(assumptions).toMatch(/HISTORICAL FCF[\s\S]*levered/i);
+  });
+
+  it("carries the basis change as a series disclosure when history exists", () => {
+    const fcf = byMetric(computeProjections(makeInputs()), "fcf");
+
+    expect(fcf.disclosures).toContainEqual(
+      expect.objectContaining({ field: "projections.fcf.basisChange", severity: "info" }),
+    );
+  });
+
+  it("omits the disclosure when there is no historical FCF to splice", () => {
+    const fcf = byMetric(computeProjections(makeInputs({ fcfHistory: [] })), "fcf");
+
+    expect(fcf.disclosures.some((d) => d.field === "projections.fcf.basisChange")).toBe(false);
+  });
+});
+
 describe("projections — not applicable", () => {
   it("returns a reason for a non-DCF (financial) route", () => {
     const val: ValuationResult = { kind: "excess-return", route: "bank", excessReturn: {} as never, multiples: {} as never, notes: [], gaps: [] };

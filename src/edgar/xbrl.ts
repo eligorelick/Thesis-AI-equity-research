@@ -227,6 +227,40 @@ export function filterToCoreForms(points: FactPoint[]): FactPoint[] {
 }
 
 /**
+ * The newest period end actually present in a companyfacts payload — its
+ * OBSERVATION date.
+ *
+ * The envelope used to carry the date it was fetched, so the observation date
+ * moved on every cache refresh even though the filings had not changed, and an
+ * issuer that last reported a year ago looked as freshly observed as one that
+ * reported yesterday. Only the core forms the extractor already trusts count,
+ * and a period end after `maxEnd` (the fetch date) is ignored so a mis-stamped
+ * future fact cannot date the envelope ahead of reality.
+ *
+ * Returns null when the payload holds no eligible fact; the caller then keeps
+ * its previous behavior rather than inventing a date.
+ */
+export function latestEligibleFactEnd(facts: CompanyFacts, maxEnd: string): string | null {
+  let latest: string | null = null;
+  for (const namespace of Object.values(facts.facts)) {
+    if (namespace === null || typeof namespace !== "object") continue;
+    for (const concept of Object.values(namespace)) {
+      const parsedConcept = conceptFactsSchema.safeParse(concept);
+      if (!parsedConcept.success) continue;
+      for (const unitPoints of Object.values(parsedConcept.data.units)) {
+        for (const point of parseFactPoints(unitPoints)) {
+          if (!CORE_FACT_FORMS.has(point.form.trim())) continue;
+          const end = point.end.slice(0, 10);
+          if (end > maxEnd) continue;
+          if (latest === null || end > latest) latest = end;
+        }
+      }
+    }
+  }
+  return latest;
+}
+
+/**
  * Step 2: group by period (start|end for durations, end for instants) and keep
  * max(filed); ties prefer amendments, then lexicographically larger accession.
  * MUST be called on core-form-filtered points (use dedupFactPoints for both).

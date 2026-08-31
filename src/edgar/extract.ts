@@ -1292,13 +1292,36 @@ export function extractFromExhibit(exhibitHtml: string, opts: ExhibitExtractOpti
     if (start !== undefined) {
       const startPos = pos.get(start.target) as number;
       const boundaries = BOUNDARY_SYNONYMS[opts.section];
-      let endPos = pre.length;
-      for (const e of titleEntries) {
+      const after = titleEntries.flatMap((e) => {
         const p = pos.get(e.target);
-        if (p === undefined || p <= startPos || e.target === start.target) continue;
+        return p === undefined || p <= startPos || e.target === start.target ? [] : [{ e, p }];
+      });
+
+      // A named boundary wins. The all-caps peer rule is a FALLBACK, not an
+      // equal alternative: inside an exhibit, a section's own SUBSECTIONS are
+      // typically all-caps too ("RESULTS OF OPERATIONS" within "FINANCIAL
+      // REVIEW"), so treating any all-caps peer as a boundary ended the slice
+      // at the first subsection and returned that fragment as ok:true — a
+      // silently truncated section, with no note saying so.
+      let endPos = pre.length;
+      let namedBoundary = false;
+      for (const { e, p } of after) {
         const n = normalizeTitle(e.title);
-        const isBoundary = boundaries.some((b) => n.includes(b)) || (isAllCaps(start.title) && isAllCaps(e.title));
-        if (isBoundary && p < endPos) endPos = p;
+        if (boundaries.some((b) => n.includes(b))) {
+          namedBoundary = true;
+          if (p < endPos) endPos = p;
+        }
+      }
+      if (!namedBoundary && isAllCaps(start.title)) {
+        for (const { e, p } of after) {
+          if (isAllCaps(e.title) && p < endPos) endPos = p;
+        }
+        if (endPos < pre.length) {
+          notes.push(
+            "exhibit slice bounded by the next ALL-CAPS heading (no named section boundary followed the start) — " +
+              "the section may be truncated at a subsection heading.",
+          );
+        }
       }
       const text = htmlToText(pre.slice(startPos, endPos));
       if (text.length >= minChars) {

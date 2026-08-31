@@ -891,6 +891,50 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     quoteInput(quote),
   );
 
+  // --- SEC 8-K forensic events -------------------------------------------
+  // Item 4.02 (non-reliance on previously issued financial statements) is a
+  // restatement announcement — among the strongest accounting red flags a
+  // filer can make — and Item 4.01 is an auditor change. The bundle FETCHED
+  // and parsed both feeds and then nothing read them: grep found zero
+  // consumers. Surface them as notes and gaps so they reach the report and the
+  // Stage C payload, where the forensic section is read.
+  const eventGaps: ManifestEntry[] = [];
+  const nonReliance = bundle.edgar?.nonReliance8Ks;
+  if (nonReliance?.ok === true && nonReliance.value.data.length > 0) {
+    const dates = nonReliance.value.data
+      .map((f) => f.filingDate)
+      .filter((d): d is string => typeof d === "string" && d.length > 0)
+      .sort()
+      .reverse();
+    notes.push(
+      `SEC Form 8-K Item 4.02 filed (${dates.slice(0, 3).join(", ")}${dates.length > 3 ? ", …" : ""}): ` +
+        "the company announced that previously issued financial statements should NO LONGER BE RELIED UPON. " +
+        "Any figure below drawn from a superseded period may be restated.",
+    );
+    eventGaps.push({
+      field: "forensics.nonReliance8K",
+      reason: `${nonReliance.value.data.length} Form 8-K Item 4.02 non-reliance/restatement filing(s) on record (latest ${dates[0] ?? "unknown"}) — historical statements may be superseded`,
+      severity: "warn",
+    });
+  }
+  const auditorChange = bundle.edgar?.auditorChange8Ks;
+  if (auditorChange?.ok === true && auditorChange.value.data.length > 0) {
+    const dates = auditorChange.value.data
+      .map((f) => f.filingDate)
+      .filter((d): d is string => typeof d === "string" && d.length > 0)
+      .sort()
+      .reverse();
+    notes.push(
+      `SEC Form 8-K Item 4.01 filed (${dates.slice(0, 3).join(", ")}${dates.length > 3 ? ", …" : ""}): ` +
+        "the company changed its registered public accounting firm.",
+    );
+    eventGaps.push({
+      field: "forensics.auditorChange8K",
+      reason: `${auditorChange.value.data.length} Form 8-K Item 4.01 auditor-change filing(s) on record (latest ${dates[0] ?? "unknown"})`,
+      severity: "info",
+    });
+  }
+
   // --- Forensics (route-aware; module handles financial suppression) --------
   const forensics = runForensics(route, {
     income: incomeAnnual.map(toForensicsIncome),
@@ -1087,6 +1131,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     returns.gaps,
     capital.gaps,
     forensics.gaps,
+    eventGaps,
     technicals.gaps,
     valuation.gaps,
     runway?.gaps ?? null,

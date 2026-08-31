@@ -68,6 +68,26 @@ const NEW_BALANCE_BASIS =
   "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)";
 
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
+  // Added 2026-08-31 (bank capital-return completion): financial routes now
+  // score return on TANGIBLE COMMON EQUITY instead of ROIC, whose invested
+  // capital is undefined for a deposit-funded balance sheet. The fixture
+  // company is a general issuer, so only the moat note and the new
+  // returns.rote block appear; its scored signals are unchanged.
+  {
+    path: "report.scores.aspects.moat.note",
+    before: "Quantitative moat proxy: level and durability of ROIC plus gross-margin (pricing-power) level. Gross margin is dropped where the route suppresses it (banks, pre-revenue).",
+    after: "Quantitative moat proxy: level and durability of ROIC plus gross-margin (pricing-power) level; financial routes score return on TANGIBLE COMMON EQUITY instead, since invested capital is undefined for a deposit-funded balance sheet. Gross margin is dropped where the route suppresses it (banks, pre-revenue).",
+  },
+  {
+    path: "stageB.returns.rote",
+    beforeMissing: true,
+    after: {"series": [{"date": "2024-12-31", "rotePct": 40.54054054054054, "tangibleCommonEquity": 3700000000, "tangibleCommonEquityAvg": 3700000000}, {"date": "2025-12-31", "rotePct": 42.68292682926829, "tangibleCommonEquity": 4500000000, "tangibleCommonEquityAvg": 4100000000}], "latestRotePct": 42.68292682926829, "latestTangibleCommonEquity": 4500000000, "asOf": "2025-12-31", "notes": ["ROTE = net income / average tangible common equity (equity − goodwill − other intangibles − preferred)."], "gaps": []},
+  },
+  {
+    path: "stageB.scores.aspects.moat.note",
+    before: "Quantitative moat proxy: level and durability of ROIC plus gross-margin (pricing-power) level. Gross margin is dropped where the route suppresses it (banks, pre-revenue).",
+    after: "Quantitative moat proxy: level and durability of ROIC plus gross-margin (pricing-power) level; financial routes score return on TANGIBLE COMMON EQUITY instead, since invested capital is undefined for a deposit-funded balance sheet. Gross margin is dropped where the route suppresses it (banks, pre-revenue).",
+  },
   // Added 2026-08-31 (second audit pass): computeGrowth now folds CAGR
   // horizon shortfalls into GrowthResult.notes. The payload forwards
   // windowYears but never actualYears, so this fixture's 2.0-year span was

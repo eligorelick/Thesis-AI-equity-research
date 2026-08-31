@@ -737,6 +737,10 @@ export interface ReturnsBalanceRow {
   totalDebt?: number | null;
   totalStockholdersEquity?: number | null;
   cashAndCashEquivalents?: number | null;
+  /** Tangible common equity components (bank profitability; see computeRote). */
+  goodwill?: number | null;
+  intangibleAssets?: number | null;
+  preferredStock?: number | null;
   /** Short-term investments, so invested capital can net the same cash the house net-debt resolver does. */
   shortTermInvestments?: number | null;
   /** Vendor's combined cash + short-term investments; preferred when present. */
@@ -862,6 +866,120 @@ function investedCapital(b: ReturnsBalanceRow, notes: string[]): number | null {
       "(narrower than the house cash + short-term-investments basis)",
   );
   return b.totalDebt + b.totalStockholdersEquity - b.cashAndCashEquivalents;
+}
+
+/** One fiscal year of return on tangible common equity. */
+export interface RoteYear {
+  date: string;
+  /** Net income / average tangible common equity, percent. Null when uncomputable. */
+  rotePct: number | null;
+  tangibleCommonEquity: number | null;
+  tangibleCommonEquityAvg: number | null;
+}
+
+export interface RoteResult {
+  /** Oldest → newest, up to ROIC_SERIES_MAX_YEARS entries. */
+  series: RoteYear[];
+  latestRotePct: number | null;
+  latestTangibleCommonEquity: number | null;
+  asOf: string | null;
+  notes: string[];
+  gaps: ManifestEntry[];
+}
+
+/**
+ * Tangible common equity = total stockholders' equity − goodwill − other
+ * intangibles − preferred stock.
+ *
+ * Goodwill and intangibles absorb losses only after common equity is gone, and
+ * preferred ranks ahead of common, so neither belongs in the capital base a
+ * COMMON shareholder's return is measured against. This is the denominator bank
+ * analysts and the banks themselves report.
+ */
+export function tangibleCommonEquity(b: ReturnsBalanceRow): number | null {
+  if (!isFiniteNumber(b.totalStockholdersEquity)) return null;
+  const goodwill = isFiniteNumber(b.goodwill) ? b.goodwill : 0;
+  const intangibles = isFiniteNumber(b.intangibleAssets) ? b.intangibleAssets : 0;
+  const preferred = isFiniteNumber(b.preferredStock) ? b.preferredStock : 0;
+  const tce = b.totalStockholdersEquity - goodwill - intangibles - preferred;
+  return Number.isFinite(tce) ? tce : null;
+}
+
+/**
+ * Return on tangible common equity — the standard profitability measure for
+ * banks, insurers and mortgage REITs, and the metric the bank route already
+ * declares it leads with ("rote") but never computed.
+ *
+ * ROIC cannot substitute: invested capital is `debt + equity − cash`, and for a
+ * deposit-funded institution debt IS the raw material and cash is an earning
+ * asset, so the denominator is meaningless (and frequently non-positive, which
+ * is why ROIC simply vanished for many banks). ROTE divides the return the
+ * common shareholder actually receives by the capital actually at risk.
+ *
+ * Averaged over beginning and ending TCE, matching the ROIC convention here.
+ */
+export function computeRote(
+  income: ReadonlyArray<ReturnsIncomeRow>,
+  balance: ReadonlyArray<ReturnsBalanceRow>,
+): RoteResult {
+  const notes: string[] = [];
+  const gaps: ManifestEntry[] = [];
+  const inc = sortNewestFirst(income);
+  const bal = sortNewestFirst(balance);
+  const series: RoteYear[] = [];
+
+  for (let i = 0; i < Math.min(inc.length, ROIC_SERIES_MAX_YEARS); i++) {
+    const cur = bal[i];
+    const prior = bal[i + 1];
+    if (!cur) break;
+    const tce = tangibleCommonEquity(cur);
+    const tcePrior = prior ? tangibleCommonEquity(prior) : null;
+    const avg = tce !== null && tcePrior !== null ? (tce + tcePrior) / 2 : tce;
+    const ni = isFiniteNumber(inc[i]?.netIncome) ? (inc[i].netIncome as number) : null;
+    // A non-positive tangible base makes the ratio meaningless, not merely
+    // negative: it is the same category error ROIC's guard already refuses.
+    const rotePct = ni !== null && avg !== null && avg > 0 ? (ni / avg) * 100 : null;
+    if (rotePct === null && avg !== null && avg <= 0) {
+      notes.push(`tangible common equity is non-positive on ${cur.date} — ROTE not meaningful`);
+    }
+    series.push({
+      date: cur.date,
+      rotePct,
+      tangibleCommonEquity: tce,
+      tangibleCommonEquityAvg: avg,
+    });
+  }
+
+  const latest = series[0] ?? null;
+  if (latest === null) {
+    gaps.push({
+      field: "returns.rote",
+      reason: "no balance-sheet rows — return on tangible common equity unavailable",
+      severity: "info",
+    });
+  }
+  if (series.length > 0 && series.every((y) => y.rotePct === null)) {
+    gaps.push({
+      field: "returns.rote",
+      reason: "return on tangible common equity not computable (net income or a positive tangible base missing)",
+      severity: "warn",
+    });
+  }
+  if (series.length > 0) {
+    notes.push(
+      "ROTE = net income / average tangible common equity (equity − goodwill − other intangibles − preferred).",
+    );
+  }
+
+  return {
+    // Oldest → newest, matching the ROIC series convention.
+    series: [...series].reverse(),
+    latestRotePct: latest?.rotePct ?? null,
+    latestTangibleCommonEquity: latest?.tangibleCommonEquity ?? null,
+    asOf: latest?.date ?? null,
+    notes,
+    gaps,
+  };
 }
 
 export function computeRoic(

@@ -625,21 +625,6 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
       "altmanZ",
       "beneishM",
       "accrualsRatio",
-      // The ROIC-vs-WACC spread is internally contradictory on this route: the
-      // bank/insurer/mortgage-REIT valuation model is the excess-return model,
-      // which the code documents as "equity-only (CoE, never WACC)". Grading a
-      // spread against a WACC the valuation refuses to use cannot be right
-      // under either reading.
-      //
-      // roicLevel/roicStability are deliberately NOT suppressed here. ROIC is
-      // admittedly not a bank measure (invested capital is undefined when debt
-      // is raw material), but the pipeline already nulls ROIC whenever invested
-      // capital is non-positive — the common bank case — and then discloses
-      // moat as not-applicable. Deleting the signal outright would leave the
-      // moat aspect with no evidence at all, on a route that already promises
-      // bank-health replacements nothing computes. The ordered fix is to build
-      // ROTCE / NIM / efficiency first, then retire ROIC here.
-      "roicVsWacc",
     ],
     lead: [
       "pTbv",
@@ -657,7 +642,7 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
     // grossMargin: FMP's revenue−costOfRevenue is meaningless on a premium/claims
     // income statement (insurers are judged on combined/loss/expense ratios), same
     // rationale as the bank route — do not let it drive the moat score.
-    suppress: ["evEbitda", "evToSales", "fcfDcf", "currentRatio", "quickRatio", "grossMargin", "altmanZ", "beneishM", "accrualsRatio", "roicVsWacc"],
+    suppress: ["evEbitda", "evToSales", "fcfDcf", "currentRatio", "quickRatio", "grossMargin", "altmanZ", "beneishM", "accrualsRatio"],
     lead: [
       "combinedRatio",
       "lossRatio",
@@ -685,7 +670,7 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
   // grossMargin is meaningless on a net-interest-spread income statement (same as
   // the bank/insurer routes) — suppress so it cannot drive the moat score.
   "reit-mortgage": {
-    suppress: ["evEbitda", "currentRatio", "fcfDcf", "ffoApprox", "affoApprox", "pFfo", "grossMargin", "altmanZ", "beneishM", "accrualsRatio", "roicVsWacc"],
+    suppress: ["evEbitda", "currentRatio", "fcfDcf", "ffoApprox", "affoApprox", "pFfo", "grossMargin", "altmanZ", "beneishM", "accrualsRatio"],
     lead: ["priceToBook", "bookValuePerShare", "dividendYield", "netInterestSpread", "leverageAssetsToEquity"],
   },
 };
@@ -734,6 +719,22 @@ export function metricPolicy(route: SectorRoute | CompanyRoute): MetricPolicy {
   // classify on, so it keeps the base policy unchanged.
   if (typeof route !== "string" && isFinancialForensicsSuppressed(route)) {
     for (const signal of FINANCIAL_FORENSIC_SIGNALS) suppress.add(signal);
+  }
+  // Exactly one capital-return measure is scored, chosen by balance-sheet type.
+  // Financials get ROTE (return on tangible common equity); everyone else keeps
+  // ROIC. Invested capital — debt + equity − cash — is undefined when debt is
+  // the raw material and cash is an earning asset, which is why a bank's ROIC
+  // routinely went non-positive and disappeared; ROTE measures the return the
+  // common shareholder actually receives on the capital actually at risk.
+  const financialBase =
+    base === "bank" || base === "insurer" || base === "reit-mortgage";
+  const financialReturns =
+    financialBase || (typeof route !== "string" && isFinancialForensicsSuppressed(route));
+  if (financialReturns) {
+    suppress.add("roic");
+    suppress.add("roicVsWacc");
+  } else {
+    suppress.add("rote");
   }
   for (const overlay of overlays) {
     for (const s of OVERLAY_POLICIES[overlay].suppress) suppress.add(s);

@@ -41,10 +41,12 @@ import {
 import {
   computeWacc,
   computeRoic,
+  computeRote,
   computeDupont,
   computeRoicVsWaccSpread,
   type WaccResult,
   type RoicResult,
+  type RoteResult,
   type DupontResult,
   type RoicVsWaccSpread,
   type ReturnsIncomeRow,
@@ -149,6 +151,7 @@ export interface ComputedMetrics {
 export interface ReturnsBlock {
   wacc: WaccResult;
   roic: RoicResult;
+  rote: RoteResult;
   dupont: DupontResult;
   roicVsWacc: RoicVsWaccSpread;
   notes: string[];
@@ -307,6 +310,10 @@ function toReturnsBalance(r: FmpBalanceSheetRow): ReturnsBalanceRow {
     cashAndCashEquivalents: num(r.cashAndCashEquivalents),
     // Invested capital nets the same cash the house net-debt resolver does.
     shortTermInvestments: num(r.shortTermInvestments),
+    // Tangible common equity components (ROTE denominator).
+    goodwill: num(r.goodwill),
+    intangibleAssets: num(r.intangibleAssets),
+    preferredStock: num(r.preferredStock),
     cashAndShortTermInvestments: num(r.cashAndShortTermInvestments),
     totalAssets: num(r.totalAssets),
   };
@@ -1017,6 +1024,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     policy,
     growth,
     roic: returns.roic,
+    rote: returns.rote,
     roicVsWacc: returns.roicVsWacc,
     wacc: returns.wacc,
     capital,
@@ -1256,11 +1264,14 @@ function computeReturns(
   });
 
   const roic = computeRoic(incomeAnnual.map(toReturnsIncome), balanceAnnual.map(toReturnsBalance));
+  // Return on tangible common equity — the capital-return measure for
+  // deposit-funded balance sheets, where invested capital is undefined.
+  const rote = computeRote(incomeAnnual.map(toReturnsIncome), balanceAnnual.map(toReturnsBalance));
   const dupont = computeDupont(incomeAnnual.map(toReturnsIncome), balanceAnnual.map(toReturnsBalance));
   const roicVsWacc = computeRoicVsWaccSpread(roic.latestRoicPct, wacc.waccPct);
 
-  gaps.push(...wacc.gaps, ...roic.gaps, ...dupont.gaps);
-  return { wacc, roic, dupont, roicVsWacc, notes, gaps };
+  gaps.push(...wacc.gaps, ...roic.gaps, ...rote.gaps, ...dupont.gaps);
+  return { wacc, roic, rote, dupont, roicVsWacc, notes, gaps };
 }
 
 // ---------------------------------------------------------------------------

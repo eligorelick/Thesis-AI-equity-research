@@ -49,6 +49,18 @@ function route(base: SectorRoute = "general", overlays: SectorOverlay[] = []): C
   };
 }
 
+/** ROTE fixture: the financial-route capital-return measure. */
+function rote(latestRotePct: number | null = 14) {
+  return {
+    series: [],
+    latestRotePct,
+    latestTangibleCommonEquity: 1000,
+    asOf: "2025-12-31",
+    notes: [],
+    gaps: [],
+  };
+}
+
 function cagr(windowYears: number, cagrPct: number | null) {
   return { windowYears, actualYears: windowYears, cagrPct, startDate: null, endDate: null, startValue: null, endValue: null };
 }
@@ -195,6 +207,7 @@ function makeInputs(over: Partial<ScoringInputs> = {}): ScoringInputs {
     policy: policy(),
     growth: growth(),
     roic: roic(),
+    rote: rote(),
     roicVsWacc: roicVsWacc(),
     wacc: wacc(),
     capital: capital(),
@@ -721,19 +734,37 @@ describe("grading — bank moat never scores on suppressed gross margin (finding
     });
   }
 
-  it("gross margin (hard-suppressed for banks) is never a moat driver; moat scores on ROIC level + stability", () => {
+  // CONTRACT CHANGED 2026-08-31. A bank's moat used to be scored on ROIC, whose
+  // invested capital (debt + equity − cash) is undefined for a deposit-funded
+  // balance sheet — debt IS the raw material and cash is an earning asset — so
+  // it routinely went non-positive and the aspect vanished. Financial routes now
+  // score return on TANGIBLE COMMON EQUITY, the measure the bank route already
+  // declared it leads with. The two alternatives carry the same total weight, so
+  // the completeness denominator is unchanged.
+  it("gross margin (hard-suppressed for banks) is never a moat driver; moat scores on ROTE", () => {
     const s = computeScores(bankInputs());
     const names = s.aspects.moat.drivers.map((d) => d.source);
     expect(names.some((n) => n.endsWith(".grossMarginLevel"))).toBe(false);
-    expect(names.some((n) => n.endsWith(".roicLevel"))).toBe(true);
-    expect(names.some((n) => n.endsWith(".roicStability"))).toBe(true);
-    // roicLevel 0.45 + roicStability 0.30 survive of the 1.0 moat weight; the
-    // 0.25 gross-margin weight is route-suppressed ⇒ completeness caps at 0.75.
+    expect(names.some((n) => n.endsWith(".roteLevel"))).toBe(true);
+    // ROIC is not scored on a financial route at all.
+    expect(names.some((n) => n.endsWith(".roicLevel"))).toBe(false);
+    expect(names.some((n) => n.endsWith(".roicStability"))).toBe(false);
+    // roteLevel 0.75 survives of the 1.0 moat weight; the 0.25 gross-margin
+    // weight is route-suppressed ⇒ completeness caps at 0.75, exactly as the
+    // ROIC pair (0.45 + 0.30) did.
     expect(s.aspects.moat.dataCompleteness).toBeCloseTo(0.75, 6);
   });
 
-  it("a bank with no ROIC framing yields a not-applicable moat (disclosed), not a garbage gross-margin grade", () => {
-    const s = computeScores(bankInputs({ roic: roic(null, [null, null, null, null, null]) }));
+  it("a general issuer still scores moat on ROIC level + stability", () => {
+    const s = computeScores(makeInputs());
+    const names = s.aspects.moat.drivers.map((d) => d.source);
+    expect(names.some((n) => n.endsWith(".roicLevel"))).toBe(true);
+    expect(names.some((n) => n.endsWith(".roicStability"))).toBe(true);
+    expect(names.some((n) => n.endsWith(".roteLevel"))).toBe(false);
+  });
+
+  it("a bank with no ROTE framing yields a not-applicable moat (disclosed), not a garbage gross-margin grade", () => {
+    const s = computeScores(bankInputs({ rote: rote(null) }));
     expect(s.aspects.moat.score).toBeNull();
     expect(s.aspects.moat.notApplicableReason).not.toBeNull();
     expect(s.aspects.moat.drivers.length).toBe(0);

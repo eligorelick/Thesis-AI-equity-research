@@ -30,7 +30,7 @@
 import type { CompanyRouteResult } from "@/pipeline/stageB/sectorRouting";
 import type { MetricPolicy } from "@/pipeline/stageB/sectorRouting";
 import type { GrowthResult } from "@/pipeline/stageB/growth";
-import type { RoicResult, RoicVsWaccSpread, WaccResult } from "@/pipeline/stageB/returns";
+import type { RoicResult, RoicVsWaccSpread, RoteResult, WaccResult } from "@/pipeline/stageB/returns";
 import type { CapitalResult } from "@/pipeline/stageB/capital";
 import { ALTMAN_ZONES, type AltmanVariant, type ForensicsReport } from "@/pipeline/stageB/forensics";
 import type { TechnicalsResult } from "@/pipeline/stageB/technicals";
@@ -255,6 +255,23 @@ const ROIC_LEVEL_BAND: readonly BandPoint[] = [
   [15, 65],
   [25, 82],
   [40, 95],
+];
+/**
+ * Return on tangible common equity (percent) — the bank/insurer moat signal.
+ *
+ * Anchored on cost of equity rather than on an industrial ROIC scale: a
+ * deposit-funded institution earning ~10% on tangible common equity is roughly
+ * covering its cost of capital, which is the neutral point; mid-teens is the
+ * level large banks are judged strong at, and sustained 20%+ is exceptional.
+ * A versioned house rule like every other band here, pending backtesting.
+ */
+const ROTE_LEVEL_BAND: readonly BandPoint[] = [
+  [0, 12],
+  [5, 32],
+  [10, 50],
+  [15, 72],
+  [20, 88],
+  [30, 96],
 ];
 // ROIC stability = stdev of the ROIC series (pp): lower = more durable moat.
 const ROIC_STABILITY_BAND: readonly BandPoint[] = [
@@ -531,6 +548,8 @@ export interface ScoringInputs {
   policy: MetricPolicy;
   growth: GrowthResult;
   roic: RoicResult;
+  /** Return on tangible common equity — the financial-route capital-return measure. */
+  rote: RoteResult;
   roicVsWacc: RoicVsWaccSpread;
   wacc: WaccResult;
   capital: CapitalResult;
@@ -544,7 +563,7 @@ export interface ScoringInputs {
 }
 
 export function computeScores(inputs: ScoringInputs): Scoring {
-  const { route, policy, growth, roic, roicVsWacc, capital, forensics, technicals, valuation } = inputs;
+  const { route, policy, growth, roic, rote, roicVsWacc, capital, forensics, technicals, valuation } = inputs;
   const weights = weightsForRoute(route);
   const financial = route.base === "bank" || route.base === "insurer" || route.base === "reit-mortgage";
 
@@ -665,11 +684,33 @@ export function computeScores(inputs: ScoringInputs): Scoring {
 
   // --- Moat (durability proxy: ROIC level + stability + gross margin) ------
   const roicStdev = stdev(roic.series.map((r) => r.roicPct).filter(isNum));
+  // Exactly ONE capital-return measure is scored, chosen by balance-sheet type,
+  // and the two alternatives carry the SAME total weight (0.75) so the moat
+  // aspect's completeness denominator is identical either way — adding a third
+  // signal would have diluted every non-financial company's published
+  // dataCompleteness for no data reason.
+  //
+  // ROIC's invested capital (debt + equity − cash) is undefined for a
+  // deposit-funded institution: debt IS the raw material and cash is an earning
+  // asset, which is why a bank's ROIC routinely went non-positive and vanished
+  // entirely. ROTE divides the return the common shareholder actually receives
+  // by the capital actually at risk, and is the measure the bank route already
+  // declared it leads with but never computed.
+  // Keyed on ROIC being suppressed, not on ROTE being permitted, so that the
+  // DEFAULT for a policy that mentions neither is the ordinary industrial
+  // measure. Choosing ROTE by default would silently score every
+  // hand-constructed or legacy policy on a bank metric.
+  const scoresRote = policy.suppress.includes("roic");
+  const moatReturnSignals: Signal[] = scoresRote
+    ? [{ name: "roteLevel", raw: rote.latestRotePct, unit: "%", weight: 0.75, band: ROTE_LEVEL_BAND }]
+    : [
+        { name: "roicLevel", raw: roic.latestRoicPct, unit: "%", weight: 0.45, band: ROIC_LEVEL_BAND },
+        { name: "roicStability", raw: roicStdev, unit: "pp", weight: 0.3, band: ROIC_STABILITY_BAND },
+      ];
   const moat = scoreAspect(
     "moat",
     [
-      { name: "roicLevel", raw: roic.latestRoicPct, unit: "%", weight: 0.45, band: ROIC_LEVEL_BAND },
-      { name: "roicStability", raw: roicStdev, unit: "pp", weight: 0.3, band: ROIC_STABILITY_BAND },
+      ...moatReturnSignals,
       // Gross margin is a hard-suppressed metric on some routes (banks: FMP emits
       // garbage revenue−costOfRevenue on an interest-income statement; pre-revenue:
       // no meaningful revenue base). Tagged so the route policy drops this signal
@@ -679,7 +720,7 @@ export function computeScores(inputs: ScoringInputs): Scoring {
     ],
     weights.moat,
     inputs.asOf,
-    "Quantitative moat proxy: level and durability of ROIC plus gross-margin (pricing-power) level. Gross margin is dropped where the route suppresses it (banks, pre-revenue).",
+    "Quantitative moat proxy: level and durability of ROIC plus gross-margin (pricing-power) level; financial routes score return on TANGIBLE COMMON EQUITY instead, since invested capital is undefined for a deposit-funded balance sheet. Gross margin is dropped where the route suppresses it (banks, pre-revenue).",
     policy,
   );
 

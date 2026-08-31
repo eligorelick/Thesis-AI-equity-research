@@ -626,7 +626,7 @@ export function computeScores(inputs: ScoringInputs): Scoring {
   const quality = scoreAspect(
     "quality",
     [
-      { name: "roicVsWaccSpread", raw: roicVsWacc.spreadPctPts, unit: "pp", weight: 0.35, band: SPREAD_BAND },
+      { name: "roicVsWaccSpread", raw: roicVsWacc.spreadPctPts, unit: "pp", weight: 0.35, band: SPREAD_BAND, suppressedBy: "roicVsWacc" },
       { name: "piotroskiF", raw: piotroskiFrac, unit: "frac", weight: 0.22, band: PIOTROSKI_BAND, suppressedBy: "piotroskiF" },
       { name: "altmanZ", raw: forensics.altman && isNum(forensics.altman.score) ? normalizeAltmanForBanding(forensics.altman.score, forensics.altman.variant) : null, unit: "z", weight: 0.16, band: ALTMAN_Z_BAND, suppressedBy: "altmanZ" },
       // suppressedBy, like its three sibling accounting-integrity signals: the
@@ -688,7 +688,7 @@ export function computeScores(inputs: ScoringInputs): Scoring {
     "leadership",
     [
       { name: "buybackDiscipline", raw: capital.buybackPriceAnalysis.premiumDiscountPct, unit: "%", weight: 0.3, band: BUYBACK_DISCIPLINE_BAND },
-      { name: "capitalDeployment", raw: roicVsWacc.spreadPctPts, unit: "pp", weight: 0.25, band: SPREAD_BAND },
+      { name: "capitalDeployment", raw: roicVsWacc.spreadPctPts, unit: "pp", weight: 0.25, band: SPREAD_BAND, suppressedBy: "roicVsWacc" },
       { name: "shareCountTrend", raw: capital.shareCount.annualizedPct, unit: "%", weight: 0.25, band: SHARE_TREND_BAND },
       { name: "sbcPctOfRevenue", raw: capital.sbc.pctOfRevenue, unit: "%", weight: 0.2, band: SBC_REV_BAND },
     ],
@@ -707,7 +707,7 @@ export function computeScores(inputs: ScoringInputs): Scoring {
   const technicalsScore = scoreAspect(
     "technicals",
     [
-      { name: "smaGap", raw: smaGap, unit: "%", weight: 0.25, band: SMA_GAP_BAND },
+      { name: "smaGap", raw: smaGap, unit: "%", weight: 0.25, band: SMA_GAP_BAND, suppressedBy: "sma200" },
       { name: "rsi14", raw: technicals.rsi14, unit: "rsi", weight: 0.2, band: RSI_BAND },
       // suppressedBy: the recent-ipo route already lists "fiftyTwoWeekRange" in
       // its suppress set, but no signal carried the tag, so the policy was

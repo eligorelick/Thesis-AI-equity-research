@@ -30,6 +30,7 @@
 import type { CompanyRouteResult } from "@/pipeline/stageB/sectorRouting";
 import { hasIrregularAnnualSpacing, yearsBetweenDates } from "@/pipeline/stageB/growth";
 import {
+  MARGIN_CLAMP_PP,
   runDcf,
   type DcfAssumptions,
   type DcfYearRow,
@@ -58,7 +59,13 @@ const SIGMA_GROWTH_MAX = 25; // pp
 const SIGMA_MARGIN_MAX = 12; // pp
 /** Perturbed-path sanity clamps. */
 const GROWTH_CLAMP: readonly [number, number] = [-30, 60]; // pct/yr
-const MARGIN_CLAMP: readonly [number, number] = [0, 60]; // pct
+// The margin bound is the BASE engine's own (valuation's MARGIN_CLAMP_PP,
+// [-20, 45]), not a second, tighter one. A local [0, 60] floored the perturbed
+// path at zero while the base DCF path may legitimately be negative, so for a
+// loss-making issuer BOTH the bull and the bear leg were lifted ABOVE the base
+// case — a bear scenario that cannot model a loss, and two targets that are
+// inflated rather than bracketing. Sharing the bound also makes
+// perturbScenarioAssumptions(a, 0, 0) reproduce the base path exactly.
 
 const isNum = (v: number | null | undefined): v is number =>
   typeof v === "number" && Number.isFinite(v);
@@ -265,7 +272,7 @@ export function perturbScenarioAssumptions(
 ): DcfAssumptions {
   const cloned: DcfAssumptions = structuredClone(assumptions);
   cloned.growthPath.value = shiftPath(assumptions.growthPath.value, growthDelta, GROWTH_CLAMP[0], GROWTH_CLAMP[1]);
-  cloned.ebitMarginPath.value = shiftPath(assumptions.ebitMarginPath.value, marginDelta, MARGIN_CLAMP[0], MARGIN_CLAMP[1]);
+  cloned.ebitMarginPath.value = shiftPath(assumptions.ebitMarginPath.value, marginDelta, MARGIN_CLAMP_PP[0], MARGIN_CLAMP_PP[1]);
   return cloned;
 }
 

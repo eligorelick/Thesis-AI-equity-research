@@ -625,6 +625,21 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
       "altmanZ",
       "beneishM",
       "accrualsRatio",
+      // The ROIC-vs-WACC spread is internally contradictory on this route: the
+      // bank/insurer/mortgage-REIT valuation model is the excess-return model,
+      // which the code documents as "equity-only (CoE, never WACC)". Grading a
+      // spread against a WACC the valuation refuses to use cannot be right
+      // under either reading.
+      //
+      // roicLevel/roicStability are deliberately NOT suppressed here. ROIC is
+      // admittedly not a bank measure (invested capital is undefined when debt
+      // is raw material), but the pipeline already nulls ROIC whenever invested
+      // capital is non-positive — the common bank case — and then discloses
+      // moat as not-applicable. Deleting the signal outright would leave the
+      // moat aspect with no evidence at all, on a route that already promises
+      // bank-health replacements nothing computes. The ordered fix is to build
+      // ROTCE / NIM / efficiency first, then retire ROIC here.
+      "roicVsWacc",
     ],
     lead: [
       "pTbv",
@@ -642,7 +657,7 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
     // grossMargin: FMP's revenue−costOfRevenue is meaningless on a premium/claims
     // income statement (insurers are judged on combined/loss/expense ratios), same
     // rationale as the bank route — do not let it drive the moat score.
-    suppress: ["evEbitda", "evToSales", "fcfDcf", "currentRatio", "quickRatio", "grossMargin", "altmanZ", "beneishM", "accrualsRatio"],
+    suppress: ["evEbitda", "evToSales", "fcfDcf", "currentRatio", "quickRatio", "grossMargin", "altmanZ", "beneishM", "accrualsRatio", "roicVsWacc"],
     lead: [
       "combinedRatio",
       "lossRatio",
@@ -670,7 +685,7 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
   // grossMargin is meaningless on a net-interest-spread income statement (same as
   // the bank/insurer routes) — suppress so it cannot drive the moat score.
   "reit-mortgage": {
-    suppress: ["evEbitda", "currentRatio", "fcfDcf", "ffoApprox", "affoApprox", "pFfo", "grossMargin", "altmanZ", "beneishM", "accrualsRatio"],
+    suppress: ["evEbitda", "currentRatio", "fcfDcf", "ffoApprox", "affoApprox", "pFfo", "grossMargin", "altmanZ", "beneishM", "accrualsRatio", "roicVsWacc"],
     lead: ["priceToBook", "bookValuePerShare", "dividendYield", "netInterestSpread", "leverageAssetsToEquity"],
   },
 };

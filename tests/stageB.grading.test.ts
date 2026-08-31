@@ -650,15 +650,23 @@ describe("grading — composite completeness excludes route-inapplicable evidenc
 
     // compWeight can never reach 100 on a bank: balanceSheet (10) is dropped and
     // quality/moat lose their suppressed signals. Hand-derived route-applicable
-    // weight = 15 + 22 + 26·0.57 + 15·0.75 + 7 + 5 = 75.07.
+    // weight = 15 + 22 + 26·0.22 + 15·0.75 + 7·0.75 + 5 = 64.22.
     //
-    // Quality's applicable share fell from 0.72 to 0.57 on 2026-08-31 when
-    // accrualsRatioAbs (0.15) joined altmanZ (0.16) and beneishM (0.12) in the
-    // bank suppression list: the Sloan ratio is scaled by net operating assets,
-    // and NOA subtracts (totalLiabilities − totalDebt), which for a bank is
-    // deposits — its raw material. That is the same category error the route
-    // already avoids for netDebt and fcfDcf.
-    expect(round2(compWeight)).toBe(75.07);
+    // Two 2026-08-31 changes moved this ceiling, and NEITHER changes the
+    // property under test above: the shrink factor stays exactly 1, because
+    // route-suppressed weight leaves the ceiling and the evidence together.
+    //
+    //  - Quality 0.72 -> 0.57: accrualsRatioAbs (0.15) joined altmanZ (0.16)
+    //    and beneishM (0.12) in the bank suppression list. The Sloan ratio is
+    //    scaled by net operating assets, and NOA subtracts (totalLiabilities −
+    //    totalDebt), which for a bank is deposits — its raw material.
+    //  - Quality 0.57 -> 0.22 and capital 1.00 -> 0.75: roicVsWaccSpread (0.35)
+    //    and capitalDeployment (0.25) are suppressed because this route values
+    //    the company with the excess-return model, which the code documents as
+    //    "equity-only (CoE, never WACC)". Grading a spread against a WACC the
+    //    valuation refuses to use is contradictory under either reading.
+    //    roicLevel/roicStability deliberately REMAIN (see the moat test below).
+    expect(round2(compWeight)).toBe(64.22);
 
     // The OLD denominator (a fixed 100) would have shrunk this identical bank
     // by ×0.7897 toward 50 — a structural cap the fix removes.

@@ -628,6 +628,9 @@ function dcfCore(
   const yearRows: DcfYearRow[] = [];
   let rev = a.startRevenue.value;
   let pvExplicit = 0;
+  // Net-operating-loss balance carried across the explicit horizon.
+  let nolBalance = 0;
+  let nolUsed = false;
   for (let t = 1; t <= n; t++) {
     const g = growth[t - 1];
     const m = margins[t - 1];
@@ -635,7 +638,34 @@ function dcfCore(
     const prev = rev;
     rev = prev * (1 + g / 100);
     const ebit = rev * (m / 100);
-    const nopat = ebit * (1 - tax / 100);
+    // A loss year earns no cash tax REFUND. `ebit * (1 - t)` applied to a
+    // negative EBIT credits the firm |EBIT| x t of cash it never receives,
+    // shrinking the modelled loss and inflating the DCF — on exactly the
+    // unprofitable issuers whose valuation is least certain. Note the
+    // deliberate asymmetry one line below: reinvestment is already floored at 0.
+    // Losses are instead carried forward and shelter later taxable income,
+    // which is standard DCF practice; no jurisdictional cap is modelled.
+    let nopat: number;
+    // Report the rate actually applied, so ebit/taxRatePct/nopat stay
+    // internally consistent for a reader auditing the year rows.
+    let effectiveTaxPct: number;
+    if (ebit <= 0) {
+      nopat = ebit;
+      nolBalance += -ebit;
+      effectiveTaxPct = 0;
+    } else if (nolBalance <= 0) {
+      // Unchanged arithmetic, deliberately: the overwhelming majority of
+      // issuers project no loss year, and rearranging this expression would
+      // shift their results in the last floating-point digit for no reason.
+      nopat = ebit * (1 - tax / 100);
+      effectiveTaxPct = tax;
+    } else {
+      const sheltered = Math.min(ebit, nolBalance);
+      nolBalance -= sheltered;
+      nolUsed = true;
+      nopat = ebit - (ebit - sheltered) * (tax / 100);
+      effectiveTaxPct = ((ebit - nopat) / ebit) * 100;
+    }
     const reinvestment = Math.max(0, (rev - prev) / s2c);
     const fcff = nopat - reinvestment;
     const discountFactor = Math.pow(1 + w, midYear ? t - 0.5 : t);
@@ -647,13 +677,27 @@ function dcfCore(
       growthPct: g,
       ebitMarginPct: m,
       ebit,
-      taxRatePct: tax,
+      taxRatePct: effectiveTaxPct,
       nopat,
       reinvestment,
       fcff,
       discountFactor,
       pv,
     });
+  }
+
+  if (nolUsed) {
+    notes.push(
+      "Projected operating losses earn no cash tax refund; they are carried forward and shelter later " +
+        "taxable income within the explicit horizon (no jurisdictional carryforward cap modelled). " +
+        "Year rows report the effective rate actually applied.",
+    );
+  }
+  if (nolBalance > 0) {
+    notes.push(
+      "Unused net operating losses remain at the end of the explicit horizon; no residual tax asset is " +
+        "credited to the terminal value (conservative).",
+    );
   }
 
   // Terminal: FCFF_{N+1} = NOPAT_{N+1} * (1 - g/ROICterm); TV = FCFF_{N+1}/(WACC - g)
@@ -673,7 +717,10 @@ function dcfCore(
   }
   const marginTerm = margins[n - 1];
   const taxTerm = taxes[n - 1];
-  const nopatN1 = rev * (1 + gTerm / 100) * (marginTerm / 100) * (1 - taxTerm / 100);
+  // Same rule as the explicit years: a negative terminal EBIT is not handed a
+  // tax refund.
+  const ebitN1 = rev * (1 + gTerm / 100) * (marginTerm / 100);
+  const nopatN1 = ebitN1 > 0 ? ebitN1 * (1 - taxTerm / 100) : ebitN1;
   const fcffN1 = nopatN1 * (1 - reinvestRate);
   const terminalValue = fcffN1 / ((waccPct - gTerm) / 100);
   const pvTerminal = terminalValue / Math.pow(1 + w, midYear ? n - 0.5 : n);

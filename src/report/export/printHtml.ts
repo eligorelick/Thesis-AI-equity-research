@@ -77,6 +77,7 @@ import { citationOutcomeLabel } from "@/report/schema";
 import {
   formatCostUsd,
   formatFinancialValue,
+  peerMetricKey,
   formatPct,
   roundedDisplayedCostTotal,
 } from "@/report/format";
@@ -707,29 +708,35 @@ function sectionLeadership(l: Leadership): string {
 function sectionCompetitive(c: Competitive): string {
   let peers = `<p class="faint">No peer data.</p>`;
   if (c.peerTable.length > 0) {
-    const maxMetrics = c.peerTable.reduce((m, p) => Math.max(m, p.metrics.length), 0);
-    const headers = [
-      "Peer",
-      "Symbol",
-      ...Array.from({ length: maxMetrics }, (_, i) => `Metric ${i + 1}`),
-    ];
-    const rows = c.peerTable.map((p) => [
-      esc(p.name),
-      esc(p.symbol ?? DASH),
-      ...Array.from({ length: maxMetrics }, (_, i) =>
-        p.metrics[i]
-          ? `<span class="mono">${esc(tracedValue(p.metrics[i]))}</span>`
-          : DASH,
-      ),
-    ]);
+    // Columns keyed by the metric, not by position — see peerMetricKey.
+    const metricKeys: string[] = [];
+    for (const p of c.peerTable) {
+      for (const metric of p.metrics) {
+        const key = peerMetricKey(metric);
+        if (!metricKeys.includes(key)) metricKeys.push(key);
+      }
+    }
+    const headers = ["Peer", "Symbol", ...metricKeys.map((key) => esc(key))];
+    const rows = c.peerTable.map((p) => {
+      const byKey = new Map(p.metrics.map((metric) => [peerMetricKey(metric), metric]));
+      return [
+        esc(p.name),
+        esc(p.symbol ?? DASH),
+        ...metricKeys.map((key) => {
+          const metric = byKey.get(key);
+          return metric ? `<span class="mono">${esc(tracedValue(metric))}</span>` : DASH;
+        }),
+      ];
+    });
     peers = table(headers, rows);
   }
+  // Moat reasoning is a model JUDGMENT. Joining the claim texts dropped every
+  // label, as-of date and citation, so it rendered as a sourced fact; route it
+  // through the shared claim renderer instead.
   const moat = c.moatAssessment
     .map(
       (m) =>
-        `<li><strong>${esc(m.source)}</strong> (${esc(
-          m.strength,
-        )}): ${esc(m.reasoning.map((r) => r.text).join(" "))}</li>`,
+        `<li><strong>${esc(m.source)}</strong> (${esc(m.strength)}):${claimList(m.reasoning)}</li>`,
     )
     .join("");
   return `<section class="block">${sectionHeading("competitive")}${gradeBlock(

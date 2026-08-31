@@ -47,7 +47,7 @@ import {
   deriveReportCompletenessPresentation,
   type ReportCompletenessPresentation,
 } from "@/report/completeness";
-import { formatCostUsd, formatFinancialValue, roundedDisplayedCostTotal } from "@/report/format";
+import { formatCostUsd, formatFinancialValue, peerMetricKey, roundedDisplayedCostTotal } from "@/report/format";
 import {
   markdownBlockquote,
   markdownHeading,
@@ -803,30 +803,39 @@ function renderCompetitive(c: Competitive): string {
   lines.push("### Peer table", "");
   if (c.peerTable.length > 0) {
     // Peers carry a free-form metrics list; render name + symbol + each metric.
-    const maxMetrics = c.peerTable.reduce((m, p) => Math.max(m, p.metrics.length), 0);
-    const headers = [
-      "Peer",
-      "Symbol",
-      ...Array.from({ length: maxMetrics }, (_, i) => `Metric ${i + 1}`),
-    ];
-    const rows = c.peerTable.map((p) => [
-      p.name,
-      p.symbol ?? DASH,
-      ...Array.from({ length: maxMetrics }, (_, i) =>
-        p.metrics[i] ? tracedValue(p.metrics[i]) : DASH,
-      ),
-    ]);
+    // Columns are keyed by the metric, not by position: a peer reporting only
+    // EV/EBITDA must not have it rendered under another peer's P/E header.
+    const metricKeys: string[] = [];
+    for (const p of c.peerTable) {
+      for (const metric of p.metrics) {
+        const key = peerMetricKey(metric);
+        if (!metricKeys.includes(key)) metricKeys.push(key);
+      }
+    }
+    const headers = ["Peer", "Symbol", ...metricKeys];
+    const rows = c.peerTable.map((p) => {
+      const byKey = new Map(p.metrics.map((metric) => [peerMetricKey(metric), metric]));
+      return [
+        p.name,
+        p.symbol ?? DASH,
+        ...metricKeys.map((key) => {
+          const metric = byKey.get(key);
+          return metric ? tracedValue(metric) : DASH;
+        }),
+      ];
+    });
     lines.push(table(headers, rows), "");
   } else {
     lines.push(`_No peer data._`, "");
   }
   lines.push("### Moat assessment", "");
   for (const m of c.moatAssessment) {
-    lines.push(
-      `- **${markdownListItem(m.source)}** (${markdownListItem(m.strength)}): ${markdownListItem(
-        m.reasoning.map((reason) => reason.text).join(" "),
-      )}`,
-    );
+    // Route the reasoning through the shared claim renderer instead of
+    // flattening it to prose. Moat reasoning is a model JUDGMENT; joining the
+    // claim texts dropped every label, as-of date and citation, so it read as a
+    // sourced fact — the one thing this report is built not to do.
+    lines.push(`#### ${markdownListItem(m.source)} (${markdownListItem(m.strength)})`, "");
+    lines.push(claimList(m.reasoning), "");
   }
   lines.push(
     "",

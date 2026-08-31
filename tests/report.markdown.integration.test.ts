@@ -764,7 +764,14 @@ describe("real report consumers use context-safe Markdown boundaries", () => {
       "- **[FACT]** P30CONTROLLEDCLAIM _(as of 2099-12-31)_ "
         + "`source id: P30CONTROLLEDID` `src: P30CONTROLLEDSOURCE`",
     );
-    expect(markdown).toContain("- **networkEffects** (wide): P30CONTROLLEDMOAT");
+    // CONTRACT CHANGED 2026-08-31. Moat reasoning used to be flattened to
+    // `- **networkEffects** (wide): <joined claim texts>`, which stripped every
+    // label, as-of date and citation from what is a model JUDGMENT — so it read
+    // as a sourced fact. It now goes through the same claim renderer as
+    // whatTheySell above, under a heading naming the source and strength.
+    expect(markdown).toContain("#### networkEffects (wide)");
+    expect(markdown).toContain("P30CONTROLLEDMOAT");
+    expect(markdown).not.toContain("- **networkEffects** (wide): P30CONTROLLEDMOAT");
     expect(markdown).toContain("- **P30CONTROLLEDTOPIC** (entity)");
     expect(markdown).toContain("  - Judge: P30CONTROLLEDJUDGE");
 

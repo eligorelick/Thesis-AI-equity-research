@@ -105,6 +105,20 @@ export function formatFinancialValue(
   }
 }
 
+/**
+ * Stable column identity for a peer metric.
+ *
+ * Peer tables were rendered POSITIONALLY ("Metric 1", "Metric 2"), so if one
+ * peer reported P/E and EV/EBITDA while another reported only EV/EBITDA, the
+ * second peer's EV/EBITDA landed under the first peer's P/E column. Different
+ * metrics under one header is a false comparison, which is the entire purpose
+ * of a peer table. Keying by the metric's own provenance fixes the alignment.
+ */
+export function peerMetricKey(metric: TracedNumber): string {
+  const tail = metric.source.split(/[.:/]/).filter(Boolean).pop();
+  return tail && tail.length > 0 ? tail : metric.unit;
+}
+
 export function formatTracedValue(number: TracedNumber): string {
   return formatFinancialValue(number.value, number.unit, number.currency);
 }

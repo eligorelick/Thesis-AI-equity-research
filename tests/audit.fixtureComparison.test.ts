@@ -68,6 +68,55 @@ const NEW_BALANCE_BASIS =
   "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)";
 
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
+  // Added 2026-08-31 (second audit pass): computeGrowth now folds CAGR
+  // horizon shortfalls into GrowthResult.notes. The payload forwards
+  // windowYears but never actualYears, so this fixture's 2.0-year span was
+  // published and citable as both a 3-year and a 5-year CAGR.
+  {
+    path: "stageB.growth.notes.0",
+    beforeMissing: true,
+    after: "Revenue 3y CAGR is computed over only 2.0 years (2023-12-31 → 2025-12-31) — the full 3-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+  },
+  {
+    path: "stageB.growth.notes.1",
+    beforeMissing: true,
+    after: "Revenue 5y CAGR is computed over only 2.0 years (2023-12-31 → 2025-12-31) — the full 5-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+  },
+  {
+    path: "stageB.growth.notes.2",
+    beforeMissing: true,
+    after: "Revenue 10y CAGR is computed over only 2.0 years (2023-12-31 → 2025-12-31) — the full 10-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+  },
+  {
+    path: "stageB.growth.notes.3",
+    beforeMissing: true,
+    after: "Diluted EPS 3y CAGR is computed over only 2.0 years (2023-12-31 → 2025-12-31) — the full 3-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+  },
+  {
+    path: "stageB.growth.notes.4",
+    beforeMissing: true,
+    after: "Diluted EPS 5y CAGR is computed over only 2.0 years (2023-12-31 → 2025-12-31) — the full 5-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+  },
+  {
+    path: "stageB.growth.notes.5",
+    beforeMissing: true,
+    after: "Diluted EPS 10y CAGR is computed over only 2.0 years (2023-12-31 → 2025-12-31) — the full 10-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+  },
+  {
+    path: "stageB.growth.notes.6",
+    beforeMissing: true,
+    after: "Free cash flow 3y CAGR is computed over only 1.0 years (2024-12-31 → 2025-12-31) — the full 3-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+  },
+  {
+    path: "stageB.growth.notes.7",
+    beforeMissing: true,
+    after: "Free cash flow 5y CAGR is computed over only 1.0 years (2024-12-31 → 2025-12-31) — the full 5-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+  },
+  {
+    path: "stageB.growth.notes.8",
+    beforeMissing: true,
+    after: "Free cash flow 10y CAGR is computed over only 1.0 years (2024-12-31 → 2025-12-31) — the full 10-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+  },
   // Added 2026-08-31 (second audit pass): multiplesFramework now emits an
   // explicit valuation.multiples.peers gap. Peer comparison is fully specified
   // and rendered downstream, but nothing ever populates `peers`, so a

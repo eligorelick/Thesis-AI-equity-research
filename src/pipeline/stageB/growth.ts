@@ -380,6 +380,27 @@ export function computeGrowth(
   const epsDilutedCagrs = CAGR_WINDOWS.map((w) => cagrForWindow(epsSeries, w));
   const fcfCagrs = CAGR_WINDOWS.map((w) => cagrForWindow(fcfSeries, w));
 
+  // A CAGR whose requested horizon was not met is still labelled "10y"/"5y"
+  // downstream: the payload forwards windowYears but neither `actualYears` nor
+  // the per-point note, so a 4-year span could be read and cited as a ten-year
+  // compound growth rate. Fold the shortfall into GrowthResult.notes, which the
+  // payload already serializes, so the horizon actually used is stated wherever
+  // the figure is used.
+  const pushHorizonNotes = (label: string, points: readonly CagrPoint[]): void => {
+    for (const p of points) {
+      if (p.cagrPct === null || !isFiniteNumber(p.actualYears)) continue;
+      if (p.actualYears >= p.windowYears - 0.001) continue;
+      notes.push(
+        `${label} ${p.windowYears}y CAGR is computed over only ${p.actualYears.toFixed(1)} years ` +
+          `(${p.startDate ?? "?"} → ${p.endDate ?? "?"}) — the full ${p.windowYears}-year history is unavailable; ` +
+          "read it as that shorter span, not a full-horizon rate.",
+      );
+    }
+  };
+  pushHorizonNotes("Revenue", revenueCagrs);
+  pushHorizonNotes("Diluted EPS", epsDilutedCagrs);
+  pushHorizonNotes("Free cash flow", fcfCagrs);
+
   // --- Margin series + trend ---------------------------------------------------
   const marginRows = inc.slice(0, MARGIN_SERIES_MAX_YEARS).reverse(); // oldest → newest
   const buildMargin = (

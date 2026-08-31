@@ -490,8 +490,8 @@ describe("payload determinism + provenance", () => {
       // thresholds — were previously dropped, so the Stage C passes reasoned
       // about forensic scores without seeing the conditions attached to them.
       // The larger prompt is the point of the fix, not a side effect.
-      fingerprint: "1.3.0:43251967",
-      promptBytes: 83_889,
+      fingerprint: "1.3.0:c54e0ec7",
+      promptBytes: 85_015,
       provenanceCount: 306,
       provenanceHash: "148db083",
       provenanceIdsHash: "1e316594",

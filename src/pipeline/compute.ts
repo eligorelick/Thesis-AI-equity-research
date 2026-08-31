@@ -215,6 +215,47 @@ export function selectUsEquityRiskPremium(
   return uniqueValues.length === 1 ? uniqueValues[0] : null;
 }
 
+const countryKeyOf = (value: unknown): string =>
+  typeof value === "string" ? value.toLowerCase().replace(/[^a-z]/g, "") : "";
+
+/**
+ * Select the total ERP for the ISSUER'S domicile, never the US premium by
+ * default. CAPM's market premium is a property of the market the equity is
+ * exposed to; substituting the US premium for a foreign issuer understates its
+ * cost of equity by the whole country risk premium — which is the entire point
+ * of Damodaran's country-risk adjustment, and which the vendor already supplies
+ * per country in the same payload.
+ *
+ * Returns the domicile row when it resolves unambiguously. Otherwise falls back
+ * to the US row and says so, so the substitution is disclosed rather than
+ * silent. Conflicting rows for one country fail closed, as the US selector
+ * already did.
+ */
+export function selectEquityRiskPremium(
+  rows: ReadonlyArray<FmpMarketRiskPremiumRow>,
+  country: string | null,
+): { pct: number | null; basis: "domicile" | "us-fallback"; country: string | null } {
+  const key = countryKeyOf(country);
+  if (key.length > 0 && !US_COUNTRY_KEYS.has(key)) {
+    const matches = [
+      ...new Set(
+        rows.flatMap((row) => {
+          const value = num(row.totalEquityRiskPremium);
+          return countryKeyOf(row.country) === key && value !== null ? [value] : [];
+        }),
+      ),
+    ];
+    if (matches.length === 1) {
+      return { pct: matches[0], basis: "domicile", country: typeof country === "string" ? country : null };
+    }
+  }
+  return {
+    pct: selectUsEquityRiskPremium(rows),
+    basis: key.length > 0 && !US_COUNTRY_KEYS.has(key) ? "us-fallback" : "domicile",
+    country: typeof country === "string" ? country : null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Adapters — map FMP rows to each module's input row shape (structural, but we
 // build explicit objects so a field rename upstream fails the typecheck here).
@@ -1088,7 +1129,23 @@ function computeReturns(
   const quote = firstRow(bundle.quote);
   const ratiosTtm = rowsOf(bundle.ratiosTtm)[0] ?? rowsOf(bundle.ratios)[0];
   const rf = riskFreePct(bundle);
-  const usErpPct = selectUsEquityRiskPremium(rowsOf(bundle.marketRiskPremium));
+  const erpSelection = selectEquityRiskPremium(
+    rowsOf(bundle.marketRiskPremium),
+    str(profile?.country),
+  );
+  const usErpPct = erpSelection.pct;
+  if (erpSelection.basis === "us-fallback") {
+    notes.push(
+      `Equity risk premium: no vendor row for ${erpSelection.country ?? "the issuer's domicile"} — the US ` +
+        "premium is used, which OMITS the country risk premium and understates cost of equity for a " +
+        "non-US issuer (no country-risk adjustment applied).",
+    );
+    gaps.push({
+      field: "returns.wacc.erp.country",
+      reason: `equity risk premium for ${erpSelection.country ?? "issuer domicile"} unavailable — US premium substituted without a country-risk adjustment`,
+      severity: "warn",
+    });
+  }
   const bal0 = balanceAnnual[0];
   const debtSnapshot = totalDebtSnapshot(balanceAnnual);
 

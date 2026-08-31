@@ -812,9 +812,28 @@ const STUB_PHRASE_RE = new RegExp(
   "i",
 );
 
-/** Layer-3 stub test: short OR incorporation phrasing in the first 400 chars. */
+/**
+ * Upper bound for the incorporation-phrase test. Observed real sections are
+ * >= 18k chars and observed stubs are 252-399, so anything past this is prose,
+ * not a pointer to prose elsewhere.
+ */
+export const STUB_PHRASE_MAX_CHARS = STUB_MIN_CHARS * 4;
+
+/**
+ * Layer-3 stub test: short, OR incorporation phrasing in the first 400 chars of
+ * a text that is still short enough to plausibly BE a stub.
+ *
+ * The phrase leg needs that upper bound. Real 10-K sections routinely open with
+ * a cross-reference — "should be read in conjunction with ... refer to the
+ * information ... appearing on pages F-1" — and MD&A and Item 1A are the two
+ * most likely to do so. Since the length leg above already returns for anything
+ * under `minChars`, an unbounded phrase test could only ever fire on text long
+ * enough to be a real section, and a detected stub is a LOUD HARD FAIL, so a
+ * correctly extracted 40,000-character MD&A was discarded outright.
+ */
 export function detectStub(text: string, minChars = STUB_MIN_CHARS): { isStub: boolean; reason: string } {
   if (text.length < minChars) return { isStub: true, reason: `only ${text.length} chars (<${minChars})` };
+  if (text.length >= STUB_PHRASE_MAX_CHARS) return { isStub: false, reason: "" };
   const head = text.slice(0, 400);
   if (STUB_PHRASE_RE.test(head)) return { isStub: true, reason: "incorporation/cross-reference phrasing in first 400 chars" };
   return { isStub: false, reason: "" };

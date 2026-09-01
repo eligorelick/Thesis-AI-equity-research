@@ -596,9 +596,34 @@ export function lookupSectorEtf(sector: string | null | undefined): SectorEtfLoo
 // ---------------------------------------------------------------------------
 
 export interface MetricPolicy {
-  /** Metric ids the UI/report builder must NEVER display for this route. */
+  /**
+   * Metric ids the UI/report builder must NEVER display for this route.
+   *
+   * This half is LOAD-BEARING: `scoreAspect` drops any signal whose
+   * `suppressedBy` tag appears here, and the composite excludes its weight. An
+   * id listed here with no signal carrying the tag is INERT — that mistake has
+   * been made twice (`fiftyTwoWeekRange`, `sma200`), so when adding an id,
+   * confirm a signal actually carries it.
+   */
   suppress: string[];
-  /** Metric ids the report leads with for this route. */
+  /**
+   * Metric ids the report would lead with for this route — DISPLAY INTENT ONLY.
+   *
+   * Nothing consumes this field today (no reader, no exporter, no scorer), and
+   * the ids are NOT a guarantee that the metric is computed: across the routes
+   * below, `combinedRatio`, `lossRatio`, `reserveDevelopment`, `nimApprox`,
+   * `efficiencyRatio`, `provisionForCreditLosses` and `impliedCapRate` have no
+   * implementation. They are retained as a record of the intended per-route
+   * emphasis, not as a claim about what exists.
+   *
+   * Before relying on an id here, grep for it. Several of them cannot be
+   * derived from the current provider data at all: a true net interest margin
+   * needs EARNING assets, which FMP does not expose (total assets would
+   * overstate the denominator and understate NIM), and the efficiency ratio
+   * needs the noninterest income/expense split, which FMP does not break out.
+   * Approximating either one under its real name would misstate a named bank
+   * metric, which is worse than leaving it unbuilt.
+   */
   lead: string[];
 }
 

@@ -68,6 +68,51 @@ const NEW_BALANCE_BASIS =
   "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)";
 
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
+  // Added 2026-08-31 (final pass): bestCagr now refuses a window whose
+  // MEASURED span is not that window. This fixture's 3y and 5y revenue CAGRs
+  // both span only 2.0 years, so the growth driver and the reverse-DCF
+  // comparison now fall through to a window that was actually measured
+  // instead of scoring a 2-year rate under a 5-year label.
+  {
+    path: "report.scores.aspects.fundamentals.drivers.0.value",
+    before: 9.11,
+    after: 8.7,
+  },
+  {
+    path: "report.scores.aspects.fundamentals.drivers.2.value",
+    before: 19,
+    after: 17.8,
+  },
+  {
+    path: "report.scores.aspects.fundamentals.score",
+    before: 67.9,
+    after: 67.13,
+  },
+  {
+    path: "report.scores.aspects.valuation.drivers.1.value",
+    before: -26.36,
+    after: -25.94,
+  },
+  {
+    path: "stageB.scores.aspects.fundamentals.drivers.0.value",
+    before: 9.11,
+    after: 8.7,
+  },
+  {
+    path: "stageB.scores.aspects.fundamentals.drivers.2.value",
+    before: 19,
+    after: 17.8,
+  },
+  {
+    path: "stageB.scores.aspects.fundamentals.score",
+    before: 67.9,
+    after: 67.13,
+  },
+  {
+    path: "stageB.scores.aspects.valuation.drivers.1.value",
+    before: -26.36,
+    after: -25.94,
+  },
   // Added 2026-08-31 (self-audit remediation): the quality and leadership
   // aspect notes are now route-aware. They advertised the ROIC-WACC spread
   // unconditionally after it had been suppressed on every financial route, so
@@ -80,7 +125,7 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "report.scores.aspects.quality.note",
     before: "Value creation (ROIC−WACC) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
-    after: "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
+    after: "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, plus Altman, accruals and Beneish where the route computes them — all three are withheld for financial classifications, whose balance sheets those models were not estimated on).",
   },
   {
     path: "stageB.scores.aspects.leadership.note",
@@ -90,7 +135,7 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "stageB.scores.aspects.quality.note",
     before: "Value creation (ROIC−WACC) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
-    after: "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
+    after: "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, plus Altman, accruals and Beneish where the route computes them — all three are withheld for financial classifications, whose balance sheets those models were not estimated on).",
   },
   // Added 2026-08-31 (self-audit remediation): valueCompany now hoists the
   // multiples model's own gaps into the valuation manifest, mirroring the
@@ -285,7 +330,7 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "report.scores.composite.score",
     before: 77.59,
-    after: 77.68,
+    after: 77.53,
   },
   {
     path: "stageB.returns.roic.latestRoicPct",
@@ -350,7 +395,7 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "stageB.scores.composite.score",
     before: 77.59,
-    after: 77.68,
+    after: 77.53,
   },
   // Added 2026-08-31: runForensics now aggregates the four models' own
   // house-rule notes into ForensicsReport.notes, mirroring the gaps

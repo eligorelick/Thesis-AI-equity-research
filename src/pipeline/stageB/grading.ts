@@ -460,13 +460,39 @@ const IMPLIED_VS_ACHIEVABLE_BAND: readonly BandPoint[] = [
  * Helper extractors
  * ------------------------------------------------------------------------ */
 
-function cagr(result: { windowYears: number; cagrPct: number | null }[], window: number): number | null {
+/**
+ * A window's CAGR, but only when the span actually measured IS that window.
+ *
+ * `actualYears` can differ from `windowYears` in both directions — short when
+ * history runs out, and LONG when a restated fiscal year is collapsed out of
+ * the series. Reading `cagrPct` without checking meant a four-year rate was
+ * consumed as the labelled three-year one and fed to the DCF's growth anchor.
+ * The disclosure note alone does not protect a numeric consumer.
+ */
+function cagr(
+  result: { windowYears: number; cagrPct: number | null; actualYears?: number | null }[],
+  window: number,
+): number | null {
   const p = result.find((c) => c.windowYears === window);
-  return p && isNum(p.cagrPct) ? p.cagrPct : null;
+  if (!p || !isNum(p.cagrPct)) return null;
+  // Absent actualYears (hand-built fixtures) is treated as matching.
+  if (isNum(p.actualYears) && Math.abs(p.actualYears - window) > CAGR_SPAN_TOLERANCE_YEARS) {
+    return null;
+  }
+  return p.cagrPct;
 }
 
-/** 5y CAGR, falling back to 3y then 1y. */
-function bestCagr(rows: { windowYears: number; cagrPct: number | null }[]): number | null {
+/**
+ * Tolerance for "the span is the window", covering 52/53-week fiscal calendars
+ * (a 53-week year is ~1.019 years, so a 5-year window can legitimately measure
+ * ~5.1 years).
+ */
+const CAGR_SPAN_TOLERANCE_YEARS = 0.25;
+
+/** 5y CAGR, falling back to 3y then 1y — each only if its span matches. */
+function bestCagr(
+  rows: { windowYears: number; cagrPct: number | null; actualYears?: number | null }[],
+): number | null {
   return cagr(rows, 5) ?? cagr(rows, 3) ?? cagr(rows, 1);
 }
 
@@ -660,7 +686,7 @@ export function computeScores(inputs: ScoringInputs): Scoring {
     ],
     weights.quality,
     inputs.asOf,
-    "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
+    "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, plus Altman, accruals and Beneish where the route computes them — all three are withheld for financial classifications, whose balance sheets those models were not estimated on).",
     policy,
   );
 

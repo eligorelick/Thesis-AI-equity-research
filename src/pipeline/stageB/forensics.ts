@@ -890,8 +890,16 @@ export function computeBeneish(current: ForensicsPeriod, prior: ForensicsPeriod)
       sgaP = (useGa ? (gaP as number) : 0) + (useSm ? (smP as number) : 0);
     }
     if (sgaT !== null && sgaP !== null) {
+      const usedParts = [
+        useGa ? "generalAndAdministrativeExpenses" : null,
+        useSm ? "sellingAndMarketingExpenses" : null,
+      ].filter((part): part is string => part !== null);
       notes.push(
-        "SGAI: SG&A built from generalAndAdministrativeExpenses + sellingAndMarketingExpenses for BOTH years (combined field unavailable/zero in one or both) — one basis, never mixed.",
+        `SGAI: SG&A built from ${usedParts.join(" + ")} for BOTH years ` +
+          "(combined field unavailable/zero in one or both) — one basis, never mixed." +
+          (usedParts.length === 1
+            ? " The other component is not disclosed in both years and is excluded from both, so the index compares like with like on a NARROWER base than full SG&A."
+            : ""),
       );
     }
   }

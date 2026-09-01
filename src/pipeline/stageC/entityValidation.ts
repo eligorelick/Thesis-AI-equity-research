@@ -224,7 +224,14 @@ function mentionsIn(text: string, registry: EntityRegistry): EntityMention[] {
 /** Sentence split for scoping the relationship check; punctuation-only, no NLP. */
 function splitSentences(text: string): string[] {
   return text
-    .split(/(?<=[.!?;])\s+/)
+    // A boundary is terminal punctuation + whitespace + a capital or digit, or
+    // a line break (so bulleted and line-broken text is segmented too). A
+    // semicolon joins clauses and is NOT a boundary. Requiring whitespace after
+    // the period already excludes decimals ("3.5"). The lookbehind excludes a
+    // SINGLE-letter token — "U.S." — without blocking a name that merely ends
+    // in a capital ("LLY.") or a trial code ending in a digit ("ATTAIN-1."),
+    // both of which are real sentence ends.
+    .split(/(?<!\b[A-Z])[.!?]+[ \t]+(?=[A-Z0-9"'“‘])|[\r\n]+/)
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
 }

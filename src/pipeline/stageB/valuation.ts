@@ -1848,7 +1848,13 @@ function excessReturnValue(
     const roe = roePathPct[t - 1] / 100;
     const excess = (roe - coe) * bv;
     pvExcess += excess / Math.pow(1 + coe, t);
-    bv = bv * (1 + roe * retention);
+    // A LOSS is retained in full. `roe * retention` on a negative ROE returns a
+    // fraction of the loss to book value — arithmetically a capital injection
+    // proportional to the loss, because `payout x negative earnings` is a
+    // negative dividend. Dividends are not negative; a loss reduces book value
+    // by its whole amount. Only positive earnings are shared with holders.
+    const bvGrowth = roe < 0 ? roe : roe * retention;
+    bv = bv * (1 + bvGrowth);
     bookValuePath.push(bv);
   }
   return { equityValue: bv0 + pvExcess, bookValuePath };

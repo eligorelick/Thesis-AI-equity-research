@@ -125,3 +125,38 @@ describe("relationship-conflict is scoped to the sentence", () => {
     expect(issues.some((i) => i.code === "relationship-conflict")).toBe(true);
   });
 });
+
+/**
+ * The sentence split must not fragment on abbreviations or decimals — a
+ * fragment both hides real misattributions and manufactures false ones — while
+ * still treating a trial code ending in a digit as a real sentence end.
+ */
+describe("sentence boundaries are punctuation-aware", () => {
+  const reg = () => getEntityRegistry("LLY") as EntityRegistry;
+  const conflicts = (text: string) =>
+    validateEntityText(text, reg(), "s").issues.filter((i) => i.code === "relationship-conflict");
+
+  it("does not split a decimal, so one sentence stays one sentence", () => {
+    // If "24.5" split, the trial and its drug would land in different segments
+    // and a correct sentence would be reported as a conflict.
+    expect(conflicts("ATTAIN-1 showed orforglipron delivered 24.5 percent weight loss.")).toHaveLength(0);
+  });
+
+  it("does not split a single-letter abbreviation", () => {
+    expect(
+      conflicts("In the U.S. ATTAIN-1 showed orforglipron delivered 12 percent weight loss."),
+    ).toHaveLength(0);
+  });
+
+  it("still splits after a trial code ending in a digit", () => {
+    // The correct pairing is in sentence one; sentence two misattributes.
+    const text =
+      "Orforglipron is studied in ATTAIN-1. ATTAIN-1 showed retatrutide delivered 24 percent.";
+    expect(conflicts(text).length).toBeGreaterThan(0);
+  });
+
+  it("treats a line break as a boundary, so list items are segmented", () => {
+    const text = "Orforglipron is studied in ATTAIN-1.\nATTAIN-1 showed retatrutide delivered 24 percent.";
+    expect(conflicts(text).length).toBeGreaterThan(0);
+  });
+});

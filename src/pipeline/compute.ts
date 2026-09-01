@@ -274,9 +274,16 @@ function countryAliases(value: unknown): Set<string> {
 export function selectEquityRiskPremium(
   rows: ReadonlyArray<FmpMarketRiskPremiumRow>,
   country: string | null,
-): { pct: number | null; basis: "domicile" | "us-fallback"; country: string | null } {
+): {
+  pct: number | null;
+  basis: "domicile" | "us-fallback";
+  country: string | null;
+  /** Why the domicile row was not used — absent, or several conflicting rows. */
+  reason: "absent" | "conflicting" | null;
+} {
   const aliases = countryAliases(country);
   const isUs = [...aliases].some((a) => US_COUNTRY_KEYS.has(a) || a === "unitedstates");
+  let matchCount = 0;
   if (aliases.size > 0 && !isUs) {
     const matches = [
       ...new Set(
@@ -288,8 +295,14 @@ export function selectEquityRiskPremium(
         }),
       ),
     ];
+    matchCount = matches.length;
     if (matches.length === 1) {
-      return { pct: matches[0], basis: "domicile", country: typeof country === "string" ? country : null };
+      return {
+        pct: matches[0],
+        basis: "domicile",
+        country: typeof country === "string" ? country : null,
+        reason: null,
+      };
     }
   }
   return {
@@ -298,6 +311,9 @@ export function selectEquityRiskPremium(
     // NOT a domicile match, and labelling it one made its disclosure unreachable.
     basis: isUs ? "domicile" : "us-fallback",
     country: typeof country === "string" ? country : null,
+    // More than one DISTINCT premium for the domicile is a vendor conflict, not
+    // an absence, and must not be disclosed as "no vendor row".
+    reason: isUs ? null : matchCount > 1 ? "conflicting" : "absent",
   };
 }
 

@@ -14,8 +14,9 @@ import type { CompanyRoute } from "@/types/core";
  * while cash is an earning asset, so the denominator is meaningless — and
  * frequently non-positive, which made the metric vanish outright.
  */
-const income = (netIncome: number, date = "2025-12-31") => ({
+const income = (netIncome: number, date = "2025-12-31", preferredDividendsPaid: number | null = -4) => ({
   date,
+  preferredDividendsPaid,
   revenue: 1000,
   operatingIncome: 300,
   ebit: 300,
@@ -61,8 +62,9 @@ describe("computeRote", () => {
       [balance(), balance({ totalStockholdersEquity: 900 }, "2024-12-31")],
     );
 
-    // TCE now 825, prior 725 ⇒ average 775; 100 / 775 = 12.9032…%
-    expect(r.latestRotePct).toBeCloseTo((100 / 775) * 100, 9);
+    // TCE now 825, prior 725 ⇒ average 775. Net income available to COMMON is
+    // 100 − 4 of preferred dividends = 96; 96 / 775 = 12.387…%.
+    expect(r.latestRotePct).toBeCloseTo((96 / 775) * 100, 9);
     expect(r.latestTangibleCommonEquity).toBe(825);
     expect(r.asOf).toBe("2025-12-31");
   });
@@ -70,7 +72,7 @@ describe("computeRote", () => {
   it("falls back to the single period when there is no prior balance", () => {
     const r = computeRote([income(100)], [balance()]);
 
-    expect(r.latestRotePct).toBeCloseTo((100 / 825) * 100, 9);
+    expect(r.latestRotePct).toBeCloseTo((96 / 825) * 100, 9);
   });
 
   it("refuses a non-positive tangible base rather than returning a sign-flipped ratio", () => {
@@ -118,11 +120,21 @@ describe("exactly one capital-return measure is scored per route", () => {
     }
   });
 
-  it("a FIN-OTHER issuer on the general route is treated as financial too", () => {
+  it("a FIN-OTHER issuer KEEPS ROIC — the returns switch is narrower than the forensic one", () => {
+    // Asset managers, exchanges and insurance brokers are fee-based: they have
+    // ordinary invested capital, so ROIC is meaningful, and they often have no
+    // tangible-equity base worth speaking of, so ROTE is uncomputable. Routing
+    // them through the financial branch stripped ROIC and gave nothing back,
+    // leaving moat scored on gross margin alone.
     const { suppress } = metricPolicy(route("general", "Financial Services"));
 
-    expect(suppress).toContain("roic");
-    expect(suppress).not.toContain("rote");
+    expect(suppress).not.toContain("roic");
+    expect(suppress).toContain("rote");
+    // The FORENSIC suppression still applies to them — the two switches are
+    // deliberately different.
+    for (const signal of ["altmanZ", "beneishM", "accrualsRatio"]) {
+      expect(suppress).toContain(signal);
+    }
   });
 
   it("non-financial routes suppress ROTE and keep ROIC", () => {
@@ -130,5 +142,42 @@ describe("exactly one capital-return measure is scored per route", () => {
 
     expect(suppress).toContain("rote");
     expect(suppress).not.toContain("roic");
+  });
+});
+
+describe("ROTE nets preferred earnings out of the common return", () => {
+  it("withholds ROTE when preferred is outstanding but its dividend is unavailable", () => {
+    // The denominator already excludes preferred; crediting preferred earnings
+    // to common would overstate ROTE for exactly the issuers this metric serves.
+    const r = computeRote([income(100, "2025-12-31", null)], [balance()]);
+
+    expect(r.latestRotePct).toBeNull();
+    expect(r.notes.join(" ")).toMatch(/preferred/i);
+  });
+
+  it("uses total net income when there is no preferred outstanding", () => {
+    const r = computeRote(
+      [income(100, "2025-12-31", null)],
+      [balance({ preferredStock: 0 })],
+    );
+
+    // TCE = 1000 − 100 − 50 − 0 = 850.
+    expect(r.latestRotePct).toBeCloseTo((100 / 850) * 100, 9);
+  });
+
+  it("pairs income to balance by DATE, not by array position", () => {
+    // Balance rows in a different order and with an extra year: positional
+    // pairing would divide 2025 income by a 2023 equity base.
+    const r = computeRote(
+      [income(100, "2025-12-31"), income(90, "2024-12-31")],
+      [
+        balance({}, "2023-12-31"),
+        balance({ totalStockholdersEquity: 900 }, "2024-12-31"),
+        balance({}, "2025-12-31"),
+      ],
+    );
+
+    expect(r.asOf).toBe("2025-12-31");
+    expect(r.latestRotePct).toBeCloseTo((96 / 775) * 100, 9);
   });
 });

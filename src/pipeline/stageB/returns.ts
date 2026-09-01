@@ -723,6 +723,8 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
 export interface ReturnsIncomeRow {
   /** Fiscal period end, ISO yyyy-mm-dd. */
   date: string;
+  /** Preferred dividends for the period; nets out of the ROTE numerator. */
+  preferredDividendsPaid?: number | null;
   revenue?: number | null;
   operatingIncome?: number | null;
   ebit?: number | null;
@@ -871,7 +873,7 @@ function investedCapital(b: ReturnsBalanceRow, notes: string[]): number | null {
 /** One fiscal year of return on tangible common equity. */
 export interface RoteYear {
   date: string;
-  /** Net income / average tangible common equity, percent. Null when uncomputable. */
+  /** Net income available to COMMON / average tangible common equity, percent. */
   rotePct: number | null;
   tangibleCommonEquity: number | null;
   tangibleCommonEquityAvg: number | null;
@@ -916,7 +918,8 @@ export function tangibleCommonEquity(b: ReturnsBalanceRow): number | null {
  * is why ROIC simply vanished for many banks). ROTE divides the return the
  * common shareholder actually receives by the capital actually at risk.
  *
- * Averaged over beginning and ending TCE, matching the ROIC convention here.
+ * Averaged over beginning and ending TCE, matching the ROIC convention here,
+ * and paired to the income row by the same date tolerance ROIC uses.
  */
 export function computeRote(
   income: ReadonlyArray<ReturnsIncomeRow>,
@@ -928,14 +931,46 @@ export function computeRote(
   const bal = sortNewestFirst(balance);
   const series: RoteYear[] = [];
 
+  // Driven off the INCOME rows with the same ±tolerance period match ROIC and
+  // DuPont use. Pairing by array position assumed the two statement lists are
+  // the same length and aligned; when they are not, a year's net income was
+  // divided by a DIFFERENT year's equity.
   for (let i = 0; i < Math.min(inc.length, ROIC_SERIES_MAX_YEARS); i++) {
-    const cur = bal[i];
-    const prior = bal[i + 1];
-    if (!cur) break;
+    const row = inc[i];
+    if (!row) break;
+    const cur = findBalanceForDate(bal, row.date);
+    if (!cur) continue;
+    const priorDate = inc[i + 1]?.date ?? null;
+    const prior = priorDate !== null ? findBalanceForDate(bal, priorDate) : null;
     const tce = tangibleCommonEquity(cur);
     const tcePrior = prior ? tangibleCommonEquity(prior) : null;
     const avg = tce !== null && tcePrior !== null ? (tce + tcePrior) / 2 : tce;
-    const ni = isFiniteNumber(inc[i]?.netIncome) ? (inc[i].netIncome as number) : null;
+
+    // Numerator is net income available to COMMON. The denominator already
+    // excludes preferred, so crediting preferred earnings to common would
+    // overstate ROTE for any issuer with meaningful preferred outstanding —
+    // exactly the issuers (banks) this metric exists for. Fail closed when
+    // preferred is present but its dividend is unavailable, rather than
+    // silently returning the unadjusted ratio.
+    const niTotal = isFiniteNumber(row.netIncome) ? row.netIncome : null;
+    const prefDiv = isFiniteNumber(row.preferredDividendsPaid)
+      ? Math.abs(row.preferredDividendsPaid)
+      : null;
+    const hasPreferred = isFiniteNumber(cur.preferredStock) && cur.preferredStock > 0;
+    let ni: number | null;
+    if (niTotal === null) {
+      ni = null;
+    } else if (prefDiv !== null) {
+      ni = niTotal - prefDiv;
+    } else if (hasPreferred) {
+      ni = null;
+      notes.push(
+        `${row.date}: preferred stock is outstanding but preferred dividends are unavailable — ROTE withheld rather than crediting preferred earnings to common`,
+      );
+    } else {
+      ni = niTotal;
+    }
+
     // A non-positive tangible base makes the ratio meaningless, not merely
     // negative: it is the same category error ROIC's guard already refuses.
     const rotePct = ni !== null && avg !== null && avg > 0 ? (ni / avg) * 100 : null;

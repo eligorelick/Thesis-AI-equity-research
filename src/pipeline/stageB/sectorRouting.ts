@@ -751,10 +751,14 @@ export function metricPolicy(route: SectorRoute | CompanyRoute): MetricPolicy {
   // the raw material and cash is an earning asset, which is why a bank's ROIC
   // routinely went non-positive and disappeared; ROTE measures the return the
   // common shareholder actually receives on the capital actually at risk.
-  const financialBase =
-    base === "bank" || base === "insurer" || base === "reit-mortgage";
+  // Gated on BALANCE-SHEET TYPE only, deliberately narrower than the forensic
+  // classifier. A FIN-OTHER issuer (asset manager, exchange, insurance broker)
+  // is fee-based: it has ordinary invested capital, so ROIC is meaningful, and
+  // it frequently has no tangible-equity base worth speaking of, so ROTE is
+  // uncomputable. Routing those through the financial branch stripped ROIC and
+  // gave them nothing back, leaving moat scored on gross margin alone.
   const financialReturns =
-    financialBase || (typeof route !== "string" && isFinancialForensicsSuppressed(route));
+    base === "bank" || base === "insurer" || base === "reit-mortgage";
   if (financialReturns) {
     suppress.add("roic");
     suppress.add("roicVsWacc");

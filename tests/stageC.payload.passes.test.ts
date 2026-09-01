@@ -490,8 +490,8 @@ describe("payload determinism + provenance", () => {
       // thresholds — were previously dropped, so the Stage C passes reasoned
       // about forensic scores without seeing the conditions attached to them.
       // The larger prompt is the point of the fix, not a side effect.
-      fingerprint: "1.3.0:c54e0ec7",
-      promptBytes: 85_015,
+      fingerprint: "1.3.0:b312a7ef",
+      promptBytes: 85_610,
       provenanceCount: 306,
       provenanceHash: "148db083",
       provenanceIdsHash: "1e316594",
@@ -505,7 +505,7 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "04be4226",
+      financeHash: "72f16888",
     });
   });
 

@@ -603,7 +603,7 @@ export function selectAltmanVariant(
     );
     return { variant: null, notes };
   }
-  if (sicNum !== null && sicNum >= 6000 && sicNum <= 6799 && route.base !== "reit") {
+  if (sicNum !== null && isFinancialSicBand(sicNum) && route.base !== "reit") {
     notes.push(
       `Altman Z not computed: SIC ${sicNum} is in the financial range 6000–6799 (research §6.3 classifier).`,
     );
@@ -1829,6 +1829,22 @@ export interface ForensicsReport {
  * general forensic map with a caution). Piotroski is still computed for
  * financials (all 9 inputs exist) with a validation-sample caveat.
  */
+/**
+ * SIC major groups whose balance sheets break Altman, Beneish and the accrual
+ * ratios: depositories, credit agencies, brokers and insurers (60-64), and
+ * holding & other investment offices (67).
+ *
+ * Major group 65 — real-estate OPERATORS, agents, managers and land
+ * subdividers — is deliberately excluded. Those are ordinary operating
+ * companies with inventory, receivables and a working-capital cycle; the
+ * models were never estimated to exclude them, and a blanket 6000-6799 band
+ * voided the entire forensic battery for them the moment the SIC started
+ * arriving. Equity REITs keep their existing carve-out at the call sites.
+ */
+function isFinancialSicBand(sicNum: number): boolean {
+  return (sicNum >= 6000 && sicNum <= 6499) || (sicNum >= 6700 && sicNum <= 6799);
+}
+
 export function isFinancialForensicsSuppressed(
   route: CompanyRoute,
   classification?: AltmanClassification,
@@ -1845,7 +1861,7 @@ export function isFinancialForensicsSuppressed(
     sicRaw !== null && sicRaw !== undefined && sicRaw.trim() !== "" && Number.isFinite(Number(sicRaw))
       ? Number(sicRaw)
       : null;
-  return sicNum !== null && sicNum >= 6000 && sicNum <= 6799 && route.base !== "reit";
+  return sicNum !== null && isFinancialSicBand(sicNum) && route.base !== "reit";
 }
 
 /**

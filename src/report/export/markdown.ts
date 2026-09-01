@@ -47,7 +47,7 @@ import {
   deriveReportCompletenessPresentation,
   type ReportCompletenessPresentation,
 } from "@/report/completeness";
-import { formatCostUsd, formatFinancialValue, peerMetricKey, roundedDisplayedCostTotal } from "@/report/format";
+import { formatCostUsd, formatFinancialValue, peerColumnKeys, roundedDisplayedCostTotal } from "@/report/format";
 import {
   markdownBlockquote,
   markdownHeading,
@@ -807,14 +807,14 @@ function renderCompetitive(c: Competitive): string {
     // EV/EBITDA must not have it rendered under another peer's P/E header.
     const metricKeys: string[] = [];
     for (const p of c.peerTable) {
-      for (const metric of p.metrics) {
-        const key = peerMetricKey(metric);
+      for (const key of peerColumnKeys(p.metrics)) {
         if (!metricKeys.includes(key)) metricKeys.push(key);
       }
     }
     const headers = ["Peer", "Symbol", ...metricKeys];
     const rows = c.peerTable.map((p) => {
-      const byKey = new Map(p.metrics.map((metric) => [peerMetricKey(metric), metric]));
+      const rowKeys = peerColumnKeys(p.metrics);
+      const byKey = new Map(p.metrics.map((metric, i) => [rowKeys[i], metric]));
       return [
         p.name,
         p.symbol ?? DASH,

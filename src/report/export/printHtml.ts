@@ -77,7 +77,7 @@ import { citationOutcomeLabel } from "@/report/schema";
 import {
   formatCostUsd,
   formatFinancialValue,
-  peerMetricKey,
+  peerColumnKeys,
   formatPct,
   roundedDisplayedCostTotal,
 } from "@/report/format";
@@ -711,14 +711,15 @@ function sectionCompetitive(c: Competitive): string {
     // Columns keyed by the metric, not by position — see peerMetricKey.
     const metricKeys: string[] = [];
     for (const p of c.peerTable) {
-      for (const metric of p.metrics) {
-        const key = peerMetricKey(metric);
+      for (const key of peerColumnKeys(p.metrics)) {
         if (!metricKeys.includes(key)) metricKeys.push(key);
       }
     }
-    const headers = ["Peer", "Symbol", ...metricKeys.map((key) => esc(key))];
+    // `table` escapes headers itself; escaping here too double-encoded them.
+      const headers = ["Peer", "Symbol", ...metricKeys];
     const rows = c.peerTable.map((p) => {
-      const byKey = new Map(p.metrics.map((metric) => [peerMetricKey(metric), metric]));
+      const rowKeys = peerColumnKeys(p.metrics);
+      const byKey = new Map(p.metrics.map((metric, i) => [rowKeys[i], metric]));
       return [
         esc(p.name),
         esc(p.symbol ?? DASH),

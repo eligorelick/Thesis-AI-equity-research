@@ -68,6 +68,41 @@ const NEW_BALANCE_BASIS =
   "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)";
 
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
+  // Added 2026-08-31 (self-audit remediation): valueCompany now hoists the
+  // multiples model's own gaps into the valuation manifest, mirroring the
+  // excess-return and REIT hoists. The peers and ownHistory gaps were being
+  // emitted and then dropped, so the peers disclosure added earlier never
+  // actually reached the missing-data appendix.
+  {
+    path: "report.appendix.missingData.44",
+    beforeMissing: true,
+    after: {"field": "valuation.multiples.ownHistory", "reason": "insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)", "severity": "info"},
+  },
+  {
+    path: "report.appendix.missingData.45",
+    beforeMissing: true,
+    after: {"field": "valuation.multiples.peers", "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)", "severity": "info"},
+  },
+  {
+    path: "stageB.gaps.43",
+    beforeMissing: true,
+    after: {"field": "valuation.multiples.ownHistory", "reason": "insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)", "severity": "info"},
+  },
+  {
+    path: "stageB.gaps.44",
+    beforeMissing: true,
+    after: {"field": "valuation.multiples.peers", "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)", "severity": "info"},
+  },
+  {
+    path: "stageB.valuation.gaps.0",
+    beforeMissing: true,
+    after: {"field": "valuation.multiples.peers", "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)", "severity": "info"},
+  },
+  {
+    path: "stageB.valuation.gaps.1",
+    beforeMissing: true,
+    after: {"field": "valuation.multiples.ownHistory", "reason": "insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)", "severity": "info"},
+  },
   // Added 2026-08-31 (bank capital-return completion): financial routes now
   // score return on TANGIBLE COMMON EQUITY instead of ROIC, whose invested
   // capital is undefined for a deposit-funded balance sheet. The fixture

@@ -290,9 +290,14 @@ function toGrowthCashFlow(r: FmpCashFlowRow): GrowthCashFlowRow {
   };
 }
 
-function toReturnsIncome(r: FmpIncomeStatementRow): ReturnsIncomeRow {
+function toReturnsIncome(
+  r: FmpIncomeStatementRow,
+  /** Preferred dividends by fiscal date, joined from the cash-flow statement. */
+  preferredByDate?: ReadonlyMap<string, number | null>,
+): ReturnsIncomeRow {
   return {
     date: String(r.date ?? ""),
+    preferredDividendsPaid: preferredByDate?.get(String(r.date ?? "")) ?? null,
     revenue: num(r.revenue),
     operatingIncome: num(r.operatingIncome),
     ebit: num(r.ebit),
@@ -694,7 +699,7 @@ function ttmCashFlowFromNormalized(
   if (normalized.rows.length < 4) return null;
   const q = normalized.rows.slice(0, 4);
   // Contiguity gate (audit M1) — identical to ttmIncome.
-  const violation = quarterWindowViolation(q);
+  const violation = quarterWindowViolation(q, normalized.rows[4] ?? null);
   if (violation !== null) {
     gaps?.push({
       field: "compute.ttmCashFlow",
@@ -906,6 +911,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   // consumers. Surface them as notes and gaps so they reach the report and the
   // Stage C payload, where the forensic section is read.
   const eventGaps: ManifestEntry[] = [];
+  const eventNotes: string[] = [];
   const nonReliance = bundle.edgar?.nonReliance8Ks;
   if (nonReliance?.ok === true && nonReliance.value.data.length > 0) {
     const dates = nonReliance.value.data
@@ -913,7 +919,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
       .filter((d): d is string => typeof d === "string" && d.length > 0)
       .sort()
       .reverse();
-    notes.push(
+    eventNotes.push(
       `SEC Form 8-K Item 4.02 filed (${dates.slice(0, 3).join(", ")}${dates.length > 3 ? ", …" : ""}): ` +
         "the company announced that previously issued financial statements should NO LONGER BE RELIED UPON. " +
         "Any figure below drawn from a superseded period may be restated.",
@@ -931,7 +937,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
       .filter((d): d is string => typeof d === "string" && d.length > 0)
       .sort()
       .reverse();
-    notes.push(
+    eventNotes.push(
       `SEC Form 8-K Item 4.01 filed (${dates.slice(0, 3).join(", ")}${dates.length > 3 ? ", …" : ""}): ` +
         "the company changed its registered public accounting firm.",
     );
@@ -1145,6 +1151,9 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     runway?.gaps ?? null,
   );
 
+  // The 8-K forensic events belong with the forensic notes the report renders,
+  // not in runStageB's own `notes`, which has no consumer.
+  forensics.notes.push(...eventNotes);
   notes.push(...route.notes);
   return {
     symbol: bundle.symbol,
@@ -1263,11 +1272,22 @@ function computeReturns(
     },
   });
 
-  const roic = computeRoic(incomeAnnual.map(toReturnsIncome), balanceAnnual.map(toReturnsBalance));
+  // Preferred dividends live on the CASH-FLOW statement; ROTE nets them out of
+  // its numerator because its denominator already excludes preferred.
+  const preferredByDate = new Map<string, number | null>(
+    rowsOf(bundle.statements.cashflowAnnual).map((r: FmpCashFlowRow) => [
+      String(r.date ?? ""),
+      num(r.preferredDividendsPaid),
+    ]),
+  );
+  const returnsIncome = incomeAnnual.map((r) => toReturnsIncome(r, preferredByDate));
+  const returnsBalance = balanceAnnual.map(toReturnsBalance);
+
+  const roic = computeRoic(returnsIncome, returnsBalance);
   // Return on tangible common equity — the capital-return measure for
   // deposit-funded balance sheets, where invested capital is undefined.
-  const rote = computeRote(incomeAnnual.map(toReturnsIncome), balanceAnnual.map(toReturnsBalance));
-  const dupont = computeDupont(incomeAnnual.map(toReturnsIncome), balanceAnnual.map(toReturnsBalance));
+  const rote = computeRote(returnsIncome, returnsBalance);
+  const dupont = computeDupont(returnsIncome, returnsBalance);
   const roicVsWacc = computeRoicVsWaccSpread(roic.latestRoicPct, wacc.waccPct);
 
   gaps.push(...wacc.gaps, ...roic.gaps, ...rote.gaps, ...dupont.gaps);

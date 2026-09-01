@@ -66,7 +66,20 @@ export const REVERSE_PRESCAN_POINTS = 17;
 export const BISECTION_TOL_PP = 0.01; // 1bp of growth/margin
 export const BISECTION_MAX_ITER = 80;
 export const EXCESS_RETURN_YEARS = 10;
-export const REVERSE_ROE_RANGE_PCT: readonly [number, number] = [0, 40];
+/**
+ * Bisection bracket for the excess-return reverse solve.
+ *
+ * MUST span the reachable value range of the objective it inverts. When that
+ * objective became the FADE path, [0, 40] stopped covering it: the invertible
+ * window collapsed to roughly [0.60x, 2.79x] book, so a bank trading below
+ * ~0.6x book (routine for a distressed or sub-book bank) and an insurer above
+ * ~2.8x both fell outside the bracket and returned null — dropping the
+ * 0.5-weight valuation signal entirely.
+ *
+ * A negative lower bound is not a modelling artefact: a loss-making issuer has
+ * a genuinely negative ROE, and the solve must be able to say so.
+ */
+export const REVERSE_ROE_RANGE_PCT: readonly [number, number] = [-40, 80];
 export const PAYOUT_CLAMP_PCT: readonly [number, number] = [0, 90];
 export const MIN_PEERS_FOR_STATS = 4;
 export const MIN_HISTORY_OBS_FOR_BAND = 8;
@@ -1447,7 +1460,7 @@ function deriveOwnHistory(
     if (unavailable.length > 0) {
       unusableWindows.push({
         anchor: window[0].date,
-        reason: `${unavailable.length === DERIVED_HISTORY_KEYS.length ? "historical multiple window unavailable" : "partial historical multiple window"}: no positive/computable ${unavailable.join(", ")}`,
+        reason: `${unavailable.length === derivedKeys.length ? "historical multiple window unavailable" : "partial historical multiple window"}: no positive/computable ${unavailable.join(", ")}`,
       });
     }
   }
@@ -1999,7 +2012,10 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
   } else {
     const [lo, hi] = REVERSE_ROE_RANGE_PCT;
     const f = (roe: number): number =>
-      excessReturnValue(bv0, fadePath(roe, coe, years), coe, payout).equityValue - mcap;
+      // Fade to the SAME terminal target the forward path uses. Hard-wiring CoE
+      // here re-opened the apples-to-apples defect this solve exists to close
+      // whenever a caller overrode the terminal ROE.
+      excessReturnValue(bv0, fadePath(roe, endRoe, years), coe, payout).equityValue - mcap;
     const fLo = f(lo);
     const fHi = f(hi);
     if (fLo > 0) {
@@ -2010,7 +2026,7 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
       const root = bisect(f, { lo, hi, fLo, fHi }, mcap);
       impliedCurrentRoePct = root;
       if (root !== null) {
-        reverseNotes.push(`starting ROE fading to CoE ${fmtNum(coe)}% over ${years} years (payout ${fmtNum(payout)}%) matching market cap — comparable to the current ROE, same dynamics as the forward path`);
+        reverseNotes.push(`starting ROE fading to ${endBasis} over ${years} years (payout ${fmtNum(payout)}%) matching market cap — comparable to the current ROE, same dynamics as the forward path`);
       }
     }
   }
@@ -2209,6 +2225,11 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
   }
 
   const multiples = multiplesFramework(route.base, inputs.multiples);
+  // Hoist the multiples model's own gaps (peers, ownHistory, priceToFfo) into
+  // the valuation manifest, mirroring the excess-return and REIT hoists below.
+  // Without this the peers gap added earlier never reached the missing-data
+  // manifest, so a permanently empty peer column still had no disclosure.
+  gaps.push(...multiples.gaps);
 
   if (route.base === "bank" || route.base === "insurer" || route.base === "reit-mortgage") {
     notes.push("FCFF DCF and FCFF reverse-DCF suppressed for financials (debt is raw material) — excess-return model used");

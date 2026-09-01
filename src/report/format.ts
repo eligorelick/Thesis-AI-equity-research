@@ -119,6 +119,27 @@ export function peerMetricKey(metric: TracedNumber): string {
   return tail && tail.length > 0 ? tail : metric.unit;
 }
 
+/**
+ * Collision-safe column keys for ONE peer row, in order.
+ *
+ * `peerMetricKey` is NOT injective — two metrics from different sources can
+ * share a trailing segment. Keying a row's metrics into a Map by that alone
+ * silently DROPPED the earlier of any colliding pair (a peer losing a metric
+ * entirely) and, across rows, split one logical metric over two columns. That
+ * is worse than the positional layout it replaced, because the loss is
+ * invisible. Duplicates within a row are disambiguated by occurrence, so every
+ * metric keeps a column and no metric overwrites another.
+ */
+export function peerColumnKeys(metrics: readonly TracedNumber[]): string[] {
+  const seen = new Map<string, number>();
+  return metrics.map((metric) => {
+    const base = peerMetricKey(metric);
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    return n === 0 ? base : `${base} (${n + 1})`;
+  });
+}
+
 export function formatTracedValue(number: TracedNumber): string {
   return formatFinancialValue(number.value, number.unit, number.currency);
 }

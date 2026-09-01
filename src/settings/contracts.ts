@@ -9,6 +9,7 @@ export const ANALYSIS_MODEL_OPTIONS = [
   "auto",
   "claude-haiku-4-5",
   "claude-fable-5",
+  "claude-opus-5",
   "claude-opus-4-8",
   "claude-sonnet-5",
 ] as const;
@@ -23,6 +24,7 @@ export const DEFAULT_ANALYSIS_EFFORT: EffortLevel = "high";
 const DATED_MODEL_FAMILIES = [
   "claude-haiku-4-5",
   "claude-fable-5",
+  "claude-opus-5",
   "claude-opus-4-8",
   "claude-sonnet-5",
 ] as const;

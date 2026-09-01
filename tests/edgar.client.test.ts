@@ -1136,17 +1136,18 @@ describe("default transport (injected fetchFn — no network)", () => {
     expect(hasConfiguredEdgarIdentity("Jane Doe jane@real-research.com")).toBe(true);
     expect(hasConfiguredEdgarIdentity("no email here")).toBe(false);
 
-    const original = process.env.EDGAR_CONTACT;
-    try {
-      delete process.env.EDGAR_CONTACT;
-      const transport = createDefaultEdgarTransport({ maxRps: 1000 });
-      await expect(
-        transport.fetchText("https://www.sec.gov/identity-check", { ttlMs: 0 }),
-      ).rejects.toThrow(/EDGAR_CONTACT/);
-    } finally {
-      if (original === undefined) delete process.env.EDGAR_CONTACT;
-      else process.env.EDGAR_CONTACT = original;
-    }
+    // Pass the unconfigured identity EXPLICITLY rather than deleting
+    // process.env.EDGAR_CONTACT. The default identity is resolved once at
+    // module load (EDGAR_USER_AGENT), so a runtime delete cannot reach it: a
+    // developer who follows the README and exports EDGAR_CONTACT would leave
+    // the gate open here and this assertion would issue a REAL request to
+    // sec.gov. An explicit userAgent keeps the test hermetic in both setups.
+    // No fetchFn is supplied on purpose — passing one would itself satisfy the
+    // identity gate and make the assertion vacuous.
+    const transport = createDefaultEdgarTransport({ maxRps: 1000, userAgent: "" });
+    await expect(
+      transport.fetchText("https://www.sec.gov/identity-check", { ttlMs: 0 }),
+    ).rejects.toThrow(/EDGAR_CONTACT/);
   });
 
   it("retries 5xx up to 3 attempts", async () => {
@@ -1191,6 +1192,19 @@ describe("default transport (injected fetchFn — no network)", () => {
 describe.runIf(process.env.EDGAR_LIVE_SMOKE === "1")(
   "live smoke (2 requests, opt-in via EDGAR_LIVE_SMOKE=1)",
   () => {
+    // Opting in without a declared contact otherwise surfaces as a confusing
+    // EdgarIdentityError from inside the client. Fail on the precondition
+    // instead, with the fix in the message — and never silently skip, which
+    // would let a misconfigured CI lane report a green live smoke it never ran.
+    it("requires a configured EDGAR_CONTACT before opting in", () => {
+      expect(
+        hasConfiguredEdgarIdentity(),
+        "EDGAR_LIVE_SMOKE=1 requires EDGAR_CONTACT to name a real contact and a " +
+          'reachable email, e.g. EDGAR_CONTACT="Jane Doe jane@her-firm.com". ' +
+          `Current identity: ${JSON.stringify(EDGAR_USER_AGENT)}`,
+      ).toBe(true);
+    });
+
     it("tickerToCik(AAPL) + submissions(AAPL) against real EDGAR", { timeout: 45_000 }, async () => {
       const client = createEdgarClient();
 

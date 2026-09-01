@@ -860,12 +860,6 @@ export function computeBeneish(current: ForensicsPeriod, prior: ForensicsPeriod)
   // overhead discipline.
   const combinedT = zeroAsNull(current.income?.sellingGeneralAndAdministrativeExpenses);
   const combinedP = zeroAsNull(prior.income?.sellingGeneralAndAdministrativeExpenses);
-  const componentsOf = (row: ForensicsIncomeRow | null | undefined): number | null => {
-    const ga = zeroAsNull(row?.generalAndAdministrativeExpenses);
-    const sm = zeroAsNull(row?.sellingAndMarketingExpenses);
-    if (ga === null && sm === null) return null;
-    return (ga ?? 0) + (sm ?? 0);
-  };
   let sgaT: number | null;
   let sgaP: number | null;
   if (combinedT !== null && combinedP !== null) {

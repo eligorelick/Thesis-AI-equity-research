@@ -54,17 +54,23 @@ import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
 /**
  * "auto" model resolution preference order (the application contract §5).
  *
- * Opus 4.8 FIRST — the default recommended for accurate professional analysis in
- * the Anthropic API contract §9. Fable 5 is deliberately LAST despite being the
- * "most capable" model: at 2x Opus cost its cyber/bio safety classifiers can
- * refuse benign finance-adjacent tickers (defense, biotech, sanctions) →
- * degraded data-only reports, its single turns can run many minutes (worsening
- * page latency), and it requires 30-day org data retention (400s under ZDR).
- * Sonnet 5 is the safe cheaper middle (near-Opus quality, no classifier/retention
- * constraints). Fable 5 stays reachable via an explicit ANALYSIS_MODEL override
- * ("deep-dive" mode) but is never auto-selected while Opus/Sonnet are available.
+ * Opus FIRST — the tier recommended for accurate professional analysis in the
+ * Anthropic API contract §9. Opus 5 leads and Opus 4.8 is the immediate
+ * fallback: they are the same price ($5/$25) and the same context (1M), so
+ * preferring the newer model costs nothing, and resolution already probes
+ * models.list() and falls through when a key cannot reach Opus 5.
+ *
+ * Fable 5 is deliberately LAST despite being the "most capable" model: at 2x
+ * Opus cost its cyber/bio safety classifiers can refuse benign
+ * finance-adjacent tickers (defense, biotech, sanctions) → degraded data-only
+ * reports, its single turns can run many minutes (worsening page latency), and
+ * it requires 30-day org data retention (400s under ZDR). Sonnet 5 is the safe
+ * cheaper middle (near-Opus quality, no classifier/retention constraints).
+ * Fable 5 stays reachable via an explicit ANALYSIS_MODEL override ("deep-dive"
+ * mode) but is never auto-selected while Opus/Sonnet are available.
  */
 export const PREFERENCE_ORDER = [
+  "claude-opus-5",
   "claude-opus-4-8",
   "claude-sonnet-5",
   "claude-fable-5",
@@ -121,15 +127,16 @@ export const WEB_SEARCH_USD_PER_SEARCH = 10 / 1000;
 /** Scheduler reservation and provider-boundary cap for one analyst request. */
 export const MAX_PROVIDER_WEB_SEARCHES = 8;
 
-export const SONNET_5_INTRO_PRICING_END_EXCLUSIVE_MS = Date.UTC(2026, 8, 1);
-export const SONNET_5_INTRO_PRICING: ModelPricing = { inputPerMTok: 2, outputPerMTok: 10 };
-
 export const PRICING: Record<string, ModelPricing> = {
   "claude-fable-5": { inputPerMTok: 10, outputPerMTok: 50 },
+  "claude-opus-5": { inputPerMTok: 5, outputPerMTok: 25 },
   "claude-opus-4-8": { inputPerMTok: 5, outputPerMTok: 25 },
-  // Standard pricing; computeCostUsd applies documented intro pricing before
-  // 2026-09-01.
-  "claude-sonnet-5": { inputPerMTok: 3, outputPerMTok: 15 },
+  // $2/$10 launched as introductory pricing "through August 31, 2026" and is
+  // now the STANDARD price: Anthropic cancelled the scheduled 2026-09-01
+  // increase to $3/$15 (docs: pricing#claude-sonnet-5-introductory-pricing,
+  // re-verified live 2026-09-01). There is no longer a dated pricing window —
+  // reintroducing one would over-bill every Sonnet 5 pass by 50%.
+  "claude-sonnet-5": { inputPerMTok: 2, outputPerMTok: 10 },
   "claude-haiku-4-5": { inputPerMTok: 1, outputPerMTok: 5 },
 };
 
@@ -137,6 +144,7 @@ export const PRICED_MODEL_ALIASES = [
   "claude-haiku-4-5",
   "claude-sonnet-5",
   "claude-opus-4-8",
+  "claude-opus-5",
   "claude-fable-5",
 ] as const;
 export type PricedModelAlias = (typeof PRICED_MODEL_ALIASES)[number];
@@ -168,16 +176,15 @@ export function findPricing(model: string): ModelPricing | undefined {
   return alias === null ? undefined : PRICING[alias];
 }
 
-function isSonnet5(model: string): boolean {
-  return model === "claude-sonnet-5" || model.startsWith("claude-sonnet-5-");
-}
-
+/**
+ * Pricing in effect for a model at a point in time. No model currently has a
+ * dated price change, so this is `findPricing`; the `at` parameter is retained
+ * so a future scheduled change has one place to land (and so call sites that
+ * already thread a clock keep working).
+ */
 export function effectivePricingFor(model: string, at = new Date()): ModelPricing | undefined {
-  const pricing = findPricing(model);
-  if (!pricing) return undefined;
-  return isSonnet5(model) && at.getTime() < SONNET_5_INTRO_PRICING_END_EXCLUSIVE_MS
-    ? SONNET_5_INTRO_PRICING
-    : pricing;
+  void at;
+  return findPricing(model);
 }
 
 /** Structural subset of the SDK Usage/BetaUsage objects that cost math needs. */
@@ -617,13 +624,23 @@ export function validateRunPassOptions(opts: RunPassOptions): void {
 /**
  * Thinking config per model family:
  * - fable-5: OMIT the param entirely (always-on; any explicit config is a 400).
- * - opus-4-8: `{type: "adaptive"}` (omitting would run WITHOUT thinking).
+ * - opus-4-8: `{type: "adaptive"}` — omitting it would run WITHOUT thinking.
+ * - opus-5: `{type: "adaptive"}`. Unlike 4.8, opus-5 already runs adaptive when
+ *   the param is omitted, so this is belt-and-braces rather than load-bearing —
+ *   it is sent explicitly so the request states the intent and does not depend
+ *   on a per-model default. (`{type: "disabled"}` is what opus-5 restricts, and
+ *   only above effort `high`; we never disable.)
  * - everything else (sonnet-5 runs adaptive by default when omitted;
  *   haiku-4-5 has no adaptive support): omit.
  */
 export function thinkingConfigFor(model: string): BetaThinkingConfigParam | undefined {
   if (model === "claude-fable-5" || model.startsWith("claude-fable-5-")) return undefined;
-  if (model === "claude-opus-4-8" || model.startsWith("claude-opus-4-8-")) {
+  if (
+    model === "claude-opus-4-8" ||
+    model.startsWith("claude-opus-4-8-") ||
+    model === "claude-opus-5" ||
+    model.startsWith("claude-opus-5-")
+  ) {
     return { type: "adaptive" };
   }
   return undefined;

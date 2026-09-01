@@ -39,7 +39,9 @@ import {
   findPricing,
   interpretPassMessage,
   isRetryableTransportError,
+  modelContextTokenLimit,
   pickPreferredModel,
+  pricedModelAlias,
   resolveModel,
   resumeIfPaused,
   runPass,
@@ -253,16 +255,20 @@ describe("computeCostUsd", () => {
     expect(computeCostUsd(usage, "claude-opus-4-8", 7)).toBeCloseTo(0.89125, 5);
   });
 
-  it("prices fable-5 at $10/$50 and sonnet-5 at intro $2/$10 before September 2026", () => {
+  it("prices fable-5 at $10/$50 and sonnet-5 at $2/$10", () => {
     const usage = { input_tokens: 1_000_000, output_tokens: 1_000_000 };
     expect(computeCostUsd(usage, "claude-fable-5")).toBeCloseTo(60, 10);
     expect(computeCostUsd(usage, "claude-sonnet-5", 0, new Date("2026-07-09T12:00:00.000Z"))).toBeCloseTo(12, 10);
     expect(computeCostUsd(usage, "claude-haiku-4-5")).toBeCloseTo(6, 10);
   });
 
-  it("prices sonnet-5 at standard $3/$15 after intro pricing expires", () => {
+  // Anthropic cancelled the 2026-09-01 increase to $3/$15 and made $2/$10 the
+  // standard price. Sonnet 5 cost must NOT change across that former boundary.
+  it("keeps sonnet-5 at $2/$10 across the cancelled 2026-09-01 price increase", () => {
     const usage = { input_tokens: 1_000_000, output_tokens: 1_000_000 };
-    expect(computeCostUsd(usage, "claude-sonnet-5", 0, new Date("2026-09-01T00:00:00.000Z"))).toBeCloseTo(18, 10);
+    expect(computeCostUsd(usage, "claude-sonnet-5", 0, new Date("2026-08-31T23:59:59.999Z"))).toBeCloseTo(12, 10);
+    expect(computeCostUsd(usage, "claude-sonnet-5", 0, new Date("2026-09-01T00:00:00.000Z"))).toBeCloseTo(12, 10);
+    expect(computeCostUsd(usage, "claude-sonnet-5", 0, new Date("2027-06-01T00:00:00.000Z"))).toBeCloseTo(12, 10);
   });
 
   it("matches dated snapshot ids by prefix", () => {
@@ -361,6 +367,34 @@ describe("buildPassParams", () => {
     expect(thinkingConfigFor("claude-sonnet-5")).toBeUndefined();
     expect(thinkingConfigFor("claude-fable-5")).toBeUndefined();
     expect(thinkingConfigFor("claude-opus-4-8")).toEqual({ type: "adaptive" });
+    expect(thinkingConfigFor("claude-opus-5")).toEqual({ type: "adaptive" });
+    expect(thinkingConfigFor("claude-opus-5-20260601")).toEqual({ type: "adaptive" });
+  });
+
+  it("prices, sizes and equips opus-5 like the rest of the Opus tier", () => {
+    // Opus 5 is the "auto" first choice; regressions here silently reroute or
+    // mis-bill every default run.
+    expect(PREFERENCE_ORDER[0]).toBe("claude-opus-5");
+    expect(pricedModelAlias("claude-opus-5")).toBe("claude-opus-5");
+    expect(pricedModelAlias("claude-opus-5-20260601")).toBe("claude-opus-5");
+    expect(pricedModelAlias("claude-opus-5-latest")).toBeNull();
+    expect(findPricing("claude-opus-5")).toEqual({ inputPerMTok: 5, outputPerMTok: 25 });
+    expect(modelContextTokenLimit("claude-opus-5")).toBe(1_000_000);
+    // Dynamic-filtering web search, not haiku's basic variant.
+    expect(webSearchTool(4, "claude-opus-5")).toMatchObject({
+      type: "web_search_20260318",
+      max_uses: 4,
+    });
+    // Opus 5 accepts output_config.effort; it must not be stripped.
+    const { params } = buildPassParams({
+      ...baseOpts,
+      model: "claude-opus-5",
+      effort: "high",
+    });
+    expect(params.output_config).toMatchObject({ effort: "high" });
+    expect(params.model).toBe("claude-opus-5");
+    // Only fable-5 carries the server-side fallback beta.
+    expect(params).not.toHaveProperty("fallbacks");
   });
 
   it("wires outputSchema into output_config.format (json_schema)", () => {

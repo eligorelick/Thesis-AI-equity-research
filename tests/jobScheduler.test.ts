@@ -2507,8 +2507,13 @@ describe("atomic paid settlement", () => {
 
 describe("conservative provider reservation bounds", () => {
   it.each([
-    ["claude-haiku-4-5", 70.2, 560.52],
-    ["claude-sonnet-5", 517.32, 560.52],
+    // Sonnet 5 reserves at its $2/$10 standard price (the scheduled 2026-09-01
+    // increase to $3/$15 was cancelled). haiku's synthesize floor is sonnet-5.
+    ["claude-haiku-4-5", 70.2, 373.68],
+    ["claude-sonnet-5", 347.76, 373.68],
+    // Opus 5 and Opus 4.8 are the same price ($5/$25) and context (1M), so
+    // they reserve identically.
+    ["claude-opus-5", 856.44, 934.2],
     ["claude-opus-4-8", 856.44, 934.2],
     ["claude-fable-5", 1704.24, 1868.4],
   ])("bounds every retry layer for %s", async (model, analyst, synthesize) => {

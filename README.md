@@ -54,6 +54,13 @@ No API key is needed to evaluate the interface:
 - `/company/DEMO` loads the fictional general-company fixture.
 - `/company/DBNK` loads the fictional bank fixture.
 
+`DEMO` and `DBNK` resolve to fixtures **only while no `FMP_API_KEY` is
+configured**. Once a key is set, they are treated as ordinary symbols and sent
+to the live provider, which does not list them — so the pages render as
+near-empty disclosed gaps rather than the demo company. To see the fixtures
+again with a key in your `.env`, start the server with `FMP_API_KEY=""`.
+`/report/sample` is static and always renders, key or no key.
+
 Bundled FMP-compatible fixtures and the sample report are invented contract
 data, not current market data or copied provider responses. The company route
 can still try keyless FINRA, FRED, and EDGAR paths; use `/report/sample` when you
@@ -92,19 +99,26 @@ credential is optional.
 | `THESIS_ALLOWED_HOST` | One exact non-loopback Host authority | Accepts loopback authorities only |
 | `THESIS_DB_PATH` | Exact SQLite file location | Uses the operating-system app-data directory |
 | `THESIS_DATA_DIR` | SQLite directory override | Uses the operating-system app-data directory |
+| `THESIS_IMPORT_LEGACY_DB` | Set to `1` for a one-time copy of an older in-repo `data/thesis.db` into the app-data location | The in-repo database is left untouched and unused |
 
 EDGAR does not require a key, but it does require a truthful contact identity.
 Placeholder or missing identities disable live EDGAR acquisition and create a
 visible data gap.
 
 `ANALYSIS_MODEL` is not a free-form Anthropic model ID. It accepts `auto` or one
-of the four priced aliases — `claude-opus-4-8`, `claude-sonnet-5`,
-`claude-fable-5`, `claude-haiku-4-5` — optionally as an eight-digit dated
-snapshot such as `claude-opus-4-8-20260115`. The scheduler cannot prove a spend
-bound for anything else, so any other value is rejected at model resolution and
-the run degrades to a data-only report with the AI passes marked skipped.
-`auto` resolves against the models your key can reach, preferring
-`claude-opus-4-8`, then `claude-sonnet-5`, then `claude-fable-5`.
+of the five priced aliases — `claude-opus-5`, `claude-opus-4-8`,
+`claude-sonnet-5`, `claude-fable-5`, `claude-haiku-4-5` — optionally as an
+eight-digit dated snapshot such as `claude-opus-5-20260115`. The scheduler
+cannot prove a spend bound for anything else, so any other value is rejected at
+model resolution and the run degrades to a data-only report with the AI passes
+marked skipped. `auto` resolves against the models your key can reach,
+preferring `claude-opus-5`, then `claude-opus-4-8`, then `claude-sonnet-5`,
+then `claude-fable-5`.
+
+Selecting `claude-haiku-4-5` does not make the whole run Haiku. Haiku is not
+used for the synthesis/judge pass; that pass is raised to `claude-sonnet-5`,
+and the substitution is disclosed in the report's execution metadata as a
+`model-floor` adjustment.
 
 The Settings page can override the analysis model and effort. Stored settings
 take precedence over environment variables, which take precedence over
@@ -122,10 +136,21 @@ per-pass reservation is `108 * maximum cost of one capped provider request`:
 
 | Analysis model | Bull/bear analyst pass | Synthesize/judge pass |
 | --- | ---: | ---: |
-| Claude Haiku 4.5 | $70.20 | $560.52 |
-| Claude Sonnet 5 | $517.32 | $560.52 |
+| Claude Haiku 4.5 | $70.20 | $373.68 |
+| Claude Sonnet 5 | $347.76 | $373.68 |
+| Claude Opus 5 | $856.44 | $934.20 |
 | Claude Opus 4.8 | $856.44 | $934.20 |
 | Claude Fable 5 | $1,704.24 | $1,868.40 |
+
+Haiku's synthesize figure is a Sonnet 5 reservation because that pass is raised
+to Sonnet 5. Because these are worst-case bounds rather than expected charges,
+a job cap small enough to act as an everyday budget is not achievable: one
+synthesize pass alone reserves $373.68, so `THESIS_MAX_JOB_COST_USD` set near a
+typical run's actual cost rejects every job before it starts. Control routine
+spend with `ANALYSIS_MODEL` and `ANALYSIS_EFFORT`, and treat the caps as
+runaway protection. For scale, one complete Anthropic-backed run measured on
+2026-09-01 (`ANALYSIS_MODEL=claude-haiku-4-5`, one large-cap US issuer, web
+search enabled) settled at **$1.43** in total.
 
 Deterministic verification reserves exactly $0. An injected provider-backed
 verification adapter must declare and reserve its own finite maximum. Use these
@@ -199,6 +224,17 @@ npm run verify         # all required local CI gates in release order
 Run `npm run verify` before contributing or publishing a change. A successful
 Next.js build alone is not the type-safety gate because strict checking runs as
 a separate command.
+
+The suite makes no network requests, whatever your `.env` contains. One live
+check against SEC EDGAR is available opt-in and is skipped otherwise:
+
+```powershell
+$env:EDGAR_LIVE_SMOKE = "1"   # also needs a real EDGAR_CONTACT
+npm test
+```
+
+It issues exactly two keyless requests (ticker→CIK and submissions) and fails
+rather than degrading, which is the point of opting in.
 
 GitHub Actions runs the same required gates on Node.js 24 LTS, retains a
 Node.js 20 compatibility lane, and performs a single-worker Windows smoke run.

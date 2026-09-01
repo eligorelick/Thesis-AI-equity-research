@@ -2,7 +2,6 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  SONNET_5_INTRO_PRICING,
   _resetAnthropicForTests,
   assertPricedModel,
   effectivePricingFor,
@@ -149,18 +148,21 @@ afterEach(() => {
 });
 
 describe("Anthropic finite request contracts", () => {
-  it("recognizes only exact aliases or eight-digit snapshots and applies dated pricing", () => {
+  it("recognizes only exact aliases or eight-digit snapshots and prices them", () => {
     expect(pricedModelAlias("claude-sonnet-5")).toBe("claude-sonnet-5");
     expect(pricedModelAlias("claude-sonnet-5-20260808")).toBe("claude-sonnet-5");
     expect(pricedModelAlias("claude-sonnet-5-latest")).toBeNull();
     expect(assertPricedModel("claude-opus-4-8-20260808")).toBe("claude-opus-4-8");
     expect(() => assertPricedModel("unpriced-model")).toThrow(/unsupported model/);
     expect(effectivePricingFor("unpriced-model")).toBeUndefined();
+    // $2/$10 is Sonnet 5's standard price on both sides of the cancelled
+    // 2026-09-01 increase — pricing is date-independent.
+    const sonnet5Pricing = { inputPerMTok: 2, outputPerMTok: 10 };
     expect(effectivePricingFor("claude-sonnet-5", new Date("2026-08-31T23:59:59Z"))).toEqual(
-      SONNET_5_INTRO_PRICING,
+      sonnet5Pricing,
     );
-    expect(effectivePricingFor("claude-sonnet-5", new Date("2026-09-01T00:00:00Z"))).not.toEqual(
-      SONNET_5_INTRO_PRICING,
+    expect(effectivePricingFor("claude-sonnet-5", new Date("2026-09-01T00:00:00Z"))).toEqual(
+      sonnet5Pricing,
     );
     expect(modelContextTokenLimit("claude-haiku-4-5")).toBe(200_000);
     expect(modelContextTokenLimit("claude-opus-4-8")).toBe(1_000_000);

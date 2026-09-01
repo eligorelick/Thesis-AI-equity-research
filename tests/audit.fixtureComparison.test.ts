@@ -5,6 +5,16 @@
  * 524d09e81b00b08fe6af386011d34759a5e02fc0. Its exact source blob IDs and
  * unchanged fixture SHA-256s live beside the projection. Arrays are diffed by
  * index, and every allowlisted leaf pins both its audited and current value.
+ *
+ * `comparisonPackageLockBlob` pins the dependency tree this projection is
+ * reproduced against, so a dependency change must be a reviewed edit rather
+ * than a silent drift. It was rolled forward once, on 2026-09-01, for the
+ * `browserslist` >=4.28.8 security override (GHSA-c83g-rgw3-j3cx /
+ * GHSA-73wf-gq98-2v4g). That bump touches only a dev-time lint transitive
+ * dependency: this test recomputes the projection from current source and
+ * fixtures on every run, and it still matched the audited baseline byte for
+ * byte afterwards, which is the evidence that the tree change altered no
+ * pipeline output. Roll the pin forward again only with the same evidence.
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -817,7 +827,7 @@ describe("Task 32 provider-free historical fixture comparison", () => {
       generator: {
         helperSha256: "73e890f2ec86463f5c86cb220e7ee65c8955ba4e0fdcbbc7eea6baff5e035bfe",
         basePackageLockBlob: "66f7242846b6d20cfe99e21400d2dada27bbfbfd",
-        comparisonPackageLockBlob: "39e4ec59aca9f54e0bc6a65e4b47fd877256fea0",
+        comparisonPackageLockBlob: "2956140b2ffcfbb04c3b3f2f1733831e9672865a",
         generationNode: "v24.11.1",
         generationNpm: "11.6.2",
         command:

@@ -28,7 +28,7 @@
  */
 
 import type { CompanyRouteResult } from "@/pipeline/stageB/sectorRouting";
-import { hasIrregularAnnualSpacing, yearsBetweenDates } from "@/pipeline/stageB/growth";
+import { yearsBetweenDates } from "@/pipeline/stageB/growth";
 import {
   MARGIN_CLAMP_PP,
   runDcf,

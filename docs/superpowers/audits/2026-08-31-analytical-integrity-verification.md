@@ -4,7 +4,8 @@
 **Scope:** the quantitative core (`src/pipeline/stageB/`), the providers and
 EDGAR extraction that feed it, and the report surfaces that publish it.
 **Baseline:** `7d4966c` ("cleaning")
-**Head:** the 29 commits listed below.
+**Head:** the commits listed below, plus four remediation commits that correct
+defects found by auditing this work itself (see "Verification of this work").
 **Gate:** `npm run verify` exits 0 at every commit except `228f32f`, which is
 recorded as a failure below.
 
@@ -26,8 +27,9 @@ branches).
 
 ## Method
 
-Two adversarial passes, both structured so that no finding reaches this document
-on one agent's say-so.
+Four adversarial passes, all structured so that no finding reaches this document
+on one agent's say-so. Passes 3 and 4 audit THIS SESSION'S OWN CHANGES; their
+results are in "Verification of this work" below.
 
 **Pass 1 — 45 agents, ~4.9M tokens, 1,515 tool calls.** Twelve finders, one per
 dimension of the analytical core, each required to cite `file:line`, quote the
@@ -282,6 +284,69 @@ merge. That is a separate project with its own verification.
 
 ---
 
+## Verification of this work, and what it revealed
+
+The changes above were themselves audited, twice, because a fix written quickly
+against complex financial code is not self-evidently correct.
+
+| Pass | Scope | Agents | Findings | Confirmed |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Analytical core, baseline `7d4966c` | 45 | 16 verified of 64 | 14 |
+| 2 | The 48 Pass-1 did not verify, re-checked post-fix | 48 | 48 | 24 |
+| 3 | **This session's own 31 commits** | 45 | 35 | **29** |
+| 4 | **The Pass-3 remediation commits** | 27 | 20 | **15** |
+
+Passes 3 and 4 are the important rows. **The work that fixed 38 defects
+introduced 29 of its own, and the work that fixed those introduced 15 more.**
+Every confirmed finding was a real defect with a reproduced wrong output, not a
+style objection.
+
+The defects the later passes found are the same shapes as the originals:
+
+- **Fixes that were inert.** The domicile ERP lookup compared FMP's ISO-2
+  profile code against its country NAMES, so it could never match and every
+  foreign issuer kept the US premium — the exact defect it was written to close.
+- **Fixes that over-corrected.** Routing FIN-OTHER issuers through the financial
+  returns branch stripped their ROIC and gave them a ROTE that is uncomputable
+  for a fee-based business, leaving moat scored on gross margin alone.
+- **Fixes that opened the opposite hole.** Exempting a trial whenever its
+  registered drug appeared anywhere in the text stopped the false positives and
+  started missing real misattributions in a later sentence.
+- **Fixes applied to one path of several.** The oldest-quarter gate reached
+  `ttmIncome` but not `ttmCashFlow`; the gap hoist reached the multiples channel
+  but not the DCF; the projection history was deduped but `dcfIncomeHistory` was
+  not.
+- **Guards that fired on the wrong condition.** The Z' substitution triggered on
+  ANY null Altman score, so a transient missing market cap published the
+  private-firm variant as a listed issuer's distress verdict.
+
+### What this means for the reliability of this record
+
+All 29 Pass-3 findings and the high-severity Pass-4 findings are fixed. But the
+sequence 14 → 24 → 29 → 15 does not extrapolate to zero, and no claim is made
+here that the tree is defect-free. What can be said precisely:
+
+- `npm run verify` passes at every commit (one exception, recorded below).
+- Every fix carries a regression test, and where practical the test was shown to
+  FAIL against the unfixed code.
+- Each pass found fewer defects in absolute terms than the surface it reviewed,
+  and Pass 4's confirmations skew markedly lower in severity than Pass 1's.
+- The remaining Pass-4 findings not yet actioned are listed under
+  "What remains" below rather than quietly dropped.
+
+An audit that reported convergence to zero after four passes would be the least
+credible thing in this document.
+
+### One finding was deliberately NOT actioned
+
+Pass 4 argued that leveraged broker-dealers should receive ROTE rather than
+ROIC, which directly contradicts Pass 3's finding that fee-based FIN-OTHER
+issuers should keep ROIC. Both are correct for their sub-type, and FMP's data
+does not reliably distinguish a leveraged broker-dealer from an asset manager.
+The switch stays gated on base route — simple, defensible and stable — rather
+than oscillating between two audits. This is a genuine modelling limit, recorded
+here instead of being papered over.
+
 ## What remains
 
 - **Bank-specific metrics beyond ROTE.** `nimApprox`, `efficiencyRatio` and
@@ -294,5 +359,14 @@ merge. That is a separate project with its own verification.
   `ROTE_LEVEL_BAND`, is a versioned house rule. None has been validated against
   realised outcomes.
 - **Branch reconciliation** as described above.
+- **Unactioned Pass-4 findings**, all medium or low: the CAGR over-long-span fix
+  is disclosure-only (the numeric consumers still read a 4-year rate under a 3y
+  label); `splitSentences` fragments at abbreviations and semicolons, so the
+  entity check can both miss and misfire on prose containing "Phase 3." or a
+  semicolon; the widened reverse-ROE bracket applies the payout ratio to loss
+  years; the SGAI note asserts G&A + S&M even when the pair-resolved basis used
+  only one component; conflicting vendor ERP rows are disclosed as "no vendor
+  row"; and the quality aspect note still claims Altman/accruals/Beneish on
+  routes that suppress all three.
 - **Task A2** (branch protection for `CI / full`) is a repository-administration
   action outside the codebase.

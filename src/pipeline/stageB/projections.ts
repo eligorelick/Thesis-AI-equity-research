@@ -310,7 +310,16 @@ export function perturbScenarioAssumptions(
   marginDelta: number,
 ): DcfAssumptions {
   const cloned: DcfAssumptions = structuredClone(assumptions);
-  cloned.growthPath.value = shiftPath(assumptions.growthPath.value, growthDelta, GROWTH_CLAMP[0], GROWTH_CLAMP[1]);
+  // Same headroom the margin path gets below: clamping the perturbed path with
+  // the bound the BASE path already satisfies truncates the bear leg for a
+  // low-growth issuer, biasing the fan upward while the disclosure claims the
+  // full shock.
+  cloned.growthPath.value = shiftPath(
+    assumptions.growthPath.value,
+    growthDelta,
+    GROWTH_CLAMP[0] - Math.abs(growthDelta),
+    GROWTH_CLAMP[1] + Math.abs(growthDelta),
+  );
   // The base path was ALREADY clamped to MARGIN_CLAMP_PP, so reusing that exact
   // bound as the perturbation's clamp annihilates the shock for any issuer
   // sitting at the boundary: a 45%-margin company's bull leg would be clamped

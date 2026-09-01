@@ -2393,6 +2393,11 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
       dcf = runDcf(assumptions, runOpts);
       sensitivity = sensitivityGrid(assumptions, runOpts);
       reverse = reverseDcf(inputs.currentPrice, assumptions, runOpts);
+      // Hoist the DCF and reverse-DCF model gaps too. The earlier hoist covered
+      // only the multiples channel, so a suppressed equity bridge or an
+      // unsolvable reverse DCF stayed invisible in the manifest — the same
+      // defect, on the model that carries the headline number.
+      gaps.push(...dcf.gaps, ...reverse.gaps);
     }
   }
   return { kind: "dcf", route: route.base, assumptions, dcf, sensitivity, reverseDcf: reverse, multiples, notes, gaps };

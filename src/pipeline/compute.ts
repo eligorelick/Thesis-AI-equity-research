@@ -294,7 +294,9 @@ export function selectEquityRiskPremium(
   }
   return {
     pct: selectUsEquityRiskPremium(rows),
-    basis: aliases.size > 0 && !isUs ? "us-fallback" : "domicile",
+    // Keyed on isUs, not on alias resolution: an unknown or blank domicile is
+    // NOT a domicile match, and labelling it one made its disclosure unreachable.
+    basis: isUs ? "domicile" : "us-fallback",
     country: typeof country === "string" ? country : null,
   };
 }
@@ -333,11 +335,17 @@ function toGrowthCashFlow(r: FmpCashFlowRow): GrowthCashFlowRow {
 function toReturnsIncome(
   r: FmpIncomeStatementRow,
   /** Preferred dividends by fiscal date, joined from the cash-flow statement. */
-  preferredByDate?: ReadonlyMap<string, number | null>,
+  preferredByDate?: Map<string, FmpCashFlowRow>,
 ): ReturnsIncomeRow {
+  // Joined with the SAME +/-5-day tolerance every other statement pairing uses.
+  // An exact string match returned null whenever the cash-flow fiscal date
+  // drifted from the income one, and ROTE fails closed on a null preferred
+  // dividend when preferred is outstanding — so a one-day drift suppressed the
+  // metric entirely for every preferred issuer.
+  const prefRow = preferredByDate ? matchByDate(preferredByDate, String(r.date ?? "")) : null;
   return {
     date: String(r.date ?? ""),
-    preferredDividendsPaid: preferredByDate?.get(String(r.date ?? "")) ?? null,
+    preferredDividendsPaid: prefRow ? num(prefRow.preferredDividendsPaid) : null,
     revenue: num(r.revenue),
     operatingIncome: num(r.operatingIncome),
     ebit: num(r.ebit),
@@ -1332,11 +1340,8 @@ function computeReturns(
 
   // Preferred dividends live on the CASH-FLOW statement; ROTE nets them out of
   // its numerator because its denominator already excludes preferred.
-  const preferredByDate = new Map<string, number | null>(
-    rowsOf(bundle.statements.cashflowAnnual).map((r: FmpCashFlowRow) => [
-      String(r.date ?? ""),
-      num(r.preferredDividendsPaid),
-    ]),
+  const preferredByDate = new Map<string, FmpCashFlowRow>(
+    rowsOf(bundle.statements.cashflowAnnual).map((r: FmpCashFlowRow) => [String(r.date ?? ""), r]),
   );
   const returnsIncome = incomeAnnual.map((r) => toReturnsIncome(r, preferredByDate));
   const returnsBalance = balanceAnnual.map(toReturnsBalance);
@@ -1445,7 +1450,10 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
         }
       : null;
 
-  const dcfIncomeHistory: DcfIncomeRow[] = incomeAnnual.map((r) => ({
+  // Same deduped rows the projection history uses: the DCF's near-term growth
+  // path is fitted to this series, so a restated fiscal year appearing twice
+  // biases the base case exactly as it biased the dispersion.
+  const dcfIncomeHistory: DcfIncomeRow[] = normalizeQuarterRows(incomeAnnual).rows.map((r) => ({
     date: String(r.date ?? ""),
     revenue: num(r.revenue),
     operatingIncome: num(r.operatingIncome),

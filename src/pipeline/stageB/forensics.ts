@@ -1983,9 +1983,20 @@ export function runForensics(route: CompanyRoute, inputs: ForensicsInputs): Fore
       // published before the SIC began arriving. Book equity and total
       // liabilities are both in the reporting currency, so the private variant
       // is computable and is the model's own designated substitute.
-      if (altman.score === null && altmanSelection.variant === "original") {
+      // Gated on the FX suppression SPECIFICALLY. Triggering on ANY null score
+      // would substitute the private-firm Z' whenever market cap was merely
+      // missing — a transient fetch outage, which must keep failing closed
+      // (the same reasoning as the X2 rule above). Only the currency mismatch
+      // is a permanent structural fact about the filings.
+      const fxSuppressed = altman.gaps.some((g) => g.field === "forensics.altman.currency");
+      if (altman.score === null && altmanSelection.variant === "original" && fxSuppressed) {
         const priv = computeAltman(altmanInputs, "private");
         if (priv.score !== null) {
+          // Carry the original attempt's gaps and notes: they are the only
+          // record of WHY market equity was unusable, and dropping them left
+          // the substitution unexplained in the manifest.
+          priv.gaps.push(...altman.gaps);
+          priv.notes.push(...altman.notes);
           priv.notes.push(
             "Original-variant X4 (market value of equity) unusable — Altman Z' (1983, BOOK equity) " +
               "substituted; its zones (1.23 / 2.90) are applied, not the original's.",

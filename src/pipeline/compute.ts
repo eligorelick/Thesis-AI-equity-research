@@ -1098,7 +1098,17 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   const dilutedSharesProj =
     projRowDate(incomeQuarterly[0]) >= projRowDate(inc0Proj) ? (sharesQProj ?? sharesAProj) : (sharesAProj ?? sharesQProj);
   const netDebtProj = netDebtFromBalance(balPointProj).value;
-  const projectionIncomeHistory = incomeAnnual.map(
+  // Collapse restated/duplicate fiscal years BEFORE the dispersion sees them.
+  // Removing the irregular-spacing veto left scenarioDispersion with no
+  // protection against a duplicated period, which contributes a zero-length
+  // interval and a repeated observation to the volatility estimate.
+  const projNorm = normalizeQuarterRows(incomeAnnual);
+  const projectionPeriodGaps: ManifestEntry[] = projNorm.rejected.map(({ period, reason }) => ({
+    field: "projections.incomeStatement.period",
+    reason: `annual period ${period} dropped from the projection history: ${reason}`,
+    severity: "warn" as const,
+  }));
+  const projectionIncomeHistory = projNorm.rows.map(
     (r): ProjectionIncomeRow => ({
       date: String(r.date ?? ""),
       revenue: num(r.revenue),
@@ -1113,7 +1123,14 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   // its figures labelled US dollars on no evidence at all. That is the same
   // false-denomination defect the report formatter was fixed for; a missing
   // currency must read as unknown, not as USD.
-  const projectionCurrency = str(profile?.currency);
+  // Falls back to the STATEMENTS' reporting currency, which is where a
+  // per-share intrinsic value is actually denominated. Leaving it null produced
+  // the unit "per share (currency unknown)", which is outside the provenance
+  // vocabulary, so canonicalizeTracedUnit rejected it and the fair value,
+  // projections and scenario targets were silently DROPPED from the registry —
+  // a worse outcome than the USD default this replaced.
+  const projectionCurrency =
+    str(profile?.currency) ?? str(ttmInc?.reportedCurrency ?? incomeAnnual[0]?.reportedCurrency);
   const projections = computeProjections({
     route,
     valuation,
@@ -1186,6 +1203,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     capital.gaps,
     forensics.gaps,
     eventGaps,
+    projectionPeriodGaps,
     technicals.gaps,
     valuation.gaps,
     runway?.gaps ?? null,
@@ -1726,6 +1744,9 @@ function mergeQuarterly(
       revenue: num(i.revenue),
       operatingIncome: num(i.operatingIncome),
       depreciationAndAmortization: num(i.depreciationAndAmortization) ?? (cf ? num(cf.depreciationAndAmortization) : null),
+      // Kept separate: the REIT FFO history must use the same D&A basis as the
+      // current ffoApprox, which reads the income statement only.
+      incomeDepreciationAndAmortization: num(i.depreciationAndAmortization),
       netIncome: num(i.netIncome),
       operatingCashFlow: cf ? num(cf.operatingCashFlow) : null,
       capitalExpenditure: cf ? num(cf.capitalExpenditure) : null,

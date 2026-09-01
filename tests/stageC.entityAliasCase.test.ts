@@ -87,3 +87,41 @@ describe("relationship-conflict requires an actual conflict, not co-occurrence",
     expect(issues.some((i) => i.code === "relationship-conflict")).toBe(true);
   });
 });
+
+/**
+ * The first narrowing exempted a trial whenever its registered drug appeared
+ * ANYWHERE in the string. That went too far: a paragraph naming the right drug
+ * once and then misattributing the trial in the NEXT sentence was let through,
+ * so the fix for false positives created a false negative. The check is now
+ * scoped to the sentence.
+ */
+describe("relationship-conflict is scoped to the sentence", () => {
+  const reg = () => getEntityRegistry("LLY") as EntityRegistry;
+
+  it("still passes a correct multi-programme sentence", () => {
+    const text =
+      "ATTAIN-1 showed orforglipron delivered 12 percent weight loss, while " +
+      "retatrutide delivered 24 percent in TRIUMPH-4.";
+    const { issues } = validateEntityText(text, reg(), "s");
+
+    expect(issues.filter((i) => i.code === "relationship-conflict")).toHaveLength(0);
+  });
+
+  it("catches a misattribution in a LATER sentence of the same text", () => {
+    // The correct pairing appears first; the second sentence then attributes
+    // ATTAIN-1 to a different drug. Exempting on whole-text presence missed this.
+    const text =
+      "Orforglipron is the subject of ATTAIN-1. " +
+      "ATTAIN-1 showed retatrutide delivered 24 percent weight loss.";
+    const { issues } = validateEntityText(text, reg(), "s");
+
+    expect(issues.some((i) => i.code === "relationship-conflict")).toBe(true);
+  });
+
+  it("still catches a single-sentence misattribution", () => {
+    const text = "ATTAIN-1 showed retatrutide delivered 24 percent weight loss.";
+    const { issues } = validateEntityText(text, reg(), "s");
+
+    expect(issues.some((i) => i.code === "relationship-conflict")).toBe(true);
+  });
+});

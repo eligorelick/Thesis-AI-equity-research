@@ -709,11 +709,15 @@ const REJECT_BEFORE_RE = /(see|refer(?:s|red)?[\s]+to|described[\s]+in|discussed
 // Risk Factors" in this Annual Report», «see Item 1A. Risk Factors for a
 // discussion of…» — so only quotes, brackets, punctuation and whitespace may
 // intervene. A REAL header is followed by a sentence, and the standard SEC
-// risk-factor preamble routinely reaches these same words within 100 chars
+// risk-factor preamble routinely reaches these same words within 100 chars.
+// One participial connector may intervene, because that is how a cross-
+// reference is actually written — «"Item 1A. Risk Factors" INCLUDED in this
+// Annual Report», «… set forth in this report» — and admitting those was the
+// gap left by the first tightening.
 // ("You should carefully consider the risks described below … in this Annual
 // Report on Form 10-K"), which used to reject the genuine header and leave the
 // item with zero candidates.
-const REJECT_AFTER_100_RE = /^[\s"'“”‘’)\](.,;:—–-]{0,12}\b((?:in|of)[\s]+this[\s]+(?:form|report|annual[\s]+report)|for[\s]+(?:a[\s]+)?discussion)\b/i;
+const REJECT_AFTER_100_RE = /^[\s"'“”‘’)\](.,;:—–-]{0,12}(?:(?:included|contained|appearing|presented|discussed|described|set[\s]+forth|referred[\s]+to|elsewhere)[\s]+)?\b((?:in|of)[\s]+this[\s]+(?:form|report|annual[\s]+report)|for[\s]+(?:a[\s]+)?discussion)\b/i;
 const REJECT_AFTER_10_RE = /^[\s\S]{0,10}?\b(above|below)\b/i;
 const REJECT_AFTER_60_RE = /^[\s\S]{0,60}?\bon[\s]+page[s]?[\s]+\d/i;
 

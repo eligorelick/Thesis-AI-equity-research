@@ -221,6 +221,23 @@ function mentionsIn(text: string, registry: EntityRegistry): EntityMention[] {
   return mentions;
 }
 
+/** Sentence split for scoping the relationship check; punctuation-only, no NLP. */
+function splitSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?;])\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+/** True when `fragment` mentions `record` under any of its registered aliases. */
+function mentionsRecord(
+  fragment: string,
+  record: { id: string },
+  registry: EntityRegistry,
+): boolean {
+  return mentionsIn(fragment, registry).some((m) => m.recordId === record.id);
+}
+
 export function validateEntityText(
   text: string,
   registry: EntityRegistry,
@@ -267,9 +284,27 @@ export function validateEntityText(
     // requires the trial's OWN registered drug to be ABSENT while some other
     // drug is present; if the right drug is named alongside others, the text is
     // consistent and nothing is claimed about the others.
-    if (mentionedDrugs.some((drug) => drug.id === trial.relatedEntityId)) continue;
+    // Scoped to the SENTENCE, not the whole text. Exempting the trial whenever
+    // its registered drug appears ANYWHERE in the string went too far: a
+    // paragraph that names the right drug once then misattributes the trial to
+    // a different one in the next sentence was let through, so the narrowing
+    // that stopped false positives also stopped catching real misattributions.
+    // A conflict is a sentence that names the trial and some OTHER drug while
+    // its own drug is absent FROM THAT SENTENCE.
+    const conflictingSentences = splitSentences(text).filter((sentence) => {
+      if (!mentionsRecord(sentence, trial, registry)) return false;
+      const drugsHere = mentionedDrugs.filter((drug) => mentionsRecord(sentence, drug, registry));
+      if (drugsHere.length === 0) return false;
+      return !drugsHere.some((drug) => drug.id === trial.relatedEntityId);
+    });
+    if (conflictingSentences.length === 0) continue;
     const expected = registry.records.find((record) => record.id === trial.relatedEntityId);
-    const observed = mentionedDrugs.map((drug) => drug.canonicalName).join(", ");
+    const observedDrugs = mentionedDrugs.filter((drug) =>
+      conflictingSentences.some((sentence) => mentionsRecord(sentence, drug, registry)),
+    );
+    const observed = (observedDrugs.length > 0 ? observedDrugs : mentionedDrugs)
+      .map((drug) => drug.canonicalName)
+      .join(", ");
     issues.push({
       code: "relationship-conflict",
       text: `${trial.canonicalName} is registered to ${expected?.canonicalName ?? trial.relatedEntityId}, which is not mentioned; the text names ${observed} instead`,

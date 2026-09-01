@@ -1209,6 +1209,12 @@ export interface QuarterlyFundamentalsRow {
   capitalExpenditure: number | null;
   totalStockholdersEquity: number | null;
   /**
+   * INCOME-statement D&A only. `depreciationAndAmortization` above may fall
+   * back to the cash-flow figure, which is a different quantity; the REIT FFO
+   * history must use the same basis as the current ffoApprox.
+   */
+  incomeDepreciationAndAmortization?: number | null;
+  /**
    * Balance components of the HOUSE enterprise value, so the own-history EV is
    * built from the same definition as the current one. FMP's
    * `enterpriseValue` omits preferred stock and minority interest and nets only
@@ -1433,7 +1439,12 @@ function deriveOwnHistory(
     // equity REIT's only two multiples carried no own-history band, its
     // valuation aspect scored null, and its composite was permanently shrunk
     // for evidence the pipeline could have computed all along.
-    const ttmDa = sum((r) => r.depreciationAndAmortization);
+    // INCOME-statement D&A only, matching how compute.ts builds the CURRENT
+    // ffoApprox (ttmInc.depreciationAndAmortization, no cash-flow fallback).
+    // mergeQuarterly falls back to the cash-flow figure, so allowing it here
+    // ranked a current P/FFO built on one D&A definition against a history
+    // built on another.
+    const ttmDa = sum((r) => r.incomeDepreciationAndAmortization ?? null);
     const ttmCapex = sum((r) => r.capitalExpenditure);
     const ttmFfo = isNum(ttmNi) && isNum(ttmDa) ? ttmNi + ttmDa : null;
     const ttmAffo = isNum(ttmFfo) && isNum(ttmCapex) ? ttmFfo - Math.abs(ttmCapex) : null;

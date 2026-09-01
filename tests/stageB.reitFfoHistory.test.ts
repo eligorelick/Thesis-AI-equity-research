@@ -34,8 +34,11 @@ function quarters(): QuarterlyFundamentalsRow[] {
     date,
     revenue: 100,
     operatingIncome: 30,
-    // Vary D&A slightly so the FFO series is not degenerate.
+    // Vary D&A slightly so the FFO series is not degenerate. The FFO history
+    // reads the INCOME-statement field specifically, matching how the current
+    // ffoApprox is built.
     depreciationAndAmortization: 20 + (index % 3),
+    incomeDepreciationAndAmortization: 20 + (index % 3),
     netIncome: 10,
     operatingCashFlow: 28,
     capitalExpenditure: -5,

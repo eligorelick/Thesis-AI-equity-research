@@ -258,8 +258,11 @@ credible.
 ## Task B3 — the unmerged branches
 
 **Decision: `codex/financial-integrity` and `codex/provider-temporal-integrity`
-are superseded for every area they overlap. Both branches are RETAINED, not
-deleted. Neither should be merged.**
+are superseded for every area they overlap. Both branch REFS are RETAINED —
+`110df7d` and `af26491` — and neither should be merged. Their `.worktrees/`
+checkouts have been removed (working copies only; no commit is unreachable),
+along with the fully-merged `codex/audit-remediation` and
+`fix/audit-review-corrections` branches, both of which were contained in `main`.**
 
 Evidence:
 
@@ -276,8 +279,8 @@ Evidence:
   `growth.ts`, `projections.ts`, `returns.ts`, `scenarioTargets.ts`,
   `sectorRouting.ts`, `valuation.ts`, `payload.ts`, `compute.ts`.
 
-Merging would resolve those conflicts in favour of a tree that predates 38
-verified fixes. The branch's distinct themes — statement-currency provenance,
+Merging would resolve those conflicts in favour of a tree that predates every
+verified fix in this record. The branch's distinct themes — statement-currency provenance,
 forensic evidence provenance, judgment-safety boundaries — are worth mining, but
 only as **individually re-audited cherry-picks onto current `main`**, never as a
 merge. That is a separate project with its own verification.
@@ -295,6 +298,9 @@ against complex financial code is not self-evidently correct.
 | 2 | The 48 Pass-1 did not verify, re-checked post-fix | 48 | 48 | 24 |
 | 3 | **This session's own 31 commits** | 45 | 35 | **29** |
 | 4 | **The Pass-3 remediation commits** | 27 | 20 | **15** |
+
+All Pass-4 findings are fixed except the one recorded below as deliberately not
+actioned.
 
 Passes 3 and 4 are the important rows. **The work that fixed 38 defects
 introduced 29 of its own, and the work that fixed those introduced 15 more.**
@@ -359,14 +365,12 @@ here instead of being papered over.
   `ROTE_LEVEL_BAND`, is a versioned house rule. None has been validated against
   realised outcomes.
 - **Branch reconciliation** as described above.
-- **Unactioned Pass-4 findings**, all medium or low: the CAGR over-long-span fix
-  is disclosure-only (the numeric consumers still read a 4-year rate under a 3y
-  label); `splitSentences` fragments at abbreviations and semicolons, so the
-  entity check can both miss and misfire on prose containing "Phase 3." or a
-  semicolon; the widened reverse-ROE bracket applies the payout ratio to loss
-  years; the SGAI note asserts G&A + S&M even when the pair-resolved basis used
-  only one component; conflicting vendor ERP rows are disclosed as "no vendor
-  row"; and the quality aspect note still claims Altman/accruals/Beneish on
-  routes that suppress all three.
+- **Nothing from Passes 1-4.** Every confirmed finding across the four passes is
+  fixed, including the six Pass-4 items previously listed here as outstanding.
+  The last of them mattered more than its severity suggested: the CAGR
+  over-long-span correction had been disclosure-only, so `bestCagr` still fed a
+  mislabelled span to the growth driver and the reverse-DCF comparison. Binding
+  the selector to the MEASURED span moved the audit fixture's fundamentals
+  aspect 67.90 -> 67.13.
 - **Task A2** (branch protection for `CI / full`) is a repository-administration
   action outside the codebase.

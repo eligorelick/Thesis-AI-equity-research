@@ -209,8 +209,10 @@ be resolved should say where it points.
 > re-audited cherry-picks onto current `main` — never as a merge. Full evidence
 > in the verification document.
 >
-> Step 4 is done: the fully-merged `codex/audit-remediation` worktree has been
-> removed.
+> Step 4 is done, and extended: the fully-merged `codex/audit-remediation` and
+> `fix/audit-review-corrections` branches are deleted (both contained in `main`)
+> and all three `.worktrees/` checkouts removed. The two superseded `codex/*`
+> branch refs are retained, so no commit is unreachable.
 
 **Problem.** `codex/financial-integrity` is 113 commits ahead of `main` and
 `codex/provider-temporal-integrity` is 24 ahead; both have `main` as an

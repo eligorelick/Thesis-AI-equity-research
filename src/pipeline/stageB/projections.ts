@@ -311,7 +311,18 @@ export function perturbScenarioAssumptions(
 ): DcfAssumptions {
   const cloned: DcfAssumptions = structuredClone(assumptions);
   cloned.growthPath.value = shiftPath(assumptions.growthPath.value, growthDelta, GROWTH_CLAMP[0], GROWTH_CLAMP[1]);
-  cloned.ebitMarginPath.value = shiftPath(assumptions.ebitMarginPath.value, marginDelta, MARGIN_CLAMP_PP[0], MARGIN_CLAMP_PP[1]);
+  // The base path was ALREADY clamped to MARGIN_CLAMP_PP, so reusing that exact
+  // bound as the perturbation's clamp annihilates the shock for any issuer
+  // sitting at the boundary: a 45%-margin company's bull leg would be clamped
+  // straight back to 45 while the report still claims the full +dm. Give the
+  // perturbation the headroom the base clamp consumed, so a shift of dm always
+  // moves the path by dm.
+  cloned.ebitMarginPath.value = shiftPath(
+    assumptions.ebitMarginPath.value,
+    marginDelta,
+    MARGIN_CLAMP_PP[0] - Math.abs(marginDelta),
+    MARGIN_CLAMP_PP[1] + Math.abs(marginDelta),
+  );
   return cloned;
 }
 

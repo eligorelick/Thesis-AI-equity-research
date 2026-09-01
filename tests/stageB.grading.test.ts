@@ -52,7 +52,15 @@ function route(base: SectorRoute = "general", overlays: SectorOverlay[] = []): C
 /** ROTE fixture: the financial-route capital-return measure. */
 function rote(latestRotePct: number | null = 14) {
   return {
-    series: [],
+    // A real series so the durability signal (stdev of ROTE) can score, the
+    // financial-route mirror of roicStability.
+    series: [
+      { date: "2021-12-31", rotePct: latestRotePct === null ? null : latestRotePct - 2, tangibleCommonEquity: 900, tangibleCommonEquityAvg: 900 },
+      { date: "2022-12-31", rotePct: latestRotePct === null ? null : latestRotePct - 1, tangibleCommonEquity: 940, tangibleCommonEquityAvg: 920 },
+      { date: "2023-12-31", rotePct: latestRotePct === null ? null : latestRotePct + 1, tangibleCommonEquity: 980, tangibleCommonEquityAvg: 960 },
+      { date: "2024-12-31", rotePct: latestRotePct === null ? null : latestRotePct - 1, tangibleCommonEquity: 1000, tangibleCommonEquityAvg: 990 },
+      { date: "2025-12-31", rotePct: latestRotePct, tangibleCommonEquity: 1000, tangibleCommonEquityAvg: 1000 },
+    ],
     latestRotePct,
     latestTangibleCommonEquity: 1000,
     asOf: "2025-12-31",

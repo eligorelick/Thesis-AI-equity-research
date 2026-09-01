@@ -854,6 +854,18 @@ function investedCapital(b: ReturnsBalanceRow, notes: string[]): number | null {
     return resolution.value + b.totalStockholdersEquity;
   }
 
+  // A CONFLICT refusal is not a missing basis: the vendor's combined cash field
+  // contradicts its own components, so no cash figure is trustworthy. Falling
+  // back to cash-only there would compute invested capital from data the
+  // resolver just rejected, and disclose it as "short-term investments
+  // unreported", which is false.
+  if (resolution.conflict === true) {
+    notes.push(
+      `${b.date}: ${resolution.reason ?? "cash components conflict"} — invested capital uncomputable (no trustworthy cash basis)`,
+    );
+    return null;
+  }
+
   // Short-term investments are genuinely unreported. Cash alone is then the
   // best available liquidity figure — no other metric has a better one either —
   // so disclose the narrower basis rather than suppress a 0.35-weight quality

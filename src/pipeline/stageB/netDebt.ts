@@ -16,6 +16,13 @@ export interface NetDebtInputs {
 }
 
 export interface NetDebtResolution {
+  /**
+   * Set only when the resolver refused because the vendor's COMBINED cash field
+   * contradicts its own components. That is a fail-closed data-integrity
+   * refusal, not "short-term investments are unreported", and callers must not
+   * fall back to a narrower basis on it.
+   */
+  conflict?: true;
   version: typeof NET_DEBT_RESOLVER_VERSION;
   value: number | null;
   asOf: string | null;
@@ -85,6 +92,7 @@ export function resolveNetDebt(inputs: NetDebtInputs): NetDebtResolution {
           ...base,
           value: null,
           cashBasis: null,
+          conflict: true,
           reason: "combined cash-and-short-term-investments conflicts with reported components",
         };
       }

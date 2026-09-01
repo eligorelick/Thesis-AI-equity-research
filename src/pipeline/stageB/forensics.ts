@@ -841,13 +841,16 @@ export function computeBeneish(current: ForensicsPeriod, prior: ForensicsPeriod)
   const depiUsesCashFlow =
     posOrNull(current.cashFlow?.depreciationAndAmortization) !== null &&
     posOrNull(prior.cashFlow?.depreciationAndAmortization) !== null;
-  if (!depiUsesCashFlow) {
+  const drT = depRate(current, depiUsesCashFlow);
+  const drP = depRate(prior, depiUsesCashFlow);
+  // Claimed only when a comparison was actually built. Announcing the basis
+  // unconditionally asserted an income-statement comparison on paths where DEPI
+  // is not computed at all.
+  if (!depiUsesCashFlow && drT !== null && drP !== null) {
     notes.push(
       "DEPI: depreciation rate built from the income statement for BOTH years (cash-flow D&A unavailable in one or both) — one basis, never mixed.",
     );
   }
-  const drT = depRate(current, depiUsesCashFlow);
-  const drP = depRate(prior, depiUsesCashFlow);
   const depiRaw = drT !== null && drP !== null && drT > 0 ? drP / drT : null;
 
   // SGAI — SG&A zero treated as undisclosed; fallback G&A + S&M
@@ -869,8 +872,23 @@ export function computeBeneish(current: ForensicsPeriod, prior: ForensicsPeriod)
     sgaT = combinedT;
     sgaP = combinedP;
   } else {
-    sgaT = componentsOf(current.income);
-    sgaP = componentsOf(prior.income);
+    // The component PATTERN is resolved once for the pair too. Summing whatever
+    // each year happens to report still mixes bases when one year discloses
+    // G&A + S&M and the other only G&A — the index would read the missing
+    // component as a spending cut.
+    const gaT = zeroAsNull(current.income?.generalAndAdministrativeExpenses);
+    const gaP = zeroAsNull(prior.income?.generalAndAdministrativeExpenses);
+    const smT = zeroAsNull(current.income?.sellingAndMarketingExpenses);
+    const smP = zeroAsNull(prior.income?.sellingAndMarketingExpenses);
+    const useGa = gaT !== null && gaP !== null;
+    const useSm = smT !== null && smP !== null;
+    if (!useGa && !useSm) {
+      sgaT = null;
+      sgaP = null;
+    } else {
+      sgaT = (useGa ? (gaT as number) : 0) + (useSm ? (smT as number) : 0);
+      sgaP = (useGa ? (gaP as number) : 0) + (useSm ? (smP as number) : 0);
+    }
     if (sgaT !== null && sgaP !== null) {
       notes.push(
         "SGAI: SG&A built from generalAndAdministrativeExpenses + sellingAndMarketingExpenses for BOTH years (combined field unavailable/zero in one or both) — one basis, never mixed.",

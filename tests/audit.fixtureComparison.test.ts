@@ -68,6 +68,30 @@ const NEW_BALANCE_BASIS =
   "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)";
 
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
+  // Added 2026-08-31 (self-audit remediation): the quality and leadership
+  // aspect notes are now route-aware. They advertised the ROIC-WACC spread
+  // unconditionally after it had been suppressed on every financial route, so
+  // a bank's report described a driver its own grade did not use.
+  {
+    path: "report.scores.aspects.leadership.note",
+    before: "Capital-stewardship proxy (buyback discipline, capital deployment above cost, dilution). Qualitative leadership assessed in the analyst grade.",
+    after: "Capital-stewardship proxy (buyback discipline, capital deployment above cost where the route scores it, dilution). Qualitative leadership assessed in the analyst grade.",
+  },
+  {
+    path: "report.scores.aspects.quality.note",
+    before: "Value creation (ROIC−WACC) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
+    after: "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
+  },
+  {
+    path: "stageB.scores.aspects.leadership.note",
+    before: "Capital-stewardship proxy (buyback discipline, capital deployment above cost, dilution). Qualitative leadership assessed in the analyst grade.",
+    after: "Capital-stewardship proxy (buyback discipline, capital deployment above cost where the route scores it, dilution). Qualitative leadership assessed in the analyst grade.",
+  },
+  {
+    path: "stageB.scores.aspects.quality.note",
+    before: "Value creation (ROIC−WACC) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
+    after: "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
+  },
   // Added 2026-08-31 (self-audit remediation): valueCompany now hoists the
   // multiples model's own gaps into the valuation manifest, mirroring the
   // excess-return and REIT hoists. The peers and ownHistory gaps were being
@@ -130,47 +154,47 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "stageB.growth.notes.0",
     beforeMissing: true,
-    after: "Revenue 3y CAGR is computed over only 2.0 years (2023-12-31 → 2025-12-31) — the full 3-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+    after: "Revenue 3y CAGR is computed over 2.0 years (2023-12-31 → 2025-12-31) — the full 3-year history is unavailable; read it as that span, not as the labelled horizon.",
   },
   {
     path: "stageB.growth.notes.1",
     beforeMissing: true,
-    after: "Revenue 5y CAGR is computed over only 2.0 years (2023-12-31 → 2025-12-31) — the full 5-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+    after: "Revenue 5y CAGR is computed over 2.0 years (2023-12-31 → 2025-12-31) — the full 5-year history is unavailable; read it as that span, not as the labelled horizon.",
   },
   {
     path: "stageB.growth.notes.2",
     beforeMissing: true,
-    after: "Revenue 10y CAGR is computed over only 2.0 years (2023-12-31 → 2025-12-31) — the full 10-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+    after: "Revenue 10y CAGR is computed over 2.0 years (2023-12-31 → 2025-12-31) — the full 10-year history is unavailable; read it as that span, not as the labelled horizon.",
   },
   {
     path: "stageB.growth.notes.3",
     beforeMissing: true,
-    after: "Diluted EPS 3y CAGR is computed over only 2.0 years (2023-12-31 → 2025-12-31) — the full 3-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+    after: "Diluted EPS 3y CAGR is computed over 2.0 years (2023-12-31 → 2025-12-31) — the full 3-year history is unavailable; read it as that span, not as the labelled horizon.",
   },
   {
     path: "stageB.growth.notes.4",
     beforeMissing: true,
-    after: "Diluted EPS 5y CAGR is computed over only 2.0 years (2023-12-31 → 2025-12-31) — the full 5-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+    after: "Diluted EPS 5y CAGR is computed over 2.0 years (2023-12-31 → 2025-12-31) — the full 5-year history is unavailable; read it as that span, not as the labelled horizon.",
   },
   {
     path: "stageB.growth.notes.5",
     beforeMissing: true,
-    after: "Diluted EPS 10y CAGR is computed over only 2.0 years (2023-12-31 → 2025-12-31) — the full 10-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+    after: "Diluted EPS 10y CAGR is computed over 2.0 years (2023-12-31 → 2025-12-31) — the full 10-year history is unavailable; read it as that span, not as the labelled horizon.",
   },
   {
     path: "stageB.growth.notes.6",
     beforeMissing: true,
-    after: "Free cash flow 3y CAGR is computed over only 1.0 years (2024-12-31 → 2025-12-31) — the full 3-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+    after: "Free cash flow 3y CAGR is computed over 1.0 years (2024-12-31 → 2025-12-31) — the full 3-year history is unavailable; read it as that span, not as the labelled horizon.",
   },
   {
     path: "stageB.growth.notes.7",
     beforeMissing: true,
-    after: "Free cash flow 5y CAGR is computed over only 1.0 years (2024-12-31 → 2025-12-31) — the full 5-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+    after: "Free cash flow 5y CAGR is computed over 1.0 years (2024-12-31 → 2025-12-31) — the full 5-year history is unavailable; read it as that span, not as the labelled horizon.",
   },
   {
     path: "stageB.growth.notes.8",
     beforeMissing: true,
-    after: "Free cash flow 10y CAGR is computed over only 1.0 years (2024-12-31 → 2025-12-31) — the full 10-year history is unavailable; read it as that shorter span, not a full-horizon rate.",
+    after: "Free cash flow 10y CAGR is computed over 1.0 years (2024-12-31 → 2025-12-31) — the full 10-year history is unavailable; read it as that span, not as the labelled horizon.",
   },
   // Added 2026-08-31 (second audit pass): multiplesFramework now emits an
   // explicit valuation.multiples.peers gap. Peer comparison is fully specified

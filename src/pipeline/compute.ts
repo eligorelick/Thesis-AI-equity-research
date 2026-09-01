@@ -222,6 +222,43 @@ const countryKeyOf = (value: unknown): string =>
   typeof value === "string" ? value.toLowerCase().replace(/[^a-z]/g, "") : "";
 
 /**
+ * FMP's profile reports an ISO-2 code ("TW"); its market-risk-premium rows are
+ * keyed by full country NAME ("Taiwan"). Comparing them directly could never
+ * match, so the domicile lookup silently fell through to the US premium for
+ * every foreign issuer — the exact defect it was written to fix.
+ *
+ * Unlisted codes stay unresolved and keep the DISCLOSED US fallback, so an
+ * unmapped domicile fails closed and loudly rather than matching wrongly.
+ */
+const COUNTRY_CODE_TO_NAME: Readonly<Record<string, string>> = {
+  ar: "argentina", au: "australia", at: "austria", be: "belgium", br: "brazil",
+  ca: "canada", cl: "chile", cn: "china", co: "colombia", cz: "czechrepublic",
+  dk: "denmark", eg: "egypt", fi: "finland", fr: "france", de: "germany",
+  gr: "greece", hk: "hongkong", hu: "hungary", in: "india", id: "indonesia",
+  ie: "ireland", il: "israel", it: "italy", jp: "japan", kr: "southkorea",
+  lu: "luxembourg", my: "malaysia", mx: "mexico", nl: "netherlands",
+  nz: "newzealand", no: "norway", pe: "peru", ph: "philippines", pl: "poland",
+  pt: "portugal", qa: "qatar", ro: "romania", ru: "russia", sa: "saudiarabia",
+  sg: "singapore", za: "southafrica", es: "spain", se: "sweden",
+  ch: "switzerland", tw: "taiwan", th: "thailand", tr: "turkey",
+  ae: "unitedarabemirates", gb: "unitedkingdom", uk: "unitedkingdom",
+  us: "unitedstates", vn: "vietnam",
+};
+
+/** Every spelling one domicile may appear under, for set-intersection matching. */
+function countryAliases(value: unknown): Set<string> {
+  const key = countryKeyOf(value);
+  if (key.length === 0) return new Set();
+  const out = new Set([key]);
+  const mapped = COUNTRY_CODE_TO_NAME[key];
+  if (mapped !== undefined) out.add(mapped);
+  for (const [code, name] of Object.entries(COUNTRY_CODE_TO_NAME)) {
+    if (name === key) out.add(code);
+  }
+  return out;
+}
+
+/**
  * Select the total ERP for the ISSUER'S domicile, never the US premium by
  * default. CAPM's market premium is a property of the market the equity is
  * exposed to; substituting the US premium for a foreign issuer understates its
@@ -238,13 +275,16 @@ export function selectEquityRiskPremium(
   rows: ReadonlyArray<FmpMarketRiskPremiumRow>,
   country: string | null,
 ): { pct: number | null; basis: "domicile" | "us-fallback"; country: string | null } {
-  const key = countryKeyOf(country);
-  if (key.length > 0 && !US_COUNTRY_KEYS.has(key)) {
+  const aliases = countryAliases(country);
+  const isUs = [...aliases].some((a) => US_COUNTRY_KEYS.has(a) || a === "unitedstates");
+  if (aliases.size > 0 && !isUs) {
     const matches = [
       ...new Set(
         rows.flatMap((row) => {
           const value = num(row.totalEquityRiskPremium);
-          return countryKeyOf(row.country) === key && value !== null ? [value] : [];
+          const rowAliases = countryAliases(row.country);
+          const hit = [...rowAliases].some((a) => aliases.has(a));
+          return hit && value !== null ? [value] : [];
         }),
       ),
     ];
@@ -254,7 +294,7 @@ export function selectEquityRiskPremium(
   }
   return {
     pct: selectUsEquityRiskPremium(rows),
-    basis: key.length > 0 && !US_COUNTRY_KEYS.has(key) ? "us-fallback" : "domicile",
+    basis: aliases.size > 0 && !isUs ? "us-fallback" : "domicile",
     country: typeof country === "string" ? country : null,
   };
 }

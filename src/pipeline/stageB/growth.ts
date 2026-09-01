@@ -389,11 +389,19 @@ export function computeGrowth(
   const pushHorizonNotes = (label: string, points: readonly CagrPoint[]): void => {
     for (const p of points) {
       if (p.cagrPct === null || !isFiniteNumber(p.actualYears)) continue;
-      if (p.actualYears >= p.windowYears - 0.001) continue;
+      // SYMMETRIC. Guarding only the short side missed the opposite failure the
+      // annual dedupe can now create: collapsing a restated year removes a data
+      // point, so a "3y" window can span FOUR actual years and be read as a
+      // three-year compound rate.
+      if (Math.abs(p.actualYears - p.windowYears) <= 0.05) continue;
+      const longer = p.actualYears > p.windowYears;
       notes.push(
-        `${label} ${p.windowYears}y CAGR is computed over only ${p.actualYears.toFixed(1)} years ` +
-          `(${p.startDate ?? "?"} → ${p.endDate ?? "?"}) — the full ${p.windowYears}-year history is unavailable; ` +
-          "read it as that shorter span, not a full-horizon rate.",
+        `${label} ${p.windowYears}y CAGR is computed over ${p.actualYears.toFixed(1)} years ` +
+          `(${p.startDate ?? "?"} → ${p.endDate ?? "?"}) — ` +
+          (longer
+            ? `a LONGER span than the ${p.windowYears}-year label, because an intervening fiscal period is unavailable; `
+            : `the full ${p.windowYears}-year history is unavailable; `) +
+          "read it as that span, not as the labelled horizon.",
       );
     }
   };

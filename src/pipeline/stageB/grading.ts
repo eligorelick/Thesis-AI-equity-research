@@ -660,7 +660,7 @@ export function computeScores(inputs: ScoringInputs): Scoring {
     ],
     weights.quality,
     inputs.asOf,
-    "Value creation (ROIC−WACC) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
+    "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
     policy,
   );
 
@@ -701,8 +701,16 @@ export function computeScores(inputs: ScoringInputs): Scoring {
   // measure. Choosing ROTE by default would silently score every
   // hand-constructed or legacy policy on a bank metric.
   const scoresRote = policy.suppress.includes("roic");
+  // Same level/durability split as the industrial branch, at the same total
+  // weight. A single year's ROTE carrying the whole 0.75 made the financial
+  // moat a point-in-time profitability read with no durability dimension —
+  // precisely what a moat proxy is supposed to measure.
+  const roteStdev = stdev(rote.series.map((y) => y.rotePct).filter(isNum));
   const moatReturnSignals: Signal[] = scoresRote
-    ? [{ name: "roteLevel", raw: rote.latestRotePct, unit: "%", weight: 0.75, band: ROTE_LEVEL_BAND }]
+    ? [
+        { name: "roteLevel", raw: rote.latestRotePct, unit: "%", weight: 0.45, band: ROTE_LEVEL_BAND },
+        { name: "roteStability", raw: roteStdev, unit: "pp", weight: 0.3, band: ROIC_STABILITY_BAND },
+      ]
     : [
         { name: "roicLevel", raw: roic.latestRoicPct, unit: "%", weight: 0.45, band: ROIC_LEVEL_BAND },
         { name: "roicStability", raw: roicStdev, unit: "pp", weight: 0.3, band: ROIC_STABILITY_BAND },
@@ -735,7 +743,7 @@ export function computeScores(inputs: ScoringInputs): Scoring {
     ],
     weights.leadership,
     inputs.asOf,
-    "Capital-stewardship proxy (buyback discipline, capital deployment above cost, dilution). Qualitative leadership assessed in the analyst grade.",
+    "Capital-stewardship proxy (buyback discipline, capital deployment above cost where the route scores it, dilution). Qualitative leadership assessed in the analyst grade.",
     policy,
   );
 

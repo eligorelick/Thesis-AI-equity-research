@@ -1,0 +1,258 @@
+// src/edgar/sic.ts
+/**
+ * SEC Standard Industrial Classification → FMP-taxonomy sector and industry.
+ *
+ * Keyless profiles have no vendor sector/industry; the SIC on the EDGAR
+ * submissions payload is the only classification a registrant supplies.
+ * The sector strings below are FMP's exactly, so `SECTOR_ETF_MAP`,
+ * `FMP_SECTOR_TO_GICS` and the payload's sector routing keep working; the
+ * financial industry strings start with the prefixes `routeCompany` matches
+ * (`Banks`, `Insurance`, `REIT`), everything else is descriptive.
+ *
+ * Specific four-digit codes win over their two-digit major group.
+ */
+
+export interface SicClassification {
+  sic: number | null;
+  sector: string | null;
+  industry: string | null;
+}
+
+const SPECIFIC: Readonly<Record<number, readonly [string, string]>> = {
+  // --- Financials: the routing-decisive codes -------------------------------
+  6021: ["Financial Services", "Banks - Diversified"],
+  6022: ["Financial Services", "Banks - Regional"],
+  6029: ["Financial Services", "Banks - Regional"],
+  6035: ["Financial Services", "Banks - Regional"],
+  6036: ["Financial Services", "Banks - Regional"],
+  6099: ["Financial Services", "Credit Services"],
+  6111: ["Financial Services", "Credit Services"],
+  6141: ["Financial Services", "Credit Services"],
+  6153: ["Financial Services", "Credit Services"],
+  6159: ["Financial Services", "Credit Services"],
+  6162: ["Financial Services", "Mortgage Finance"],
+  6163: ["Financial Services", "Mortgage Finance"],
+  6199: ["Financial Services", "Credit Services"],
+  6200: ["Financial Services", "Capital Markets"],
+  6211: ["Financial Services", "Capital Markets"],
+  6221: ["Financial Services", "Capital Markets"],
+  6282: ["Financial Services", "Asset Management"],
+  6311: ["Financial Services", "Insurance - Life"],
+  6321: ["Financial Services", "Insurance - Life"],
+  6324: ["Financial Services", "Insurance - Life"],
+  6331: ["Financial Services", "Insurance - Property & Casualty"],
+  6351: ["Financial Services", "Insurance - Specialty"],
+  6361: ["Financial Services", "Insurance - Specialty"],
+  6399: ["Financial Services", "Insurance - Diversified"],
+  6411: ["Financial Services", "Insurance - Brokers"],
+  6770: ["Financial Services", "Shell Companies"],
+  6798: ["Real Estate", "REIT - Diversified"],
+  // --- Technology ------------------------------------------------------------
+  3571: ["Technology", "Computer Hardware"],
+  3572: ["Technology", "Computer Hardware"],
+  3576: ["Technology", "Communication Equipment"],
+  3577: ["Technology", "Computer Hardware"],
+  3578: ["Technology", "Computer Hardware"],
+  3661: ["Technology", "Communication Equipment"],
+  3663: ["Technology", "Communication Equipment"],
+  3672: ["Technology", "Electronic Components"],
+  3674: ["Technology", "Semiconductors"],
+  3679: ["Technology", "Electronic Components"],
+  3825: ["Technology", "Scientific & Technical Instruments"],
+  3826: ["Technology", "Scientific & Technical Instruments"],
+  3827: ["Technology", "Scientific & Technical Instruments"],
+  3829: ["Technology", "Scientific & Technical Instruments"],
+  7370: ["Technology", "Software - Infrastructure"],
+  7371: ["Technology", "Information Technology Services"],
+  7372: ["Technology", "Software - Application"],
+  7373: ["Technology", "Information Technology Services"],
+  7374: ["Technology", "Information Technology Services"],
+  // --- Healthcare ------------------------------------------------------------
+  2833: ["Healthcare", "Drug Manufacturers - Specialty & Generic"],
+  2834: ["Healthcare", "Drug Manufacturers - General"],
+  2835: ["Healthcare", "Diagnostics & Research"],
+  2836: ["Healthcare", "Biotechnology"],
+  3841: ["Healthcare", "Medical Devices"],
+  3842: ["Healthcare", "Medical Instruments & Supplies"],
+  3843: ["Healthcare", "Medical Instruments & Supplies"],
+  3844: ["Healthcare", "Medical Devices"],
+  3845: ["Healthcare", "Medical Devices"],
+  3851: ["Healthcare", "Medical Instruments & Supplies"],
+  5047: ["Healthcare", "Medical Distribution"],
+  5122: ["Healthcare", "Medical Distribution"],
+  8011: ["Healthcare", "Medical Care Facilities"],
+  8062: ["Healthcare", "Medical Care Facilities"],
+  8071: ["Healthcare", "Diagnostics & Research"],
+  8082: ["Healthcare", "Medical Care Facilities"],
+  8090: ["Healthcare", "Medical Care Facilities"],
+  8093: ["Healthcare", "Medical Care Facilities"],
+  8731: ["Healthcare", "Biotechnology"],
+  // --- Consumer --------------------------------------------------------------
+  3711: ["Consumer Cyclical", "Auto Manufacturers"],
+  3714: ["Consumer Cyclical", "Auto Parts"],
+  3716: ["Consumer Cyclical", "Recreational Vehicles"],
+  3751: ["Consumer Cyclical", "Recreational Vehicles"],
+  5311: ["Consumer Cyclical", "Department Stores"],
+  5331: ["Consumer Defensive", "Discount Stores"],
+  5411: ["Consumer Defensive", "Grocery Stores"],
+  5412: ["Consumer Defensive", "Grocery Stores"],
+  5500: ["Consumer Cyclical", "Auto & Truck Dealerships"],
+  5531: ["Consumer Cyclical", "Auto Parts"],
+  5661: ["Consumer Cyclical", "Footwear & Accessories"],
+  5812: ["Consumer Cyclical", "Restaurants"],
+  5912: ["Consumer Defensive", "Pharmaceutical Retailers"],
+  5940: ["Consumer Cyclical", "Specialty Retail"],
+  5961: ["Consumer Cyclical", "Internet Retail"],
+  5990: ["Consumer Cyclical", "Specialty Retail"],
+  7011: ["Consumer Cyclical", "Lodging"],
+  7990: ["Consumer Cyclical", "Leisure"],
+  7993: ["Consumer Cyclical", "Gambling"],
+  // --- Communication ---------------------------------------------------------
+  4813: ["Communication Services", "Telecom Services"],
+  4822: ["Communication Services", "Telecom Services"],
+  4832: ["Communication Services", "Broadcasting"],
+  4833: ["Communication Services", "Entertainment"],
+  4841: ["Communication Services", "Entertainment"],
+  4899: ["Communication Services", "Telecom Services"],
+  7310: ["Communication Services", "Advertising Agencies"],
+  7311: ["Communication Services", "Advertising Agencies"],
+  7812: ["Communication Services", "Entertainment"],
+  7819: ["Communication Services", "Entertainment"],
+  7830: ["Communication Services", "Entertainment"],
+  7841: ["Communication Services", "Entertainment"],
+  // --- Industrials -----------------------------------------------------------
+  3720: ["Industrials", "Aerospace & Defense"],
+  3721: ["Industrials", "Aerospace & Defense"],
+  3724: ["Industrials", "Aerospace & Defense"],
+  3728: ["Industrials", "Aerospace & Defense"],
+  3760: ["Industrials", "Aerospace & Defense"],
+  3812: ["Industrials", "Aerospace & Defense"],
+  4011: ["Industrials", "Railroads"],
+  4213: ["Industrials", "Trucking"],
+  4412: ["Industrials", "Marine Shipping"],
+  4512: ["Industrials", "Airlines"],
+  4513: ["Industrials", "Integrated Freight & Logistics"],
+  4522: ["Industrials", "Airlines"],
+  4731: ["Industrials", "Integrated Freight & Logistics"],
+  7359: ["Industrials", "Rental & Leasing Services"],
+  7361: ["Industrials", "Staffing & Employment Services"],
+  7363: ["Industrials", "Staffing & Employment Services"],
+  7381: ["Industrials", "Security & Protection Services"],
+  7389: ["Industrials", "Specialty Business Services"],
+  8711: ["Industrials", "Engineering & Construction"],
+  8741: ["Industrials", "Consulting Services"],
+  8742: ["Industrials", "Consulting Services"],
+  // --- Energy / materials / utilities ----------------------------------------
+  1311: ["Energy", "Oil & Gas E&P"],
+  1381: ["Energy", "Oil & Gas Drilling"],
+  1382: ["Energy", "Oil & Gas Equipment & Services"],
+  1389: ["Energy", "Oil & Gas Equipment & Services"],
+  2911: ["Energy", "Oil & Gas Refining & Marketing"],
+  4610: ["Energy", "Oil & Gas Midstream"],
+  4922: ["Energy", "Oil & Gas Midstream"],
+  4923: ["Utilities", "Utilities - Regulated Gas"],
+  4924: ["Utilities", "Utilities - Regulated Gas"],
+  4911: ["Utilities", "Utilities - Regulated Electric"],
+  4931: ["Utilities", "Utilities - Diversified"],
+  4932: ["Utilities", "Utilities - Regulated Gas"],
+  4941: ["Utilities", "Utilities - Regulated Water"],
+  4991: ["Utilities", "Utilities - Renewable"],
+  1040: ["Basic Materials", "Gold"],
+  1000: ["Basic Materials", "Other Industrial Metals & Mining"],
+  3312: ["Basic Materials", "Steel"],
+  3334: ["Basic Materials", "Aluminum"],
+};
+
+/** Two-digit SIC major group → sector and a descriptive industry. */
+const MAJOR_GROUP: Readonly<Record<number, readonly [string, string]>> = {
+  1: ["Consumer Defensive", "Farm Products"],
+  2: ["Consumer Defensive", "Farm Products"],
+  7: ["Consumer Defensive", "Farm Products"],
+  8: ["Basic Materials", "Lumber & Wood Production"],
+  9: ["Consumer Defensive", "Farm Products"],
+  10: ["Basic Materials", "Other Industrial Metals & Mining"],
+  12: ["Energy", "Thermal Coal"],
+  13: ["Energy", "Oil & Gas E&P"],
+  14: ["Basic Materials", "Building Materials"],
+  15: ["Consumer Cyclical", "Residential Construction"],
+  16: ["Industrials", "Engineering & Construction"],
+  17: ["Industrials", "Engineering & Construction"],
+  20: ["Consumer Defensive", "Packaged Foods"],
+  21: ["Consumer Defensive", "Tobacco"],
+  22: ["Consumer Cyclical", "Textile Manufacturing"],
+  23: ["Consumer Cyclical", "Apparel Manufacturing"],
+  24: ["Basic Materials", "Lumber & Wood Production"],
+  25: ["Consumer Cyclical", "Furnishings, Fixtures & Appliances"],
+  26: ["Basic Materials", "Paper & Paper Products"],
+  27: ["Communication Services", "Publishing"],
+  28: ["Basic Materials", "Chemicals"],
+  29: ["Energy", "Oil & Gas Refining & Marketing"],
+  30: ["Basic Materials", "Specialty Chemicals"],
+  31: ["Consumer Cyclical", "Footwear & Accessories"],
+  32: ["Basic Materials", "Building Materials"],
+  33: ["Basic Materials", "Steel"],
+  34: ["Industrials", "Metal Fabrication"],
+  35: ["Industrials", "Specialty Industrial Machinery"],
+  36: ["Technology", "Electronic Components"],
+  37: ["Industrials", "Aerospace & Defense"],
+  38: ["Technology", "Scientific & Technical Instruments"],
+  39: ["Consumer Cyclical", "Leisure"],
+  40: ["Industrials", "Railroads"],
+  41: ["Industrials", "Trucking"],
+  42: ["Industrials", "Trucking"],
+  44: ["Industrials", "Marine Shipping"],
+  45: ["Industrials", "Airlines"],
+  46: ["Energy", "Oil & Gas Midstream"],
+  47: ["Industrials", "Integrated Freight & Logistics"],
+  48: ["Communication Services", "Telecom Services"],
+  49: ["Utilities", "Utilities - Diversified"],
+  50: ["Industrials", "Industrial Distribution"],
+  51: ["Consumer Defensive", "Food Distribution"],
+  52: ["Consumer Cyclical", "Home Improvement Retail"],
+  53: ["Consumer Cyclical", "Department Stores"],
+  54: ["Consumer Defensive", "Grocery Stores"],
+  55: ["Consumer Cyclical", "Auto & Truck Dealerships"],
+  56: ["Consumer Cyclical", "Apparel Retail"],
+  57: ["Consumer Cyclical", "Specialty Retail"],
+  58: ["Consumer Cyclical", "Restaurants"],
+  59: ["Consumer Cyclical", "Specialty Retail"],
+  60: ["Financial Services", "Banks - Regional"],
+  61: ["Financial Services", "Credit Services"],
+  62: ["Financial Services", "Capital Markets"],
+  63: ["Financial Services", "Insurance - Diversified"],
+  64: ["Financial Services", "Insurance - Brokers"],
+  65: ["Real Estate", "Real Estate Services"],
+  67: ["Financial Services", "Asset Management"],
+  70: ["Consumer Cyclical", "Lodging"],
+  72: ["Consumer Cyclical", "Personal Services"],
+  73: ["Industrials", "Specialty Business Services"],
+  75: ["Consumer Cyclical", "Auto & Truck Dealerships"],
+  76: ["Consumer Cyclical", "Personal Services"],
+  78: ["Communication Services", "Entertainment"],
+  79: ["Consumer Cyclical", "Leisure"],
+  80: ["Healthcare", "Medical Care Facilities"],
+  81: ["Industrials", "Specialty Business Services"],
+  82: ["Consumer Defensive", "Education & Training Services"],
+  83: ["Healthcare", "Medical Care Facilities"],
+  86: ["Industrials", "Specialty Business Services"],
+  87: ["Industrials", "Consulting Services"],
+  89: ["Industrials", "Specialty Business Services"],
+};
+
+/** Parse a four-digit code out of "6021" or "6021 NATIONAL COMMERCIAL BANKS". */
+export function parseSicCode(value: string | number | null | undefined): number | null {
+  if (typeof value === "number") return Number.isInteger(value) && value >= 0 && value <= 9999 ? value : null;
+  if (typeof value !== "string") return null;
+  const match = /^\s*(\d{4})\b/.exec(value);
+  return match ? Number(match[1]) : null;
+}
+
+export function sectorIndustryForSic(value: string | number | null | undefined): SicClassification {
+  const sic = parseSicCode(value);
+  if (sic === null) return { sic: null, sector: null, industry: null };
+  const specific = SPECIFIC[sic];
+  if (specific !== undefined) return { sic, sector: specific[0], industry: specific[1] };
+  const group = MAJOR_GROUP[Math.floor(sic / 100)];
+  if (group !== undefined) return { sic, sector: group[0], industry: group[1] };
+  return { sic, sector: null, industry: null };
+}

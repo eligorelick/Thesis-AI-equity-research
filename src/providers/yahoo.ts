@@ -4,7 +4,9 @@
  * Used only for members FMP could not serve (no key, empty, 402, refused
  * symbol) and only after EDGAR resolved the ticker to a real registrant. The
  * endpoint is unofficial: requests carry a browser-style User-Agent (the
- * server answers 429 without one), are rate-limited to 2/s, cached in the
+ * server answers 429 without one), are rate-limited to 2/s by the shared
+ * per-provider registry in http.ts (so every client in the process queues
+ * behind one bucket, and setProviderLimiter can tighten it), cached in the
  * durable api_cache, and every failure degrades to a disclosed gap.
  *
  * Contract with the rest of the pipeline: rows are FMP-shaped
@@ -28,7 +30,6 @@ import {
   HttpTransportError,
   type FetchPolicy,
   type TokenBucketLimiter,
-  makeLimiter,
 } from "@/providers/http";
 import {
   deriveAsOf,
@@ -54,10 +55,6 @@ export const YAHOO_TTLS = { history: 24 * HOUR, quote: 15 * MINUTE } as const;
  */
 export const YAHOO_DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Thesis-research/1.0 (local-first equity research; keyless price fallback)";
-
-/** Production throttle for an unofficial endpoint: deliberately conservative. */
-const DEFAULT_RATE_PER_SEC = 2;
-const DEFAULT_BURST = 2;
 
 export interface YahooMeta {
   symbol: string;
@@ -164,7 +161,15 @@ class YahooResponseError extends Error {
 }
 
 type ChartFetch =
-  | { ok: true; result: ChartResult; endpoint: string; fetchedAt: string }
+  | {
+      ok: true;
+      result: ChartResult;
+      endpoint: string;
+      fetchedAt: string;
+      /** Served past TTL by the durable cache — must reach `Sourced` and the appendix. */
+      stale?: boolean;
+      staleReason?: CachedFetchResult<unknown>["staleReason"];
+    }
   | { ok: false; reason: string; endpoint: string };
 
 function gap<T>(
@@ -220,7 +225,7 @@ function chartEndpoint(ySymbol: string, query: string): string {
 
 export class YahooClient {
   private readonly fetchImpl: typeof fetch | undefined;
-  private readonly limiter: TokenBucketLimiter;
+  private readonly limiter: TokenBucketLimiter | undefined;
   private readonly cachedFetch: CachedFetchFn;
   private readonly now: () => Date;
   private readonly userAgent: string;
@@ -232,7 +237,12 @@ export class YahooClient {
 
   constructor(config: YahooClientConfig = {}) {
     this.fetchImpl = config.fetchImpl;
-    this.limiter = config.limiter ?? makeLimiter(DEFAULT_RATE_PER_SEC, DEFAULT_BURST);
+    // Deliberately NOT defaulted: leaving it undefined lets fetchWithPolicy
+    // reach getProviderLimiter("yahoo") — one bucket for the whole process
+    // (http.ts's FALLBACK_RATE is already 2/s, burst 2) that setProviderLimiter
+    // can tighten after live verification. A per-client bucket would make N
+    // per-company clients 2N req/s against an unofficial endpoint.
+    this.limiter = config.limiter;
     this.cachedFetch = config.cachedFetch ?? (async (_key, _ttl, loader) => ({ value: await loader() }));
     this.now = config.now ?? (() => new Date());
     this.userAgent = config.userAgent ?? YAHOO_DEFAULT_USER_AGENT;
@@ -262,7 +272,7 @@ export class YahooClient {
           provider: "yahoo",
           timeoutMs: this.timeoutMs,
           signal: this.signal,
-          limiter: this.limiter,
+          ...(this.limiter ? { limiter: this.limiter } : {}),
           ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
           ...(this.maxRetries === undefined ? {} : { maxRetries: this.maxRetries }),
           ...(this.retryBaseDelayMs === undefined
@@ -325,6 +335,8 @@ export class YahooClient {
       result: exchange.value.result,
       endpoint: displayEndpoint,
       fetchedAt: exchange.fetchedAt ?? exchange.value.fetchedAt,
+      ...(exchange.stale ? { stale: true } : {}),
+      ...(exchange.staleReason ? { staleReason: exchange.staleReason } : {}),
     };
   }
 
@@ -362,7 +374,13 @@ export class YahooClient {
         high,
         low,
         close,
-        volume: volume ?? 0,
+        // "Yahoo reported no volume" is NOT "volume was zero". A literal 0
+        // passes Stage B's `typeof === "number" && >= 0` guard
+        // (pipeline/stageB/technicals.ts), so the 20d/90d averages would be
+        // computed from a fabricated zero, biased downward, and labelled
+        // "falling" with no disclosure. Omitting the key is what makes that
+        // guard fire and raise the technicals.volumeTrend info gap.
+        ...(volume === null ? {} : { volume }),
         adjClose: adj[i] ?? null,
       });
     }
@@ -378,6 +396,8 @@ export class YahooClient {
       source: "yahoo",
       endpoint,
       fetchedAt,
+      ...(fetched.stale ? { stale: true } : {}),
+      ...(fetched.staleReason ? { staleReason: fetched.staleReason } : {}),
     };
     return { ok: true, value: sourced };
   }
@@ -406,6 +426,8 @@ export class YahooClient {
         source: "yahoo",
         endpoint: fetched.endpoint,
         fetchedAt: fetched.fetchedAt,
+        ...(fetched.stale ? { stale: true } : {}),
+        ...(fetched.staleReason ? { staleReason: fetched.staleReason } : {}),
       },
     };
   }
@@ -461,6 +483,8 @@ export class YahooClient {
         source: "yahoo",
         endpoint: metaRes.value.endpoint,
         fetchedAt: metaRes.value.fetchedAt,
+        ...(metaRes.value.stale ? { stale: true } : {}),
+        ...(metaRes.value.staleReason ? { staleReason: metaRes.value.staleReason } : {}),
       },
     };
   }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { makeLimiter } from "@/providers/http";
+import { getProviderLimiter, makeLimiter, setProviderLimiter } from "@/providers/http";
 import type { CachedFetchFn } from "@/providers/fmp";
 import {
   createYahooClient,
@@ -191,14 +191,19 @@ describe("YahooClient.dailyHistory", () => {
     expect(res.value.data.rows[0]!.symbol).toBe("7203-T");
   });
 
-  it("keeps a bar whose volume alone is missing rather than dropping the session", async () => {
+  it("keeps a bar whose volume alone is missing, but never invents a zero volume", async () => {
     const body = chart({ bars: 1 });
     body.chart.result![0]!.indicators.quote[0]!.volume = [null];
     const { impl } = fakeFetch(() => ({ status: 200, body }));
     const res = await client(impl).dailyHistory("AAPL", "2026-08-20", "2026-09-01");
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.value.data.rows[0]).toMatchObject({ date: "2026-08-24", volume: 0 });
+    const row = res.value.data.rows[0]!;
+    expect(row).toMatchObject({ date: "2026-08-24", close: 100.5 });
+    // A literal 0 would pass Stage B's `typeof === "number" && >= 0` guard and
+    // be averaged into the 20d/90d volume trend as real, undisclosed data.
+    expect(row.volume).toBeUndefined();
+    expect("volume" in row).toBe(false);
   });
 
   it("turns a Yahoo error envelope into a disclosed gap, not an exception", async () => {
@@ -340,17 +345,32 @@ describe("YahooClient.dailyHistory", () => {
     ]);
   });
 
-  it("prefers the cache's own fetchedAt so a served-from-cache row is not back-dated to now", async () => {
+  it("prefers the cache's own fetchedAt and carries its staleness into the provenance", async () => {
     const cachedFetch: CachedFetchFn = async (_key, _ttl, loader) => ({
       value: await loader(),
       fetchedAt: "2026-08-29T12:00:00.000Z",
       stale: true,
+      staleReason: "empty-refresh-preserved",
     });
     const { impl } = fakeFetch(() => ({ status: 200, body: chart({ bars: 5 }) }));
     const res = await client(impl, cachedFetch).dailyHistory("AAPL", "2026-08-20", "2026-09-01");
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.fetchedAt).toBe("2026-08-29T12:00:00.000Z");
+    // Dropping these would print "unknown" in the sources appendix and stop
+    // report/diff.ts ever flagging a Yahoo-backed report as stale.
+    expect(res.value.stale).toBe(true);
+    expect(res.value.staleReason).toBe("empty-refresh-preserved");
+  });
+
+  it("leaves stale unset when the cache served a fresh body", async () => {
+    const cachedFetch: CachedFetchFn = async (_key, _ttl, loader) => ({ value: await loader() });
+    const { impl } = fakeFetch(() => ({ status: 200, body: chart({ bars: 5 }) }));
+    const res = await client(impl, cachedFetch).dailyHistory("AAPL", "2026-08-20", "2026-09-01");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.value.stale).toBeUndefined();
+    expect(res.value.staleReason).toBeUndefined();
   });
 
   it("honours a custom base URL and defaults the clock, limiter and User-Agent in production shape", async () => {
@@ -366,6 +386,31 @@ describe("YahooClient.dailyHistory", () => {
     );
     // No `now` injected: the fetch stamp is a real clock reading, not a fixture.
     expect(Number.isNaN(Date.parse(res.value.fetchedAt))).toBe(false);
+  });
+
+  it("throttles through the shared provider registry when no limiter is injected", async () => {
+    // The client must not own a private bucket: N per-company clients would
+    // then issue 2N req/s to an unofficial endpoint, and setProviderLimiter —
+    // http.ts's documented "tighter throttle after live verification" hook —
+    // would be dead for Yahoo.
+    const inner = makeLimiter(1000, 1000);
+    let taken = 0;
+    setProviderLimiter("yahoo", {
+      ...inner,
+      take: async (n?: number) => {
+        taken++;
+        await inner.take(n);
+      },
+    });
+    const { impl } = fakeFetch(() => ({ status: 200, body: chart({ bars: 1 }) }));
+    const res = await createYahooClient({ fetchImpl: impl }).dailyHistory(
+      "AAPL",
+      "2026-08-20",
+      "2026-09-01",
+    );
+    expect(res.ok).toBe(true);
+    expect(taken).toBe(1);
+    expect(getProviderLimiter("yahoo").ratePerSec).toBe(1000);
   });
 });
 
@@ -522,6 +567,28 @@ describe("YahooClient.quote and meta", () => {
     expect(res.gap.field).toBe("yahoo.quote(ZZZZ)");
     expect(res.gap.reason).toMatch(/No data found/);
     expect(res.gap.attemptedSources).toEqual(["/v8/finance/chart/ZZZZ?range=5d&interval=1d"]);
+  });
+
+  it("carries cache staleness through both meta and the quote built from it", async () => {
+    const cachedFetch: CachedFetchFn = async (_key, _ttl, loader) => ({
+      value: await loader(),
+      stale: true,
+      staleReason: "empty-refresh-preserved",
+    });
+    const { impl } = fakeFetch(() => ({ status: 200, body: chart({ bars: 3 }) }));
+    const yahoo = client(impl, cachedFetch);
+
+    const metaRes = await yahoo.meta("AAPL");
+    expect(metaRes.ok).toBe(true);
+    if (!metaRes.ok) return;
+    expect(metaRes.value.stale).toBe(true);
+    expect(metaRes.value.staleReason).toBe("empty-refresh-preserved");
+
+    const quoteRes = await yahoo.quote("AAPL");
+    expect(quoteRes.ok).toBe(true);
+    if (!quoteRes.ok) return;
+    expect(quoteRes.value.stale).toBe(true);
+    expect(quoteRes.value.staleReason).toBe("empty-refresh-preserved");
   });
 
   it("caches the meta call under the quote TTL", async () => {

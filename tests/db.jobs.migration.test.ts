@@ -148,6 +148,15 @@ afterEach(() => {
   }
 });
 
+/**
+ * These tests open, bootstrap and close real SQLite files. Locally they take
+ * tens of milliseconds; on the shared Windows CI runner the same work has taken
+ * 5-14 s (file locking plus on-access scanning of the temp database), which is
+ * an environment cost, not a regression. Budget for it explicitly, as the
+ * concurrent-bootstrap test below already does.
+ */
+const SQLITE_IO_TIMEOUT_MS = 30_000;
+
 describe("durable job schema migration", () => {
   it("terminalizes duplicate active jobs as one revisioned snapshot and preserves paid settlement leases", () => {
     const dbPath = tempDbPath();
@@ -473,7 +482,7 @@ describe("durable job schema migration", () => {
     } finally {
       sqlite.close();
     }
-  });
+  }, SQLITE_IO_TIMEOUT_MS);
 
   it("increments revisions atomically with stale-writer fencing across connections", () => {
     const dbPath = tempDbPath();
@@ -496,7 +505,7 @@ describe("durable job schema migration", () => {
       first.close();
       second.close();
     }
-  });
+  }, SQLITE_IO_TIMEOUT_MS);
 
   it("serializes concurrent legacy bootstraps without losing legacy data", async () => {
     const dbPath = tempDbPath();

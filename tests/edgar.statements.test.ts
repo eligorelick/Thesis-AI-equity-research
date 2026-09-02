@@ -639,6 +639,146 @@ describe("buildStatementsFromCompanyFacts — lease obligations belong in total 
   });
 });
 
+describe("buildStatementsFromCompanyFacts — debt chain overlaps", () => {
+  /** A filer with no debt tags at all; each case adds only the tags it is about. */
+  function bare(extra: Record<string, Pt[]>): CompanyFacts {
+    const k = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20" } as const;
+    return facts({
+      Revenues: [{ start: "2025-01-01", end: "2025-12-31", val: 1_000, ...k }],
+      Assets: [{ end: "2025-12-31", val: 5_000, ...k }],
+      CashAndCashEquivalentsAtCarryingValue: [{ end: "2025-12-31", val: 100, ...k }],
+      ...extra,
+    });
+  }
+  const at = (val: number): Pt[] => [{ end: "2025-12-31", val, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20" }];
+  const row = (f: CompanyFacts) => buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "X" }).balanceAnnual;
+
+  it("counts finance leases once when longTermDebt came from the combined debt-and-leases tag", () => {
+    // `LongTermDebtAndCapitalLeaseObligations` already contains the finance
+    // leases that `capitalLeaseObligations` resolves again from
+    // `FinanceLeaseLiability`, so adding both double-counted them in totalDebt.
+    const built = row(
+      bare({
+        LongTermDebtAndCapitalLeaseObligations: [...at(500)],
+        FinanceLeaseLiability: [...at(30)],
+        OperatingLeaseLiability: [...at(70)],
+      }),
+    );
+    const fy = built.rows[0]!;
+    expect(fy.longTermDebt).toBe(500);
+    // The published lease figure is still the full operating + finance total.
+    expect(fy.capitalLeaseObligations).toBe(100);
+    // ...but only the operating half is added: 500 + 70, not 500 + 100.
+    expect(fy.totalDebt).toBe(570);
+    expect(fy.netDebt).toBe(470);
+    expect(
+      built.notes.some(
+        (n) =>
+          /^totalDebt 2025-12-31:/.test(n) &&
+          /already includes finance lease obligations/.test(n) &&
+          /only the operating-lease liability is added/.test(n),
+      ),
+    ).toBe(true);
+    expect(built.notes).toContain("longTermDebt 2025-12-31: from LongTermDebtAndCapitalLeaseObligations");
+  });
+
+  it("adds the whole lease liability when the noncurrent debt tag excludes leases", () => {
+    const built = row(
+      bare({
+        LongTermDebtNoncurrent: [...at(500)],
+        FinanceLeaseLiability: [...at(30)],
+        OperatingLeaseLiability: [...at(70)],
+      }),
+    );
+    expect(built.rows[0]).toMatchObject({ longTermDebt: 500, capitalLeaseObligations: 100, totalDebt: 600 });
+    expect(built.notes.some((n) => /already includes finance lease obligations/.test(n))).toBe(false);
+  });
+
+  it("nets current maturities out of longTermDebt when the us-gaap total resolved", () => {
+    // `LongTermDebt` is the total INCLUDING current maturities, and
+    // `shortTermDebt` sums `LongTermDebtCurrent` — so the current portion was
+    // counted twice in totalDebt.
+    const built = row(bare({ LongTermDebt: [...at(500)], LongTermDebtCurrent: [...at(40)] }));
+    const fy = built.rows[0]!;
+    expect(fy.shortTermDebt).toBe(40);
+    expect(fy.longTermDebt).toBe(460); // 500 total − 40 current maturities
+    expect(fy.totalDebt).toBe(500); // counted once
+    expect(built.notes).toContain("longTermDebt 2025-12-31: LongTermDebt less current maturities (LongTermDebtCurrent 40)");
+  });
+
+  it("keeps the LongTermDebt total and says so when no current maturities are filed", () => {
+    const built = row(bare({ LongTermDebt: [...at(500)] }));
+    expect(built.rows[0]).toMatchObject({ longTermDebt: 500, shortTermDebt: null, totalDebt: 500 });
+    expect(
+      built.notes.some((n) => /^longTermDebt 2025-12-31:/.test(n) && /current maturities may be included/.test(n)),
+    ).toBe(true);
+  });
+
+  it("does not add commercial paper on top of short-term borrowings", () => {
+    // Commercial paper is conventionally a component of ShortTermBorrowings.
+    const built = row(
+      bare({ ShortTermBorrowings: [...at(120)], CommercialPaper: [...at(50)], LongTermDebtCurrent: [...at(30)] }),
+    );
+    const fy = built.rows[0]!;
+    expect(fy.shortTermDebt).toBe(150); // 30 + 120, not 30 + 120 + 50
+    expect(fy.totalDebt).toBe(150);
+    expect(
+      built.notes.some(
+        (n) =>
+          /^shortTermDebt 2025-12-31:/.test(n) &&
+          /CommercialPaper excluded/.test(n) &&
+          /conventionally a component of ShortTermBorrowings/.test(n),
+      ),
+    ).toBe(true);
+  });
+
+  it("still sums commercial paper when the filer tags no short-term borrowings", () => {
+    const built = row(bare({ CommercialPaper: [...at(50)], LongTermDebtCurrent: [...at(30)] }));
+    expect(built.rows[0]).toMatchObject({ shortTermDebt: 80, totalDebt: 80 });
+    expect(built.notes).toContain("shortTermDebt 2025-12-31: from LongTermDebtCurrent + CommercialPaper");
+  });
+
+  it("names the winning tags for the three debt fields on every row", () => {
+    const built = row(
+      bare({
+        DebtCurrent: [...at(20)],
+        LongTermDebtNoncurrent: [...at(500)],
+        OperatingLeaseLiabilityCurrent: [...at(5)],
+        OperatingLeaseLiabilityNoncurrent: [...at(25)],
+      }),
+    );
+    expect(built.notes).toContain("shortTermDebt 2025-12-31: from DebtCurrent");
+    expect(built.notes).toContain("longTermDebt 2025-12-31: from LongTermDebtNoncurrent");
+    expect(built.notes).toContain(
+      "capitalLeaseObligations 2025-12-31: from OperatingLeaseLiabilityCurrent + OperatingLeaseLiabilityNoncurrent",
+    );
+  });
+
+  it("keeps Apple FY2025 at the FMP total debt of 112.377B", () => {
+    // The house number every band was calibrated against:
+    // shortTermDebt 20.329 + longTermDebt 78.328 + leases 13.720.
+    const k = { form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" } as const;
+    const instant = (val: number): Pt[] => [{ end: "2025-09-27", val, ...k }];
+    const built = buildStatementsFromCompanyFacts(
+      addTags(appleLike(), {
+        LongTermDebtNoncurrent: instant(78.328),
+        LongTermDebtCurrent: instant(10.6),
+        CommercialPaper: instant(9.729),
+        OperatingLeaseLiabilityCurrent: instant(1.6),
+        OperatingLeaseLiabilityNoncurrent: instant(10.89),
+        FinanceLeaseLiability: instant(1.23),
+      }),
+      OPTS,
+    );
+    expect(built.balanceAnnual.rows.find((r) => r.date === "2025-09-27")).toMatchObject({
+      shortTermDebt: 20.329,
+      longTermDebt: 78.328,
+      capitalLeaseObligations: 13.72,
+      totalDebt: 112.377,
+    });
+  });
+});
+
 describe("buildStatementsFromCompanyFacts — cash-only filers", () => {
   /** Home Depot / McDonald's / UPS shape: one "Cash and cash equivalents" line, no marketable securities. */
   function cashOnly(extra: Record<string, Pt[]> = {}): CompanyFacts {

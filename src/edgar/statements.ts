@@ -652,13 +652,22 @@ interface Resolved {
   /** The filing that FIRST reported `point`'s period. Row labels are read off this. */
   reporter: FactPoint;
   unit: string;
+  /**
+   * The us-gaap tag(s) this value came from, in resolution order. A chain of
+   * near-synonyms hides which concept actually won, and for the debt fields
+   * that is exactly what decides whether two of them overlap: the composition
+   * has to be visible in the row notes and readable by `computeBalance`.
+   */
+  tags: string[];
+  /** For a `sumAnyOf`, each resolved part by label (the lease split needs it). */
+  parts?: Record<string, number>;
   derivation?: Derivation;
   derivedFrom?: string[];
 }
 
 /** Value and period from `point`; labels from the filing that first reported that period. */
-function resolvedPoint(up: UnitPoints, point: FactPoint, value: number): Resolved {
-  return { value, point, reporter: reporterFor(up, point), unit: up.unit };
+function resolvedPoint(tag: string, up: UnitPoints, point: FactPoint, value: number): Resolved {
+  return { value, point, reporter: reporterFor(up, point), unit: up.unit, tags: [tag] };
 }
 
 type TagResolver = (tag: string, kind: UnitKind) => Resolved | null;
@@ -695,7 +704,8 @@ function combine(value: number, parts: Resolved[]): Resolved {
   const derived = parts.find((p) => p.derivation !== undefined);
   const derivedFrom = [...new Set(parts.flatMap((p) => p.derivedFrom ?? []))];
   const reporter = parts.reduce((a, b) => (b.reporter.filed < a.reporter.filed ? b : a), head).reporter;
-  const out: Resolved = { value, point: head.point, reporter, unit: head.unit };
+  const tags = [...new Set(parts.flatMap((p) => p.tags))];
+  const out: Resolved = { value, point: head.point, reporter, unit: head.unit, tags };
   if (derived !== undefined) out.derivation = derived.derivation;
   if (derivedFrom.length > 0) out.derivedFrom = derivedFrom;
   return out;
@@ -780,7 +790,10 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
         );
       }
       const total = present.reduce((s, p) => s + p.r.value, 0);
-      return combine(tidy(total, MONEY_DECIMALS), present.map((p) => p.r));
+      return {
+        ...combine(tidy(total, MONEY_DECIMALS), present.map((p) => p.r)),
+        parts: Object.fromEntries(present.map((p) => [p.label, p.r.value])),
+      };
     }
     case "diff": {
       const plus = resolve(spec.plus, spec.unit);
@@ -938,7 +951,7 @@ function annualResolver(index: FactIndex, fy: FiscalYear): TagResolver {
     const up = pickUnitPoints(index, tag, kind);
     if (up === null) return null;
     const p = findDurationForAnnual(up.points, fy.start, fy.end);
-    return p === null ? null : resolvedPoint(up, p, p.val);
+    return p === null ? null : resolvedPoint(tag, up, p, p.val);
   };
 }
 
@@ -947,7 +960,7 @@ function instantResolver(index: FactIndex, end: string): TagResolver {
     const up = pickUnitPoints(index, tag, kind);
     if (up === null) return null;
     const p = findInstant(up.points, end);
-    return p === null ? null : resolvedPoint(up, p, p.val);
+    return p === null ? null : resolvedPoint(tag, up, p, p.val);
   };
 }
 
@@ -1001,7 +1014,7 @@ function quarterResolver(index: FactIndex, ctx: QuarterContext, quarterEnds: str
 
     if (!ytdOnly) {
       const threeMonth = findByDurationDays(pts, ctx.end, QUARTER_MIN_DAYS, QUARTER_MAX_DAYS);
-      if (threeMonth !== null) return resolvedPoint(up, threeMonth, threeMonth.val);
+      if (threeMonth !== null) return resolvedPoint(tag, up, threeMonth, threeMonth.val);
     }
     if (kind === "shares") return null;
 
@@ -1013,7 +1026,7 @@ function quarterResolver(index: FactIndex, ctx: QuarterContext, quarterEnds: str
         const ytdPrev = findDurationExact(pts, fy.start, ctx.previousEnd);
         if (ytdPrev !== null) {
           return {
-            ...resolvedPoint(up, fy, tidy(fy.val - ytdPrev.val, decimals)),
+            ...resolvedPoint(tag, up, fy, tidy(fy.val - ytdPrev.val, decimals)),
             derivation: "fy-minus-ytd",
             derivedFrom: [describePoint(tag, fy), describePoint(tag, ytdPrev)],
           };
@@ -1024,7 +1037,7 @@ function quarterResolver(index: FactIndex, ctx: QuarterContext, quarterEnds: str
       if (quarters === null) return null;
       const sum = quarters.reduce((s, p) => s + p.val, 0);
       return {
-        ...resolvedPoint(up, fy, tidy(fy.val - sum, decimals)),
+        ...resolvedPoint(tag, up, fy, tidy(fy.val - sum, decimals)),
         derivation: "fy-minus-quarters",
         derivedFrom: [describePoint(tag, fy), ...quarters.map((p) => describePoint(tag, p))],
       };
@@ -1034,12 +1047,12 @@ function quarterResolver(index: FactIndex, ctx: QuarterContext, quarterEnds: str
     const ytd = findDurationExact(pts, ctx.fyStart, ctx.end);
     if (ytd === null || ytd.start === undefined) return null;
     // First quarter of the fiscal year: the year-to-date fact IS the quarter.
-    if (daysBetween(ctx.fyStart, ctx.end) <= QUARTER_MAX_DAYS) return resolvedPoint(up, ytd, ytd.val);
+    if (daysBetween(ctx.fyStart, ctx.end) <= QUARTER_MAX_DAYS) return resolvedPoint(tag, up, ytd, ytd.val);
     if (ctx.previousEnd === null) return null;
     const prior = findDurationExact(pts, ytd.start, ctx.previousEnd);
     if (prior === null) return null;
     return {
-      ...resolvedPoint(up, ytd, tidy(ytd.val - prior.val, decimals)),
+      ...resolvedPoint(tag, up, ytd, tidy(ytd.val - prior.val, decimals)),
       derivation: "ytd-difference",
       derivedFrom: [describePoint(tag, ytd), describePoint(tag, prior)],
     };
@@ -1070,6 +1083,17 @@ function sumAnyValues(parts: [string, number | null][], notes: NoteSink, label: 
   return tidy(present.reduce((s, p) => s + p[1], 0), MONEY_DECIMALS);
 }
 
+/**
+ * What a computed pass may consult beyond the field values: which tag(s) won
+ * each chain, and a direct tag lookup at this period. Both exist for the debt
+ * fields, whose chains contain near-synonyms that overlap each other.
+ */
+interface ComputeContext {
+  resolved: ReadonlyMap<string, Resolved>;
+  /** The value of one money tag at this period, or null. */
+  money(tag: string): number | null;
+}
+
 function computeIncome(v: FieldValues, notes: NoteSink, ctx: string): void {
   v.grossProfit ??= sub(v.revenue ?? null, v.costOfRevenue ?? null);
   v.operatingExpenses ??= sumAnyValues(
@@ -1084,7 +1108,7 @@ function computeIncome(v: FieldValues, notes: NoteSink, ctx: string): void {
   v.ebit ??= add(v.incomeBeforeTax ?? null, v.interestExpense ?? null) ?? v.operatingIncome ?? null;
 }
 
-function computeBalance(v: FieldValues, notes: NoteSink, ctx: string): void {
+function computeBalance(v: FieldValues, notes: NoteSink, ctx: string, cc: ComputeContext): void {
   // A strict `add` here returned null for every filer that presents a single
   // "Cash and cash equivalents" line and tags no short-term-investment concept
   // (Home Depot, McDonald's, UPS, Costco and hundreds like them). That
@@ -1102,6 +1126,7 @@ function computeBalance(v: FieldValues, notes: NoteSink, ctx: string): void {
   // both fall back to `totalStockholdersEquity`, so nothing is suppressed.
   v.totalEquity ??= add(v.totalStockholdersEquity ?? null, v.minorityInterest ?? null);
   v.totalLiabilities ??= sub(v.totalAssets ?? null, v.totalEquity ?? null);
+  const lease = resolveDebtOverlaps(v, notes, ctx, cc);
   // FMP's definition: shortTermDebt + longTermDebt + capitalLeaseObligations
   // (Apple FY2025 20.329 + 78.328 + 13.720 = 112.377B). Dropping the leases
   // moved net debt, invested capital and the cost-of-debt denominator off the
@@ -1110,12 +1135,87 @@ function computeBalance(v: FieldValues, notes: NoteSink, ctx: string): void {
     [
       ["shortTermDebt", v.shortTermDebt ?? null],
       ["longTermDebt", v.longTermDebt ?? null],
-      ["capitalLeaseObligations", v.capitalLeaseObligations ?? null],
+      [lease.label, lease.value],
     ],
     notes,
     `totalDebt ${ctx}`,
   );
   v.netDebt ??= sub(v.totalDebt ?? null, v.cashAndCashEquivalents ?? null);
+}
+
+/**
+ * FMP semantics for the three debt fields: `longTermDebt` is noncurrent debt
+ * excluding leases, `shortTermDebt` is current debt, `capitalLeaseObligations`
+ * is the operating + finance lease liability, and `totalDebt` is their sum.
+ * Three us-gaap tags in the chains break that partition by overlapping each
+ * other, and every one of them reaches net debt, invested capital, ROIC, the
+ * multiples EV and the cost-of-debt denominator with no note:
+ *
+ *  1. `LongTermDebtAndCapitalLeaseObligations` already contains the finance
+ *     leases that `capitalLeaseObligations` resolves again.
+ *  2. `LongTermDebt` is the us-gaap TOTAL including current maturities, which
+ *     `shortTermDebt` counts again through `LongTermDebtCurrent`.
+ *  3. `CommercialPaper` is conventionally a component of `ShortTermBorrowings`.
+ *
+ * The composition of all three fields is named in the notes either way, so a
+ * reader can see which concepts a debt figure is made of. Returns the label the
+ * lease component carries into the `totalDebt` sum.
+ */
+function resolveDebtOverlaps(
+  v: FieldValues,
+  notes: NoteSink,
+  ctx: string,
+  cc: ComputeContext,
+): { label: string; value: number | null } {
+  const tagsOf = (field: string): string[] => cc.resolved.get(field)?.tags ?? [];
+  for (const field of ["shortTermDebt", "longTermDebt", "capitalLeaseObligations"] as const) {
+    const tags = tagsOf(field);
+    if (tags.length > 0) notes.add(`${field} ${ctx}: from ${tags.join(" + ")}`);
+  }
+
+  // Case 3 first: it changes `shortTermDebt`, which case 2 does not read.
+  const shortTermTags = tagsOf("shortTermDebt");
+  if (shortTermTags.includes("ShortTermBorrowings") && shortTermTags.includes("CommercialPaper")) {
+    const commercialPaper = cc.money("CommercialPaper");
+    if (commercialPaper !== null && v.shortTermDebt != null) {
+      v.shortTermDebt = tidy(v.shortTermDebt - commercialPaper, MONEY_DECIMALS);
+      notes.add(
+        `shortTermDebt ${ctx}: CommercialPaper excluded — commercial paper is conventionally a component of ShortTermBorrowings, which resolved for this period`,
+      );
+    }
+  }
+
+  const longTermTags = tagsOf("longTermDebt");
+  // Case 2.
+  if (longTermTags.includes("LongTermDebt") && v.longTermDebt != null) {
+    const current = cc.money("LongTermDebtCurrent");
+    if (current !== null) {
+      v.longTermDebt = tidy(v.longTermDebt - current, MONEY_DECIMALS);
+      notes.add(`longTermDebt ${ctx}: LongTermDebt less current maturities (LongTermDebtCurrent ${current})`);
+    } else {
+      notes.add(
+        `longTermDebt ${ctx}: resolved from the LongTermDebt total and no LongTermDebtCurrent fact was filed, so current maturities may be included`,
+      );
+    }
+  }
+
+  // Case 1. `capitalLeaseObligations` itself keeps the full lease figure — that
+  // is what FMP publishes — and the exclusion is applied only to the sum.
+  const leases = cc.resolved.get("capitalLeaseObligations");
+  const full = v.capitalLeaseObligations ?? null;
+  if (longTermTags.includes("LongTermDebtAndCapitalLeaseObligations") && leases?.parts !== undefined) {
+    const finance = leases.parts["financeLeaseLiability"];
+    if (finance !== undefined) {
+      notes.add(
+        `totalDebt ${ctx}: longTermDebt resolved from LongTermDebtAndCapitalLeaseObligations, which already includes finance lease obligations, so only the operating-lease liability is added here; capitalLeaseObligations still reports the full ${full ?? "null"}`,
+      );
+      return {
+        label: "capitalLeaseObligations (operating leases only)",
+        value: leases.parts["operatingLeaseLiability"] ?? null,
+      };
+    }
+  }
+  return { label: "capitalLeaseObligations", value: full };
 }
 
 function computeCashflow(v: FieldValues): void {
@@ -1137,7 +1237,7 @@ interface StatementDef {
   aliases: Record<string, string>;
   unsourced: string[];
   computed: string[];
-  compute: (v: FieldValues, notes: NoteSink, ctx: string) => void;
+  compute: (v: FieldValues, notes: NoteSink, ctx: string, cc: ComputeContext) => void;
 }
 
 interface PeriodSlot {
@@ -1210,7 +1310,13 @@ function buildStatementRows<TRow>(
       continue;
     }
     const anchor = resolutions.get(anchorField) as Resolved;
-    def.compute(values, notes, ctxLabel);
+    def.compute(values, notes, ctxLabel, {
+      resolved: resolutions,
+      money: (tag) => {
+        const r = slot.resolve(tag, "money");
+        return r === null ? null : tidy(r.value, MONEY_DECIMALS);
+      },
+    });
     for (const field of def.unsourced) values[field] ??= null;
 
     if (anchor.point.form.trim().startsWith("20-F") || anchor.reporter.form.trim().startsWith("20-F")) {

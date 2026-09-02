@@ -1786,8 +1786,17 @@ export function multiplesFramework(
 export interface ExcessReturnInputs {
   /** BV0 = totalStockholdersEquity, latest (FMP name). */
   bookValue: number | null;
-  /** TTM ROE, percent. */
+  /** Current ROE, percent — TTM unless `currentRoeBasis` says otherwise. */
   currentRoePct: number | null;
+  /**
+   * Which figure `currentRoePct` actually is. The keyless path has no FMP
+   * key-metrics-TTM row and falls back to the latest fiscal-year DuPont ROE
+   * (net income / average fiscal-year equity), so the printed assumption must
+   * not keep calling that "TTM ROE". Defaults to `"ttm"`.
+   */
+  currentRoeBasis?: "ttm" | "fiscal-year-dupont";
+  /** Fiscal-year end the DuPont ROE is measured at; only read for that basis. */
+  currentRoeAsOf?: string | null;
   /**
    * Optional caller override of the TERMINAL ROE (percent). The default terminal
    * ROE is the cost of equity (competitive fade → zero terminal excess); a value
@@ -1987,7 +1996,11 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
   const endBasis = overrideTerminal
     ? `caller-supplied terminal ROE ${fmtNum(endRoe)}% (persistent excess asserted)`
     : `cost of equity ${fmtNum(coe)}% (competitive fade — zero terminal excess)`;
-  const roeBasis = `linear fade from TTM ROE ${fmtNum(roeStart)}% to ${endBasis} by year ${years}`;
+  const startBasis =
+    inputs.currentRoeBasis === "fiscal-year-dupont"
+      ? `${inputs.currentRoeAsOf != null ? `FY ${inputs.currentRoeAsOf} ` : ""}DuPont ROE`
+      : "TTM ROE";
+  const roeBasis = `linear fade from ${startBasis} ${fmtNum(roeStart)}% to ${endBasis} by year ${years}`;
   const roePath = fadePath(roeStart, endRoe, years);
 
   const { equityValue, bookValuePath } = excessReturnValue(bv0, roePath, coe, payout);

@@ -1663,6 +1663,11 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
       ? {
           bookValue: balPoint ? num(balPoint.totalStockholdersEquity) : null,
           currentRoePct: vendorRoePct ?? dupontRoePct,
+          // The printed assumption names the figure it actually faded from;
+          // saying "TTM ROE" over a fiscal-year DuPont number made the report
+          // contradict its own substitution note below.
+          currentRoeBasis: currentRoeFromDupont ? "fiscal-year-dupont" : "ttm",
+          currentRoeAsOf: currentRoeFromDupont ? (ctx.dupont.latest?.date ?? null) : null,
           // Audit M5: null CoE SUPPRESSES the model inside excessReturnModel
           // (critical gap) — never a silent 10% default.
           costOfEquityPct: wacc.costOfEquityPct,

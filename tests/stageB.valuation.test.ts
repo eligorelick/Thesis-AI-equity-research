@@ -1323,6 +1323,35 @@ describe("excessReturnModel (banks / insurers)", () => {
     expect(r.roePathPct.basis).toMatch(/caller-supplied terminal ROE/i);
   });
 
+  it("names the ROE basis the model actually faded from", () => {
+    // On a keyless bank/insurer/mREIT run there is no FMP key-metrics-TTM row,
+    // so `currentRoePct` is the latest fiscal-year DuPont ROE (net income over
+    // AVERAGE fiscal-year equity). The printed assumption used to say "TTM ROE"
+    // over it, contradicting compute.ts's own substitution note.
+    const base = { bookValue: 1000, currentRoePct: 15, costOfEquityPct: 10, years: 2, payoutRatioPct: 50, dilutedShares: 100 } as const;
+    expect(excessReturnModel(base).roePathPct.basis).toBe(
+      "linear fade from TTM ROE 15% to cost of equity 10% (competitive fade — zero terminal excess) by year 2",
+    );
+    expect(excessReturnModel({ ...base, currentRoeBasis: "ttm" }).roePathPct.basis).toBe(
+      excessReturnModel(base).roePathPct.basis,
+    );
+    expect(
+      excessReturnModel({ ...base, currentRoeBasis: "fiscal-year-dupont", currentRoeAsOf: "2025-12-31" }).roePathPct
+        .basis,
+    ).toBe(
+      "linear fade from FY 2025-12-31 DuPont ROE 15% to cost of equity 10% (competitive fade — zero terminal excess) by year 2",
+    );
+    // No fiscal-year end available: still not called TTM.
+    const undated = excessReturnModel({ ...base, currentRoeBasis: "fiscal-year-dupont", currentRoeAsOf: null })
+      .roePathPct.basis;
+    expect(undated).toMatch(/^linear fade from DuPont ROE 15%/);
+    expect(undated).not.toMatch(/TTM/);
+    // The label is the only thing that moves: the numbers are untouched.
+    expect(excessReturnModel({ ...base, currentRoeBasis: "fiscal-year-dupont" }).equityValue).toBe(
+      excessReturnModel(base).equityValue,
+    );
+  });
+
   it("default competitive fade: ROE fades to CoE, terminal excess is exactly 0", () => {
     // No analystImpliedRoePct (production never supplies it) → endpoint = CoE.
     // fadePath(15, 10, 2) = [15, 10], CoE 10, retention 0.5:

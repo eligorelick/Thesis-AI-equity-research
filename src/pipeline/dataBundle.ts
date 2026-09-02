@@ -1541,9 +1541,13 @@ export async function buildDataBundle(
   // vouching for itself, and in fixture mode it is a synthetic number for a
   // fictional issuer. Serving that ticker's profile, statements or price
   // history from Yahoo would attach a real market's data to an identity nothing
-  // independent confirmed — so those members need either SEC's own ticker table
-  // to have made the match, or SEC to have answered for that CIK (submissions or
-  // companyfacts), which is also exactly the evidence they are built from.
+  // independent confirmed. The rule is therefore: SEC's own ticker table made
+  // the match (`source === "edgar"`), or the registrant SEC returned lists the
+  // requested ticker itself. SEC merely ANSWERING for an FMP-supplied CIK is
+  // not confirmation — it proves the CIK exists, not that this ticker belongs
+  // to it, so a stale or reused CIK in an FMP profile would otherwise route
+  // another registrant's statements, shares and market-cap history into this
+  // report, each stamped `served by edgar`.
   //
   // SPY and the sector ETF are not issuer-bound: they are index instruments,
   // identical whoever this company turns out to be, and the spec calls for the
@@ -1560,8 +1564,7 @@ export async function buildDataBundle(
   const edgarConfirmedIssuer =
     edgarBundle.cik.ok &&
     (edgarBundle.cik.value.source === "edgar" ||
-      edgarBundle.registrant !== null ||
-      edgarBundle.companyFacts.ok);
+      edgarBundle.registrant?.tickers.some((t) => t.trim().toUpperCase() === sym) === true);
   const runKeyless =
     opts.keyless !== false &&
     edgarBundle.cik.ok &&

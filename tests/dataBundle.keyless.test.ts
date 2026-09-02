@@ -375,6 +375,75 @@ describe("buildDataBundle without an FMP key", () => {
     ]);
   });
 
+  describe("SEC answering for an FMP-supplied CIK is not issuer confirmation", () => {
+    /**
+     * `company_tickers.json` answers but does not carry the symbol, so the CIK
+     * comes from FMP's own profile. SEC then answers submissions and
+     * companyfacts for that CIK — which proves the CIK exists, not that the
+     * requested ticker belongs to it. `registrantTickers` is what decides.
+     */
+    function edgarTickerMiss(registrantTickers: string[]): EdgarTransport {
+      return {
+        fetchText(url: string): Promise<EdgarTransportResponse> {
+          const ok = (body: unknown): EdgarTransportResponse => ({ status: 200, body: JSON.stringify(body), fetchedAt: NOW.toISOString(), fromCache: false, stale: false });
+          if (url.includes("company_tickers.json")) return Promise.resolve(ok({ "0": { cik_str: 789019, ticker: "MSFT", title: "Microsoft Corp" } }));
+          if (url.includes("submissions/CIK0000320193.json")) return Promise.resolve(ok({ cik: "320193", name: "Some Other Registrant Inc.", sic: "3571", sicDescription: "ELECTRONIC COMPUTERS", fiscalYearEnd: "0927", stateOfIncorporation: "CA", tickers: registrantTickers, exchanges: ["Nasdaq"], filings: { recent: { accessionNumber: ["0000320193-25-000079"], filingDate: ["2025-10-31"], reportDate: ["2025-09-27"], form: ["10-K"], primaryDocument: ["aapl-20250927.htm"] }, files: [] } }));
+          if (url.includes("companyfacts/CIK0000320193.json")) return Promise.resolve(ok(appleFacts()));
+          return Promise.resolve({ status: 404, body: "not found", fetchedAt: NOW.toISOString(), fromCache: false, stale: false });
+        },
+      };
+    }
+
+    /** Keyed plan: a profile carrying a CIK, AAPL prices, every other symbol refused. */
+    const keyedFmp: typeof fetch = (async (input: string | URL | Request) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      const endpoint = /\/stable\/(.+)$/.exec(url.pathname)![1]!;
+      const symbol = url.searchParams.get("symbol");
+      const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+      if (endpoint === "profile") return json([{ symbol: "AAPL", companyName: "Apple Inc.", sector: "Technology", currency: "USD", country: "US", cik: "0000320193" }]);
+      if (endpoint === "historical-price-eod/full" && symbol === "AAPL") return json([{ symbol, date: "2026-09-01", open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
+      if (endpoint === "historical-price-eod/full") return new Response("Premium Query Parameter: 'Special Endpoint : This value set for 'symbol' is not available under your current subscription", { status: 402 });
+      return json({ "Error Message": "not in this test" }, 401);
+    }) as unknown as typeof fetch;
+
+    const bundleWith = (registrantTickers: string[]): ReturnType<typeof buildDataBundle> =>
+      buildDataBundle("AAPL", {
+        now: () => NOW,
+        eodYears: 0,
+        fmp: createFmpClient({ apiKey: "KEYED", fetchImpl: keyedFmp, limiter: makeLimiter(1e6, 1e6), now: () => NOW }),
+        edgar: createEdgarClient({ transport: edgarTickerMiss(registrantTickers) }),
+        yahoo: fakeYahoo(),
+        ...noNetworkConfigs(),
+      });
+
+    it("substitutes no issuer-bound member when the registrant does not list the symbol", async () => {
+      const bundle = await bundleWith(["OTHER"]);
+      expect(bundle.edgar.cik.ok && bundle.edgar.cik.value.source).toBe("fmp");
+      expect(bundle.edgar.registrant?.tickers).toEqual(["OTHER"]);
+      expect(bundle.edgar.companyFacts.ok).toBe(true);
+      // Only the two index instruments, which assert no issuer identity.
+      expect(bundle.gaps.filter((g) => g.field.startsWith("keyless.")).map((g) => g.field).sort()).toEqual([
+        "keyless.sectorEtf",
+        "keyless.spy",
+      ]);
+      // FMP's own gaps stand: nothing was filled from another registrant.
+      expect(bundle.statements.incomeAnnual.ok).toBe(false);
+      expect(bundle.enterpriseValues.ok).toBe(false);
+      expect(bundle.profile.ok && bundle.profile.value.source).toBe("fmp");
+    });
+
+    it("runs the issuer-bound fallbacks once the registrant lists the requested symbol", async () => {
+      const bundle = await bundleWith(["aapl", "OTHER"]); // case- and whitespace-insensitive
+      expect(bundle.edgar.cik.ok && bundle.edgar.cik.value.source).toBe("fmp");
+      expect(bundle.statements.incomeAnnual.ok && bundle.statements.incomeAnnual.value.source).toBe("edgar");
+      const fields = bundle.gaps.filter((g) => g.field.startsWith("keyless.")).map((g) => g.field);
+      expect(fields).toContain("keyless.incomeAnnual");
+      expect(fields).toContain("keyless.balanceQuarterly");
+      // FMP's profile carried rows, so it is never overwritten by the layer.
+      expect(bundle.profile.ok && bundle.profile.value.source).toBe("fmp");
+    });
+  });
+
   it("serves a refused sector ETF from Yahoo on a keyed plan while keeping FMP statements", async () => {
     // FMP fake: statements + profile + AAPL prices OK, XLK refused with the plan's 402 text.
     const fmpFetch: typeof fetch = (async (input: string | URL | Request) => {

@@ -27,6 +27,7 @@ const EXPECTED_RISK_SOURCES = [
   "src/edgar/extract.ts",
   "src/edgar/xbrl.ts",
   "src/edgar/statements.ts",
+  "src/edgar/splits.ts",
   "src/edgar/sic.ts",
   "src/cache/apiCache.ts",
   "src/cache/compression.ts",

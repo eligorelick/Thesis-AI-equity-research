@@ -10,6 +10,16 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-02-keyless-data-path-design.md`
 
+**Status (2026-09-02):** executed. This plan is the implementation record as
+written before the work started; its task bodies, code snippets and the
+concept-chain table below describe that starting design. Where the code has
+since moved — the issuer-confirmation gate, bank cash and interest tags,
+`cashAndShortTermInvestments` from whichever component is tagged, the debt
+overlap pass, the interest-expense / operating-income / equity stand-ins, the
+maturity-schedule stand-in, the string-typed companyfacts `cik`, and the
+IFRS / successor-issuer causes — the spec's status paragraph and its rule 6b
+are the accurate description, and the spec, not this plan, is authoritative.
+
 ## Global Constraints
 
 - Nothing throws for missing data: every failure is a `ManifestEntry` gap (`{ field, reason, severity, attemptedSources? }`), the application contract §3 rule #4.

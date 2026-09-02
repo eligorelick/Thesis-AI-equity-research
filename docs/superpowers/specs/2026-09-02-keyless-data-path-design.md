@@ -1,7 +1,7 @@
 # Keyless data path — design
 
 **Date:** 2026-09-02
-**Status:** implemented on `feat/keyless-data-path` (2026-09-02). Live keyless verification, no FMP key, isolated data directory: AAPL resolved through EDGAR; six statement members from company facts, prices from Yahoo, profile/enterprise values/market-cap history computed; forensics, multiples, a DCF and the composite score produced; free cash flow, capex intensity, operating margins, net debt and technicals identical to the FMP-based run, with ten fiscal years of history where the entry-tier FMP plan served five. JPM took the bank route with return on tangible common equity and the excess-return valuation. A fictional ticker rendered the not-found page. Deviations from this design: the fallback gate is issuer identity (an EDGAR-sourced CIK, or a registrant whose own ticker list contains the requested symbol) rather than "a CIK exists", because the fixtures carry placeholder CIKs and SEC merely answering for an FMP-supplied CIK proves the CIK exists, not that the ticker belongs to it; the SPY and sector-ETF fallbacks also run for keyed plans without issuer confirmation; the profile does not carry a fiscal year end; total debt includes lease obligations to match FMP; bank cash and interest tags were added; current ROE falls back to the DuPont figure; financial routes skip cost-of-debt inference; `isEtf`/`isFund` come from Yahoo's `instrumentType` rather than from a "no core forms on file" rule, which would have marked 40-F filers and newly listed issuers unsupported; `cashAndShortTermInvestments` sums whichever of cash and short-term investments a filer tags, rather than requiring both; the debt chains record which tag won each field and net out three us-gaap overlaps (combined debt-and-leases against a separate finance-lease tag, the `LongTermDebt` total against `LongTermDebtCurrent`, and `CommercialPaper` inside `ShortTermBorrowings`) so `totalDebt` counts each obligation once, with the composition in the row notes; shares outstanding fall back to the non-dimensional `us-gaap:CommonStockSharesOutstanding` when a per-class reporter files no `dei:EntityCommonStockSharesOutstanding` at all, with the basis named in the profile, enterprise-value, market-cap-history and shares-float run-log notes and in the shares-float and market-cap-history endpoint strings; the cost-of-debt suppression and the `returns.wacc.interestExpense` warn severity cover all three financial routes (bank, insurer, mortgage REIT) on keyed plans as well as keyless ones, because none of them consumes a WACC cost of debt.
+**Status:** implemented on `feat/keyless-data-path` (2026-09-02). Live keyless verification, no FMP key, isolated data directory: AAPL resolved through EDGAR; six statement members from company facts, prices from Yahoo, profile/enterprise values/market-cap history computed; forensics, multiples, a DCF and the composite score produced; free cash flow, capex intensity, operating margins, net debt and technicals identical to the FMP-based run, with ten fiscal years of history where the entry-tier FMP plan served five. JPM took the bank route with return on tangible common equity and the excess-return valuation. A fictional ticker rendered the not-found page. Deviations from this design: the fallback gate is issuer identity (an EDGAR-sourced CIK, or a registrant whose own ticker list contains the requested symbol) rather than "a CIK exists", because the fixtures carry placeholder CIKs and SEC merely answering for an FMP-supplied CIK proves the CIK exists, not that the ticker belongs to it; the SPY and sector-ETF fallbacks also run for keyed plans without issuer confirmation; the profile does not carry a fiscal year end; total debt includes lease obligations to match FMP; bank cash and interest tags were added; current ROE falls back to the DuPont figure; financial routes skip cost-of-debt inference; `isEtf`/`isFund` come from Yahoo's `instrumentType` rather than from a "no core forms on file" rule, which would have marked 40-F filers and newly listed issuers unsupported; `cashAndShortTermInvestments` sums whichever of cash and short-term investments a filer tags, rather than requiring both; the debt chains record which tag won each field and net out five us-gaap overlaps (combined debt-and-leases against a separate finance-lease tag, the `LongTermDebt` total against `LongTermDebtCurrent`, `CommercialPaper` inside `ShortTermBorrowings`, the combined `LongTermDebtAndCapitalLeaseObligationsCurrent` beside `LongTermDebtCurrent`, and the debt maturity schedule's next-twelve-months figure beside either current tag — standing in for the current portion when neither is filed) so `totalDebt` counts each obligation once, with the composition in the row notes; shares outstanding fall back to the non-dimensional `us-gaap:CommonStockSharesOutstanding` when a per-class reporter files no `dei:EntityCommonStockSharesOutstanding` at all, with the basis named in the profile, enterprise-value, market-cap-history and shares-float run-log notes and in the shares-float and market-cap-history endpoint strings; the cost-of-debt suppression and the `returns.wacc.interestExpense` warn severity cover all three financial routes (bank, insurer, mortgage REIT) on keyed plans as well as keyless ones, because none of them consumes a WACC cost of debt.
 
 **Original status:** approved for implementation (owner directive of 2026-09-02: "make sure it works if users don't have an FMP subscription")
 **Plan:** [`../plans/2026-09-02-keyless-data-path.md`](../plans/2026-09-02-keyless-data-path.md)
@@ -109,6 +109,48 @@ Rules:
 6. Per-share figures (EPS) are never derived by subtraction across periods
    except Q4 (`FY − YTD_Q3`), matching FMP's convention; weighted share counts
    are taken only when tagged for the period.
+6a. Stock splits (`src/edgar/splits.ts`). Companyfacts stores facts as filed,
+   so a period reported only before a split keeps its pre-split EPS and share
+   count (Apple FY2016 diluted EPS 8.31 against 7.46 for FY2025 read as a
+   negative ten-year CAGR). Each split is read from
+   `us-gaap:StockholdersEquityNoteStockSplitConversionRatio1` (any form; the
+   context date is the split date) and its direction confirmed against the
+   share counts the next filings restated across that date; a tagged ratio the
+   restatement contradicts is not applied and the note says why. Every
+   per-share and share-count point — EPS, weighted shares,
+   `CommonStockSharesOutstanding`, the dei cover count used for market-cap
+   history — filed before an applied split is scaled by the product of the
+   later ratios before dedup, so FMP's split-adjusted contract holds. Money
+   facts are untouched. The notes ride on the income and balance rows.
+6b. Stand-in concepts. A chain step may carry a `disclose` text; when such a
+   step resolves, the statement records a `Substitution` `{ field, text,
+   periods }` (newest period first) and the orchestration files it as an
+   `info` manifest entry `keyless.<member>.<field>` — "<text> (periods: …)".
+   Three chains use it. `interestExpense` falls back from the income-statement
+   tags (`InterestExpense`, `InterestExpenseNonoperating`,
+   `InterestExpenseDebt`, `InterestAndDebtExpense`, `InterestExpenseOperating`)
+   to cash interest paid (`InterestPaidNet`, `InterestPaid`): Caterpillar and
+   GE tag their interest line only by extension, and without a cost of debt
+   the WACC and the whole DCF were suppressed. `operatingIncome` falls back
+   from `OperatingIncomeLoss` to the sum of pretax income
+   (`IncomeLossFromContinuingOperationsBeforeIncomeTaxes…`) and the
+   `interestExpense` chain (`sumAll`: every part must resolve): Pfizer files
+   no operating-income line at all. Bank-style filers
+   (`looksLikeBankTagging`) keep the plain `OperatingIncomeLoss` chain: a
+   bank's interest expense is an operating cost, so pretax income plus
+   interest is not its EBIT (JPMorgan's keyless run had derived one).
+   `totalStockholdersEquity` falls back from `StockholdersEquity` to
+   `StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest`
+   minus `MinorityInterest` (`diff`), then to that total alone: Caterpillar
+   tags only the total. A stand-in inside a composite is the composite's
+   disclosure; the field it belongs to discloses its own. The debt maturity
+   schedule's `LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths`
+   is a row-note stand-in rather than a `Substitution`: it joins the
+   `shortTermDebt` sum only when no balance-sheet current-debt tag
+   (`LongTermDebtCurrent` or the combined current tag) resolved for the
+   period, and the overlap pass notes "current maturities taken from the debt
+   maturity schedule"; beside such a tag it is the same amount twice and is
+   dropped with a note.
 7. Missing concepts are `null`, never `0`. Computed fields exist only when
    every operand is present: `grossProfit = revenue − costOfRevenue`,
    `ebitda = operatingIncome + depreciationAndAmortization`,
@@ -188,7 +230,19 @@ Every replacement adds an `info` manifest entry
 `keyless.<member>` — "served by <source> (<endpoint>) because FMP <reason>",
 `expected: true` when no FMP key is configured. When the keyless source also
 fails, the original FMP gap stands and the keyless failure is appended to
-`attemptedSources`.
+`attemptedSources`. A statement member that built no rows from a parsable
+companyfacts names the cause when one is known: an IFRS reporter ("the issuer
+reports under IFRS (N ifrs-full concepts, M us-gaap) and the keyless
+statement builder reads us-gaap only") or a successor registrant ("the
+registrant is a successor issuer (Form 8-K12B on file) whose predecessor's
+XBRL history sits under another CIK that EDGAR does not link"). The
+companyfacts client accepts the `cik` field as either a number or a digit
+string: SEC emits the string form for registrants created recently
+(ExxonMobil Holdings Corp, CIK 2115436), and rejecting it discarded every
+fact of a reorganized issuer. When the body check rejects a response the gap
+reason is the check's own text, not "HTTP 200". `selectAnnualFiling` reports
+a miss as `no "10-K" or "20-F"` and appends the successor-issuer notice when a
+Form 8-K12B is on file.
 
 ### `src/pipeline/dataBundle.ts` wiring
 
@@ -247,12 +301,23 @@ never produced from partial operands.
 - `tests/edgar.statements.test.ts`: synthetic companyfacts covering 3-month
   + YTD income facts, YTD-only cash flow, Q4 derivation, restatement dedup,
   52/53-week fiscal years, missing components → null, computed-field
-  operand rules, currency from unit, bank revenue chain, 20-F filer.
+  operand rules, currency from unit, bank revenue chain, 20-F filer, stock
+  splits, the interest-expense / operating-income / stockholders'-equity
+  stand-ins with their `substitutions` records, the bank guard on the
+  operating-income stand-in, and the maturity-schedule stand-in with its
+  overlap cases (netted beside a balance-sheet current tag, standing alone
+  otherwise, netted out of a `LongTermDebt` total).
+- `tests/edgar.client.test.ts`: the string-typed `cik` of a newly created
+  registrant parses; a body-check rejection reports the check's reason.
+- `tests/dataBundle.edgarForms.test.ts`: no annual form on file names both
+  forms and the successor-issuer notice.
 - `tests/edgar.sic.test.ts`: specific codes, major groups, unknown.
 - `tests/stageB.betaEstimate.test.ts`: known slope, alignment, minimum window.
 - `tests/keyless.test.ts`: orchestration with fake EDGAR/Yahoo — profile,
   quote, statements, EV, market-cap history, float, provenance, manifest
-  entries, "keyless source also failed" path, fixture symbols skipped.
+  entries, "keyless source also failed" path, fixture symbols skipped, split
+  disclosure, `keyless.<member>.<field>` stand-in entries, and the IFRS /
+  successor-issuer causes on an empty statement member.
 - `tests/dataBundle.keyless.test.ts`: `buildDataBundle` with a keyless FMP
   client, fake EDGAR transport and fake Yahoo → members present with
   `edgar`/`yahoo` sources; a keyed FMP whose sector ETF is refused → Yahoo

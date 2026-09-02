@@ -59,7 +59,11 @@ export interface CompanyFacts {
 }
 
 export const companyFactsSchema = z.looseObject({
-  cik: z.number(),
+  // The same endpoint returns {"cik":320193} for a long-standing registrant and
+  // {"cik":"2115436"} for one created recently (ExxonMobil Holdings, the XOM
+  // successor, 2026). Rejecting the string form threw away every fact of a
+  // newly reorganized issuer.
+  cik: z.union([z.number().int().nonnegative(), z.string().regex(/^\d{1,10}$/).transform(Number)]),
   entityName: z.string(),
   facts: z.record(z.string(), z.record(z.string(), z.unknown())),
 });

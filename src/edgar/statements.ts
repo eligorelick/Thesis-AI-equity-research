@@ -28,6 +28,7 @@
 
 import type { FmpBalanceSheetRow, FmpCashFlowRow, FmpIncomeStatementRow } from "@/providers/fmp";
 import type { ManifestEntry } from "@/types/core";
+import { discoverStockSplits, type SplitEvent, type SplitNote, type StockSplits } from "@/edgar/splits";
 import {
   CORE_FACT_FORMS,
   conceptFactsSchema,
@@ -58,6 +59,20 @@ export interface StatementRowsResult<TRow> {
   rows: TRow[];
   notes: string[];
   gaps: ManifestEntry[];
+  /** Concepts a fallback step served instead of the concept's own tag, with the periods it served. */
+  substitutions: Substitution[];
+}
+
+/**
+ * One field of one statement resolved by a stand-in rather than its own tag
+ * (cash interest paid for interest expense; pretax income + interest for
+ * EBIT). `text` is the step's `disclose` wording; `periods` lists every row
+ * date it served, newest first.
+ */
+export interface Substitution {
+  field: string;
+  text: string;
+  periods: string[];
 }
 
 /**
@@ -93,6 +108,12 @@ export interface BuiltStatements {
   reportedCurrency: string | null;
   /** True when at least one 20-F point was used (foreign private issuer). */
   filesTwentyF: boolean;
+  /**
+   * The stock splits applied to per-share and share-count facts filed before
+   * them (see src/edgar/splits.ts) and one note per tagged split, applied or
+   * not. The note texts are also carried on the income and balance rows' notes.
+   */
+  splits: { events: SplitEvent[]; notes: SplitNote[] };
 }
 
 // ---------------------------------------------------------------------------
@@ -166,12 +187,21 @@ type UnitKind = "money" | "perShare" | "shares";
  * the absent-component note, exactly as tag names do for `sumAny`.
  */
 export type ChainSpec =
-  | { kind: "first"; tags: string[]; unit: UnitKind; sign?: -1 }
-  | { kind: "sum"; tags: string[]; unit: "money" }
+  | { kind: "first"; tags: string[]; unit: UnitKind; sign?: -1; disclose?: string }
+  | { kind: "sum"; tags: string[]; unit: "money"; disclose?: string }
   | { kind: "sumAny"; tags: string[]; unit: "money" }
   | { kind: "sumAnyOf"; parts: { label: string; spec: ChainSpec }[]; unit: "money" }
-  | { kind: "diff"; plus: string; minus: string; unit: "money" }
+  /** Every part must resolve (a derivation such as pretax income + interest expense). */
+  | { kind: "sumAll"; parts: { label: string; spec: ChainSpec }[]; unit: "money"; disclose?: string }
+  | { kind: "diff"; plus: string; minus: string; unit: "money"; disclose?: string }
   | { kind: "chain"; steps: ChainSpec[]; unit: UnitKind };
+
+/**
+ * `disclose` marks a fallback step whose figure is a stand-in for the concept,
+ * not the concept's own tag. When such a step resolves, its wording is recorded
+ * as a `Substitution` on the statement (the keyless layer files it in the
+ * manifest) and appended to the progress notes.
+ */
 
 const REVENUE_TAGS = [
   "RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -182,6 +212,46 @@ const REVENUE_TAGS = [
 ];
 
 const REVENUE_SPEC: ChainSpec = { kind: "first", tags: REVENUE_TAGS, unit: "money" };
+
+const INCOME_BEFORE_TAX_TAGS = [
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+];
+
+/**
+ * `InterestExpenseOperating` is LAST among the income-statement tags: for a
+ * bank it is the whole interest expense (JPM FY2025 97.9B, and it files none
+ * of the four tags before it, so the chain resolved nothing and the keyless
+ * WACC raised a critical gap the FMP path never shows), but for a non-bank
+ * that tags both, the non-operating figure is the borrowing cost the WACC
+ * wants.
+ *
+ * Caterpillar and GE tag their income-statement interest line only by
+ * extension (cat:..., ge:...), which the us-gaap namespace of companyfacts
+ * never carries, yet both file the cash-flow supplement's InterestPaidNet.
+ * Cash interest paid is the last resort: close to the expense for an
+ * investment-grade borrower, and disclosed on every row it serves. Without it
+ * the WACC had no cost of debt and the whole DCF was suppressed.
+ */
+const INTEREST_EXPENSE_SPEC: ChainSpec = {
+  kind: "chain",
+  unit: "money",
+  steps: [
+    {
+      kind: "first",
+      tags: ["InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt", "InterestAndDebtExpense", "InterestExpenseOperating"],
+      unit: "money",
+    },
+    {
+      kind: "first",
+      tags: ["InterestPaidNet", "InterestPaid"],
+      unit: "money",
+      disclose:
+        "cash interest paid (cash-flow supplement, InterestPaidNet/InterestPaid) stands in for interest expense: the filer tags its " +
+        "income-statement interest line only by extension; the cash figure omits accrued but unpaid interest and includes interest capitalized into assets",
+    },
+  ],
+};
 
 /**
  * Banks tag total net revenue under Revenues / RevenuesNetOfInterestExpense, or
@@ -198,6 +268,14 @@ const BANK_REVENUE_SPEC: ChainSpec = {
     { kind: "first", tags: REVENUE_TAGS, unit: "money" },
   ],
 };
+
+/**
+ * A bank's interest expense is its cost of funds, so "pretax income + interest
+ * expense" is no EBIT there (JPMorgan FY2025: 72B pretax against 97.9B of
+ * interest expense). On a bank-tagged filer operating income is the filed
+ * line or nothing; the derivation below is for industrial filers only.
+ */
+const BANK_OPERATING_INCOME_SPEC: ChainSpec = { kind: "first", tags: ["OperatingIncomeLoss"], unit: "money" };
 
 const DEPRECIATION_SPEC: ChainSpec = {
   kind: "first",
@@ -226,25 +304,32 @@ const INCOME_CHAINS: Record<string, ChainSpec> = {
   sellingAndMarketingExpenses: { kind: "first", tags: ["SellingAndMarketingExpense"], unit: "money" },
   generalAndAdministrativeExpenses: { kind: "first", tags: ["GeneralAndAdministrativeExpense"], unit: "money" },
   operatingExpenses: { kind: "first", tags: ["OperatingExpenses"], unit: "money" },
-  operatingIncome: { kind: "first", tags: ["OperatingIncomeLoss"], unit: "money" },
   /**
-   * `InterestExpenseOperating` is LAST: for a bank it is the whole interest
-   * expense (JPM FY2025 97.9B, and it files none of the four tags above, so the
-   * chain resolved nothing and the keyless WACC raised a critical gap the FMP
-   * path never shows), but for a non-bank that tags both, the non-operating
-   * figure is the borrowing cost the WACC wants.
+   * Pfizer files no OperatingIncomeLoss line at all (its statement runs from
+   * revenue straight to income before taxes); GE Aerospace neither. Without an
+   * EBIT the DCF was "not buildable". Pretax income + interest expense is the
+   * textbook EBIT for a firm that reports none, and the derivation is disclosed
+   * on every row it serves.
    */
-  interestExpense: {
-    kind: "first",
-    tags: [
-      "InterestExpense",
-      "InterestExpenseNonoperating",
-      "InterestExpenseDebt",
-      "InterestAndDebtExpense",
-      "InterestExpenseOperating",
-    ],
+  operatingIncome: {
+    kind: "chain",
     unit: "money",
+    steps: [
+      { kind: "first", tags: ["OperatingIncomeLoss"], unit: "money" },
+      {
+        kind: "sumAll",
+        unit: "money",
+        parts: [
+          { label: "pretax income", spec: { kind: "first", tags: INCOME_BEFORE_TAX_TAGS, unit: "money" } },
+          { label: "interest expense", spec: INTEREST_EXPENSE_SPEC },
+        ],
+        disclose:
+          "EBIT derived as pretax income + interest expense: the filer reports no OperatingIncomeLoss line; " +
+          "non-operating items other than interest (investment income, gains, equity-method results) stay inside the figure",
+      },
+    ],
   },
+  interestExpense: INTEREST_EXPENSE_SPEC,
   interestIncome: {
     kind: "first",
     tags: [
@@ -257,14 +342,7 @@ const INCOME_CHAINS: Record<string, ChainSpec> = {
     unit: "money",
   },
   netInterestIncome: { kind: "first", tags: ["InterestIncomeExpenseNet"], unit: "money" },
-  incomeBeforeTax: {
-    kind: "first",
-    tags: [
-      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
-      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
-    ],
-    unit: "money",
-  },
+  incomeBeforeTax: { kind: "first", tags: INCOME_BEFORE_TAX_TAGS, unit: "money" },
   incomeTaxExpense: { kind: "first", tags: ["IncomeTaxExpenseBenefit"], unit: "money" },
   totalOtherIncomeExpensesNet: { kind: "first", tags: ["NonoperatingIncomeExpense"], unit: "money" },
   netIncome: { kind: "first", tags: ["NetIncomeLoss", "ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"], unit: "money" },
@@ -323,6 +401,15 @@ const LEASE_LIABILITY_SPEC: ChainSpec = {
  * its finance-lease slice from being counted twice.
  */
 const COMBINED_CURRENT_TAG = "LongTermDebtAndCapitalLeaseObligationsCurrent";
+/**
+ * The debt-maturity schedule's first-year principal. Caterpillar files no
+ * LongTermDebtCurrent (its balance-sheet current maturities are an extension
+ * tag) but files this schedule, whose first year IS the current portion; with
+ * it missing, 7.1B of 43B of debt was absent from net debt and invested
+ * capital. It is a disclosure figure, so beside a balance-sheet current tag
+ * it is netted out again (resolveDebtOverlaps, cases 5 and 2).
+ */
+const MATURITIES_NEXT_YEAR_TAG = "LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths";
 
 const BALANCE_CHAINS: Record<string, ChainSpec> = {
   /**
@@ -375,7 +462,7 @@ const BALANCE_CHAINS: Record<string, ChainSpec> = {
       { kind: "first", tags: ["DebtCurrent"], unit: "money" },
       {
         kind: "sumAny",
-        tags: ["LongTermDebtCurrent", "ShortTermBorrowings", "CommercialPaper", COMBINED_CURRENT_TAG],
+        tags: ["LongTermDebtCurrent", "ShortTermBorrowings", "CommercialPaper", COMBINED_CURRENT_TAG, MATURITIES_NEXT_YEAR_TAG],
         unit: "money",
       },
     ],
@@ -398,7 +485,35 @@ const BALANCE_CHAINS: Record<string, ChainSpec> = {
     tags: ["AccumulatedOtherComprehensiveIncomeLossNetOfTax"],
     unit: "money",
   },
-  totalStockholdersEquity: { kind: "first", tags: ["StockholdersEquity"], unit: "money" },
+  /**
+   * Caterpillar tags no StockholdersEquity line — only the total including
+   * noncontrolling interest — so invested capital, the DCF and the multiples
+   * EV bridge were all suppressed. Parent equity is that total less the
+   * noncontrolling interest when the filer tags one (exact), else the total
+   * itself stands in (disclosed; the noncontrolling slice is usually small).
+   */
+  totalStockholdersEquity: {
+    kind: "chain",
+    unit: "money",
+    steps: [
+      { kind: "first", tags: ["StockholdersEquity"], unit: "money" },
+      {
+        kind: "diff",
+        plus: "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        minus: "MinorityInterest",
+        unit: "money",
+        disclose:
+          "stockholders' equity derived as total equity including noncontrolling interest minus the noncontrolling interest: the filer tags no StockholdersEquity line",
+      },
+      {
+        kind: "first",
+        tags: ["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
+        unit: "money",
+        disclose:
+          "total equity including noncontrolling interest stands in for stockholders' equity: the filer tags neither a StockholdersEquity line nor a MinorityInterest to net out",
+      },
+    ],
+  },
   minorityInterest: { kind: "first", tags: ["MinorityInterest"], unit: "money" },
   totalEquity: {
     kind: "first",
@@ -534,7 +649,7 @@ function collectTags(spec: ChainSpec, into: Set<string>): void {
     for (const step of spec.steps) collectTags(step, into);
     return;
   }
-  if (spec.kind === "sumAnyOf") {
+  if (spec.kind === "sumAnyOf" || spec.kind === "sumAll") {
     for (const part of spec.parts) collectTags(part.spec, into);
     return;
   }
@@ -571,11 +686,31 @@ function unitMatches(unit: string, kind: UnitKind): boolean {
 }
 
 /**
- * Parse -> core-form filter -> per-period max(filed), once per (tag, unit).
- * Unit entries are ordered USD-first then alphabetically so a filer reporting
- * in two currencies resolves deterministically.
+ * Carry every per-share and share-count point filed before a stock split to
+ * the current share basis (see src/edgar/splits.ts). Applied to each point by
+ * its OWN filing date, before the max(filed) dedup, so a period restated in a
+ * post-split filing is scaled once (by 1) and a period only ever filed
+ * pre-split is scaled by the splits since. Money facts are untouched.
  */
-function buildFactIndex(facts: CompanyFacts): FactIndex {
+function toCurrentShareBasis(points: FactPoint[], unit: string, splits: StockSplits): FactPoint[] {
+  if (splits.events.length === 0) return points;
+  const perShare = unitMatches(unit, "perShare");
+  const shares = unitMatches(unit, "shares");
+  if (!perShare && !shares) return points;
+  return points.map((p) => {
+    const factor = splits.factorFor(p.filed);
+    if (factor === 1 || !Number.isFinite(p.val)) return p;
+    const val = perShare ? tidy(p.val / factor, PER_SHARE_DECIMALS) : Math.round(p.val * factor);
+    return { ...p, val };
+  });
+}
+
+/**
+ * Parse -> split adjustment -> core-form filter -> per-period max(filed), once
+ * per (tag, unit). Unit entries are ordered USD-first then alphabetically so a
+ * filer reporting in two currencies resolves deterministically.
+ */
+function buildFactIndex(facts: CompanyFacts, splits: StockSplits): FactIndex {
   const index: FactIndex = new Map();
   const namespaces: [string, string, ReadonlySet<string>][] = [
     ["us-gaap", "", NEEDED_US_GAAP_TAGS],
@@ -591,7 +726,7 @@ function buildFactIndex(facts: CompanyFacts): FactIndex {
       const entries: UnitPoints[] = [];
       for (const [unit, rawPoints] of Object.entries(parsed.data.units)) {
         if (!Array.isArray(rawPoints)) continue;
-        const core = filterToCoreForms(parseFactPoints(rawPoints));
+        const core = filterToCoreForms(toCurrentShareBasis(parseFactPoints(rawPoints), unit, splits));
         const points = dedupByPeriod(core);
         if (points.length > 0) entries.push({ unit, points, reporters: buildReporters(core) });
       }
@@ -708,20 +843,36 @@ type TagResolver = (tag: string, kind: UnitKind) => Resolved | null;
 
 interface NoteSink {
   readonly notes: string[];
+  readonly substitutions: Substitution[];
   add(note: string): void;
+  /** Record that `field` at row `period` was served by a stand-in described by `text`. */
+  substitute(field: string, period: string, text: string): void;
 }
 
 function createNoteSink(): NoteSink {
   const seen = new Set<string>();
   const notes: string[] = [];
+  const substitutions: Substitution[] = [];
   return {
     notes,
+    substitutions,
     add(note: string): void {
       if (seen.has(note)) return;
       seen.add(note);
       notes.push(note);
     },
+    substitute(field: string, period: string, text: string): void {
+      const existing = substitutions.find((s) => s.field === field && s.text === text);
+      if (existing === undefined) substitutions.push({ field, text, periods: [period] });
+      else if (!existing.periods.includes(period)) existing.periods.push(period);
+    },
   };
+}
+
+/** The row a resolution is for; carried through `chain` steps so a `disclose` lands on the right field. */
+interface ResolveAt {
+  field: string;
+  period: string;
 }
 
 function describePoint(tag: string, p: FactPoint): string {
@@ -768,11 +919,20 @@ function resolveComponents(
   return { present, absent };
 }
 
-function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, label: string): Resolved | null {
+function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, label: string, at?: ResolveAt): Resolved | null {
+  const disclosed = (r: Resolved | null): Resolved | null => {
+    if (r === null || !("disclose" in spec) || spec.disclose === undefined) return r;
+    notes.add(`${label}: ${spec.disclose}`);
+    // A stand-in inside a composite (the interest term of a derived EBIT) is
+    // the composite's business to disclose; the field it belongs to discloses
+    // its own resolution separately.
+    if (at !== undefined) notes.substitute(at.field, at.period, spec.disclose);
+    return r;
+  };
   switch (spec.kind) {
     case "chain": {
       for (const step of spec.steps) {
-        const r = resolveSpec(step, resolve, notes, label);
+        const r = resolveSpec(step, resolve, notes, label, at);
         if (r !== null) return r;
       }
       return null;
@@ -781,9 +941,9 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
       for (const tag of spec.tags) {
         const r = resolve(tag, spec.unit);
         if (r === null) continue;
-        if (spec.sign === undefined) return r;
+        if (spec.sign === undefined) return disclosed(r);
         const decimals = spec.unit === "perShare" ? PER_SHARE_DECIMALS : MONEY_DECIMALS;
-        return { ...r, value: tidy(r.value * spec.sign, decimals) };
+        return disclosed({ ...r, value: tidy(r.value * spec.sign, decimals) });
       }
       return null;
     }
@@ -791,7 +951,17 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
       const { present } = resolveComponents(spec.tags, spec.unit, resolve);
       if (present.length !== spec.tags.length) return null;
       const total = present.reduce((s, p) => s + p.r.value, 0);
-      return combine(tidy(total, MONEY_DECIMALS), present.map((p) => p.r));
+      return disclosed(combine(tidy(total, MONEY_DECIMALS), present.map((p) => p.r)));
+    }
+    case "sumAll": {
+      const present: Resolved[] = [];
+      for (const part of spec.parts) {
+        const r = resolveSpec(part.spec, resolve, notes, `${label} (${part.label})`);
+        if (r === null || (present.length > 0 && present[0]!.unit !== r.unit)) return null;
+        present.push(r);
+      }
+      const total = present.reduce((s, r) => s + r.value, 0);
+      return disclosed(combine(tidy(total, MONEY_DECIMALS), present));
     }
     case "sumAny": {
       const { present, absent } = resolveComponents(spec.tags, spec.unit, resolve);
@@ -833,7 +1003,7 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
       const plus = resolve(spec.plus, spec.unit);
       const minus = resolve(spec.minus, spec.unit);
       if (plus === null || minus === null || plus.unit !== minus.unit) return null;
-      return combine(tidy(plus.value - minus.value, MONEY_DECIMALS), [plus, minus]);
+      return disclosed(combine(tidy(plus.value - minus.value, MONEY_DECIMALS), [plus, minus]));
     }
   }
 }
@@ -1230,13 +1400,33 @@ function resolveDebtOverlaps(
     );
   }
 
+  // Case 5: the maturity schedule's first year is the current portion of
+  // long-term debt. Beside a balance-sheet current tag (LongTermDebtCurrent or
+  // the combined current tag) it is the same amount twice, so it is dropped;
+  // alone it stands in for the current maturities the filer never tagged.
+  const maturities = shortTermTags.includes(MATURITIES_NEXT_YEAR_TAG) ? cc.money(MATURITIES_NEXT_YEAR_TAG) : null;
+  const maturitiesStand =
+    maturities !== null && !shortTermTags.includes("LongTermDebtCurrent") && combinedCurrent === null;
+  if (maturities !== null && !maturitiesStand && v.shortTermDebt != null) {
+    v.shortTermDebt = tidy(v.shortTermDebt - maturities, MONEY_DECIMALS);
+    notes.add(
+      `shortTermDebt ${ctx}: ${MATURITIES_NEXT_YEAR_TAG} excluded — the balance sheet's own current-debt tag resolved for this period`,
+    );
+  } else if (maturitiesStand) {
+    notes.add(
+      `shortTermDebt ${ctx}: current maturities taken from the debt maturity schedule (${MATURITIES_NEXT_YEAR_TAG} ${maturities}) — no balance-sheet current-debt tag filed`,
+    );
+  }
+
   const longTermTags = tagsOf("longTermDebt");
   // Case 2.
   if (longTermTags.includes("LongTermDebt") && v.longTermDebt != null) {
-    const current = cc.money("LongTermDebtCurrent");
+    const current = cc.money("LongTermDebtCurrent") ?? (maturitiesStand ? maturities : null);
     if (current !== null) {
       v.longTermDebt = tidy(v.longTermDebt - current, MONEY_DECIMALS);
-      notes.add(`longTermDebt ${ctx}: LongTermDebt less current maturities (LongTermDebtCurrent ${current})`);
+      notes.add(
+        `longTermDebt ${ctx}: LongTermDebt less current maturities (${cc.money("LongTermDebtCurrent") !== null ? "LongTermDebtCurrent" : MATURITIES_NEXT_YEAR_TAG} ${current})`,
+      );
     } else {
       notes.add(
         `longTermDebt ${ctx}: resolved from the LongTermDebt total and no LongTermDebtCurrent fact was filed, so current maturities may be included`,
@@ -1362,7 +1552,7 @@ function buildStatementRows<TRow>(
     const values: FieldValues = {};
     const resolutions = new Map<string, Resolved>();
     for (const [field, spec] of Object.entries(def.chains)) {
-      const r = resolveSpec(spec, slot.resolve, notes, `${field} ${ctxLabel}`);
+      const r = resolveSpec(spec, slot.resolve, notes, `${field} ${ctxLabel}`, { field, period: slot.date });
       values[field] = r === null ? null : tidy(r.value, decimalsFor(spec.unit));
       if (r !== null) resolutions.set(field, r);
     }
@@ -1416,7 +1606,7 @@ function buildStatementRows<TRow>(
 
   const gaps: ManifestEntry[] = [];
   if (rows.length === 0) gaps.push(noRowsGap(def, scope, opts, slots.length));
-  return { rows, notes: notes.notes, gaps };
+  return { rows, notes: notes.notes, gaps, substitutions: notes.substitutions };
 }
 
 function noRowsGap(def: StatementDef, scope: Scope, opts: StatementBuildOptions, candidates: number): ManifestEntry {
@@ -1486,7 +1676,9 @@ export function latestSharesOutstanding(index: FactIndex): SharesOutstandingPoin
 
 const INCOME_DEF = (bankRevenue: boolean): StatementDef => ({
   statement: "income",
-  chains: bankRevenue ? { ...INCOME_CHAINS, revenue: BANK_REVENUE_SPEC } : INCOME_CHAINS,
+  chains: bankRevenue
+    ? { ...INCOME_CHAINS, revenue: BANK_REVENUE_SPEC, operatingIncome: BANK_OPERATING_INCOME_SPEC }
+    : INCOME_CHAINS,
   anchors: ["revenue", "netIncome"],
   aliases: {},
   unsourced: INCOME_UNSOURCED,
@@ -1520,7 +1712,8 @@ const CASHFLOW_DEF: StatementDef = {
  * lists plus one manifest gap per statement and scope, never a throw.
  */
 export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: StatementBuildOptions): BuiltStatements {
-  const index = buildFactIndex(facts);
+  const splits = discoverStockSplits(facts);
+  const index = buildFactIndex(facts, splits);
   const state: BuildState = { filesTwentyF: false };
 
   const allFiscalYears = discoverFiscalYears(index);
@@ -1555,6 +1748,17 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
     incomeAnnualNotes.add(bankNote);
     incomeQuarterlyNotes.add(bankNote);
   }
+  // The split notes ride with the rows that carry share-basis figures: EPS and
+  // weighted shares on the income rows, CommonStockSharesOutstanding on the
+  // balance rows.
+  const balanceAnnualNotes = createNoteSink();
+  const balanceQuarterlyNotes = createNoteSink();
+  for (const note of splits.notes) {
+    incomeAnnualNotes.add(note.text);
+    incomeQuarterlyNotes.add(note.text);
+    balanceAnnualNotes.add(note.text);
+    balanceQuarterlyNotes.add(note.text);
+  }
 
   const incomeAnnual = buildStatementRows<FmpIncomeStatementRow>(
     incomeDef,
@@ -1578,7 +1782,7 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
     "annual",
     opts,
     state,
-    createNoteSink(),
+    balanceAnnualNotes,
   );
   const balanceQuarterly = buildStatementRows<FmpBalanceSheetRow>(
     BALANCE_DEF,
@@ -1586,7 +1790,7 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
     "quarter",
     opts,
     state,
-    createNoteSink(),
+    balanceQuarterlyNotes,
   );
   const cashflowAnnual = buildStatementRows<FmpCashFlowRow>(
     CASHFLOW_DEF,
@@ -1614,6 +1818,10 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
   ];
   for (const [result, def] of quarterlyResults) {
     result.rows.splice(Math.max(0, opts.quarterlyPeriods));
+    // A substitution only counts for the rows that survive the trim.
+    const kept = new Set(result.rows.map((row) => String(row.date)));
+    for (const sub of result.substitutions) sub.periods = sub.periods.filter((p) => kept.has(p));
+    result.substitutions = result.substitutions.filter((sub) => sub.periods.length > 0);
     if (result.rows.length === 0 && result.gaps.length === 0) {
       result.gaps.push(noRowsGap(def, "quarter", opts, quarterSlotContexts.length));
     }
@@ -1642,5 +1850,6 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
     },
     reportedCurrency: currency,
     filesTwentyF: state.filesTwentyF,
+    splits: { events: splits.events, notes: splits.notes },
   };
 }

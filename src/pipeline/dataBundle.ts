@@ -921,9 +921,26 @@ export function selectAnnualFiling(
   sub: Sourced<EdgarSubmissions>,
   symbol: string,
 ): FetchResult<EdgarFiling> {
-  const tenK = filingFromSubmissions(sub, "10-K", `edgar.latestTenK(${symbol})`, "critical");
+  const field = `edgar.latestTenK(${symbol})`;
+  const tenK = filingFromSubmissions(sub, "10-K", field, "critical");
   if (tenK.ok) return tenK;
-  return filingFromSubmissions(sub, "20-F", `edgar.latestTenK(${symbol})`, "critical");
+  const twentyF = filingFromSubmissions(sub, "20-F", field, "critical");
+  if (twentyF.ok) return twentyF;
+  // Neither on file: name both forms (reporting only the 20-F miss made a
+  // domestic filer look foreign), and the one situation that leaves a listed
+  // large cap with no annual report at all — a successor registrant (Form
+  // 8-K12B; ExxonMobil Holdings Corp took over the XOM ticker in July 2026)
+  // whose predecessor's filings sit under a CIK EDGAR does not link.
+  const successor = sub.data.recentFilings.find((f) => f.form.trim() === "8-K12B");
+  return gapResult(
+    field,
+    `no "10-K" or "20-F" among ${sub.data.recentFilings.length} recent filings (exact form match; older overflow pages not searched)` +
+      (successor === undefined
+        ? ""
+        : `; the registrant is a successor issuer (Form 8-K12B filed ${successor.filingDate}) — its predecessor's annual reports live under another CIK that EDGAR does not link`),
+    "critical",
+    [sub.endpoint],
+  );
 }
 
 /**

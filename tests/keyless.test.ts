@@ -5,6 +5,7 @@ import {
   lastCloseOnOrBefore,
   needsFallback,
   sharesOnOrBefore,
+  sharesOutstandingSeries,
   type KeylessInputs,
   type KeylessMembers,
 } from "@/pipeline/keyless";
@@ -693,5 +694,158 @@ describe("applyKeylessFallbacks", () => {
       { symbol: "AAPL", date: "2025-03-28", marketCap: 190 * 14_900 },
       { symbol: "AAPL", date: "2024-12-27", marketCap: 180 * 14_900 },
     ]);
+  });
+});
+
+describe("sharesOutstandingSeries", () => {
+  it("carries cover counts filed before a split to the current share basis and names the split", () => {
+    const SPLIT_TAG = "StockholdersEquityNoteStockSplitConversionRatio1";
+    const series = sharesOutstandingSeries(
+      facts(
+        {
+          [SPLIT_TAG]: [{ end: "2020-08-28", val: 4, filed: "2020-10-30" }],
+          WeightedAverageNumberOfDilutedSharesOutstanding: [
+            { start: "2018-09-30", end: "2019-09-28", val: 4_648_913_000, filed: "2019-10-31" },
+            { start: "2018-09-30", end: "2019-09-28", val: 18_595_651_000, filed: "2020-10-30" },
+          ],
+        },
+        {
+          EntityCommonStockSharesOutstanding: [
+            { end: "2019-10-18", val: 4_443_265_000, filed: "2019-10-31" },
+            { end: "2020-10-16", val: 17_001_802_000, filed: "2020-10-30" },
+          ],
+        },
+        { [SPLIT_TAG]: "pure" },
+      ),
+    );
+    expect(series.basis).toBe("dei cover page");
+    expect(series.points).toEqual([
+      { value: 17_773_060_000, asOf: "2019-10-18" },
+      { value: 17_001_802_000, asOf: "2020-10-16" },
+    ]);
+    expect(series.splits.map((e) => [e.date, e.ratio])).toEqual([["2020-08-28", 4]]);
+  });
+
+  it("leaves a series without a split concept exactly as filed", () => {
+    const series = sharesOutstandingSeries(appleFacts());
+    expect(series.splits).toEqual([]);
+    expect(series.points.map((p) => p.value)).toEqual([14_900, 14_776]);
+  });
+});
+
+describe("applyKeylessFallbacks — stock split disclosure", () => {
+  const SPLIT_TAG = "StockholdersEquityNoteStockSplitConversionRatio1";
+  /** appleFacts() plus a tagged split and the FY2019 diluted count as first filed and as restated. */
+  function withSplit(tagged: number): CompanyFacts {
+    const f = appleFacts();
+    const usGaap = f.facts["us-gaap"] as Record<string, { units: Record<string, unknown[]> }>;
+    usGaap[SPLIT_TAG] = {
+      units: { pure: [{ end: "2020-08-28", val: tagged, accn: "s-1", fy: 2020, fp: "FY", form: "10-K", filed: "2020-10-30" }] },
+    };
+    usGaap["WeightedAverageNumberOfDilutedSharesOutstanding"]!.units["shares"]!.push(
+      { start: "2018-09-30", end: "2019-09-28", val: 4_648_913_000, accn: "s-2", fy: 2019, fp: "FY", form: "10-K", filed: "2019-10-31" },
+      { start: "2018-09-30", end: "2019-09-28", val: 18_595_651_000, accn: "s-3", fy: 2020, fp: "FY", form: "10-K", filed: "2020-10-30" },
+    );
+    return f;
+  }
+  const run = (facts: CompanyFacts) =>
+    applyKeylessFallbacks(
+      inputs({
+        edgar: {
+          ...inputs().edgar,
+          companyFacts: { ok: true, value: { data: facts, asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+        },
+      }),
+    );
+
+  it("records an applied split in the manifest as an expected info entry", async () => {
+    const out = await run(withSplit(4));
+    expect(out.gaps.filter((g) => g.field.startsWith("keyless.stockSplits"))).toEqual([
+      {
+        field: "keyless.stockSplits(2020-08-28)",
+        reason: `stock split 4-for-1 on 2020-08-28 (${SPLIT_TAG}, confirmed by restated share counts ×4): per-share and share-count facts filed before that date are restated to the post-split basis`,
+        severity: "info",
+        attemptedSources: [`edgar:companyfacts us-gaap/${SPLIT_TAG}`],
+        expected: true,
+      },
+    ]);
+  });
+
+  it("records a ratio it could not apply as an unexpected warning", async () => {
+    const out = await run(withSplit(3));
+    const entry = out.gaps.find((g) => g.field.startsWith("keyless.stockSplits"));
+    expect(entry).toMatchObject({ field: "keyless.stockSplits(2020-08-28)", severity: "warn", expected: false });
+    expect(entry?.reason).toMatch(/^stock split ratio 3 tagged for 2020-08-28 .* NOT applied: share counts restated across that date moved by ×4/);
+  });
+
+  it("adds no split entry when the concept is absent", async () => {
+    const out = await run(appleFacts());
+    expect(out.gaps.some((g) => g.field.startsWith("keyless.stockSplits"))).toBe(false);
+  });
+});
+
+describe("applyKeylessFallbacks — concept substitution disclosure", () => {
+  const run = (facts: CompanyFacts) =>
+    applyKeylessFallbacks(
+      inputs({
+        edgar: {
+          ...inputs().edgar,
+          companyFacts: { ok: true, value: { data: facts, asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+        },
+      }),
+    );
+
+  it("records a stand-in concept as an expected info entry naming the statement, the field and the periods", async () => {
+    const f = appleFacts();
+    const usGaap = f.facts["us-gaap"] as Record<string, unknown>;
+    usGaap["InterestPaidNet"] = usGaap["InterestExpense"];
+    delete usGaap["InterestExpense"];
+    const out = await run(f);
+    const entry = out.gaps.find((g) => g.field === "keyless.incomeAnnual.interestExpense");
+    expect(entry).toMatchObject({ severity: "info", expected: true, attemptedSources: ["edgar:companyfacts"] });
+    expect(entry?.reason).toMatch(/^cash interest paid .*InterestPaidNet.* \(periods: 2025-09-27\)$/);
+  });
+
+  it("adds no substitution entry when every concept resolved from its own tag", async () => {
+    const out = await run(appleFacts());
+    expect(out.gaps.some((g) => /^keyless\.(income|balance|cashflow)(Annual|Quarterly)\./.test(g.field))).toBe(false);
+  });
+});
+
+describe("applyKeylessFallbacks — why a parsable companyfacts yields no statements", () => {
+  const withFacts = (facts: CompanyFacts, forms: string[]) =>
+    applyKeylessFallbacks(
+      inputs({
+        edgar: {
+          ...inputs().edgar,
+          registrant: { ...inputs().edgar.registrant!, forms },
+          companyFacts: { ok: true, value: { data: facts, asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+        },
+      }),
+    );
+
+  it("names IFRS reporting when the facts carry ifrs-full concepts and no us-gaap ones", async () => {
+    const facts: CompanyFacts = {
+      cik: 1046179,
+      entityName: "TAIWAN SEMICONDUCTOR MANUFACTURING CO LTD",
+      facts: { "ifrs-full": { Revenue: { label: "Revenue", units: { TWD: [] } } }, dei: {} },
+    };
+    const out = await withFacts(facts, ["20-F", "6-K"]);
+    const entry = out.gaps.find((g) => g.field === "keyless.incomeAnnual");
+    expect(entry?.reason).toMatch(/^EDGAR companyfacts produced no incomeAnnual rows: .*; the issuer reports under IFRS \(1 ifrs-full concepts, 0 us-gaap\) and the keyless statement builder reads us-gaap only$/);
+  });
+
+  it("names a successor issuer when the registrant has a Form 8-K12B and no annual facts", async () => {
+    const facts: CompanyFacts = { cik: 2115436, entityName: "Exxon Mobil Corporation", facts: { "us-gaap": {}, dei: {} } };
+    const out = await withFacts(facts, ["8-K12B", "10-Q", "8-K"]);
+    const entry = out.gaps.find((g) => g.field === "keyless.incomeAnnual");
+    expect(entry?.reason).toMatch(/; the registrant is a successor issuer \(Form 8-K12B on file\) whose predecessor's XBRL history sits under another CIK that EDGAR does not link$/);
+  });
+
+  it("adds no cause when the facts are simply thin", async () => {
+    const facts: CompanyFacts = { cik: 1, entityName: "Thin Co", facts: { "us-gaap": {}, dei: {} } };
+    const out = await withFacts(facts, ["10-K", "10-Q"]);
+    const entry = out.gaps.find((g) => g.field === "keyless.incomeAnnual");
+    expect(entry?.reason).not.toMatch(/IFRS|successor/);
   });
 });

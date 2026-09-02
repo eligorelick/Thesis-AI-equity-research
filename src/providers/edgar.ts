@@ -1579,7 +1579,9 @@ export class EdgarClient {
   async companyFacts(cik: number | string): Promise<FetchResult<CompanyFacts>> {
     const url = `${EDGAR_HOSTS.data}/api/xbrl/companyfacts/CIK${padCik(cik)}.json`;
     const res = await this.request(url, EDGAR_TTL.companyFacts, EdgarClient.companyFactsBodyProblem(cik));
-    if (!res.ok) return this.gap(`edgar.companyFacts(${cik})`, `companyfacts HTTP ${res.status}`, [url]);
+    // A body the validator rejected arrives as ok:false with status 200; the
+    // problem text is the reason, "HTTP 200" would hide it.
+    if (!res.ok) return this.gap(`edgar.companyFacts(${cik})`, res.bodyProblem ?? `companyfacts HTTP ${res.status}`, [url]);
     let parsedJson: unknown;
     try {
       parsedJson = JSON.parse(res.body);

@@ -36,6 +36,7 @@ import {
   type StatementRowsResult,
 } from "@/edgar/statements";
 import { conceptFactsSchema, dedupFactPoints, parseFactPoints, type CompanyFacts } from "@/edgar/xbrl";
+import { describeSplitRatio, discoverStockSplits, SPLIT_RATIO_TAG, type SplitEvent } from "@/edgar/splits";
 import { estimateBeta, type ClosePoint } from "@/pipeline/stageB/betaEstimate";
 import type { EdgarRegistrant } from "@/pipeline/types";
 import type { CikMapping } from "@/providers/edgar";
@@ -274,12 +275,19 @@ export function isUsJurisdiction(code: string | null | undefined): boolean {
   return typeof code === "string" && US_JURISDICTIONS.has(code.trim().toUpperCase());
 }
 
-/** One share-count concept as a deduped series, oldest first; empty when absent. */
+/**
+ * One share-count concept as a deduped series, oldest first; empty when absent.
+ * Each point is carried to the current share basis by the splits dated after
+ * its own filing (`factorFor`), the same rule `src/edgar/statements.ts`
+ * applies: a cover count filed before a 4-for-1 split is a quarter of today's
+ * share count, and the daily market-cap history would be a quarter short.
+ */
 function sharePointsForConcept(
   facts: CompanyFacts,
   namespaceName: string,
   tag: string,
   instantOnly: boolean,
+  factorFor: (filed: string) => number,
 ): { value: number; asOf: string }[] {
   const namespace = facts.facts[namespaceName];
   if (namespace === null || namespace === undefined || typeof namespace !== "object") return [];
@@ -294,7 +302,7 @@ function sharePointsForConcept(
       if (instantOnly && point.start !== undefined) return [];
       const day = isoDay(point.end);
       return day !== null && isFiniteNumber(point.val) && point.val > 0
-        ? [{ value: point.val, asOf: day }]
+        ? [{ value: Math.round(point.val * factorFor(point.filed)), asOf: day }]
         : [];
     })
     .sort((a, b) => (a.asOf < b.asOf ? -1 : a.asOf > b.asOf ? 1 : 0));
@@ -316,13 +324,16 @@ function sharePointsForConcept(
 export function sharesOutstandingSeries(facts: CompanyFacts): {
   points: { value: number; asOf: string }[];
   basis: SharesBasis | null;
+  /** The stock splits the pre-split points were carried across, oldest first. */
+  splits: SplitEvent[];
 } {
-  const cover = sharePointsForConcept(facts, "dei", DEI_SHARES_TAG, false);
-  if (cover.length > 0) return { points: cover, basis: "dei cover page" };
-  const balanceSheet = sharePointsForConcept(facts, "us-gaap", BALANCE_SHEET_SHARES_TAG, true);
+  const splits = discoverStockSplits(facts);
+  const cover = sharePointsForConcept(facts, "dei", DEI_SHARES_TAG, false, splits.factorFor);
+  if (cover.length > 0) return { points: cover, basis: "dei cover page", splits: splits.events };
+  const balanceSheet = sharePointsForConcept(facts, "us-gaap", BALANCE_SHEET_SHARES_TAG, true, splits.factorFor);
   return balanceSheet.length > 0
-    ? { points: balanceSheet, basis: "balance sheet CommonStockSharesOutstanding" }
-    : { points: [], basis: null };
+    ? { points: balanceSheet, basis: "balance sheet CommonStockSharesOutstanding", splits: splits.events }
+    : { points: [], basis: null, splits: splits.events };
 }
 
 /**
@@ -489,10 +500,30 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         quarterlyPeriods: inputs.quarterlyPeriods,
       })
     : null;
+  // A split restatement changes every per-share and share-count figure the
+  // report will cite, and a ratio that could NOT be applied leaves the series
+  // on mixed share bases; both belong in the manifest, not only in the
+  // transient progress log the statement notes reach.
+  if (built !== null) {
+    // One field per split date: the manifest dedups by field.
+    for (const note of built.splits.notes) {
+      gaps.push({
+        field: `keyless.stockSplits(${note.date})`,
+        reason: note.text,
+        severity: note.severity,
+        attemptedSources: [`edgar:companyfacts us-gaap/${SPLIT_RATIO_TAG}`],
+        expected: note.severity === "info",
+      });
+    }
+  }
   const factsFetchedAt = inputs.edgar.companyFacts.ok
     ? inputs.edgar.companyFacts.value.fetchedAt
     : fetchedAt;
   const factsReason = inputs.edgar.companyFacts.ok ? null : inputs.edgar.companyFacts.gap.reason;
+  const emptyStatementsContext = describeEmptyStatements(
+    inputs.edgar.companyFacts.ok ? inputs.edgar.companyFacts.value.data : null,
+    registrant,
+  );
 
   const statementFor = <TRow extends FmpRawRow>(
     member: keyof KeylessMembers,
@@ -510,9 +541,21 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       return null;
     }
     for (const note of result.notes) notes.push(`${member}: ${note}`);
+    // A concept served by a stand-in tag (cash interest paid for interest
+    // expense, pretax income + interest for EBIT) feeds the WACC and the DCF;
+    // the report has to say so, not only the progress log.
+    for (const sub of result.substitutions) {
+      gaps.push({
+        field: `keyless.${member}.${sub.field}`,
+        reason: `${sub.text} (periods: ${sub.periods.join(", ")})`,
+        severity: "info",
+        attemptedSources: ["edgar:companyfacts"],
+        expected: true,
+      });
+    }
     if (result.rows.length === 0) {
       const why = result.gaps[0]?.reason ?? "no period resolved from the filed facts";
-      failKeyless(member, `EDGAR companyfacts produced no ${member} rows: ${why}`, ["edgar:companyfacts", endpoint], true);
+      failKeyless(member, `EDGAR companyfacts produced no ${member} rows: ${why}${emptyStatementsContext}`, ["edgar:companyfacts", endpoint], true);
       return null;
     }
     record(member, "edgar", endpoint);
@@ -612,8 +655,15 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   const marketCap = price !== null && outstanding !== null ? price * outstanding.value : null;
   const shareSeries = inputs.edgar.companyFacts.ok
     ? sharesOutstandingSeries(inputs.edgar.companyFacts.value.data)
-    : { points: [], basis: null };
+    : { points: [], basis: null, splits: [] };
   const deiShares = shareSeries.points;
+  if (shareSeries.splits.length > 0 && deiShares.length > 0) {
+    notes.push(
+      `keyless share counts: points filed before the ${shareSeries.splits
+        .map((e) => `${describeSplitRatio(e.ratio)} split of ${e.date}`)
+        .join(" and the ")} are restated to the current share basis`,
+    );
+  }
   /** Which share-count concept a derived figure rests on, for the notes. */
   const seriesBasis: SharesBasis | "no share-count concept" =
     shareSeries.basis ?? "no share-count concept";
@@ -833,4 +883,32 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   }
 
   return { members, sectorEtfSymbol, gaps, notes, replaced };
+}
+
+/**
+ * Why a companyfacts payload that parsed still built no statement rows. Two
+ * situations account for it among listed issuers and neither is a data
+ * outage: a foreign private issuer reporting under IFRS (TSMC's 20-F facts
+ * sit in the ifrs-full namespace; the builder reads us-gaap only) and a
+ * successor registrant (ExxonMobil Holdings Corp, July 2026) whose
+ * predecessor's history sits under a CIK EDGAR does not link. Appended to the
+ * "no rows" reason so the manifest names the cause rather than the symptom.
+ */
+function describeEmptyStatements(facts: CompanyFacts | null, registrant: EdgarRegistrant | null): string {
+  const parts: string[] = [];
+  if (facts !== null) {
+    const ifrs = Object.keys(facts.facts["ifrs-full"] ?? {}).length;
+    const usGaap = Object.keys(facts.facts["us-gaap"] ?? {}).length;
+    if (ifrs > 0 && ifrs > usGaap) {
+      parts.push(
+        `the issuer reports under IFRS (${ifrs} ifrs-full concepts, ${usGaap} us-gaap) and the keyless statement builder reads us-gaap only`,
+      );
+    }
+  }
+  if (registrant !== null && registrant.forms.some((form) => form.trim() === "8-K12B")) {
+    parts.push(
+      "the registrant is a successor issuer (Form 8-K12B on file) whose predecessor's XBRL history sits under another CIK that EDGAR does not link",
+    );
+  }
+  return parts.length === 0 ? "" : `; ${parts.join("; ")}`;
 }

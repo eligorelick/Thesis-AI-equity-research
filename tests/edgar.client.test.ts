@@ -443,6 +443,25 @@ describe("EdgarClient (fake transport)", () => {
     const result = await client.companyFacts(320193);
 
     expect(result.ok).toBe(false);
+    // The body check is what rejected it; "HTTP 200" would hide that.
+    if (!result.ok) expect(result.gap.reason).toMatch(/CIK 789019 did not match requested CIK 0000320193/);
+  });
+
+  it("companyFacts accepts the string-typed cik SEC emits for a newly created registrant", async () => {
+    // Long-standing registrants come back as {"cik":320193}; one created in
+    // 2026 (ExxonMobil Holdings, the XOM successor) as {"cik":"2115436"} — the
+    // same endpoint, and its facts are as real as anyone's.
+    const { transport } = fakeTransport({
+      "companyfacts/CIK0002115436.json": {
+        body: JSON.stringify({ cik: "2115436", entityName: "Exxon Mobil Corporation", facts: {} }),
+      },
+    });
+    const client = new EdgarClient({ transport });
+
+    const result = await client.companyFacts(2115436);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.data.cik).toBe(2115436);
   });
 
   it("filingIndexHeaders builds the TYPE map through the client", async () => {

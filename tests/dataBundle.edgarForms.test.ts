@@ -146,3 +146,27 @@ describe("buildDataBundle EDGAR filing boundary", () => {
     expect(calls.some((url) => url.includes("Archives/edgar/data"))).toBe(false);
   });
 });
+
+describe("selectAnnualFiling — no annual form on file", () => {
+  it("names both annual forms and the successor-issuer notice", () => {
+    // ExxonMobil Holdings Corp (CIK 2115436) took over the XOM ticker in July
+    // 2026 with an 8-K12B, a 10-Q and S-8s; the old wording reported only the
+    // 20-F miss and made a Texas registrant look like a foreign filer.
+    const result = selectAnnualFiling(submissions(["8-K12B", "10-Q", "8-K"]), "XOM");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.gap.severity).toBe("critical");
+      expect(result.gap.reason).toMatch(/^no "10-K" or "20-F" among 3 recent filings/);
+      expect(result.gap.reason).toMatch(/successor issuer \(Form 8-K12B filed 2026-03-01\)/);
+    }
+  });
+
+  it("reports a plain absence when there is no successor notice", () => {
+    const result = selectAnnualFiling(submissions(["10-Q"]), "NEW");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.gap.reason).toMatch(/^no "10-K" or "20-F" among 1 recent filings/);
+      expect(result.gap.reason).not.toMatch(/successor/);
+    }
+  });
+});

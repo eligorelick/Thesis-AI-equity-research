@@ -1058,6 +1058,17 @@ describe("buildStatementsFromCompanyFacts — bank interest tags", () => {
       interestIncome: 900,
     });
   });
+
+  it("does not derive an EBIT from pretax income plus interest on a bank-tagged filer", () => {
+    // Interest expense is a bank's cost of funds; pretax + interest is not an
+    // EBIT (the first keyless rerun handed JPMorgan 72B + 97.9B as one).
+    const built = buildStatementsFromCompanyFacts(
+      bankInterest({ IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest: annual(72_000) }),
+      { ...OPTS, symbol: "JPM" },
+    );
+    expect(built.incomeAnnual.rows[0]).toMatchObject({ operatingIncome: null, incomeBeforeTax: 72_000 });
+    expect(built.incomeAnnual.substitutions).toEqual([]);
+  });
 });
 
 describe("buildStatementsFromCompanyFacts — current maturities tagged together with finance leases", () => {
@@ -1126,5 +1137,262 @@ describe("buildStatementsFromCompanyFacts — current maturities tagged together
     expect(
       built.notes.some((n) => /^shortTermDebt 2025-12-31:/.test(n) && /LongTermDebtAndCapitalLeaseObligationsCurrent excluded/.test(n)),
     ).toBe(true);
+  });
+});
+
+/** Append points to concepts `f` already has (`addTags` replaces a concept wholesale). */
+function withPoints(f: CompanyFacts, extra: Record<string, Pt[]>): CompanyFacts {
+  type Concept = { units: Record<string, unknown[]> };
+  const base = f.facts["us-gaap"] as Record<string, Concept | undefined>;
+  const merged: Record<string, unknown> = { ...base };
+  for (const [tag, concept] of Object.entries(facts(extra).facts["us-gaap"] as Record<string, Concept>)) {
+    const cur = base[tag];
+    if (cur === undefined) {
+      merged[tag] = concept;
+      continue;
+    }
+    const units: Record<string, unknown[]> = { ...cur.units };
+    for (const [unit, pts] of Object.entries(concept.units)) units[unit] = [...(units[unit] ?? []), ...pts];
+    merged[tag] = { ...cur, units };
+  }
+  return { ...f, facts: { ...f.facts, "us-gaap": merged } };
+}
+
+describe("buildStatementsFromCompanyFacts — stock splits", () => {
+  const SPLIT_TAG = "StockholdersEquityNoteStockSplitConversionRatio1";
+  /** Apple's 4-for-1 split of 2020-08-28 with the FY2019 diluted count as first filed and as restated. */
+  const split2020 = {
+    [SPLIT_TAG]: [{ end: "2020-08-28", val: 4, form: "10-K", fp: "FY", fy: 2020, filed: "2020-10-30" }],
+    WeightedAverageNumberOfDilutedSharesOutstanding: [
+      { start: "2018-09-30", end: "2019-09-28", val: 4_648_913_000, form: "10-K", fp: "FY", fy: 2019, filed: "2019-10-31" },
+      { start: "2018-09-30", end: "2019-09-28", val: 18_595_651_000, form: "10-K", fp: "FY", fy: 2020, filed: "2020-10-30" },
+    ],
+  };
+  /** FY2016 as Apple filed it in 2016: pre-split EPS and share count, never restated in a later core form. */
+  const fy2016 = { start: "2015-09-27", end: "2016-09-24", form: "10-K", fp: "FY", fy: 2016, filed: "2016-10-26" } as const;
+
+  it("carries per-share and share-count facts filed before a split to the current share basis, money facts untouched", () => {
+    const built = buildStatementsFromCompanyFacts(
+      withPoints(appleLike(), {
+        ...split2020,
+        RevenueFromContractWithCustomerExcludingAssessedTax: [{ ...fy2016, val: 215_639 }],
+        NetIncomeLoss: [{ ...fy2016, val: 45_687 }],
+        EarningsPerShareDiluted: [{ ...fy2016, val: 8.31 }],
+        WeightedAverageNumberOfDilutedSharesOutstanding: [
+          ...split2020.WeightedAverageNumberOfDilutedSharesOutstanding,
+          { ...fy2016, val: 5_500_281_000 },
+        ],
+      }),
+      OPTS,
+    );
+    const rows = built.incomeAnnual.rows;
+    expect(rows.map((r) => r.date)).toEqual(["2025-09-27", "2024-09-28", "2016-09-24"]);
+    expect(rows[2]).toMatchObject({
+      revenue: 215_639,
+      netIncome: 45_687,
+      epsDiluted: 2.0775,
+      weightedAverageShsOutDil: 22_001_124_000,
+    });
+    // Filed after the split: already on the current basis, scaled by 1.
+    expect(rows[0]).toMatchObject({ epsDiluted: 7.5, weightedAverageShsOutDil: 15_000 });
+    expect(built.splits.events).toEqual([{ date: "2020-08-28", ratio: 4, tagged: 4, evidence: 4 }]);
+    const note = `stock split 4-for-1 on 2020-08-28 (${SPLIT_TAG}, confirmed by restated share counts ×4): per-share and share-count facts filed before that date are restated to the post-split basis`;
+    expect(built.splits.notes).toEqual([{ date: "2020-08-28", text: note, severity: "info" }]);
+    for (const result of [built.incomeAnnual, built.incomeQuarterly, built.balanceAnnual, built.balanceQuarterly]) {
+      expect(result.notes).toContain(note);
+    }
+    expect(built.cashflowAnnual.notes).not.toContain(note);
+  });
+
+  it("does not rescale a period whose dedup winner was already filed post-split", () => {
+    const fy2018 = { start: "2017-10-01", end: "2018-09-29" };
+    const built = buildStatementsFromCompanyFacts(
+      withPoints(appleLike(), {
+        ...split2020,
+        RevenueFromContractWithCustomerExcludingAssessedTax: [
+          { ...fy2018, val: 265_595, form: "10-K", fp: "FY", fy: 2018, filed: "2018-11-05" },
+        ],
+        NetIncomeLoss: [{ ...fy2018, val: 59_531, form: "10-K", fp: "FY", fy: 2018, filed: "2018-11-05" }],
+        EarningsPerShareDiluted: [
+          { ...fy2018, val: 11.91, form: "10-K", fp: "FY", fy: 2018, filed: "2018-11-05" },
+          { ...fy2018, val: 2.98, form: "10-K", fp: "FY", fy: 2020, filed: "2020-10-30" },
+        ],
+      }),
+      OPTS,
+    );
+    const fy18 = built.incomeAnnual.rows.find((r) => r.date === "2018-09-29");
+    expect(fy18?.epsDiluted).toBe(2.98);
+    expect(fy18?.fiscalYear).toBe("2018");
+  });
+
+  it("reports no splits and adds no notes when the concept is absent", () => {
+    const built = buildStatementsFromCompanyFacts(appleLike(), OPTS);
+    expect(built.splits).toEqual({ events: [], notes: [] });
+    expect(built.incomeAnnual.rows[0]?.epsDiluted).toBe(7.5);
+  });
+});
+
+describe("buildStatementsFromCompanyFacts — income-statement fallbacks", () => {
+  const K = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" } as const;
+  const annual = (val: number): Pt[] => [{ start: "2025-01-01", end: "2025-12-31", val, ...K }];
+  const base = (extra: Record<string, Pt[]>): CompanyFacts =>
+    facts({
+      Revenues: annual(64_000),
+      NetIncomeLoss: annual(6_200),
+      Assets: [{ end: "2025-12-31", val: 210_000, ...K }],
+      ...extra,
+    });
+
+  it("stands cash interest paid in for an interest-expense line the filer tags only by extension", () => {
+    // Caterpillar and GE file no us-gaap interest-expense tag (extension tags
+    // only) but both file InterestPaidNet; without it the keyless WACC, and
+    // with it the whole DCF, vanished behind "cost of debt cannot be inferred".
+    const built = buildStatementsFromCompanyFacts(
+      base({ OperatingIncomeLoss: annual(11_151), InterestPaidNet: annual(1_842) }),
+      { ...OPTS, symbol: "CAT" },
+    );
+    expect(built.incomeAnnual.rows[0]).toMatchObject({ interestExpense: 1_842, operatingIncome: 11_151 });
+    expect(built.incomeAnnual.substitutions).toEqual([
+      { field: "interestExpense", periods: ["2025-12-31"], text: expect.stringMatching(/^cash interest paid .*InterestPaidNet/) },
+    ]);
+  });
+
+  it("prefers the income-statement interest tag over cash interest paid when both exist", () => {
+    const built = buildStatementsFromCompanyFacts(
+      base({ OperatingIncomeLoss: annual(11_151), InterestExpense: annual(2_671), InterestPaidNet: annual(2_739) }),
+      { ...OPTS, symbol: "PFE" },
+    );
+    expect(built.incomeAnnual.rows[0]).toMatchObject({ interestExpense: 2_671 });
+    expect(built.incomeAnnual.substitutions).toEqual([]);
+  });
+
+  it("derives EBIT as pretax income plus interest expense when no operating-income tag is filed", () => {
+    // Pfizer reports no OperatingIncomeLoss line at all; the DCF was "not buildable".
+    const built = buildStatementsFromCompanyFacts(
+      base({
+        IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest: annual(7_520),
+        InterestExpense: annual(2_671),
+      }),
+      { ...OPTS, symbol: "PFE" },
+    );
+    expect(built.incomeAnnual.rows[0]).toMatchObject({ operatingIncome: 10_191, interestExpense: 2_671, incomeBeforeTax: 7_520 });
+    expect(built.incomeAnnual.substitutions).toEqual([
+      { field: "operatingIncome", periods: ["2025-12-31"], text: expect.stringMatching(/^EBIT derived as pretax income \+ interest expense/) },
+    ]);
+  });
+
+  it("derives EBIT through the cash-interest stand-in and discloses each substitution under its own field", () => {
+    // GE: no OperatingIncomeLoss and no us-gaap interest line, but pretax income and InterestPaidNet.
+    const built = buildStatementsFromCompanyFacts(
+      base({
+        IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest: annual(10_000),
+        InterestPaidNet: annual(882),
+      }),
+      { ...OPTS, symbol: "GE" },
+    );
+    expect(built.incomeAnnual.rows[0]).toMatchObject({ operatingIncome: 10_882, interestExpense: 882 });
+    expect(built.incomeAnnual.substitutions.map((s) => s.field).sort()).toEqual(["interestExpense", "operatingIncome"]);
+  });
+
+  it("leaves operating income null when neither an operating-income nor an interest figure exists", () => {
+    const built = buildStatementsFromCompanyFacts(
+      base({ IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest: annual(7_520) }),
+      { ...OPTS, symbol: "PFE" },
+    );
+    expect(built.incomeAnnual.rows[0]).toMatchObject({ operatingIncome: null, interestExpense: null });
+    expect(built.incomeAnnual.substitutions).toEqual([]);
+  });
+
+  it("lists every period a substitution served, newest first", () => {
+    const two = (a: number, b: number): Pt[] => [
+      { start: "2025-01-01", end: "2025-12-31", val: a, ...K },
+      { start: "2024-01-01", end: "2024-12-31", val: b, form: "10-K", fp: "FY", fy: 2024, filed: "2025-02-14" },
+    ];
+    const built = buildStatementsFromCompanyFacts(
+      facts({
+        Revenues: two(64_000, 60_000),
+        NetIncomeLoss: two(6_200, 5_000),
+        Assets: [
+          { end: "2025-12-31", val: 210_000, ...K },
+          { end: "2024-12-31", val: 200_000, form: "10-K", fp: "FY", fy: 2024, filed: "2025-02-14" },
+        ],
+        OperatingIncomeLoss: two(11_151, 10_000),
+        InterestPaidNet: two(1_842, 1_700),
+      }),
+      { ...OPTS, symbol: "CAT" },
+    );
+    expect(built.incomeAnnual.substitutions).toEqual([
+      { field: "interestExpense", periods: ["2025-12-31", "2024-12-31"], text: expect.any(String) },
+    ]);
+  });
+});
+
+
+describe("buildStatementsFromCompanyFacts — Caterpillar-style balance sheets", () => {
+  const k = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20" } as const;
+  const at = (val: number): Pt[] => [{ end: "2025-12-31", val, ...k }];
+  function catLike(extra: Record<string, Pt[]>): CompanyFacts {
+    return facts({
+      Revenues: [{ start: "2025-01-01", end: "2025-12-31", val: 64_000, ...k }],
+      Assets: at(98_585),
+      CashAndCashEquivalentsAtCarryingValue: at(9_980),
+      ...extra,
+    });
+  }
+  const build = (f: CompanyFacts) => buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "CAT" });
+
+  it("derives parent equity from the total including noncontrolling interest less that interest", () => {
+    const built = build(catLike({ StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest: at(21_318), MinorityInterest: at(18) }));
+    expect(built.balanceAnnual.rows[0]).toMatchObject({ totalStockholdersEquity: 21_300, totalEquity: 21_318, minorityInterest: 18 });
+    expect(built.balanceAnnual.substitutions).toEqual([
+      { field: "totalStockholdersEquity", periods: ["2025-12-31"], text: expect.stringMatching(/^stockholders' equity derived as total equity including noncontrolling interest minus/) },
+    ]);
+  });
+
+  it("lets the total including noncontrolling interest stand in when no interest is tagged", () => {
+    const built = build(catLike({ StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest: at(21_318) }));
+    expect(built.balanceAnnual.rows[0]).toMatchObject({ totalStockholdersEquity: 21_318 });
+    expect(built.balanceAnnual.substitutions[0]?.text).toMatch(/^total equity including noncontrolling interest stands in/);
+  });
+
+  it("prefers the filed StockholdersEquity line and records nothing", () => {
+    const built = build(catLike({ StockholdersEquity: at(21_000), StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest: at(21_318), MinorityInterest: at(318) }));
+    expect(built.balanceAnnual.rows[0]).toMatchObject({ totalStockholdersEquity: 21_000 });
+    expect(built.balanceAnnual.substitutions).toEqual([]);
+  });
+
+  it("takes current maturities from the debt maturity schedule when no current-debt tag is filed", () => {
+    // CAT FY2025: ShortTermBorrowings 5,514 + first-year maturities 7,120 + LongTermDebtNoncurrent 30,696.
+    const built = build(catLike({
+      ShortTermBorrowings: at(5_514),
+      LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
+      LongTermDebtNoncurrent: at(30_696),
+    }));
+    const fy = built.balanceAnnual.rows[0]!;
+    expect(fy.shortTermDebt).toBe(12_634);
+    expect(fy.longTermDebt).toBe(30_696);
+    expect(fy.totalDebt).toBe(43_330);
+    expect(built.balanceAnnual.notes.some((n) => /current maturities taken from the debt maturity schedule \(LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths 7120\)/.test(n))).toBe(true);
+  });
+
+  it("drops the schedule figure beside a balance-sheet current-debt tag", () => {
+    const built = build(catLike({
+      LongTermDebtCurrent: at(7_000),
+      LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
+      LongTermDebtNoncurrent: at(30_696),
+    }));
+    expect(built.balanceAnnual.rows[0]).toMatchObject({ shortTermDebt: 7_000, totalDebt: 37_696 });
+    expect(built.balanceAnnual.notes.some((n) => /LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths excluded — the balance sheet's own current-debt tag resolved/.test(n))).toBe(true);
+  });
+
+  it("nets the schedule figure out of a LongTermDebt total so the current portion counts once", () => {
+    const built = build(catLike({
+      LongTermDebt: at(37_816),
+      LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
+    }));
+    expect(built.balanceAnnual.rows[0]).toMatchObject({ shortTermDebt: 7_120, longTermDebt: 30_696, totalDebt: 37_816 });
+    expect(built.balanceAnnual.notes).toContain(
+      "longTermDebt 2025-12-31: LongTermDebt less current maturities (LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths 7120)",
+    );
   });
 });

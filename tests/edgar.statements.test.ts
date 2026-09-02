@@ -775,3 +775,43 @@ describe("buildStatementsFromCompanyFacts — FMP field names Stage B reads", ()
     });
   });
 });
+
+describe("buildStatementsFromCompanyFacts — bank interest tags", () => {
+  const K = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" } as const;
+  const annual = (val: number): Pt[] => [{ start: "2025-01-01", end: "2025-12-31", val, ...K }];
+
+  /** JPM tags neither InterestExpense nor InterestAndDebtExpense — only the *Operating pair. */
+  function bankInterest(extra: Record<string, Pt[]> = {}): CompanyFacts {
+    return facts({
+      InterestIncomeExpenseNet: annual(95_400),
+      NoninterestIncome: annual(87_047),
+      NetIncomeLoss: annual(57_048),
+      Assets: [{ end: "2025-12-31", val: 4_424_900, ...K }],
+      InterestExpenseOperating: annual(97_900),
+      InterestIncomeOperating: annual(193_300),
+      ...extra,
+    });
+  }
+
+  it("resolves interest expense and income from the *Operating tags a bank files", () => {
+    const built = buildStatementsFromCompanyFacts(bankInterest(), { ...OPTS, symbol: "JPM" });
+    // Without these the keyless WACC raised a CRITICAL
+    // returns.wacc.interestExpense gap the FMP path never shows.
+    expect(built.incomeAnnual.rows[0]).toMatchObject({
+      interestExpense: 97_900,
+      interestIncome: 193_300,
+      netInterestIncome: 95_400,
+    });
+  });
+
+  it("keeps the non-operating tag when a filer reports both", () => {
+    const built = buildStatementsFromCompanyFacts(
+      bankInterest({ InterestExpense: annual(4_100), InvestmentIncomeInterest: annual(900) }),
+      { ...OPTS, symbol: "JPM" },
+    );
+    expect(built.incomeAnnual.rows[0]).toMatchObject({
+      interestExpense: 4_100,
+      interestIncome: 900,
+    });
+  });
+});

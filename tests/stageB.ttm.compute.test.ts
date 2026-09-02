@@ -1087,6 +1087,17 @@ describe("runStageB wiring — keyless excess-return and WACC fallbacks (task 8)
         (g) => g.field === "returns.wacc.interestExpense" && /inferred from the FY/i.test(g.reason),
       ),
     ).toBe(false);
+    // ...and the gap that replaces it is a WARNING. A critical one would make
+    // buildDataCompleteness report state "blocked" (completeness.ts), re-blocking
+    // the very keyless bank report the DuPont ROE fallback above unblocks.
+    const gap = computed.returns.gaps.find((g) => g.field === "returns.wacc.interestExpense");
+    expect(gap?.severity).toBe("warn");
+    expect(gap?.reason).toMatch(/costed on equity alone/i);
+    expect(
+      computed.gaps.some(
+        (g) => g.field === "returns.wacc.interestExpense" && g.severity === "critical",
+      ),
+    ).toBe(false);
     // Existing behaviour is otherwise untouched: cost of equity is still carried.
     expect(w.costOfEquityPct).not.toBeNull();
   });

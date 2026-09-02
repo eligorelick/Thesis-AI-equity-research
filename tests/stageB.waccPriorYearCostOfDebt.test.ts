@@ -69,6 +69,32 @@ describe("computeWacc with a prior-year cost of debt", () => {
     expect(res.gaps.some((g) => g.field === "returns.wacc.interestExpense")).toBe(false);
   });
 
+  it("files the undisclosed-interest gap as a WARNING on a financial route, not a blocker", () => {
+    // Task 8 item 5 stops inferring a historical rate for a bank, which drops
+    // it into this branch. A CRITICAL gap makes buildDataCompleteness report
+    // state "blocked", so the whole keyless bank report would be blocked on a
+    // figure its valuation never consumes.
+    const res = computeWacc({ ...base, isFinancial: true });
+    expect(res.costOfDebtMethod).toBe("unavailable");
+    const gap = res.gaps.find((g) => g.field === "returns.wacc.interestExpense");
+    expect(gap?.severity).toBe("warn");
+    expect(gap?.reason).toMatch(/costed on equity alone/i);
+  });
+
+  it("control: a non-financial route keeps the critical severity", () => {
+    const gap = computeWacc(base).gaps.find((g) => g.field === "returns.wacc.interestExpense");
+    expect(gap?.severity).toBe("critical");
+    expect(gap?.reason).not.toMatch(/costed on equity alone/i);
+  });
+
+  it("downgrades an implausible negative figure the same way on a financial route", () => {
+    const res = computeWacc({ ...base, interestExpenseTtm: -10, isFinancial: true });
+    expect(res.costOfDebtMethod).toBe("unavailable");
+    const gap = res.gaps.find((g) => g.field === "returns.wacc.interestExpense");
+    expect(gap?.severity).toBe("warn");
+    expect(gap?.reason).toMatch(/implausible sign/);
+  });
+
   it("refuses a negative current figure even when a prior year exists", () => {
     const res = computeWacc({ ...base, interestExpenseTtm: -10, priorYearCostOfDebt: prior });
     expect(res.costOfDebtMethod).toBe("unavailable");

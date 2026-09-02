@@ -209,14 +209,33 @@ const INCOME_CHAINS: Record<string, ChainSpec> = {
   generalAndAdministrativeExpenses: { kind: "first", tags: ["GeneralAndAdministrativeExpense"], unit: "money" },
   operatingExpenses: { kind: "first", tags: ["OperatingExpenses"], unit: "money" },
   operatingIncome: { kind: "first", tags: ["OperatingIncomeLoss"], unit: "money" },
+  /**
+   * `InterestExpenseOperating` is LAST: for a bank it is the whole interest
+   * expense (JPM FY2025 97.9B, and it files none of the four tags above, so the
+   * chain resolved nothing and the keyless WACC raised a critical gap the FMP
+   * path never shows), but for a non-bank that tags both, the non-operating
+   * figure is the borrowing cost the WACC wants.
+   */
   interestExpense: {
     kind: "first",
-    tags: ["InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt", "InterestAndDebtExpense"],
+    tags: [
+      "InterestExpense",
+      "InterestExpenseNonoperating",
+      "InterestExpenseDebt",
+      "InterestAndDebtExpense",
+      "InterestExpenseOperating",
+    ],
     unit: "money",
   },
   interestIncome: {
     kind: "first",
-    tags: ["InvestmentIncomeInterest", "InvestmentIncomeInterestAndDividend", "InterestAndDividendIncomeOperating"],
+    tags: [
+      "InvestmentIncomeInterest",
+      "InvestmentIncomeInterestAndDividend",
+      "InterestAndDividendIncomeOperating",
+      // The bank twin of the tag above: JPM's total interest income, 193.3B.
+      "InterestIncomeOperating",
+    ],
     unit: "money",
   },
   netInterestIncome: { kind: "first", tags: ["InterestIncomeExpenseNet"], unit: "money" },

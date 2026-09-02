@@ -576,14 +576,25 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
             ? "interest expense = 0 treated as undisclosed (FMP zero-for-undisclosed policy) — cost of debt and WACC unavailable"
             : "interest expense missing with debt outstanding — cost of debt and WACC unavailable",
       );
+      // A financial route's valuation is costed on equity alone — the
+      // excess-return model discounts at the cost of equity, and deposits
+      // rather than debt fund the balance sheet — so a missing cost of debt
+      // costs it no output. Filing this as CRITICAL there would make
+      // buildDataCompleteness (report/completeness.ts) report state "blocked"
+      // over a figure nothing downstream consumes. Non-financials keep the
+      // critical severity: their DCF discount rate does depend on it.
+      const financialRoute = inputs.isFinancial === true;
+      const interestGapReason = intExpNegative
+        ? `interest expense negative (${fmt(intExpRaw)}) with debt outstanding — implausible sign; cost of debt cannot be inferred`
+        : intExpRaw === 0
+          ? "interest expense reported as 0 with debt outstanding — treated as undisclosed; cost of debt cannot be inferred"
+          : "interest expense missing with debt outstanding — cost of debt cannot be inferred";
       gaps.push({
         field: "returns.wacc.interestExpense",
-        reason: intExpNegative
-          ? `interest expense negative (${fmt(intExpRaw)}) with debt outstanding — implausible sign; cost of debt cannot be inferred`
-          : intExpRaw === 0
-            ? "interest expense reported as 0 with debt outstanding — treated as undisclosed; cost of debt cannot be inferred"
-            : "interest expense missing with debt outstanding — cost of debt cannot be inferred",
-        severity: "critical",
+        reason: financialRoute
+          ? `${interestGapReason}; the financial route does not consume a cost of debt (its valuation is costed on equity alone), so this is disclosed rather than blocking`
+          : interestGapReason,
+        severity: financialRoute ? "warn" : "critical",
       });
     }
 

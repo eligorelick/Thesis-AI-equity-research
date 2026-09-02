@@ -1059,3 +1059,72 @@ describe("buildStatementsFromCompanyFacts — bank interest tags", () => {
     });
   });
 });
+
+describe("buildStatementsFromCompanyFacts — current maturities tagged together with finance leases", () => {
+  const k = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20" } as const;
+  const at = (val: number): Pt[] => [{ end: "2025-12-31", val, ...k }];
+  const row = (extra: Record<string, Pt[]>) =>
+    buildStatementsFromCompanyFacts(
+      facts({
+        Revenues: [{ start: "2025-01-01", end: "2025-12-31", val: 1_000, ...k }],
+        Assets: [{ end: "2025-12-31", val: 5_000, ...k }],
+        CashAndCashEquivalentsAtCarryingValue: [{ end: "2025-12-31", val: 100, ...k }],
+        ...extra,
+      }),
+      { ...OPTS, symbol: "X" },
+    ).balanceAnnual;
+
+  it("counts the combined current portion once when the noncurrent tag also carries finance leases", () => {
+    // Home Depot's shape: current installments are tagged
+    // LongTermDebtAndCapitalLeaseObligationsCurrent (debt + finance leases), the
+    // noncurrent tag is LongTermDebtAndCapitalLeaseObligations, and the lease
+    // liabilities are tagged in full. The finance leases then sit in the two
+    // debt tags exactly once, so only the operating leases join the sum.
+    const built = row({
+      LongTermDebtAndCapitalLeaseObligations: at(500),
+      LongTermDebtAndCapitalLeaseObligationsCurrent: at(40),
+      FinanceLeaseLiability: at(30),
+      FinanceLeaseLiabilityCurrent: at(5),
+      OperatingLeaseLiability: at(70),
+    });
+    expect(built.rows[0]).toMatchObject({ shortTermDebt: 40, longTermDebt: 500, capitalLeaseObligations: 100, totalDebt: 610 });
+    expect(built.notes).toContain("shortTermDebt 2025-12-31: from LongTermDebtAndCapitalLeaseObligationsCurrent");
+    expect(built.notes.some((n) => /netted out of the lease component/.test(n))).toBe(false);
+  });
+
+  it("nets the finance-lease slice of the combined current portion out of the lease component", () => {
+    const built = row({
+      LongTermDebtNoncurrent: at(500),
+      LongTermDebtAndCapitalLeaseObligationsCurrent: at(40),
+      FinanceLeaseLiability: at(30),
+      FinanceLeaseLiabilityCurrent: at(5),
+      OperatingLeaseLiability: at(70),
+    });
+    // 40 + 500 + (100 − 5): the 5 of current finance leases is already inside the 40.
+    expect(built.rows[0]).toMatchObject({ shortTermDebt: 40, longTermDebt: 500, capitalLeaseObligations: 100, totalDebt: 635 });
+    expect(built.notes.some((n) => /^totalDebt 2025-12-31:/.test(n) && /netted out of the lease component/.test(n))).toBe(true);
+  });
+
+  it("says so when the finance-lease slice cannot be separated", () => {
+    const built = row({
+      LongTermDebtNoncurrent: at(500),
+      LongTermDebtAndCapitalLeaseObligationsCurrent: at(40),
+      FinanceLeaseLiability: at(30),
+      OperatingLeaseLiability: at(70),
+    });
+    expect(built.rows[0]).toMatchObject({ shortTermDebt: 40, capitalLeaseObligations: 100, totalDebt: 640 });
+    expect(built.notes.some((n) => /^totalDebt 2025-12-31:/.test(n) && /may be counted twice/.test(n))).toBe(true);
+  });
+
+  it("drops the combined current portion when LongTermDebtCurrent is tagged beside it", () => {
+    const built = row({
+      LongTermDebtNoncurrent: at(500),
+      LongTermDebtCurrent: at(35),
+      LongTermDebtAndCapitalLeaseObligationsCurrent: at(40),
+    });
+    expect(built.rows[0]).toMatchObject({ shortTermDebt: 35, longTermDebt: 500, totalDebt: 535 });
+    expect(
+      built.notes.some((n) => /^shortTermDebt 2025-12-31:/.test(n) && /LongTermDebtAndCapitalLeaseObligationsCurrent excluded/.test(n)),
+    ).toBe(true);
+  });
+});

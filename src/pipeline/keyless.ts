@@ -141,9 +141,22 @@ const STATEMENT_ENDPOINTS = {
   cashflowQuarterly: "companyfacts→cash-flow(quarter)",
 } as const;
 
-const PROFILE_ENDPOINT = "derived:profile(edgar:submissions + yahoo:chart + dei:shares)";
 const ENTERPRISE_VALUES_ENDPOINT = "derived:enterprise-values(balance×close×shares)";
-const MARKET_CAP_ENDPOINT = "derived:market-cap(close×dei:shares)";
+/**
+ * The profile and market-cap-history endpoints name the share concept that
+ * actually served the count. A per-class reporter has no dei cover count, so
+ * claiming `dei:shares` there would be a false provenance string in the
+ * sources appendix — the same rule the shares-float endpoint follows.
+ */
+function sharesConcept(basis: SharesBasis | null): string {
+  return basis === "balance sheet CommonStockSharesOutstanding" ? `us-gaap:${BALANCE_SHEET_SHARES_TAG}` : "dei:shares";
+}
+function profileEndpoint(basis: SharesBasis | null): string {
+  return `derived:profile(edgar:submissions + yahoo:chart + ${sharesConcept(basis)})`;
+}
+function marketCapEndpoint(basis: SharesBasis | null): string {
+  return `derived:market-cap(close×${sharesConcept(basis)})`;
+}
 const SHARES_FLOAT_ENDPOINT = "companyfacts→shares-float(dei:EntityCommonStockSharesOutstanding + dei:EntityPublicFloat)";
 
 const DEI_SHARES_TAG = "EntityCommonStockSharesOutstanding";
@@ -676,8 +689,9 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       // explicit null rather than a 0 or a dropped key.
       const profileRow = row as FmpProfileRow;
       const asOf = metaResult !== null && metaResult.ok ? metaResult.value.asOf : inputs.today;
-      members.profile = sourced([profileRow], "computed", PROFILE_ENDPOINT, asOf, fetchedAt);
-      record("profile", "computed", PROFILE_ENDPOINT);
+      const profileEp = profileEndpoint(outstanding?.basis ?? null);
+      members.profile = sourced([profileRow], "computed", profileEp, asOf, fetchedAt);
+      record("profile", "computed", profileEp);
     }
   }
 
@@ -772,13 +786,14 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     if (rows.length === 0) {
       failKeyless(
         "marketCapHistory",
-        `no market-cap history: ${eodRows.length} price bar${eodRows.length === 1 ? "" : "s"} and ${deiShares.length} dei share observation${deiShares.length === 1 ? "" : "s"}`,
+        `no market-cap history: ${eodRows.length} price bar${eodRows.length === 1 ? "" : "s"} and ${deiShares.length} share observation${deiShares.length === 1 ? "" : "s"} (${seriesBasis})`,
         ["computed:market-cap"],
       );
     } else {
       notes.push(`keyless market-cap history: share counts from the ${seriesBasis}`);
-      members.marketCapHistory = sourced(rows, "computed", MARKET_CAP_ENDPOINT, newestDate(rows, inputs.today), fetchedAt);
-      record("marketCapHistory", "computed", MARKET_CAP_ENDPOINT);
+      const marketCapEp = marketCapEndpoint(shareSeries.basis);
+      members.marketCapHistory = sourced(rows, "computed", marketCapEp, newestDate(rows, inputs.today), fetchedAt);
+      record("marketCapHistory", "computed", marketCapEp);
     }
   }
 

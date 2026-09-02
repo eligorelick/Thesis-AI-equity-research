@@ -317,6 +317,13 @@ const LEASE_LIABILITY_SPEC: ChainSpec = {
   ],
 };
 
+/**
+ * The current portion of long-term debt AND finance leases, as Home Depot and
+ * other retailers tag their current installments. `resolveDebtOverlaps` keeps
+ * its finance-lease slice from being counted twice.
+ */
+const COMBINED_CURRENT_TAG = "LongTermDebtAndCapitalLeaseObligationsCurrent";
+
 const BALANCE_CHAINS: Record<string, ChainSpec> = {
   /**
    * Bank tagging (JPM): `CashAndCashEquivalentsAtCarryingValue` goes stale — its
@@ -366,7 +373,11 @@ const BALANCE_CHAINS: Record<string, ChainSpec> = {
     unit: "money",
     steps: [
       { kind: "first", tags: ["DebtCurrent"], unit: "money" },
-      { kind: "sumAny", tags: ["LongTermDebtCurrent", "ShortTermBorrowings", "CommercialPaper"], unit: "money" },
+      {
+        kind: "sumAny",
+        tags: ["LongTermDebtCurrent", "ShortTermBorrowings", "CommercialPaper", COMBINED_CURRENT_TAG],
+        unit: "money",
+      },
     ],
   },
   longTermDebt: {
@@ -1208,6 +1219,17 @@ function resolveDebtOverlaps(
     }
   }
 
+  // Case 4a: the combined current tag is a superset of `LongTermDebtCurrent`,
+  // so beside it the combined figure is dropped.
+  const combinedCurrent = shortTermTags.includes(COMBINED_CURRENT_TAG) ? cc.money(COMBINED_CURRENT_TAG) : null;
+  const combinedCurrentStands = combinedCurrent !== null && !shortTermTags.includes("LongTermDebtCurrent");
+  if (combinedCurrent !== null && !combinedCurrentStands && v.shortTermDebt != null) {
+    v.shortTermDebt = tidy(v.shortTermDebt - combinedCurrent, MONEY_DECIMALS);
+    notes.add(
+      `shortTermDebt ${ctx}: ${COMBINED_CURRENT_TAG} excluded — it contains LongTermDebtCurrent, which also resolved for this period`,
+    );
+  }
+
   const longTermTags = tagsOf("longTermDebt");
   // Case 2.
   if (longTermTags.includes("LongTermDebt") && v.longTermDebt != null) {
@@ -1237,6 +1259,25 @@ function resolveDebtOverlaps(
         value: leases.parts["operatingLeaseLiability"] ?? null,
       };
     }
+  }
+  // Case 4b: the combined current tag stands in `shortTermDebt` and carries the
+  // current finance leases, which `capitalLeaseObligations` also holds. (When
+  // case 1 fired above, the finance leases sit in the two debt tags exactly
+  // once and nothing is netted.)
+  if (combinedCurrentStands && full !== null) {
+    const financeCurrent = cc.money("FinanceLeaseLiabilityCurrent");
+    if (financeCurrent !== null) {
+      notes.add(
+        `totalDebt ${ctx}: shortTermDebt includes ${COMBINED_CURRENT_TAG}, whose finance-lease slice (FinanceLeaseLiabilityCurrent ${financeCurrent}) is also inside capitalLeaseObligations, so it is netted out of the lease component here; capitalLeaseObligations still reports the full ${full}`,
+      );
+      return {
+        label: "capitalLeaseObligations (less the finance-lease current portion already in shortTermDebt)",
+        value: tidy(full - financeCurrent, MONEY_DECIMALS),
+      };
+    }
+    notes.add(
+      `totalDebt ${ctx}: shortTermDebt includes ${COMBINED_CURRENT_TAG} and no FinanceLeaseLiabilityCurrent fact was filed, so its finance-lease slice may be counted twice`,
+    );
   }
   return { label: "capitalLeaseObligations", value: full };
 }

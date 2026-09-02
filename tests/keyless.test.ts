@@ -514,6 +514,13 @@ describe("applyKeylessFallbacks", () => {
     expect(out.notes).toContain(
       "keyless market-cap history: share counts from the balance sheet CommonStockSharesOutstanding",
     );
+    // The rendered endpoint strings name the concept that served the count.
+    expect(out.members.marketCapHistory.ok && out.members.marketCapHistory.value.endpoint).toBe(
+      "derived:market-cap(close×us-gaap:CommonStockSharesOutstanding)",
+    );
+    expect(out.members.profile.value.endpoint).toBe(
+      "derived:profile(edgar:submissions + yahoo:chart + us-gaap:CommonStockSharesOutstanding)",
+    );
     expect(out.notes).toContain(
       "keyless enterprise values: fallback share counts from the balance sheet CommonStockSharesOutstanding",
     );
@@ -528,6 +535,12 @@ describe("applyKeylessFallbacks", () => {
 
   it("prefers the dei cover count and names it in the notes when both concepts exist", async () => {
     const out = await applyKeylessFallbacks(inputs());
+    expect(out.members.profile.ok && out.members.profile.value.endpoint).toBe(
+      "derived:profile(edgar:submissions + yahoo:chart + dei:shares)",
+    );
+    expect(out.members.marketCapHistory.ok && out.members.marketCapHistory.value.endpoint).toBe(
+      "derived:market-cap(close×dei:shares)",
+    );
     expect(out.notes).toContain("profile: market cap from the dei cover page share count (14776 at 2025-10-17)");
     expect(out.notes).toContain("keyless market-cap history: share counts from the dei cover page");
     expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.endpoint).toBe(

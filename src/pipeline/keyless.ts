@@ -300,7 +300,7 @@ function sharePointsForConcept(
  * all. Same-`end` duplicates are refilings and stay deduped by max(`filed`);
  * they are never summed.
  */
-export function deiSharePoints(facts: CompanyFacts): {
+export function sharesOutstandingSeries(facts: CompanyFacts): {
   points: { value: number; asOf: string }[];
   basis: SharesBasis | null;
 } {
@@ -598,7 +598,7 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   const outstanding = built?.shares.outstanding ?? null;
   const marketCap = price !== null && outstanding !== null ? price * outstanding.value : null;
   const shareSeries = inputs.edgar.companyFacts.ok
-    ? deiSharePoints(inputs.edgar.companyFacts.value.data)
+    ? sharesOutstandingSeries(inputs.edgar.companyFacts.value.data)
     : { points: [], basis: null };
   const deiShares = shareSeries.points;
   /** Which share-count concept a derived figure rests on, for the notes. */

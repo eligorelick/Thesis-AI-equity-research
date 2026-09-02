@@ -26,6 +26,7 @@ export type DataSource =
   | "finra"
   | "fred"
   | "finnhub"
+  | "yahoo"
   | "anthropic"
   | "computed";
 

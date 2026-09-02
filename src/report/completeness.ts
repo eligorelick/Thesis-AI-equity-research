@@ -21,7 +21,18 @@ export function buildDataCompleteness(
   const actionableGaps = gaps.filter((gap) => gap.expected !== true);
   const criticalCount = actionableGaps.filter((gap) => gap.severity === "critical").length;
   const warningCount = actionableGaps.filter((gap) => gap.severity === "warn").length;
-  const edgarGaps = actionableGaps.filter((gap) => /edgar|company.?facts/i.test(`${gap.field} ${gap.reason}`));
+  // A `keyless.*` entry reports on the EDGAR + Yahoo SUBSTITUTION layer, not on
+  // EDGAR's availability, and it names its sources in prose ("served by edgar
+  // (companyfacts→income-statement)"). Classifying those as EDGAR gaps inverted
+  // the meaning: a keyed run that successfully filled its statements FROM
+  // companyfacts — the best possible EDGAR outcome — reported `edgar: "missing"`
+  // and downgraded forensics to "provisional". When EDGAR really is unavailable
+  // its own `edgar.*` member gaps are in this same manifest and still classify.
+  const isKeylessEntry = (gap: ManifestEntry): boolean =>
+    gap.field === "keyless" || gap.field.startsWith("keyless.");
+  const edgarGaps = actionableGaps.filter(
+    (gap) => !isKeylessEntry(gap) && /edgar|company.?facts/i.test(`${gap.field} ${gap.reason}`),
+  );
   const xbrlGaps = actionableGaps.filter((gap) => /xbrl/i.test(`${gap.field} ${gap.reason}`));
   // "failed" must mean the cross-check RAN and disagreed — not that it could
   // not be performed. Stage A already encodes that distinction in severity: a

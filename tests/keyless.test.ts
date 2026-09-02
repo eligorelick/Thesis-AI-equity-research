@@ -198,6 +198,7 @@ function inputs(over: Partial<KeylessInputs> = {}): KeylessInputs {
     sectorEtfSymbol: null,
     fmp: allGaps(),
     fmpKeyless: true,
+    edgarConfirmedIssuer: true,
     edgar: {
       cik: { ok: true, value: { data: { cik10: "0000320193", cik: 320193, ticker: "AAPL", title: "Apple Inc." }, asOf: "2026-09-01", source: "edgar", endpoint: "company_tickers.json", fetchedAt: NOW.toISOString() } },
       registrant: { name: "Apple Inc.", cik10: "0000320193", sic: "3571", sicDescription: "ELECTRONIC COMPUTERS", exchanges: ["Nasdaq"], tickers: ["AAPL"], fiscalYearEnd: "0927", stateOfIncorporation: "CA", forms: ["10-K", "10-Q", "8-K"] },
@@ -330,6 +331,43 @@ describe("applyKeylessFallbacks", () => {
     expect(out.members.marketCapHistory.ok).toBe(false);
     // Float needs a price to turn the filed dollar float into shares.
     expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.data.rows[0]).toMatchObject({ outstandingShares: 14_776, floatShares: null, freeFloat: null });
+  });
+
+  it("fills only the benchmark series when EDGAR did not confirm the issuer", async () => {
+    // A keyed plan whose EDGAR lookup failed but whose FMP profile supplied a
+    // CIK: SPY and the sector ETF are the same instruments whoever this company
+    // is, so they still substitute. Nothing that would assert an issuer identity
+    // is attempted — and no gap is filed for an attempt that never happened.
+    const base = inputs({
+      edgarConfirmedIssuer: false,
+      fmpKeyless: false,
+      sectorEtfSymbol: "XLK",
+      edgar: {
+        ...inputs().edgar,
+        registrant: null,
+        companyFacts: { ok: false, gap: { field: "edgar.companyFacts(AAPL)", reason: "EDGAR HTTP 503", severity: "warn" } },
+      },
+    });
+    const out = await applyKeylessFallbacks(base);
+    expect(out.replaced.sort()).toEqual(["sectorEtf", "spy"]);
+    expect(out.members.spy.ok && out.members.spy.value.source).toBe("yahoo");
+    expect(out.members.sectorEtf.ok && out.members.sectorEtf.value.source).toBe("yahoo");
+    // Every issuer-bound member keeps FMP's untouched result, by identity.
+    for (const member of ["profile", "quote", "incomeAnnual", "balanceQuarterly", "cashflowAnnual", "eodPrices", "enterpriseValues", "marketCapHistory", "sharesFloat"] as const) {
+      expect(out.members[member]).toBe(base.fmp[member]);
+    }
+    // ...and no keyless entry claims those were tried.
+    expect(out.gaps.map((g) => g.field).sort()).toEqual(["keyless.sectorEtf", "keyless.spy"]);
+    expect(out.notes.some((n) => /limited to the benchmark series/.test(n))).toBe(true);
+  });
+
+  it("attempts nothing at all when the issuer is unconfirmed and FMP already served the benchmarks", async () => {
+    const fmp = allGaps();
+    fmp.spy = okRows([{ symbol: "SPY", date: "2026-08-31", close: 400 }]);
+    fmp.sectorEtf = okRows([{ symbol: "XLK", date: "2026-08-31", close: 200 }]);
+    const out = await applyKeylessFallbacks(inputs({ fmp, edgarConfirmedIssuer: false }));
+    expect(out.replaced).toEqual([]);
+    expect(out.gaps).toEqual([]);
   });
 
   it("does nothing when EDGAR did not resolve the ticker", async () => {

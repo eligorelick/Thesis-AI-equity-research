@@ -97,7 +97,7 @@ import {
   type XbrlSummary,
 } from "@/pipeline/types";
 import { mergeManifest } from "@/pipeline/stageA/manifest";
-import { applyKeylessFallbacks } from "@/pipeline/keyless";
+import { applyKeylessFallbacks, type KeylessOutcome } from "@/pipeline/keyless";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1531,118 +1531,156 @@ export async function buildDataBundle(
   const edgarBundle = await pEdgar;
 
   // ---- keyless fallbacks: fill what FMP could not serve from EDGAR + Yahoo ---
-  // Runs only after EDGAR resolved the ticker to a registrant, never overwrites
-  // an FMP member that carries rows, and discloses every substitution as its own
+  // Runs only after EDGAR resolved the ticker to a CIK, never overwrites an FMP
+  // member that carries rows, and discloses every substitution as its own
   // `keyless.<member>` manifest entry.
   //
-  // The gate is issuer identity, not merely "a CIK exists". buildEdgarBundle
-  // will synthesize a CIK from FMP's own profile when company_tickers.json
-  // misses (`cik.value.source === "fmp"`); that is FMP vouching for itself, and
-  // in fixture mode it is a synthetic number for a fictional issuer. Fetching a
-  // Yahoo series for such a ticker would attach a real market's prices to an
-  // identity nothing independent confirmed. So the layer needs either SEC's own
-  // ticker table to have made the match, or SEC to have answered for that CIK
-  // (submissions or companyfacts) — which is also exactly the evidence every
-  // derived member is built from.
+  // Issuer identity is what gates the ISSUER-BOUND members, not the layer as a
+  // whole. buildEdgarBundle will synthesize a CIK from FMP's own profile when
+  // company_tickers.json misses (`cik.value.source === "fmp"`); that is FMP
+  // vouching for itself, and in fixture mode it is a synthetic number for a
+  // fictional issuer. Serving that ticker's profile, statements or price
+  // history from Yahoo would attach a real market's data to an identity nothing
+  // independent confirmed — so those members need either SEC's own ticker table
+  // to have made the match, or SEC to have answered for that CIK (submissions or
+  // companyfacts), which is also exactly the evidence they are built from.
+  //
+  // SPY and the sector ETF are not issuer-bound: they are index instruments,
+  // identical whoever this company turns out to be, and the spec calls for the
+  // sector-ETF fallback specifically when a keyed plan refuses that symbol. So
+  // the layer still runs for them with the issuer flag off.
+  //
+  // `!fmp.fixtureMode` guards that benchmark-only branch. With no FMP key AND
+  // no EDGAR confirmation, the company half of the bundle is synthetic contract
+  // fixtures for a fictional issuer (DEMO/DBNK); pulling live SPY bars alongside
+  // it would put real market data and invented fundamentals in one bundle and
+  // let Stage B compute a real relative-strength number for a company that does
+  // not exist. It also keeps the fictional-fixture projection network-free.
   const keylessGaps: ManifestEntry[] = [];
   const edgarConfirmedIssuer =
     edgarBundle.cik.ok &&
     (edgarBundle.cik.value.source === "edgar" ||
       edgarBundle.registrant !== null ||
       edgarBundle.companyFacts.ok);
-  if (opts.keyless !== false && edgarConfirmedIssuer) {
-    const keyless = await applyKeylessFallbacks({
-      symbol: sym,
-      today,
-      eodFrom,
-      sectorEtfSymbol,
-      fmp: {
-        profile,
-        quote,
-        incomeAnnual: statements.incomeAnnual,
-        incomeQuarterly: statements.incomeQuarterly,
-        balanceAnnual: statements.balanceAnnual,
-        balanceQuarterly: statements.balanceQuarterly,
-        cashflowAnnual: statements.cashflowAnnual,
-        cashflowQuarterly: statements.cashflowQuarterly,
-        eodPrices,
-        spy: spyPrices,
-        sectorEtf: sectorEtfPrices,
-        enterpriseValues,
-        marketCapHistory,
-        sharesFloat,
-      },
-      fmpKeyless: fmp.fixtureMode,
-      edgar: {
-        cik: edgarBundle.cik,
-        registrant: edgarBundle.registrant,
-        companyFacts: edgarBundle.companyFacts,
-      },
-      yahoo,
-      annualPeriods: ANNUAL_PERIODS,
-      quarterlyPeriods: QUARTERLY_PERIODS,
-      now,
-      resolveSectorEtf,
-    });
-    const m = keyless.members;
-    // A member the fallback left alone is the very object that went in; only a
-    // genuinely new result is re-sorted, so a skipped run cannot perturb
-    // anything (the fictional-fixture projection depends on that).
-    const swap = <TRow extends FmpRawRow>(
-      next: FetchResult<FmpPayload<TRow>>,
-      prev: FetchResult<FmpPayload<TRow>>,
-    ): FetchResult<FmpPayload<TRow>> => (next === prev ? prev : sortRows(next));
-
-    profile = swap(m.profile, profile);
-    quote = swap(m.quote, quote);
-    statements = {
-      ...statements,
-      incomeAnnual: swap(m.incomeAnnual, statements.incomeAnnual),
-      incomeQuarterly: swap(m.incomeQuarterly, statements.incomeQuarterly),
-      balanceAnnual: swap(m.balanceAnnual, statements.balanceAnnual),
-      balanceQuarterly: swap(m.balanceQuarterly, statements.balanceQuarterly),
-      cashflowAnnual: swap(m.cashflowAnnual, statements.cashflowAnnual),
-      cashflowQuarterly: swap(m.cashflowQuarterly, statements.cashflowQuarterly),
-    };
-    eodPrices = swap(m.eodPrices, eodPrices);
-    spyPrices = swap(m.spy, spyPrices);
-    sectorEtfPrices = swap(m.sectorEtf, sectorEtfPrices);
-    resolvedSectorEtfSymbol = keyless.sectorEtfSymbol ?? sectorEtfSymbol;
-    enterpriseValues = swap(m.enterpriseValues, enterpriseValues);
-    marketCapHistory = swap(m.marketCapHistory, marketCapHistory);
-    sharesFloat = swap(m.sharesFloat, sharesFloat);
-    keylessGaps.push(...keyless.gaps);
-
-    // FRED's sector overlay was routed from FMP's profile long before this
-    // point, so a sector that only the keyless profile knows arrives too late to
-    // fetch. The series are simply not in this bundle; say so rather than let a
-    // reader assume the overlay was considered and found empty.
-    if (gicsSector === null) {
-      const keylessSector = profile.ok ? profile.value.data.rows[0]?.sector : undefined;
-      const keylessGics = resolveGicsSector(
-        typeof keylessSector === "string" ? keylessSector : null,
-      );
-      if (keylessGics !== null) {
-        const entry: ManifestEntry = {
-          field: "keyless.macroSectorOverlay",
-          reason: `keyless profile resolved after macro routing; sector FRED overlay not fetched (sector ${keylessGics} was only known once EDGAR + Yahoo filled the profile)`,
-          severity: "info",
-          attemptedSources: ["fred"],
-          // Same rule as the substitution entries: structural on a plan with no
-          // FMP key, an incident on a keyed one.
-          expected: fmp.fixtureMode,
-        };
-        keylessGaps.push(entry);
-      }
+  const runKeyless =
+    opts.keyless !== false &&
+    edgarBundle.cik.ok &&
+    (edgarConfirmedIssuer || !fmp.fixtureMode);
+  if (runKeyless) {
+    // The ONE fallible step in a function whose contract is "nothing throws".
+    // keyless.ts wraps its network calls in `attempt`, but the XBRL statement
+    // build, the beta regression and the SIC lookup run bare, so an unexpected
+    // throw there would escape buildDataBundle itself. A failure of the
+    // substitution layer must degrade to FMP's own results plus a disclosure.
+    let keyless: KeylessOutcome | null = null;
+    try {
+      keyless = await applyKeylessFallbacks({
+        symbol: sym,
+        today,
+        eodFrom,
+        sectorEtfSymbol,
+        fmp: {
+          profile,
+          quote,
+          incomeAnnual: statements.incomeAnnual,
+          incomeQuarterly: statements.incomeQuarterly,
+          balanceAnnual: statements.balanceAnnual,
+          balanceQuarterly: statements.balanceQuarterly,
+          cashflowAnnual: statements.cashflowAnnual,
+          cashflowQuarterly: statements.cashflowQuarterly,
+          eodPrices,
+          spy: spyPrices,
+          sectorEtf: sectorEtfPrices,
+          enterpriseValues,
+          marketCapHistory,
+          sharesFloat,
+        },
+        fmpKeyless: fmp.fixtureMode,
+        edgarConfirmedIssuer,
+        edgar: {
+          cik: edgarBundle.cik,
+          registrant: edgarBundle.registrant,
+          companyFacts: edgarBundle.companyFacts,
+        },
+        yahoo,
+        annualPeriods: ANNUAL_PERIODS,
+        quarterlyPeriods: QUARTERLY_PERIODS,
+        now,
+        resolveSectorEtf,
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      keylessGaps.push({
+        field: "keyless",
+        reason: `the keyless fallback layer threw and was abandoned: ${reason}; every member kept the result FMP returned and nothing was substituted`,
+        severity: "warn",
+        attemptedSources: ["edgar:companyfacts", "yahoo"],
+      });
+      progress(`keyless: layer failed (${reason}) — keeping FMP's results`);
     }
 
-    // Derivation notes are per-period bookkeeping ("this quarter had no debt
-    // tag"), not missing-data disclosures: they belong in the run log, not the
-    // manifest. The member-level failures they accompany are already gaps.
-    for (const note of keyless.notes) progress(`keyless: ${note}`);
-    progress(`keyless: replaced ${keyless.replaced.join(", ") || "nothing"}`);
+    if (keyless !== null) {
+      const m = keyless.members;
+      // A member the fallback left alone is the very object that went in; only a
+      // genuinely new result is re-sorted, so a skipped run cannot perturb
+      // anything (the fictional-fixture projection depends on that).
+      const swap = <TRow extends FmpRawRow>(
+        next: FetchResult<FmpPayload<TRow>>,
+        prev: FetchResult<FmpPayload<TRow>>,
+      ): FetchResult<FmpPayload<TRow>> => (next === prev ? prev : sortRows(next));
+
+      profile = swap(m.profile, profile);
+      quote = swap(m.quote, quote);
+      statements = {
+        ...statements,
+        incomeAnnual: swap(m.incomeAnnual, statements.incomeAnnual),
+        incomeQuarterly: swap(m.incomeQuarterly, statements.incomeQuarterly),
+        balanceAnnual: swap(m.balanceAnnual, statements.balanceAnnual),
+        balanceQuarterly: swap(m.balanceQuarterly, statements.balanceQuarterly),
+        cashflowAnnual: swap(m.cashflowAnnual, statements.cashflowAnnual),
+        cashflowQuarterly: swap(m.cashflowQuarterly, statements.cashflowQuarterly),
+      };
+      eodPrices = swap(m.eodPrices, eodPrices);
+      spyPrices = swap(m.spy, spyPrices);
+      sectorEtfPrices = swap(m.sectorEtf, sectorEtfPrices);
+      resolvedSectorEtfSymbol = keyless.sectorEtfSymbol ?? sectorEtfSymbol;
+      enterpriseValues = swap(m.enterpriseValues, enterpriseValues);
+      marketCapHistory = swap(m.marketCapHistory, marketCapHistory);
+      sharesFloat = swap(m.sharesFloat, sharesFloat);
+      keylessGaps.push(...keyless.gaps);
+
+      // FRED's sector overlay was routed from FMP's profile long before this
+      // point, so a sector that only the keyless profile knows arrives too late
+      // to fetch. The series are simply not in this bundle; say so rather than
+      // let a reader assume the overlay was considered and found empty.
+      if (gicsSector === null) {
+        const keylessSector = profile.ok ? profile.value.data.rows[0]?.sector : undefined;
+        const keylessGics = resolveGicsSector(
+          typeof keylessSector === "string" ? keylessSector : null,
+        );
+        if (keylessGics !== null) {
+          keylessGaps.push({
+            field: "keyless.macroSectorOverlay",
+            reason: `keyless profile resolved after macro routing; sector FRED overlay not fetched (sector ${keylessGics} was only known once the fallback layer filled the profile)`,
+            severity: "info",
+            attemptedSources: ["fred"],
+            // Same rule as the substitution entries: structural on a plan with
+            // no FMP key, an incident on a keyed one.
+            expected: fmp.fixtureMode,
+          });
+        }
+      }
+
+      // Derivation notes are per-period bookkeeping ("this quarter had no debt
+      // tag"), not missing-data disclosures: they belong in the run log, not the
+      // manifest. The member-level failures they accompany are already gaps.
+      for (const note of keyless.notes) progress(`keyless: ${note}`);
+      progress(`keyless: replaced ${keyless.replaced.join(", ") || "nothing"}`);
+    }
   } else if (opts.keyless !== false) {
-    progress(`keyless: skipped — EDGAR did not confirm ${sym} as a registrant`);
+    progress(
+      `keyless: skipped — EDGAR did not confirm ${sym} as a registrant${fmp.fixtureMode ? " and FMP is serving fixtures, so even the benchmark series stay synthetic" : ""}`,
+    );
   }
 
   const benchmarkPrices: BenchmarkPrices = {

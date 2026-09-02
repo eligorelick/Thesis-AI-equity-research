@@ -14,7 +14,7 @@ import {
   type EdgarTransportResponse,
 } from "@/providers/edgar";
 import { createFmpClient } from "@/providers/fmp";
-import { createYahooClient } from "@/providers/yahoo";
+import { createYahooClient, type YahooClient } from "@/providers/yahoo";
 import { makeLimiter } from "@/providers/http";
 import type { CompanyFacts } from "@/edgar/xbrl";
 import type { FinraConfig } from "@/providers/finra";
@@ -172,6 +172,35 @@ function edgarTransport(): EdgarTransport {
   };
 }
 
+/**
+ * A Yahoo client whose payload explodes the moment the orchestrator reads its
+ * rows. The fault has to land OUTSIDE keyless.ts's own `attempt` wrapper —
+ * `attempt` only guards the fetch itself, while the XBRL build, the beta
+ * regression and the row reads that follow run bare.
+ */
+function explodingYahoo(): YahooClient {
+  const boom = {
+    ok: true,
+    value: {
+      data: {
+        get rows(): never {
+          throw new Error("poisoned keyless payload");
+        },
+        raw: null,
+      },
+      asOf: "2026-09-01",
+      source: "yahoo",
+      endpoint: "/v8/finance/chart/AAPL",
+      fetchedAt: NOW.toISOString(),
+    },
+  };
+  return {
+    dailyHistory: () => Promise.resolve(boom),
+    meta: () => Promise.resolve(boom),
+    quote: () => Promise.resolve(boom),
+  } as unknown as YahooClient;
+}
+
 function noNetworkConfigs(): { fred: FredConfig; finnhub: FinnhubConfig; finra: FinraConfig } {
   const unavailable = (): Promise<Response> => Promise.resolve(new Response("not available", { status: 404 }));
   return {
@@ -267,6 +296,66 @@ describe("buildDataBundle without an FMP key", () => {
     expect(withKeyless.gaps).toEqual(withoutKeyless.gaps);
     expect(provenance(withKeyless)).toEqual(provenance(withoutKeyless));
     expect(withKeyless.gaps.some((g) => g.field.startsWith("keyless."))).toBe(false);
+  });
+
+  it("still builds, and discloses a warn gap, when the keyless layer throws", async () => {
+    const bundle = await buildDataBundle("AAPL", {
+      now: () => NOW,
+      fmp: createFmpClient({ apiKey: "", fixturesDir: "fixtures/fmp" }),
+      edgar: createEdgarClient({ transport: edgarTransport() }),
+      yahoo: explodingYahoo(),
+      ...noNetworkConfigs(),
+    });
+    // buildDataBundle's contract is that nothing throws: reaching here is the
+    // assertion. The failure is disclosed, not swallowed.
+    const failure = bundle.gaps.find((g) => g.field === "keyless");
+    expect(failure?.severity).toBe("warn");
+    expect(failure?.reason).toMatch(/poisoned keyless payload/);
+    // FMP's own results are untouched — no member was half-substituted.
+    expect(bundle.statements.incomeAnnual.ok).toBe(false);
+    expect(bundle.profile.ok).toBe(false);
+    expect(bundle.eodPrices.ok).toBe(false);
+    expect(bundle.gaps.some((g) => g.field.startsWith("keyless."))).toBe(false);
+  });
+
+  it("fills only SPY and the sector ETF when a keyed plan refuses them and EDGAR is down", async () => {
+    // EDGAR 404s everything, so the CIK is the one FMP's own profile carries and
+    // no independent source confirms the issuer. The benchmark series are index
+    // instruments that assert nothing about this company, so they still fall
+    // back; the company's own members stay exactly as FMP left them.
+    const fmpFetch: typeof fetch = (async (input: string | URL | Request) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      const endpoint = /\/stable\/(.+)$/.exec(url.pathname)![1]!;
+      const symbol = url.searchParams.get("symbol");
+      const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+      if (endpoint === "profile") return json([{ symbol: "AAPL", companyName: "Apple Inc.", sector: "Technology", currency: "USD", country: "US", cik: "0000320193" }]);
+      if (endpoint === "historical-price-eod/full" && symbol === "AAPL") return json([{ symbol, date: "2026-09-01", open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
+      if (endpoint === "historical-price-eod/full") return new Response("Premium Query Parameter: 'Special Endpoint : This value set for 'symbol' is not available under your current subscription", { status: 402 });
+      return json({ "Error Message": "not in this test" }, 401);
+    }) as unknown as typeof fetch;
+    const edgarDown: EdgarTransport = {
+      fetchText: () =>
+        Promise.resolve({ status: 404, body: "not found", fetchedAt: NOW.toISOString(), fromCache: false, stale: false }),
+    };
+    const bundle = await buildDataBundle("AAPL", {
+      now: () => NOW,
+      eodYears: 0,
+      fmp: createFmpClient({ apiKey: "KEYED", fetchImpl: fmpFetch, limiter: makeLimiter(1e6, 1e6), now: () => NOW }),
+      edgar: createEdgarClient({ transport: edgarDown }),
+      yahoo: fakeYahoo(),
+      ...noNetworkConfigs(),
+    });
+    expect(bundle.edgar.cik.ok && bundle.edgar.cik.value.source).toBe("fmp");
+    expect(bundle.benchmarkPrices.spy.ok && bundle.benchmarkPrices.spy.value.source).toBe("yahoo");
+    expect(bundle.benchmarkPrices.sectorEtf.ok && bundle.benchmarkPrices.sectorEtf.value.source).toBe("yahoo");
+    expect(bundle.gaps.find((g) => g.field === "keyless.sectorEtf")?.reason).toMatch(/HTTP 402/);
+    // Nothing issuer-bound was substituted, and nothing claims it was tried.
+    expect(bundle.statements.incomeAnnual.ok).toBe(false);
+    expect(bundle.enterpriseValues.ok).toBe(false);
+    expect(bundle.gaps.filter((g) => g.field.startsWith("keyless.")).map((g) => g.field).sort()).toEqual([
+      "keyless.sectorEtf",
+      "keyless.spy",
+    ]);
   });
 
   it("serves a refused sector ETF from Yahoo on a keyed plan while keeping FMP statements", async () => {

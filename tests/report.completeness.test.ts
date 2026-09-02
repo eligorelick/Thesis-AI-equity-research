@@ -33,6 +33,62 @@ describe("report data completeness", () => {
     });
   });
 
+  it("does not read a keyless substitution as an EDGAR outage on a keyed plan", () => {
+    // A keyed plan whose statements FMP refused were filled FROM companyfacts:
+    // `expected` is false (the substitution is an incident on a paid plan) and
+    // the reason names edgar, but EDGAR was the source that SUCCEEDED here.
+    const gaps: ManifestEntry[] = [
+      {
+        field: "keyless.incomeAnnual",
+        reason:
+          "served by edgar (companyfacts→income-statement(annual)) because FMP returned unparseable body (HTTP 402)",
+        severity: "info",
+        expected: false,
+      },
+      {
+        field: "keyless.macroSectorOverlay",
+        reason:
+          "keyless profile resolved after macro routing; sector FRED overlay not fetched (sector Information Technology was only known once the fallback layer filled the profile)",
+        severity: "info",
+        expected: false,
+      },
+      {
+        field: "keyless",
+        reason:
+          "the keyless fallback layer threw and was abandoned: boom; every member kept the result FMP returned and nothing was substituted",
+        severity: "warn",
+        attemptedSources: ["edgar:companyfacts", "yahoo"],
+      },
+    ];
+    expect(buildDataCompleteness(gaps)).toEqual({
+      state: "degraded",
+      criticalCount: 0,
+      warningCount: 1,
+      edgar: "available",
+      xbrl: "checked",
+      forensicValidation: "complete",
+    });
+  });
+
+  it("still reports a real EDGAR outage alongside a keyless substitution", () => {
+    // The exclusion is scoped to the `keyless.*` namespace: EDGAR's own member
+    // gap is in the same manifest and still classifies the run as missing.
+    expect(
+      buildDataCompleteness([
+        {
+          field: "keyless.incomeAnnual",
+          reason: "EDGAR companyfacts unavailable: EDGAR HTTP 503",
+          severity: "warn",
+        },
+        {
+          field: "edgar.companyFacts(AAPL)",
+          reason: "EDGAR HTTP 503",
+          severity: "warn",
+        },
+      ]),
+    ).toMatchObject({ edgar: "missing", forensicValidation: "provisional" });
+  });
+
   it("reports a complete state when no provider gap was recorded", () => {
     expect(buildDataCompleteness([])).toEqual({
       state: "complete",

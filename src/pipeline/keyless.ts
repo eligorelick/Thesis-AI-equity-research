@@ -86,6 +86,20 @@ export interface KeylessInputs {
   fmp: KeylessMembers;
   /** No FMP key configured → the substitution gaps are `expected`. */
   fmpKeyless: boolean;
+  /**
+   * SEC independently tied this ticker to this registrant — either its own
+   * ticker table made the match, or it answered for the CIK with submissions or
+   * companyfacts.
+   *
+   * When false, only the members that assert NOTHING about the issuer are
+   * eligible: the SPY and sector-ETF benchmark series are the same instruments
+   * whoever the company turns out to be. Everything else — the profile, the
+   * quote, the statements, the company's own price history and every figure
+   * derived from them — would be publishing "this is that issuer's data" on the
+   * strength of a ticker string alone, so those members keep FMP's result and
+   * no gap is filed for a substitution that was never attempted.
+   */
+  edgarConfirmedIssuer: boolean;
   edgar: {
     cik: FetchResult<CikMapping>;
     registrant: EdgarRegistrant | null;
@@ -303,8 +317,24 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   const cik10 = inputs.edgar.cik.value.data.cik10;
   const registrant = inputs.edgar.registrant;
 
+  /**
+   * Every member except the two benchmark series. Substituting one of these
+   * publishes a claim about WHICH COMPANY the data belongs to, so each needs
+   * `edgarConfirmedIssuer`. `spy` and `sectorEtf` are index instruments that
+   * belong to no issuer, so they stay eligible either way.
+   */
+  const issuerBound = (member: keyof KeylessMembers): boolean =>
+    member !== "spy" && member !== "sectorEtf";
+
   const needs = (member: keyof KeylessMembers): boolean =>
+    (inputs.edgarConfirmedIssuer || !issuerBound(member)) &&
     needsFallback(inputs.fmp[member] as AnyMemberResult);
+
+  if (!inputs.edgarConfirmedIssuer) {
+    notes.push(
+      `keyless fallbacks limited to the benchmark series: EDGAR did not confirm ${inputs.symbol} as a registrant, so no member that would assert an issuer identity was attempted`,
+    );
+  }
 
   /** A member was served from a keyless source: disclose what replaced what. */
   const record = (member: keyof KeylessMembers, source: DataSource, endpoint: string): void => {
@@ -367,8 +397,10 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
 
   // --- Statements: one companyfacts build feeds all six members -------------
 
-  const factsOk = inputs.edgar.companyFacts.ok;
-  const built: BuiltStatements | null = factsOk
+  // Every consumer of `built` (the six statements, the profile, the derived
+  // capitalization members) is issuer-bound, so an unconfirmed issuer skips the
+  // whole build rather than doing the work and discarding it.
+  const built: BuiltStatements | null = inputs.edgar.companyFacts.ok && inputs.edgarConfirmedIssuer
     ? buildStatementsFromCompanyFacts(inputs.edgar.companyFacts.value.data, {
         symbol: inputs.symbol,
         cik: cik10,

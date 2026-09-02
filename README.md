@@ -12,8 +12,8 @@ comparison, watchlist, Markdown export, and browser print-to-PDF support.
 
 ## What it does
 
-- Fetches typed data from Financial Modeling Prep, SEC EDGAR, FINRA, FRED, and
-  Finnhub.
+- Fetches typed data from Financial Modeling Prep, SEC EDGAR, Yahoo Finance,
+  FINRA, FRED, and Finnhub.
 - Validates freshness, balance-sheet identities, and selected FMP figures
   against EDGAR XBRL data.
 - Computes growth, returns, capital structure, valuation, projections,
@@ -46,6 +46,11 @@ npm run dev
 On macOS or Linux, use `cp .env.example .env`. Open
 [http://127.0.0.1:3000](http://127.0.0.1:3000).
 
+A provider key is optional. With no `FMP_API_KEY`, set `EDGAR_CONTACT` in
+`.env` to a truthful "Name email" identity and real US-listed tickers are
+served from SEC EDGAR and Yahoo instead of FMP (see *Without an FMP
+subscription* below).
+
 ### Synthetic demo mode
 
 No API key is needed to evaluate the interface:
@@ -63,9 +68,12 @@ again with a key in your `.env`, start the server with `FMP_API_KEY=""`.
 `/report/sample` is static and always renders, key or no key.
 
 Bundled FMP-compatible fixtures and the sample report are invented contract
-data, not current market data or copied provider responses. The company route
-can still try keyless FINRA, FRED, and EDGAR paths; use `/report/sample` when you
-want a static demonstration with no provider request.
+data, not current market data or copied provider responses. Any other symbol
+sent to `/company/SYMBOL` with no `FMP_API_KEY` is a live request: with
+`EDGAR_CONTACT` configured it returns a full report sourced from SEC EDGAR and
+Yahoo (see *Without an FMP subscription*); without it, live EDGAR is disabled
+and the page renders as disclosed gaps. Use `/report/sample` when you want a
+static demonstration with no provider request.
 
 For a production build:
 
@@ -83,7 +91,7 @@ credential is optional.
 
 | Variable | Purpose | Behavior when absent |
 |---|---|---|
-| `FMP_API_KEY` | Statements, prices, estimates, ownership, segments, and peers | Uses the fictional `DEMO` and `DBNK` fixtures |
+| `FMP_API_KEY` | Statements, prices, estimates, ownership, segments, and peers | Real tickers are served from SEC EDGAR and Yahoo (see *Without an FMP subscription*); `DEMO`/`DBNK` use the fictional fixtures |
 | `ANTHROPIC_API_KEY` | Grounded bull, bear, and synthesis passes | Produces a deterministic data-only report |
 | `FRED_API_KEY` | Macroeconomic series | Uses supported keyless CSV data where available |
 | `FINNHUB_API_KEY` | Insider sentiment | Records the source as unavailable |
@@ -102,14 +110,56 @@ credential is optional.
 | `THESIS_DATA_DIR` | SQLite directory override | Uses the operating-system app-data directory |
 | `THESIS_IMPORT_LEGACY_DB` | Set to `1` for a one-time copy of an older in-repo `data/thesis.db` into the app-data location | The in-repo database is left untouched and unused |
 
+### Without an FMP subscription
+
+Set only `EDGAR_CONTACT`. FMP stays the primary source for every member;
+wherever FMP cannot serve one — no key, an empty response, HTTP 402, or a
+refused symbol — the pipeline fills it from public keyless sources instead of
+leaving the report empty:
+
+| Member | Source | Provenance |
+| --- | --- | --- |
+| Statements (income statement, balance sheet, cash flow), shares outstanding, public float | SEC EDGAR XBRL company facts | `edgar` |
+| Registrant name, sector and industry (from SIC), exchange, fiscal year end | SEC EDGAR submissions | `edgar` |
+| Daily prices for the symbol, SPY, and the sector ETF; quote; listing date | Yahoo Finance chart endpoint | `yahoo` |
+| Beta, market cap, quarterly enterprise values, daily market-cap history, float | computed from the above | `computed` |
+
+Beta is estimated from five years of monthly returns against SPY; market cap
+is price times shares outstanding. Quarterly cash-flow figures, and any
+quarter a filer reports only year-to-date, are derived by subtraction and
+marked `derivation` on the row; a line item a filer tags with a non-standard
+extension tag yields `null`, never a guess. Every replaced member is recorded
+in the missing-data manifest as `keyless.<member>`, naming why FMP could not
+serve it.
+
+Analyst estimates and price targets, grades consensus, peers, insider trades
+and statistics, 13F institutional ownership, news and press releases,
+transcripts, executive compensation, segment revenue, the earnings calendar,
+and FMP's derived key-metrics, ratios, and financial-growth rows have no
+keyless source and stay disclosed gaps (Stage B computes its own
+growth/margin/return figures from the statements either way).
+
+The Yahoo endpoint is unofficial and best-effort: requests carry a
+User-Agent, are rate-limited and cached, and any failure becomes a disclosed
+gap rather than an error. The same fallback also fills members that an
+entry-tier FMP plan refuses outright, such as sector-ETF price history, even
+when a key is configured. `DEMO` and `DBNK` remain the fictional fixtures,
+served only when no `FMP_API_KEY` is configured; they never reach EDGAR or
+Yahoo. Because keyless statements are sourced from XBRL, the FMP-versus-XBRL
+cross-check on those rows is recorded as a passing identity check rather than
+a numeric comparison.
+
 Any FMP plan works. Lower tiers cap the `limit` parameter (5 periods on the
 entry plans) and restrict some endpoints: Thesis reads the cap from FMP's own
 rejection, retries within it, and records the truncated history depth in the
 missing-data manifest, while restricted endpoints (insider trades,
-institutional ownership, news, transcripts, sector ETF prices) become disclosed
-gaps rather than failures. Five fiscal years still support the growth, returns,
-forensic, DCF and scoring modules; own-history multiple percentiles need eight
-quarters and are withheld until the plan supplies them.
+institutional ownership, news, transcripts) become disclosed gaps rather than
+failures. Sector-ETF price history that an entry-tier plan refuses is instead
+served from Yahoo when `EDGAR_CONTACT` is configured, the same fallback real
+tickers use with no key at all (see *Without an FMP subscription* above).
+Five fiscal years still support the growth, returns, forensic, DCF and
+scoring modules; own-history multiple percentiles need eight quarters and are
+withheld until the plan supplies them.
 
 A data-only report (no `ANTHROPIC_API_KEY`) is not empty: it carries every
 deterministic Stage B result — growth, margins, returns, capital structure,
@@ -263,7 +313,7 @@ Repository administrators must configure branch protection to require the
 ```text
 src/              application, providers, pipeline, reports, database, and UI
 tests/            deterministic unit and integration tests
-fixtures/fmp/     fictional provider-contract data for keyless demo mode
+fixtures/fmp/     fictional provider-contract data for the no-key demo fixtures
 fixtures/edgar/   compact SEC excerpts required by extraction tests
 fixtures/report/  fictional complete sample report
 ```
@@ -279,6 +329,8 @@ fixtures/report/  fictional complete sample report
   retries, web searches, and provider pricing.
 - This build is designed for one local user and should not be exposed publicly
   without additional authentication and authorization.
+- Keyless statements are derived from XBRL tags; a filer that uses extension
+  tags for a line item yields `null` for that field, never a guess.
 
 ## Contributing
 

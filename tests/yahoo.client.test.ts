@@ -178,17 +178,26 @@ describe("YahooClient.dailyHistory", () => {
     ]);
   });
 
-  it("dates bars by the exchange offset so an Asian session does not land on the prior UTC day", async () => {
-    const { impl } = fakeFetch(() => ({
-      status: 200,
-      body: chart({ bars: 1, gmtoffset: 32400, symbol: "7203.T" }),
-    }));
-    const res = await client(impl).dailyHistory("7203.T", "2026-08-20", "2026-09-01");
+  it("dates bars by the exchange gmtoffset rather than by UTC", async () => {
+    // A session that opens 09:00 in a +09:00 exchange is still 2026-08-24 there
+    // while UTC has not yet reached it; the row must carry the session's date.
+    const { impl } = fakeFetch(() => ({ status: 200, body: chart({ bars: 1, gmtoffset: 32400 }) }));
+    const res = await client(impl).dailyHistory("AAPL", "2026-08-20", "2026-09-01");
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.data.rows[0]!.date).toBe("2026-08-24");
-    // FMP's "7203.T" is Yahoo's "7203-T" once class separators are mapped.
-    expect(res.value.data.rows[0]!.symbol).toBe("7203-T");
+  });
+
+  it("maps a class separator to Yahoo's dash and stamps rows with the mapped symbol", async () => {
+    // `.` is a CLASS separator in FMP's US tickers (BRK.B), which Yahoo spells
+    // BRK-B. It is not a general dot-to-dash rule: Yahoo spells Toyota 7203.T,
+    // where the `.T` is an exchange suffix, and the branch is US-only.
+    const { impl, calls } = fakeFetch(() => ({ status: 200, body: chart({ bars: 1, symbol: "BRK-B" }) }));
+    const res = await client(impl).dailyHistory("BRK.B", "2026-08-20", "2026-09-01");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(calls[0]!.url).toContain("/v8/finance/chart/BRK-B?");
+    expect(res.value.data.rows[0]!.symbol).toBe("BRK-B");
   });
 
   it("keeps a bar whose volume alone is missing, but never invents a zero volume", async () => {

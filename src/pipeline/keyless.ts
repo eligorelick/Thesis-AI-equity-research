@@ -617,7 +617,12 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     } else {
       const beta = estimateBeta(closePoints(eodRows), closePoints(spyRows));
       if (beta.gap !== null) gaps.push(beta.gap);
-      notes.push(`profile: ${beta.note}`);
+      // The regression's fit is what says how much of this stock's movement the
+      // benchmark explains; the spec calls for reporting it, and it was
+      // computed and then dropped on the floor.
+      notes.push(
+        `profile: ${beta.note}${beta.rSquared !== null ? ` (R² ${beta.rSquared.toFixed(2)})` : ""}`,
+      );
       if (outstanding !== null) {
         notes.push(
           `profile: market cap from the ${outstanding.basis} share count (${outstanding.value} at ${outstanding.asOf})`,

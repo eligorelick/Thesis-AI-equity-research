@@ -576,13 +576,19 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
             ? "interest expense = 0 treated as undisclosed (FMP zero-for-undisclosed policy) — cost of debt and WACC unavailable"
             : "interest expense missing with debt outstanding — cost of debt and WACC unavailable",
       );
-      // A financial route's valuation is costed on equity alone — the
-      // excess-return model discounts at the cost of equity, and deposits
-      // rather than debt fund the balance sheet — so a missing cost of debt
-      // costs it no output. Filing this as CRITICAL there would make
+      // Every financial route — bank, insurer and mortgage REIT — is valued on
+      // the cost of equity alone (the excess-return and price-to-book models),
+      // and none of them consumes a WACC cost of debt, so a missing one costs
+      // them no output. Filing this as CRITICAL there would make
       // buildDataCompleteness (report/completeness.ts) report state "blocked"
-      // over a figure nothing downstream consumes. Non-financials keep the
-      // critical severity: their DCF discount rate does depend on it.
+      // over a figure nothing downstream consumes.
+      //
+      // This downgrade applies on KEYED plans too, not only keyless ones: a
+      // vendor failure to supply interest expense for a bank now yields a warn
+      // rather than blocking the report. That is deliberate — the severity
+      // tracks what the route consumes, not which provider served it.
+      // Non-financials keep the critical severity: their DCF discount rate does
+      // depend on it.
       const financialRoute = inputs.isFinancial === true;
       const interestGapReason = intExpNegative
         ? `interest expense negative (${fmt(intExpRaw)}) with debt outstanding — implausible sign; cost of debt cannot be inferred`

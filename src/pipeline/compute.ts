@@ -1368,11 +1368,19 @@ function computeReturns(
     riskFreePct: rf.pct,
     erpPct: usErpPct,
     interestExpenseTtm: interestExpenseForWacc,
-    // Never inferred on a financial route: a bank is deposit-funded, so
-    // interest expense / long-term debt is not its cost of debt (JPM's keyless
-    // run produced 183.28%), the financial-route valuation does not consume the
-    // figure, and the number would only mislead in the report. Financials keep
-    // the existing "cost of debt unavailable, cost of equity carried" outcome.
+    // Never inferred on ANY financial route — bank, insurer and mortgage REIT
+    // alike — and on keyed plans as well as keyless ones.
+    //
+    // The reason is what the route consumes, not how it is funded: all three
+    // value on the cost of equity (the excess-return and price-to-book models
+    // in valuation.ts), and none reads the WACC cost of debt. Nor would
+    // interest expense over short-plus-long-term debt BE their funding cost:
+    // deposits, policy reserves and repo are the liabilities that fund them,
+    // and repo is tagged `SecuritiesSoldUnderAgreementsToRepurchase`, which is
+    // outside the debt chains — so the inference is wrong for a mortgage REIT
+    // for the same reason it is wrong for a bank (JPM's keyless run produced
+    // 183.28%). Financials keep the existing "cost of debt unavailable, cost of
+    // equity carried" outcome.
     priorYearCostOfDebt:
       !isFinancial && (interestExpenseForWacc === null || interestExpenseForWacc <= 0)
         ? priorYearCostOfDebt(incomeAnnual, balanceAnnual)

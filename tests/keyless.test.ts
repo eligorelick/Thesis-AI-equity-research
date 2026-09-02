@@ -400,6 +400,16 @@ describe("applyKeylessFallbacks", () => {
     expect(out.notes[0]).toMatch(/skipped/);
   });
 
+  it("reports the beta regression's R-squared in the profile note", async () => {
+    // betaEstimate computes rSquared and nothing surfaced it; the spec lists R²
+    // reporting, and the fit is what says how much of the move the benchmark
+    // explains.
+    const out = await applyKeylessFallbacks(inputs());
+    const note = out.notes.find((n) => /^profile: beta /.test(n));
+    expect(note).toMatch(/^profile: beta -?\d+\.\d{3} from \d+ monthly log returns/);
+    expect(note).toMatch(/\(R² \d\.\d{2}\)$/);
+  });
+
   it("classifies an ETF from Yahoo's instrumentType so the instrument guard refuses it", async () => {
     // SPY, QQQ and the closed-end trusts are SEC registrants with tickers and
     // 10-K filings, so they clear the issuer gate and the whole keyless

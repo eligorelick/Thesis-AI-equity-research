@@ -29,8 +29,10 @@
 
 import { sectorIndustryForSic } from "@/edgar/sic";
 import {
+  BALANCE_SHEET_SHARES_TAG,
   buildStatementsFromCompanyFacts,
   type BuiltStatements,
+  type SharesBasis,
   type StatementRowsResult,
 } from "@/edgar/statements";
 import { conceptFactsSchema, dedupFactPoints, parseFactPoints, type CompanyFacts } from "@/edgar/xbrl";
@@ -259,15 +261,16 @@ export function isUsJurisdiction(code: string | null | undefined): boolean {
   return typeof code === "string" && US_JURISDICTIONS.has(code.trim().toUpperCase());
 }
 
-/**
- * The dei cover-page share-count series (deduped by the critical rule), oldest
- * first. `BuiltStatements.shares` exposes only the latest point; the market-cap
- * history and enterprise values need the whole series.
- */
-export function deiSharePoints(facts: CompanyFacts): { value: number; asOf: string }[] {
-  const namespace = facts.facts["dei"];
+/** One share-count concept as a deduped series, oldest first; empty when absent. */
+function sharePointsForConcept(
+  facts: CompanyFacts,
+  namespaceName: string,
+  tag: string,
+  instantOnly: boolean,
+): { value: number; asOf: string }[] {
+  const namespace = facts.facts[namespaceName];
   if (namespace === null || namespace === undefined || typeof namespace !== "object") return [];
-  const raw = (namespace as Record<string, unknown>)[DEI_SHARES_TAG];
+  const raw = (namespace as Record<string, unknown>)[tag];
   if (raw === undefined) return [];
   const parsed = conceptFactsSchema.safeParse(raw);
   if (!parsed.success) return [];
@@ -275,12 +278,38 @@ export function deiSharePoints(facts: CompanyFacts): { value: number; asOf: stri
   if (!Array.isArray(unitPoints)) return [];
   return dedupFactPoints(parseFactPoints(unitPoints))
     .flatMap((point) => {
+      if (instantOnly && point.start !== undefined) return [];
       const day = isoDay(point.end);
       return day !== null && isFiniteNumber(point.val) && point.val > 0
         ? [{ value: point.val, asOf: day }]
         : [];
     })
     .sort((a, b) => (a.asOf < b.asOf ? -1 : a.asOf > b.asOf ? 1 : 0));
+}
+
+/**
+ * The share-count series the market-cap history and enterprise values need
+ * (`BuiltStatements.shares` exposes only the latest point), oldest first.
+ *
+ * The dei cover-page concept comes first, and `us-gaap:CommonStockSharesOutstanding`
+ * is the fallback: a per-class reporter (GOOGL, BRK.B, FOXA) files its cover
+ * counts DIMENSIONED by share class, companyfacts carries no dimensional facts,
+ * so the dei concept is absent for them entirely while the non-dimensional
+ * balance-sheet total — all classes combined — is present. Without the fallback
+ * those issuers get no market cap, enterprise value or market-cap history at
+ * all. Same-`end` duplicates are refilings and stay deduped by max(`filed`);
+ * they are never summed.
+ */
+export function deiSharePoints(facts: CompanyFacts): {
+  points: { value: number; asOf: string }[];
+  basis: SharesBasis | null;
+} {
+  const cover = sharePointsForConcept(facts, "dei", DEI_SHARES_TAG, false);
+  if (cover.length > 0) return { points: cover, basis: "dei cover page" };
+  const balanceSheet = sharePointsForConcept(facts, "us-gaap", BALANCE_SHEET_SHARES_TAG, true);
+  return balanceSheet.length > 0
+    ? { points: balanceSheet, basis: "balance sheet CommonStockSharesOutstanding" }
+    : { points: [], basis: null };
 }
 
 /**
@@ -568,9 +597,13 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   const price = meta?.regularMarketPrice ?? quotePrice ?? lastCloseOnOrBefore(eodRows, inputs.today);
   const outstanding = built?.shares.outstanding ?? null;
   const marketCap = price !== null && outstanding !== null ? price * outstanding.value : null;
-  const deiShares = inputs.edgar.companyFacts.ok
+  const shareSeries = inputs.edgar.companyFacts.ok
     ? deiSharePoints(inputs.edgar.companyFacts.value.data)
-    : [];
+    : { points: [], basis: null };
+  const deiShares = shareSeries.points;
+  /** Which share-count concept a derived figure rests on, for the notes. */
+  const seriesBasis: SharesBasis | "no share-count concept" =
+    shareSeries.basis ?? "no share-count concept";
 
   // --- Profile --------------------------------------------------------------
 
@@ -585,6 +618,11 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       const beta = estimateBeta(closePoints(eodRows), closePoints(spyRows));
       if (beta.gap !== null) gaps.push(beta.gap);
       notes.push(`profile: ${beta.note}`);
+      if (outstanding !== null) {
+        notes.push(
+          `profile: market cap from the ${outstanding.basis} share count (${outstanding.value} at ${outstanding.asOf})`,
+        );
+      }
       const instrument = classifyInstrument(meta);
       if (instrument.gap !== null) gaps.push(instrument.gap);
       if (instrument.note !== null) notes.push(`profile: ${instrument.note}`);
@@ -709,6 +747,7 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         ["computed:enterprise-values"],
       );
     } else {
+      notes.push(`keyless enterprise values: fallback share counts from the ${seriesBasis}`);
       members.enterpriseValues = sourced(rows, "computed", ENTERPRISE_VALUES_ENDPOINT, newestDate(rows, inputs.today), fetchedAt);
       record("enterpriseValues", "computed", ENTERPRISE_VALUES_ENDPOINT);
     }
@@ -732,6 +771,7 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         ["computed:market-cap"],
       );
     } else {
+      notes.push(`keyless market-cap history: share counts from the ${seriesBasis}`);
       members.marketCapHistory = sourced(rows, "computed", MARKET_CAP_ENDPOINT, newestDate(rows, inputs.today), fetchedAt);
       record("marketCapHistory", "computed", MARKET_CAP_ENDPOINT);
     }
@@ -743,7 +783,7 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     if (outstanding === null) {
       failKeyless(
         "sharesFloat",
-        `no dei:${DEI_SHARES_TAG} cover-page share count in companyfacts`,
+        `no share count in companyfacts: neither dei:${DEI_SHARES_TAG} nor us-gaap:${BALANCE_SHEET_SHARES_TAG}`,
         ["edgar:companyfacts"],
       );
     } else {
@@ -759,8 +799,16 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         freeFloat,
         source: "edgar",
       };
-      members.sharesFloat = sourced([row as FmpSharesFloatRow], "edgar", SHARES_FLOAT_ENDPOINT, outstanding.asOf, factsFetchedAt);
-      record("sharesFloat", "edgar", SHARES_FLOAT_ENDPOINT);
+      // The endpoint names the concept that actually served the count: a
+      // per-class reporter has no dei cover count, so claiming one would be a
+      // false provenance string.
+      const floatEndpoint =
+        outstanding.basis === "dei cover page"
+          ? SHARES_FLOAT_ENDPOINT
+          : `companyfacts→shares-float(us-gaap:${BALANCE_SHEET_SHARES_TAG} + dei:EntityPublicFloat)`;
+      notes.push(`keyless shares float: outstanding share count from the ${outstanding.basis}`);
+      members.sharesFloat = sourced([row as FmpSharesFloatRow], "edgar", floatEndpoint, outstanding.asOf, factsFetchedAt);
+      record("sharesFloat", "edgar", floatEndpoint);
     }
   }
 

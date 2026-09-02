@@ -60,6 +60,24 @@ export interface StatementRowsResult<TRow> {
   gaps: ManifestEntry[];
 }
 
+/**
+ * Where a share count came from. A per-class reporter (GOOGL, BRK.B, FOXA)
+ * files its cover counts DIMENSIONED by class, and companyfacts excludes
+ * dimensional facts, so `dei:EntityCommonStockSharesOutstanding` is absent
+ * entirely for them; the non-dimensional balance-sheet total is present and is
+ * the all-classes figure. Verified live against Alphabet (CIK 0001652044,
+ * 2026-09-02): no dei concept, `us-gaap:CommonStockSharesOutstanding` 12.23B at
+ * 2026-06-30. Without the fallback those issuers get no market cap, no
+ * enterprise value and no market-cap history at all.
+ */
+export type SharesBasis = "dei cover page" | "balance sheet CommonStockSharesOutstanding";
+
+export interface SharesOutstandingPoint {
+  value: number;
+  asOf: string;
+  basis: SharesBasis;
+}
+
 export interface BuiltStatements {
   incomeAnnual: StatementRowsResult<FmpIncomeStatementRow>;
   incomeQuarterly: StatementRowsResult<FmpIncomeStatementRow>;
@@ -67,9 +85,9 @@ export interface BuiltStatements {
   balanceQuarterly: StatementRowsResult<FmpBalanceSheetRow>;
   cashflowAnnual: StatementRowsResult<FmpCashFlowRow>;
   cashflowQuarterly: StatementRowsResult<FmpCashFlowRow>;
-  /** Latest cover-page shares outstanding and public float from `dei`. */
+  /** Latest shares outstanding (cover page, else balance sheet) and public float. */
   shares: {
-    outstanding: { value: number; asOf: string } | null;
+    outstanding: SharesOutstandingPoint | null;
     publicFloat: { value: number; asOf: string } | null;
   };
   reportedCurrency: string | null;
@@ -517,10 +535,15 @@ function collectTags(spec: ChainSpec, into: Set<string>): void {
   for (const tag of spec.tags) into.add(tag);
 }
 
+/** The all-classes share count a per-class reporter files instead of the dei cover count. */
+export const BALANCE_SHEET_SHARES_TAG = "CommonStockSharesOutstanding";
+
 /** Every us-gaap tag any chain or anchor can ask for; nothing else is parsed. */
 const NEEDED_US_GAAP_TAGS: ReadonlySet<string> = (() => {
   const tags = new Set<string>(FY_ANCHOR_DURATION_TAGS);
   tags.add("Assets");
+  // Not in any chain: the share-count fallback below reads it directly.
+  tags.add(BALANCE_SHEET_SHARES_TAG);
   for (const table of [INCOME_CHAINS, BALANCE_CHAINS, CASHFLOW_CHAINS]) {
     for (const spec of Object.values(table)) collectTags(spec, tags);
   }
@@ -1376,14 +1399,44 @@ const DERIVATION_PHRASE: Record<Derivation, string> = {
 // dei cover-page facts
 // ---------------------------------------------------------------------------
 
-function latestDeiPoint(index: FactIndex, tag: string, kind: UnitKind): { value: number; asOf: string } | null {
-  const up = pickUnitPoints(index, `dei:${tag}`, kind);
+/**
+ * Newest point of one indexed concept. Same-`end` duplicates in companyfacts
+ * are refilings, so the max(`filed`) winner is the right one — they are never
+ * summed.
+ */
+function latestPoint(
+  index: FactIndex,
+  key: string,
+  kind: UnitKind,
+  instantOnly = false,
+): { value: number; asOf: string } | null {
+  const up = pickUnitPoints(index, key, kind);
   if (up === null) return null;
   let best: FactPoint | null = null;
   for (const p of up.points) {
+    if (instantOnly && p.start !== undefined) continue;
     if (best === null || p.end > best.end || (p.end === best.end && p.filed > best.filed)) best = p;
   }
   return best === null ? null : { value: best.val, asOf: best.end };
+}
+
+function latestDeiPoint(index: FactIndex, tag: string, kind: UnitKind): { value: number; asOf: string } | null {
+  return latestPoint(index, `dei:${tag}`, kind);
+}
+
+/**
+ * Cover-page share count, else the balance-sheet all-classes total. See
+ * `SharesBasis`: a per-class reporter files no non-dimensional dei cover count
+ * at all, and suppressing its market cap is worse than reporting the
+ * combined-class figure with the basis named.
+ */
+export function latestSharesOutstanding(index: FactIndex): SharesOutstandingPoint | null {
+  const cover = latestDeiPoint(index, "EntityCommonStockSharesOutstanding", "shares");
+  if (cover !== null) return { ...cover, basis: "dei cover page" };
+  const balanceSheet = latestPoint(index, BALANCE_SHEET_SHARES_TAG, "shares", true);
+  return balanceSheet === null
+    ? null
+    : { ...balanceSheet, basis: "balance sheet CommonStockSharesOutstanding" };
 }
 
 // ---------------------------------------------------------------------------
@@ -1543,7 +1596,7 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
     cashflowAnnual,
     cashflowQuarterly,
     shares: {
-      outstanding: latestDeiPoint(index, "EntityCommonStockSharesOutstanding", "shares"),
+      outstanding: latestSharesOutstanding(index),
       publicFloat: latestDeiPoint(index, "EntityPublicFloat", "money"),
     },
     reportedCurrency: currency,

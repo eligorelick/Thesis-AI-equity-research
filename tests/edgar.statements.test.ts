@@ -307,7 +307,7 @@ describe("buildStatementsFromCompanyFacts — edge cases", () => {
   it("exposes cover-page shares and float, newest first, and returns empty results with gaps for an empty payload", () => {
     const built = buildStatementsFromCompanyFacts(appleLike(), OPTS);
     expect(built.shares).toEqual({
-      outstanding: { value: 14_776, asOf: "2025-10-17" },
+      outstanding: { value: 14_776, asOf: "2025-10-17", basis: "dei cover page" },
       publicFloat: { value: 3_000_000, asOf: "2025-03-28" },
     });
     const empty = buildStatementsFromCompanyFacts({ cik: 1, entityName: "Empty", facts: {} }, OPTS);
@@ -636,6 +636,50 @@ describe("buildStatementsFromCompanyFacts — lease obligations belong in total 
         (n) => /^totalDebt /.test(n) && /absent and excluded: capitalLeaseObligations/.test(n),
       ),
     ).toBe(true);
+  });
+});
+
+describe("buildStatementsFromCompanyFacts — multi-class share counts", () => {
+  /** Strip the dei cover-page count, as companyfacts does for a per-class reporter. */
+  function withoutDeiShares(f: CompanyFacts): CompanyFacts {
+    const dei = { ...(f.facts["dei"] as Record<string, unknown>) };
+    delete dei["EntityCommonStockSharesOutstanding"];
+    return { ...f, facts: { ...f.facts, dei } };
+  }
+
+  it("falls back to the balance-sheet all-classes total when no dei cover count exists", () => {
+    // GOOGL/BRK.B/FOXA file their cover counts DIMENSIONED by class and
+    // companyfacts carries no dimensional facts, so the dei concept is absent
+    // entirely. Without this fallback those issuers get no market cap, no
+    // enterprise value and no market-cap history at all.
+    const built = buildStatementsFromCompanyFacts(
+      addTags(withoutDeiShares(appleLike()), {
+        CommonStockSharesOutstanding: [
+          { end: "2025-06-28", val: 12_100, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+          { end: "2025-09-27", val: 12_230, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" },
+        ],
+      }),
+      OPTS,
+    );
+    expect(built.shares.outstanding).toEqual({
+      value: 12_230,
+      asOf: "2025-09-27",
+      basis: "balance sheet CommonStockSharesOutstanding",
+    });
+  });
+
+  it("prefers the dei cover count when the filer files both", () => {
+    const built = buildStatementsFromCompanyFacts(
+      addTags(appleLike(), {
+        CommonStockSharesOutstanding: [{ end: "2025-09-27", val: 12_230, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      }),
+      OPTS,
+    );
+    expect(built.shares.outstanding).toEqual({ value: 14_776, asOf: "2025-10-17", basis: "dei cover page" });
+  });
+
+  it("stays null when neither concept is filed", () => {
+    expect(buildStatementsFromCompanyFacts(withoutDeiShares(appleLike()), OPTS).shares.outstanding).toBeNull();
   });
 });
 

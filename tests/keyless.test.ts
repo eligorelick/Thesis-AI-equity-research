@@ -462,6 +462,69 @@ describe("applyKeylessFallbacks", () => {
     expect(out.notes.some((n) => /^profile: instrument type /.test(n))).toBe(false);
   });
 
+  it("builds shares, market cap and history from the balance-sheet total for a per-class reporter", async () => {
+    // A registrant that reports cover counts per share class (GOOGL, BRK.B,
+    // FOXA) files them DIMENSIONED, and companyfacts carries no dimensional
+    // facts — so `dei:EntityCommonStockSharesOutstanding` is absent altogether
+    // while the non-dimensional all-classes balance-sheet total is present.
+    const facts = appleFacts();
+    const dei = { ...(facts.facts["dei"] as Record<string, unknown>) };
+    delete dei["EntityCommonStockSharesOutstanding"];
+    const usGaap = facts.facts["us-gaap"] as Record<string, unknown>;
+    usGaap["CommonStockSharesOutstanding"] = {
+      label: "CommonStockSharesOutstanding",
+      units: {
+        shares: [
+          { end: "2024-09-28", val: 12_000, accn: "a-1", fy: 2024, fp: "FY", form: "10-K", filed: "2024-11-01" },
+          { end: "2025-09-27", val: 12_230, accn: "a-2", fy: 2025, fp: "FY", form: "10-K", filed: "2025-10-31" },
+        ],
+      },
+    };
+    const out = await applyKeylessFallbacks(
+      inputs({
+        edgar: {
+          ...inputs().edgar,
+          companyFacts: { ok: true, value: { data: { ...facts, facts: { ...facts.facts, dei } }, asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+        },
+      }),
+    );
+    expect(out.members.profile.ok).toBe(true);
+    if (!out.members.profile.ok) return;
+    const profile = out.members.profile.value.data.rows[0]!;
+    expect(profile.marketCap).toBeCloseTo(profile.price! * 12_230, 3);
+    expect(out.notes.some((n) => /^profile: market cap from the balance sheet CommonStockSharesOutstanding share count \(12230 at 2025-09-27\)$/.test(n))).toBe(true);
+    // The whole series, not just the latest point, feeds the daily history.
+    expect(out.members.marketCapHistory.ok).toBe(true);
+    if (out.members.marketCapHistory.ok) {
+      const rows = out.members.marketCapHistory.value.data.rows;
+      expect(rows.length).toBeGreaterThan(1000);
+      const oldest = rows[rows.length - 1]!;
+      expect(oldest.marketCap).toBeGreaterThan(0);
+    }
+    expect(out.notes).toContain(
+      "keyless market-cap history: share counts from the balance sheet CommonStockSharesOutstanding",
+    );
+    expect(out.notes).toContain(
+      "keyless enterprise values: fallback share counts from the balance sheet CommonStockSharesOutstanding",
+    );
+    expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.endpoint).toBe(
+      "companyfacts→shares-float(us-gaap:CommonStockSharesOutstanding + dei:EntityPublicFloat)",
+    );
+    expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.data.rows[0]).toMatchObject({
+      outstandingShares: 12_230,
+      date: "2025-09-27",
+    });
+  });
+
+  it("prefers the dei cover count and names it in the notes when both concepts exist", async () => {
+    const out = await applyKeylessFallbacks(inputs());
+    expect(out.notes).toContain("profile: market cap from the dei cover page share count (14776 at 2025-10-17)");
+    expect(out.notes).toContain("keyless market-cap history: share counts from the dei cover page");
+    expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.endpoint).toBe(
+      "companyfacts→shares-float(dei:EntityCommonStockSharesOutstanding + dei:EntityPublicFloat)",
+    );
+  });
+
   it("flags a 20-F filer as an ADR and leaves country null for a foreign incorporation", async () => {
     const facts = appleFacts();
     for (const concept of Object.values(facts.facts["us-gaap"]!)) {

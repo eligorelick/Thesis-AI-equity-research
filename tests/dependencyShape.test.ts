@@ -275,3 +275,101 @@ describe("dependency shape gate", () => {
     expect(output).toContain("dependency shape verified");
   }, 30_000);
 });
+
+describe("lockfile edge integrity", () => {
+  interface LockShape {
+    packages: Record<string, Record<string, unknown>>;
+  }
+  interface EdgeChecker {
+    collectUnresolvedLockEdges(lock: unknown): Array<{ from: string; name: string; range: string; field: string }>;
+    validateLockEdges(lock: unknown): void;
+  }
+  const realLock = (): LockShape =>
+    JSON.parse(readFileSync(path.join(ROOT, "package-lock.json"), "utf8")) as LockShape;
+
+  it("resolves hoisted, nested, and optional-peer edges without complaint", async () => {
+    const checker = (await loadChecker()) as unknown as EdgeChecker;
+    const lock: LockShape = {
+      packages: {
+        "": { dependencies: { a: "^1.0.0" } },
+        "node_modules/a": {
+          version: "1.0.0",
+          dependencies: { b: "^2.0.0" },
+          peerDependencies: { optionalPeer: "^1.0.0" },
+          peerDependenciesMeta: { optionalPeer: { optional: true } },
+        },
+        "node_modules/a/node_modules/b": { version: "2.0.0", dependencies: { c: "^1.0.0" } },
+        "node_modules/c": { version: "1.0.0", optionalDependencies: { d: "^1.0.0" } },
+        "node_modules/d": { version: "1.0.0" },
+        "node_modules/linked": { link: true, resolved: "packages/linked" },
+        "packages/linked": { version: "0.0.1", dependencies: { c: "^1.0.0" } },
+      },
+    };
+    expect(checker.collectUnresolvedLockEdges(lock)).toEqual([]);
+    expect(() => checker.validateLockEdges(lock)).not.toThrow();
+  });
+
+  it("names every dependency edge that has no lock entry anywhere up the tree", async () => {
+    const checker = (await loadChecker()) as unknown as EdgeChecker;
+    const lock: LockShape = {
+      packages: {
+        "": { dependencies: { a: "^1.0.0" } },
+        "node_modules/a": {
+          version: "1.0.0",
+          dependencies: { missingDep: "^1.0.0" },
+          optionalDependencies: { missingOptional: "^3.0.0" },
+          peerDependencies: { missingPeer: "^2.0.0" },
+        },
+      },
+    };
+    expect(checker.collectUnresolvedLockEdges(lock)).toEqual([
+      { from: "node_modules/a", name: "missingDep", range: "^1.0.0", field: "dependencies" },
+      { from: "node_modules/a", name: "missingOptional", range: "^3.0.0", field: "optionalDependencies" },
+      { from: "node_modules/a", name: "missingPeer", range: "^2.0.0", field: "peerDependencies" },
+    ]);
+    expect(() => checker.validateLockEdges(lock)).toThrow(
+      /lock.*3 dependency edge.*node_modules\/a -> missingDep@\^1\.0\.0/is,
+    );
+  });
+
+  it("keeps the real lock fully resolvable so npm ci cannot reject it", async () => {
+    const checker = (await loadChecker()) as unknown as EdgeChecker;
+    expect(checker.collectUnresolvedLockEdges(realLock())).toEqual([]);
+  });
+
+  it("rejects the platform-pruned lock that broke CI (optional wasm deps dropped on Windows)", async () => {
+    // Regression: `npm install` on a platform that skips the wasm32 optional
+    // packages dropped their transitive @emnapi entries from package-lock.json,
+    // the local npm accepted it, and every CI runner failed `npm ci` with
+    // "Missing: @emnapi/runtime@… from lock file". The gate must catch that
+    // BEFORE push, independent of which npm version is installed locally.
+    const checker = (await loadChecker()) as unknown as EdgeChecker;
+    const pruned = realLock();
+    delete pruned.packages["node_modules/@emnapi/runtime"];
+    delete pruned.packages["node_modules/@emnapi/core"];
+    delete pruned.packages["node_modules/@emnapi/core/node_modules/@emnapi/wasi-threads"];
+    const unresolved = checker.collectUnresolvedLockEdges(pruned);
+    expect(unresolved.map((edge) => edge.name)).toContain("@emnapi/runtime");
+    expect(() => checker.validateLockEdges(pruned)).toThrow(/@emnapi\/runtime/);
+  });
+
+  it("fails the CLI on an unresolvable edge before consulting npm", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "thesis-lock-edge-"));
+    try {
+      const pruned = realLock();
+      delete pruned.packages["node_modules/@emnapi/runtime"];
+      const lockPath = path.join(tempDir, "package-lock.json");
+      writeFileSync(lockPath, JSON.stringify(pruned), "utf8");
+      const result = spawnSync(process.execPath, [CHECKER, "--lockfile", lockPath], {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: { ...process.env },
+      });
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(/@emnapi\/runtime/);
+      expect(`${result.stdout}\n${result.stderr}`).not.toContain("dependency shape verified");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});

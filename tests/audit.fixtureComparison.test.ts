@@ -14,7 +14,11 @@
  * dependency: this test recomputes the projection from current source and
  * fixtures on every run, and it still matched the audited baseline byte for
  * byte afterwards, which is the evidence that the tree change altered no
- * pipeline output. Roll the pin forward again only with the same evidence.
+ * pipeline output. Rolled forward a second time on 2026-09-01 when the lock
+ * regained the `@emnapi/*` entries that npm on Windows had pruned (the reason
+ * every CI `npm ci` failed); no package version changed and the projection
+ * again matched the baseline byte for byte. Roll the pin forward again only
+ * with the same evidence.
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -827,7 +831,7 @@ describe("Task 32 provider-free historical fixture comparison", () => {
       generator: {
         helperSha256: "73e890f2ec86463f5c86cb220e7ee65c8955ba4e0fdcbbc7eea6baff5e035bfe",
         basePackageLockBlob: "66f7242846b6d20cfe99e21400d2dada27bbfbfd",
-        comparisonPackageLockBlob: "2956140b2ffcfbb04c3b3f2f1733831e9672865a",
+        comparisonPackageLockBlob: "58d0f8390e3ee80281eec42f1dce8133f8d7daf2",
         generationNode: "v24.11.1",
         generationNpm: "11.6.2",
         command:

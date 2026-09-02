@@ -627,9 +627,31 @@ export interface FmpIndustryNameRow extends FmpRawRow {
 }
 
 /** Every method returns the typed rows plus the verbatim parsed body. */
+/**
+ * Set when the request's `limit` was clamped to the FMP subscription's cap
+ * (learned from the provider's own 402 rejection), so the bundle can disclose
+ * that history depth is truncated rather than silently shorter.
+ */
+export interface FmpPlanLimit {
+  requested: number;
+  applied: number;
+}
+
 export interface FmpPayload<TRow extends FmpRawRow = FmpRawRow> {
   rows: TRow[];
   raw: unknown;
+  planLimit?: FmpPlanLimit;
+}
+
+export function isPlanLimited(data: unknown): data is { planLimit: FmpPlanLimit } {
+  if (data === null || typeof data !== "object") return false;
+  const limit = (data as { planLimit?: unknown }).planLimit;
+  return (
+    limit !== null &&
+    typeof limit === "object" &&
+    typeof (limit as FmpPlanLimit).requested === "number" &&
+    typeof (limit as FmpPlanLimit).applied === "number"
+  );
 }
 
 export type FmpResult<TRow extends FmpRawRow = FmpRawRow> = Promise<FetchResult<FmpPayload<TRow>>>;
@@ -830,6 +852,43 @@ function validateCriticalRows<TRow extends FmpRawRow>(
  * FMP error detection: any non-array object carrying an "Error Message" key is
  * an error regardless of HTTP status (401-before-routing, DATA_MAP §1.1).
  */
+/**
+ * Lower FMP tiers reject a `limit` above the plan's cap with a plain-text 402:
+ *   "... The values for 'limit' must be between 0 and 5 based on your current
+ *   subscription ..."
+ * Returns the cap, or null when the body is anything else. The cap is read from
+ * the provider's own message, so no plan knowledge is hardcoded here.
+ */
+export function parseFmpLimitCap(bodyText: string): number | null {
+  const match = /values for 'limit' must be between \d+ and (\d+)/i.exec(bodyText);
+  if (match === null) return null;
+  const cap = Number(match[1]);
+  return Number.isSafeInteger(cap) && cap >= 0 ? cap : null;
+}
+
+/**
+ * Subscription `limit` caps learned at runtime, keyed by API key so a process
+ * that serves several keys never clamps one plan by another's ceiling. Each
+ * bundle build creates its own client, so the memo lives at module scope:
+ * one refused request teaches the cap for every later call in the process.
+ */
+const planLimitCaps = new Map<string, number>();
+
+/**
+ * While a key's cap is still unknown, the FIRST limit-bearing request is the
+ * probe and every other limit-bearing request for that key waits for it. A
+ * bundle build fires a dozen such requests at once; without the gate each of
+ * them is refused once before any learns the cap — a dozen wasted calls
+ * against a daily quota small enough to feel it. With it, one refusal teaches
+ * the whole wave. Requests without a `limit` never wait.
+ */
+const planLimitProbes = new Map<string, Promise<void>>();
+
+export function resetFmpPlanLimits(): void {
+  planLimitCaps.clear();
+  planLimitProbes.clear();
+}
+
 export function isFmpErrorBody(body: unknown): body is { "Error Message": string } {
   return (
     typeof body === "object" &&
@@ -1128,10 +1187,57 @@ export class FmpClient {
     if (apiKey === undefined) {
       throw new Error("fromLive called without an API key (programming error — fixtureMode should have routed)");
     }
-    const qs = fmpQueryString(spec.params);
+    // Serialize cap discovery: one probe per key, everyone else waits on it.
+    if (typeof spec.params.limit === "number" && !planLimitCaps.has(apiKey)) {
+      const existing = planLimitProbes.get(apiKey);
+      if (existing !== undefined) {
+        await existing;
+      } else {
+        let release: () => void = () => {};
+        const probe = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        planLimitProbes.set(apiKey, probe);
+        try {
+          const result = await this.fromLiveUnprobed<TRow>(spec);
+          // A probe that came back with data at its full limit found no cap on
+          // this key (a higher tier): record that so later waves stop waiting
+          // on a probe. A larger limit refused later still learns the real cap
+          // through the retry path, which overwrites this sentinel.
+          if (result.ok && !planLimitCaps.has(apiKey)) {
+            planLimitCaps.set(apiKey, Number.POSITIVE_INFINITY);
+          }
+          return result;
+        } finally {
+          planLimitProbes.delete(apiKey);
+          release();
+        }
+      }
+    }
+    return this.fromLiveUnprobed<TRow>(spec);
+  }
+
+  private async fromLiveUnprobed<TRow extends FmpRawRow>(spec: CallSpec): Promise<FetchResult<FmpPayload<TRow>>> {
+    const apiKey = this.apiKey;
+    if (apiKey === undefined) {
+      throw new Error("fromLiveUnprobed called without an API key (programming error)");
+    }
+    // Clamp `limit` to a cap this key has already been refused above. The cache
+    // key, endpoint provenance and the request itself all use the APPLIED
+    // params, so cached rows are keyed by what was actually asked for.
+    const requestedLimit = typeof spec.params.limit === "number" ? spec.params.limit : null;
+    const knownCap = planLimitCaps.get(apiKey);
+    const clamp = requestedLimit !== null && knownCap !== undefined && requestedLimit > knownCap;
+    const params: FmpParams = clamp ? { ...spec.params, limit: knownCap } : spec.params;
+    const planLimit: FmpPlanLimit | undefined =
+      clamp && requestedLimit !== null && knownCap !== undefined
+        ? { requested: requestedLimit, applied: knownCap }
+        : undefined;
+    const appliedLimit = typeof params.limit === "number" ? params.limit : null;
+    const qs = fmpQueryString(params);
     const endpointPath = qs ? `/stable/${spec.endpoint}?${qs}` : `/stable/${spec.endpoint}`;
     const url = `${this.baseUrl}/${spec.endpoint}${qs ? `?${qs}` : ""}`;
-    const cacheKey = fmpCacheKey(spec.endpoint, spec.params);
+    const cacheKey = fmpCacheKey(spec.endpoint, params);
     const ttlMs = FMP_TTLS[spec.method];
     const expectedEntityScope = spec.entityScope === undefined ? undefined : canonicalEntityScope(spec.entityScope);
 
@@ -1150,6 +1256,14 @@ export class FmpClient {
           { headers: { apikey: apiKey, accept: "application/json" } },
           policy,
         );
+        // A plan-cap rejection is a retryable request-shape problem, not data:
+        // learn the cap and let the catch below re-issue the call within it.
+        // Only when the limit actually sent exceeds the cap — a rejection of an
+        // already-clamped request is a genuine, final refusal.
+        if (!res.ok && appliedLimit !== null) {
+          const cap = parseFmpLimitCap(res.bodyText);
+          if (cap !== null && appliedLimit > cap) throw new FmpPlanLimitError(cap);
+        }
         let body: unknown;
         try {
           body = res.bodyText.length > 0 ? (JSON.parse(res.bodyText) as unknown) : null;
@@ -1193,6 +1307,10 @@ export class FmpClient {
         };
       });
     } catch (err) {
+      if (err instanceof FmpPlanLimitError) {
+        planLimitCaps.set(apiKey, err.cap);
+        return this.fromLiveUnprobed<TRow>(spec);
+      }
       if (err instanceof FmpEntityIdentityError) {
         return gap(spec.gapField, err.message, "critical", [endpointPath]);
       }
@@ -1248,7 +1366,7 @@ export class FmpClient {
     if (!validation.ok) return gap(spec.gapField, validation.reason, "warn", [endpointPath]);
     const rows = validation.rows;
     const sourced: Sourced<FmpPayload<TRow>> = {
-      data: { rows, raw: body },
+      data: { rows, raw: body, ...(planLimit === undefined ? {} : { planLimit }) },
       asOf: deriveAsOf(rows, fetchedAt ?? this.now().toISOString()),
       source: "fmp",
       endpoint: endpointPath,
@@ -2081,6 +2199,16 @@ class FmpApiError extends Error {
     super(message);
     this.name = "FmpApiError";
     this.status = status;
+  }
+}
+
+/** The subscription refused the request's `limit`; `cap` is the plan's ceiling. */
+class FmpPlanLimitError extends Error {
+  readonly cap: number;
+  constructor(cap: number) {
+    super(`FMP subscription caps 'limit' at ${cap}`);
+    this.name = "FmpPlanLimitError";
+    this.cap = cap;
   }
 }
 

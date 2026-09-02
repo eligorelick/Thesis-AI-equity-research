@@ -166,6 +166,11 @@ export interface WaccInputs {
   erpPct: number | null;
   /** TTM interest expense (currency units). FMP zero-for-undisclosed handled here. */
   interestExpenseTtm: number | null;
+  /**
+   * Last-disclosed effective cost of debt from an earlier fiscal year; used
+   * only when `interestExpenseTtm` is missing or a provider-placeholder zero.
+   */
+  priorYearCostOfDebt?: PriorYearCostOfDebt | null;
   /** Average of the latest two totalDebt balances (currency units). */
   totalDebtAvg: number | null;
   /** Raw invalid observation, kept separate so it cannot be hidden by averaging. */
@@ -196,7 +201,41 @@ export interface WaccInputs {
   asOf?: { riskFreeRate?: string; statements?: string; marketCap?: string };
 }
 
-export type CostOfDebtMethod = "effective" | "synthetic" | "none" | "unavailable";
+/**
+ * How the pre-tax cost of debt was established:
+ *  - "effective":  current interest expense / average debt, inside the band
+ *  - "historical": the same ratio from the most recent fiscal year that still
+ *                  DISCLOSED interest expense, when the current year does not
+ *  - "synthetic":  rf + rating spread from the interest-coverage ratio
+ *  - "none":       no debt, so no cost of debt is needed
+ *  - "unavailable": debt outstanding but no defensible basis
+ */
+export type CostOfDebtMethod = "effective" | "historical" | "synthetic" | "none" | "unavailable";
+
+/**
+ * Effective cost of debt observed in an earlier fiscal year. Supplied by the
+ * caller when the CURRENT interest expense is undisclosed (FMP reports 0, the
+ * filer no longer breaks it out) so the WACC can fall back to the issuer's own
+ * last-disclosed rate instead of failing closed. `yearsBack` is 1 for the
+ * fiscal year before the latest annual row.
+ */
+export interface PriorYearCostOfDebt {
+  pct: number;
+  fiscalYearEnd: string;
+  yearsBack: number;
+  interestExpense: number;
+  totalDebtAvg: number;
+  /**
+   * That year's EBIT, so the synthetic-rating path can score coverage on a
+   * consistent (same-year) numerator and denominator when the historical
+   * effective rate falls outside the acceptance band — the normal case for
+   * fixed-rate debt issued when yields were lower than today's risk-free rate.
+   */
+  ebit: number | null;
+}
+
+/** Oldest disclosure the historical fallback will accept (fiscal years back). */
+export const PRIOR_YEAR_COST_OF_DEBT_MAX_YEARS_BACK = 3;
 
 export interface WaccResult {
   /** Final WACC in percent (clamped). Null when rf or weights are unavailable. */
@@ -502,7 +541,31 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
     // Neither can establish a cost of debt; only a positive figure is usable.
     const intExpRaw = isFiniteNumber(inputs.interestExpenseTtm) ? inputs.interestExpenseTtm : null;
     const intExp = intExpRaw !== null && intExpRaw > 0 ? intExpRaw : null;
-    if (intExpRaw === null || intExpRaw <= 0) {
+    // The issuer's own last-disclosed rate. Some filers (Apple from FY2024)
+    // stop breaking interest expense out of "other income/(expense), net";
+    // every provider then carries 0 and no source has the figure. Their debt
+    // has not vanished, and the rate they paid the last time they disclosed it
+    // is a better basis than suppressing the whole DCF — provided it is recent
+    // and passes the same acceptance band as a current effective rate.
+    const prior = inputs.priorYearCostOfDebt ?? null;
+    const priorUsable =
+      intExp === null &&
+      !(intExpRaw !== null && intExpRaw < 0) &&
+      prior !== null &&
+      isFiniteNumber(prior.pct) &&
+      prior.pct > 0 &&
+      prior.yearsBack >= 1 &&
+      prior.yearsBack <= PRIOR_YEAR_COST_OF_DEBT_MAX_YEARS_BACK;
+    if (priorUsable) {
+      notes.push(
+        `interest expense ${intExpRaw === 0 ? "reported as 0 (undisclosed)" : "missing"} with debt outstanding — cost of debt taken from FY ${prior.fiscalYearEnd}, the latest fiscal year that disclosed it (${prior.yearsBack} year${prior.yearsBack === 1 ? "" : "s"} back): ${fmt(prior.interestExpense)} / ${fmt(prior.totalDebtAvg)} average debt = ${fmt(prior.pct)}%`,
+      );
+      gaps.push({
+        field: "returns.wacc.interestExpense",
+        reason: `interest expense undisclosed for the latest fiscal year — cost of debt inferred from the FY ${prior.fiscalYearEnd} effective rate (${fmt(prior.pct)}%, ${prior.yearsBack} fiscal year${prior.yearsBack === 1 ? "" : "s"} back); a rate change since then is not captured`,
+        severity: "warn",
+      });
+    } else if (intExpRaw === null || intExpRaw <= 0) {
       const intExpNegative = intExpRaw !== null && intExpRaw < 0;
       // Basis-neutral wording: the caller may have passed the TTM figure OR the
       // annual fallback (compute.ts discloses which) — don't claim "Ttm" here.
@@ -535,34 +598,50 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
       );
     }
 
-    const rdEffective = intExp !== null && intExp > 0 ? (intExp / debtAvg) * 100 : null;
+    const rdEffective =
+      intExp !== null && intExp > 0
+        ? (intExp / debtAvg) * 100
+        : priorUsable
+          ? prior.pct
+          : null;
 
     if (rdEffective !== null && !deMinimis && rdEffective >= rdBand[0] && rdEffective <= rdBand[1]) {
       costOfDebtPct = rdEffective;
-      costOfDebtMethod = "effective";
+      costOfDebtMethod = priorUsable ? "historical" : "effective";
       notes.push(
-        `effective cost of debt ${fmt(rdEffective)}% accepted (band [rf − ${RD_BAND_BELOW_RF_PCT}, rf + ${RD_BAND_ABOVE_RF_PCT}] = [${fmt(rdBand[0])}, ${fmt(rdBand[1])}]%)`,
+        `${priorUsable ? "historical" : "effective"} cost of debt ${fmt(rdEffective)}% accepted (band [rf − ${RD_BAND_BELOW_RF_PCT}, rf + ${RD_BAND_ABOVE_RF_PCT}] = [${fmt(rdBand[0])}, ${fmt(rdBand[1])}]%)`,
       );
     } else {
       if (rdEffective !== null && !deMinimis) {
         notes.push(
-          `effective cost of debt ${fmt(rdEffective)}% outside acceptance band [${fmt(rdBand[0])}, ${fmt(rdBand[1])}]% — synthetic rating used`,
+          `${priorUsable ? "historical" : "effective"} cost of debt ${fmt(rdEffective)}% outside acceptance band [${fmt(rdBand[0])}, ${fmt(rdBand[1])}]% — synthetic rating used`,
         );
       }
       // Synthetic rating requires a positive observed interest expense. Missing
       // or provider-placeholder zero cannot establish an infinite coverage
-      // ratio and must not be converted into an AAA spread.
-      if (intExp === null || intExp <= 0) {
+      // ratio and must not be converted into an AAA spread. When the current
+      // figure is undisclosed, the last-disclosed year's own EBIT / interest
+      // pair scores coverage instead — same year top and bottom, so the ratio
+      // is internally consistent — and today's rf carries the current-rate
+      // information the historical coupon lacks (Damodaran: the cost of debt
+      // is the marginal rate, which a synthetic rating prices off today's rf).
+      const coverageBasis =
+        intExp !== null && intExp > 0
+          ? { interest: intExp, ebit: inputs.ebitTtm, label: "TTM" }
+          : priorUsable && isFiniteNumber(prior.ebit) && prior.interestExpense > 0
+            ? { interest: prior.interestExpense, ebit: prior.ebit, label: `FY ${prior.fiscalYearEnd} (latest fiscal year with disclosed interest expense)` }
+            : null;
+      if (coverageBasis === null) {
         costOfDebtMethod = "unavailable";
-      } else if (isFiniteNumber(inputs.ebitTtm)) {
-        interestCoverageRatio = inputs.ebitTtm / intExp;
+      } else if (isFiniteNumber(coverageBasis.ebit)) {
+        interestCoverageRatio = coverageBasis.ebit / coverageBasis.interest;
         const band = lookupSyntheticSpread(interestCoverageRatio, variant);
         costOfDebtPct = rf + band.spreadPct;
         costOfDebtMethod = "synthetic";
         syntheticRating = band.rating;
         syntheticSpreadPct = band.spreadPct;
         notes.push(
-          `synthetic rating ${band.rating} from ICR ${fmt(interestCoverageRatio)} (${variant} table, SPREADS_2026_01 ${SPREADS_2026_01.dateOfAnalysis}) — Rd = rf + ${fmt(band.spreadPct)}%`,
+          `synthetic rating ${band.rating} from ICR ${fmt(interestCoverageRatio)} on ${coverageBasis.label} (${variant} table, SPREADS_2026_01 ${SPREADS_2026_01.dateOfAnalysis}) — Rd = rf + ${fmt(band.spreadPct)}%`,
         );
         if (band.spreadPct >= DISTRESS_SPREAD_WARN_PCT) {
           notes.push(

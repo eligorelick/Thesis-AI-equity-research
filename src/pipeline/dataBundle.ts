@@ -26,6 +26,7 @@
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
 import {
   createFmpClient,
+  isPlanLimited,
   FMP_EMPTY_ARRAY_REASON,
   type CachedFetchFn,
   type CachedFetchResult,
@@ -553,7 +554,7 @@ function sortRows<TRow extends FmpRawRow>(
     const db = rowKey(b, dateField);
     return da < db ? 1 : da > db ? -1 : 0;
   });
-  return { ok: true, value: { ...res.value, data: { rows, raw: res.value.data.raw } } };
+  return { ok: true, value: { ...res.value, data: { ...res.value.data, rows } } };
 }
 
 /** New FetchResult with rows sorted DESC by a numeric field (e.g. comp year). */
@@ -567,7 +568,7 @@ function sortRowsNumeric<TRow extends FmpRawRow>(
     const nb = typeof b[numField] === "number" ? (b[numField] as number) : Number.NEGATIVE_INFINITY;
     return nb - na;
   });
-  return { ok: true, value: { ...res.value, data: { rows, raw: res.value.data.raw } } };
+  return { ok: true, value: { ...res.value, data: { ...res.value.data, rows } } };
 }
 
 /**
@@ -1532,6 +1533,24 @@ export async function buildDataBundle(
   const gaps = mergeManifest(
     [
       ...allResults.filter((r): r is { ok: false; gap: ManifestEntry } => !r.ok).map((r) => r.gap),
+      // A subscription that caps `limit` served fewer periods than the pipeline
+      // asked for. The rows that arrived are real; what is missing is depth, and
+      // every consumer that needs more history discloses its own shortfall. This
+      // entry records WHY the history is short so a reader does not blame the
+      // provider's data or the pipeline's math.
+      ...Object.entries(resultRegistry).flatMap(([name, result]): ManifestEntry[] =>
+        result.ok && isPlanLimited(result.value.data)
+          ? [
+              {
+                field: `fmp.planLimit(${name})`,
+                reason: `FMP subscription caps 'limit' at ${result.value.data.planLimit.applied}; served ${result.value.data.planLimit.applied} of ${result.value.data.planLimit.requested} requested periods, so history depth is truncated`,
+                severity: "info",
+                attemptedSources: [result.value.endpoint],
+                expected: true,
+              },
+            ]
+          : [],
+      ),
       ...allResults.flatMap((result): ManifestEntry[] =>
         result.ok && result.value.staleReason === "empty-refresh-preserved"
           ? [

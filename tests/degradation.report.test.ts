@@ -263,33 +263,147 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
     expect(report.verdict.synthesis.toLowerCase()).toContain("data-only");
   });
 
-  it("presents NO fabricated grade as analyzed — every graded section is the ungraded data-only flag", () => {
+  it("presents NO analyst grade — every graded section is the deterministic score band, stated as such", () => {
+    // Before 2026-09-01 the stub graded everything "F" with an "ungraded" note,
+    // which read as six failing assessments nobody had made. The grades are now
+    // the Stage B score bands — the same reproducible anchor the judge is
+    // prompted to align to — and every block says no analyst pass ran.
     const report = dataOnly();
-    for (const block of collectGradeBlocks(report)) {
-      // The data-only stub grades everything "F" with an explicit ungraded reason.
-      expect(block.grade).toBe("F");
-      expect(block.oneLineWhy.toLowerCase()).toContain("data-only");
-      expect(block.confidence).toBe("low");
-      // Reasoning discloses the LLM did not run — never a fabricated analytic claim.
+    const { computed } = buildInputs();
+    const strip = report.verdict.gradeStrip;
+    const expected: Array<[Report["fundamentals"]["graded"], string]> = [
+      [strip.fundamentals, "fundamentals"],
+      [strip.valuation, "valuation"],
+      [strip.technicals, "technicals"],
+      [strip.quality, "quality"],
+      [strip.leadership, "leadership"],
+      [strip.moat, "moat"],
+    ];
+    for (const [block, aspect] of expected) {
+      const score = computed.scores.aspects[aspect as keyof typeof computed.scores.aspects];
+      if (score.band !== null) {
+        expect(block.grade).toBe(score.band);
+        expect(block.oneLineWhy).toContain("Deterministic score");
+      } else {
+        expect(block.oneLineWhy).toContain("Not scored");
+      }
+      expect(block.oneLineWhy).toContain("no analyst pass ran");
+      expect(["low", "medium"]).toContain(block.confidence);
+      // The numbers behind the band are the score drivers, and the reasoning
+      // still discloses that the LLM did not run — never a fabricated claim.
+      expect(block.keyNumbers).toEqual(score.drivers);
       expect(block.reasoning.some((c) => /did not run|data-only/i.test(c.text))).toBe(true);
     }
+    for (const block of collectGradeBlocks(report)) {
+      expect(block.reasoning.some((c) => /did not run|data-only/i.test(c.text))).toBe(true);
+    }
+    expect(report.balanceSheet.graded?.grade).toBe(
+      computed.scores.aspects.balanceSheet.band ?? report.balanceSheet.graded?.grade,
+    );
   });
 
-  it("contains no fabricated numeric placeholders", () => {
+  it("carries only pipeline-computed numbers, each traced to a computed source, and no scenario odds", () => {
     const report = dataOnly();
     const numbers: TracedNumber[] = collectTracedNumbers(report);
-    expect(numbers).toEqual([]);
+    // The deterministic Stage B content is present …
+    expect(numbers.length).toBeGreaterThan(50);
+    // … and every figure is a pipeline computation or a provider row — nothing
+    // authored. `verified: true` marks the computed origin, as it does for the
+    // score drivers on the LLM path.
+    for (const n of numbers) {
+      expect(n.source).toMatch(/^(computed\.|fmp:|fred:)/);
+      expect(n.verified).toBe(true);
+      expect(Number.isFinite(n.value)).toBe(true);
+    }
+    // Scenario odds are analyst judgments: still null on a data-only report.
     expect(report.valuation.scenarios.map((scenario) => scenario.probability)).toEqual([
       null,
       null,
       null,
     ]);
     expect(report.meta.provenanceCoverage?.numeric).toEqual({
-      supported: 0,
-      total: 0,
-      rate: null,
+      supported: numbers.length,
+      total: numbers.length,
+      rate: 1,
     });
     expect(report.appendix.provenanceCoverage).toEqual(report.meta.provenanceCoverage);
+  });
+
+  it("attaches the deterministic Stage B blocks exactly as the LLM path does", () => {
+    const report = dataOnly();
+    const { computed } = buildInputs();
+    expect(report.scores).toEqual(computed.scores);
+    expect(report.projections).toEqual(computed.projections);
+    expect(report.scenarioTargets).toEqual(computed.scenarioTargets);
+    expect(report.fairValue).toEqual(computed.fairValue);
+    // Fair value + DCF display + multiples + reverse DCF are injected through
+    // the same apply* helpers assembleReport uses.
+    if (computed.fairValue.status === "available") {
+      expect(report.valuation.dcf.perShare).toEqual(computed.fairValue.perShare);
+      expect(report.valuation.dcf.upsidePct).toBe(computed.fairValue.upsidePct);
+      expect(report.valuation.dcf.assumptions.length).toBeGreaterThan(0);
+      expect(report.valuation.dcf.sensitivityGrid.length).toBeGreaterThan(0);
+    }
+    if (computed.valuation.kind === "dcf" && computed.valuation.reverseDcf?.method === "growth") {
+      expect(report.valuation.reverseDcf.impliedValue).toBe(
+        computed.valuation.reverseDcf.impliedRevenueGrowthPct,
+      );
+      expect(report.valuation.reverseDcf.narrative).toContain("no narrative analysis ran");
+    }
+    expect(report.valuation.multiples.length).toBeGreaterThan(0);
+    expect(report.quality.forensicScores.altman.score).toBe(computed.forensics.altman?.score ?? null);
+    expect(report.quality.forensicScores.piotroski.score).toBe(computed.forensics.piotroski?.score ?? null);
+  });
+
+  it("fills the fundamentals, capital, technicals and macro tables from Stage B, and leaves narrative sections empty", () => {
+    const report = dataOnly();
+    const { computed } = buildInputs();
+    const labels = report.fundamentals.growthTable.map((row) => row.label);
+    expect(labels).toContain("Revenue CAGR");
+    expect(report.fundamentals.marginTrend.map((row) => row.label)).toContain("Operating margin");
+    expect(report.fundamentals.returns.map((row) => row.label)).toContain("ROIC");
+    expect(report.fundamentals.fcf.map((row) => row.label)).toContain("Free cash flow");
+    // Monetary rows carry the statements' own currency, never a default.
+    const fcfRow = report.fundamentals.fcf.find((row) => row.label === "Free cash flow");
+    expect(fcfRow?.values.every((cell) => cell.value.currency === "USD")).toBe(true);
+    expect(fcfRow?.values.map((cell) => cell.value.value)).toEqual(
+      computed.capital.fcf.series.filter((y) => y.fcf !== null).map((y) => y.fcf),
+    );
+    expect(report.balanceSheet.debtProfile.numbers.length).toBeGreaterThan(0);
+    // The fixture carries no price history, so technicals stay empty here; the
+    // read still names the deterministic trend state.
+    expect(report.technicals.indicators.length).toBe(
+      computed.technicals.lastClose === null ? 0 : report.technicals.indicators.length,
+    );
+    expect(report.technicals.read.trend).toContain(computed.technicals.read.trend);
+    // Narrative sections the pipeline cannot compute stay empty and say so.
+    expect(report.catalystsRisks).toEqual({ catalysts: [], risks: [] });
+    expect(report.competitive.peerTable).toEqual([]);
+    expect(report.competitive.moatAssessment).toEqual([]);
+    expect(report.competitive.marketShareDirection).toContain("no analyst pass ran");
+    expect(report.leadership.executives).toEqual([]);
+    expect(report.verdict.synthesis).toContain("Data-only report");
+    expect(report.verdict.synthesis).toContain("deterministic composite score");
+  });
+
+  it("stays a bare stub when Stage B itself did not run", () => {
+    const { bundle, validation } = buildInputs();
+    const report = buildDataOnlyReport({
+      symbol: "AAPL",
+      companyName: "Apple Inc.",
+      generatedAt: GENERATED_AT,
+      model: "none",
+      costUsd: 0,
+      bundle,
+      validation,
+      computed: null,
+      costBreakdown: [],
+      reason: "ANTHROPIC_API_KEY not set — analysis passes skipped",
+    });
+    expect(() => ReportSchema.parse(report)).not.toThrow();
+    expect(collectTracedNumbers(report)).toEqual([]);
+    expect(report.scores).toBeUndefined();
+    for (const block of collectGradeBlocks(report)) expect(block.grade).toBe("F");
   });
 
   it("appendix discloses the fetched sources + every gap (never papered over)", () => {

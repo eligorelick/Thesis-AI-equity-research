@@ -67,6 +67,7 @@ import { runStageB, type ComputedMetrics } from "@/pipeline/compute";
 import { validateBundle, type ValidationReport } from "@/pipeline/stageA/validate";
 import { sourceManifestEntries, type DataBundle } from "@/pipeline/types";
 import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
+import { enrichDataOnlyReport } from "@/pipeline/stageC/dataOnlyReport";
 import {
   getJobSnapshot,
   publishJobEvent,
@@ -3836,10 +3837,14 @@ interface DataOnlyInput {
 
 /**
  * Build a data-only Report: real meta + appendix (sources/manifest/cost), and
- * every graded section carrying a single "F" GradeBlock whose reasoning is the
- * data-only disclaimer. This is a valid Report per the Zod schema so the UI can
- * render + persist it; every section is explicitly flagged as ungraded because
- * the LLM analysis did not run.
+ * every graded section flagged as ungraded because the LLM analysis did not
+ * run. When Stage B ran (`computed` present) the deterministic content it
+ * produced — growth, margins, returns, capital structure, forensics,
+ * technicals, DCF, reverse DCF, multiples, scenario targets, projections and
+ * the aspect scores — is attached exactly as the LLM path attaches it after the
+ * judge, and the grades are the deterministic score bands, stated as such.
+ * Without `computed` (Stage B itself failed) the stub stays empty: nothing is
+ * ever filled in that the pipeline did not compute.
  */
 export function buildDataOnlyReport(input: DataOnlyInput): Report {
   const { symbol, bundle, validation, computed } = input;
@@ -4020,7 +4025,8 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
     },
     disagreements: [],
   };
-  return report;
+  if (computed === null) return report;
+  return enrichDataOnlyReport(report, { bundle, computed, reason: input.reason });
 }
 
 function naScore(): Report["quality"]["forensicScores"]["altman"] {

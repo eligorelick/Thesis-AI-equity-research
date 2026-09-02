@@ -101,6 +101,22 @@ credential is optional.
 | `THESIS_DATA_DIR` | SQLite directory override | Uses the operating-system app-data directory |
 | `THESIS_IMPORT_LEGACY_DB` | Set to `1` for a one-time copy of an older in-repo `data/thesis.db` into the app-data location | The in-repo database is left untouched and unused |
 
+Any FMP plan works. Lower tiers cap the `limit` parameter (5 periods on the
+entry plans) and restrict some endpoints: Thesis reads the cap from FMP's own
+rejection, retries within it, and records the truncated history depth in the
+missing-data manifest, while restricted endpoints (insider trades,
+institutional ownership, news, transcripts, sector ETF prices) become disclosed
+gaps rather than failures. Five fiscal years still support the growth, returns,
+forensic, DCF and scoring modules; own-history multiple percentiles need eight
+quarters and are withheld until the plan supplies them.
+
+A data-only report (no `ANTHROPIC_API_KEY`) is not empty: it carries every
+deterministic Stage B result — growth, margins, returns, capital structure,
+forensic scores, technicals, DCF, reverse DCF, multiples, scenario targets,
+projections and the aspect scores — with the score bands shown as grades and
+every block stating that no analyst pass ran. Only the narrative sections
+(catalysts, risks, outlook, executive credibility, moat sources) stay empty.
+
 EDGAR does not require a key, but it does require a truthful contact identity.
 Placeholder or missing identities disable live EDGAR acquisition and create a
 visible data gap.

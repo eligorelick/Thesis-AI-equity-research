@@ -114,6 +114,71 @@ export function validateExactVersions(
   }
 }
 
+/**
+ * Lockfile dependency-edge integrity.
+ *
+ * `npm install` on a platform that skips an optional package (the wasm32
+ * builds on Windows, for instance) can drop that package's transitive entries
+ * from package-lock.json while the local npm still accepts the file. Every CI
+ * runner then fails `npm ci` with "Missing: <pkg> from lock file". This check
+ * walks each package entry's dependency edges and resolves them the way Node
+ * does — nearest `node_modules` first, then up the tree — using nothing but
+ * the lock's own JSON, so it gives the same answer on every platform and npm
+ * version. Existence only: version-range satisfaction is npm's job.
+ */
+const LOCK_EDGE_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"];
+
+function resolveLockEdge(packages, fromPath, name) {
+  let base = fromPath;
+  for (;;) {
+    const candidate = base === "" ? `node_modules/${name}` : `${base}/node_modules/${name}`;
+    if (Object.hasOwn(packages, candidate)) return candidate;
+    if (base === "") return null;
+    const index = base.lastIndexOf("/node_modules/");
+    base = index < 0 ? "" : base.slice(0, index);
+  }
+}
+
+export function collectUnresolvedLockEdges(lock) {
+  const lockRecord = objectRecord(lock, "lock");
+  const packages = objectRecord(lockRecord.packages, "lock packages");
+  const unresolved = [];
+  for (const [packagePath, rawEntry] of Object.entries(packages)) {
+    const entry = objectRecord(rawEntry, `lock entry ${packagePath}`);
+    // A workspace link's edges belong to its target entry, which is walked too.
+    if (entry.link === true) continue;
+    const optionalPeers =
+      entry.peerDependenciesMeta !== undefined
+        ? objectRecord(entry.peerDependenciesMeta, `lock ${packagePath} peerDependenciesMeta`)
+        : {};
+    for (const field of LOCK_EDGE_FIELDS) {
+      if (entry[field] === undefined) continue;
+      const edges = objectRecord(entry[field], `lock ${packagePath} ${field}`);
+      for (const [name, range] of Object.entries(edges)) {
+        if (field === "peerDependencies") {
+          const meta = optionalPeers[name];
+          if (meta !== null && typeof meta === "object" && meta.optional === true) continue;
+        }
+        if (resolveLockEdge(packages, packagePath, name) !== null) continue;
+        unresolved.push({ from: packagePath, name, range: String(range), field });
+      }
+    }
+  }
+  return unresolved;
+}
+
+export function validateLockEdges(lock) {
+  const unresolved = collectUnresolvedLockEdges(lock);
+  if (unresolved.length === 0) return;
+  const lines = unresolved.map(
+    (edge) => `${edge.from || "(root)"} -> ${edge.name}@${edge.range} (${edge.field})`,
+  );
+  throw new Error(
+    `lock has ${unresolved.length} dependency edge(s) with no lock entry; npm ci will reject it. ` +
+      `Regenerate with "npx npm@10 install --package-lock-only":\n  ${lines.join("\n  ")}`,
+  );
+}
+
 export function resolveNpmExecPath(value) {
   if (!value) throw new Error("npm_execpath is missing");
   if (!path.isAbsolute(value)) {
@@ -146,6 +211,7 @@ export function runDependencyShape({
       `cannot read dependency lock ${lockPath}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  validateLockEdges(lock);
   validateExactVersions(collectLockVersions(lock), APPROVED_VERSIONS, "lock");
 
   const args = [

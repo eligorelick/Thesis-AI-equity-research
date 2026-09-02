@@ -51,6 +51,8 @@ import {
   type RoicVsWaccSpread,
   type ReturnsIncomeRow,
   type ReturnsBalanceRow,
+  PRIOR_YEAR_COST_OF_DEBT_MAX_YEARS_BACK,
+  type PriorYearCostOfDebt,
 } from "@/pipeline/stageB/returns";
 import {
   computeCapital,
@@ -837,6 +839,42 @@ function riskFreePct(bundle: DataBundle): { pct: number | null; asOf: string | n
  * separately so opposite-signed observations can never average to zero and
  * impersonate a genuinely debt-free capital structure.
  */
+/**
+ * The most recent fiscal year (excluding the latest, at index 0) whose income
+ * statement discloses a POSITIVE interest expense and whose balance sheet
+ * carries positive total debt — the issuer's own last-disclosed effective cost
+ * of debt. Consumed by the WACC only when the current interest expense is
+ * missing or a provider-placeholder zero. Annual rows are newest-first.
+ */
+export function priorYearCostOfDebt(
+  incomeAnnual: readonly FmpIncomeStatementRow[],
+  balanceAnnual: readonly FmpBalanceSheetRow[],
+): PriorYearCostOfDebt | null {
+  for (let index = 1; index < incomeAnnual.length && index <= PRIOR_YEAR_COST_OF_DEBT_MAX_YEARS_BACK; index += 1) {
+    const income = incomeAnnual[index];
+    const fiscalYearEnd = isoDay(income?.date);
+    const interestExpense = num(income?.interestExpense);
+    if (fiscalYearEnd === null || interestExpense === null || interestExpense <= 0) continue;
+    const balanceIndex = balanceAnnual.findIndex((row) => isoDay(row.date) === fiscalYearEnd);
+    if (balanceIndex < 0) continue;
+    const debtThisYear = num(balanceAnnual[balanceIndex]?.totalDebt);
+    const debtPriorYear = num(balanceAnnual[balanceIndex + 1]?.totalDebt);
+    if (debtThisYear === null || debtThisYear <= 0) continue;
+    if (debtPriorYear !== null && debtPriorYear < 0) continue;
+    const totalDebtAvg =
+      debtPriorYear !== null && debtPriorYear > 0 ? (debtThisYear + debtPriorYear) / 2 : debtThisYear;
+    return {
+      pct: (interestExpense / totalDebtAvg) * 100,
+      fiscalYearEnd,
+      yearsBack: index,
+      interestExpense,
+      totalDebtAvg,
+      ebit: num(income?.ebit) ?? num(income?.operatingIncome),
+    };
+  }
+  return null;
+}
+
 function totalDebtSnapshot(balances: FmpBalanceSheetRow[]): {
   average: number | null;
   negativeObservation: number | null;
@@ -1329,6 +1367,10 @@ function computeReturns(
     riskFreePct: rf.pct,
     erpPct: usErpPct,
     interestExpenseTtm: interestExpenseForWacc,
+    priorYearCostOfDebt:
+      interestExpenseForWacc === null || interestExpenseForWacc <= 0
+        ? priorYearCostOfDebt(incomeAnnual, balanceAnnual)
+        : null,
     totalDebtAvg: debtSnapshot.average,
     negativeTotalDebtObservation: debtSnapshot.negativeObservation,
     marketCap: num(quote?.marketCap ?? profile?.marketCap),

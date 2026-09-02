@@ -128,9 +128,31 @@ is price times shares outstanding. Quarterly cash-flow figures, and any
 quarter a filer reports only year-to-date, are derived by subtraction after
 the first quarter of a fiscal year (Q1 is the year-to-date fact itself) and
 marked `derivation` on the row; a line item a filer tags with a non-standard
-extension tag yields `null`, never a guess. Every replaced member is recorded
-in the missing-data manifest as `keyless.<member>`, naming why FMP could not
-serve it.
+extension tag yields `null`, never a guess, with three disclosed stand-ins:
+interest expense falls back to cash interest paid from the cash-flow
+supplement (`InterestPaidNet`) when no us-gaap interest line is filed;
+operating income is derived as pretax income plus interest expense when no
+`OperatingIncomeLoss` line exists (not on bank-style filers, for which
+interest is an operating cost and the sum is not EBIT); and stockholders'
+equity is derived as total equity including the noncontrolling interest minus
+that interest, or taken as that total when no `MinorityInterest` is tagged
+either. Each stand-in is recorded in the manifest as
+`keyless.<statement>.<field>` with the periods it served. When a filer tags no
+balance-sheet current-debt line, the debt maturity schedule's
+next-twelve-months figure stands in for short-term debt and the row note says
+so. SEC facts are stored as filed, so
+per-share and share-count facts filed before a stock split are restated to the
+current share basis from the filer's tagged split ratio, checked against the
+share counts later filings restated across that date; each applied or refused
+ratio is disclosed in the manifest as `keyless.stockSplits`. Every replaced
+member is recorded in the missing-data manifest as `keyless.<member>`, naming
+why FMP could not serve it. Two issuer situations leave the statements empty
+even though SEC answers, and the manifest names them: a foreign private
+issuer reporting under IFRS (its facts sit in the `ifrs-full` taxonomy, which
+the builder does not read), and a successor registrant created by a
+reorganization (a Form 8-K12B on file and no annual report yet; the
+predecessor's history sits under a CIK that EDGAR does not link, as with
+ExxonMobil Holdings Corp from July 2026).
 
 Analyst estimates and price targets, grades consensus, peers, insider trades
 and statistics, 13F institutional ownership, news and press releases,
@@ -173,6 +195,28 @@ projections and the aspect scores — with the score bands shown as grades and
 every block stating that no analyst pass ran. Only the narrative sections
 (catalysts, risks, outlook, executive credibility, moat sources) stay empty.
 
+The DCF's terminal value assumes returns fade to the cost of capital (terminal
+ROIC = WACC) unless the issuer's ROIC exceeded its WACC in each of the last
+four or more fiscal years on record; then half the median spread, capped at
+five percentage points, is carried in perpetuity. Near-term growth anchors on
+the lower of the three- and five-year revenue CAGRs; when the two disagree in
+sign the history holds a spike or a collapse rather than a trend, and
+near-term growth is set to the terminal rate instead. The point-in-time
+balance row behind net debt, invested capital and the EV bridge is the newer
+of the latest quarterly and annual rows, unless that row lacks any of total
+debt, equity and cash while the older row carries all three; the fallback
+names the missing field in the valuation notes and is filed as an info gap.
+The assumption block states
+which rule applied and why, and the design note in
+`docs/superpowers/specs/2026-09-02-analysis-quality-design.md` gives the
+evidence behind it. On the bank, insurer and mortgage-REIT routes the
+Piotroski F-score withholds its current-ratio, gross-margin and both
+operating-cash-flow signals and is reported out of the signals that remain,
+and the unprofitable overlay (which switches the headline metrics to cash
+runway and burn) triggers on negative net income alone: a negative operating
+cash flow on those routes reflects loan, deposit, trading and reserve flows,
+not losses, and the routing note says when it was set aside.
+
 EDGAR does not require a key, but it does require a truthful contact identity.
 Placeholder or missing identities disable live EDGAR acquisition and create a
 visible data gap.
@@ -191,6 +235,14 @@ Selecting `claude-haiku-4-5` does not make the whole run Haiku. Haiku is not
 used for the synthesis/judge pass; that pass is raised to `claude-sonnet-5`,
 and the substitution is disclosed in the report's execution metadata as a
 `model-floor` adjustment.
+
+A bull or bear pass whose output is received but rejected by the analyst
+schema (a malformed date, invalid JSON) gets one repair attempt: the same
+cached payload with the validation error and the rejected output fed back as
+a further turn, under its own settlement and cost row, while the sibling's
+paid output is kept. The judge pass has the same repair loop with two
+retries. A transport failure or a refusal is not retried this way; the run
+degrades to a data-only report with the failure disclosed.
 
 The Settings page can override the analysis model and effort. Stored settings
 take precedence over environment variables, which take precedence over
@@ -334,8 +386,22 @@ fixtures/report/  fictional complete sample report
   retries, web searches, and provider pricing.
 - This build is designed for one local user and should not be exposed publicly
   without additional authentication and authorization.
-- Keyless statements are derived from XBRL tags; a filer that uses extension
-  tags for a line item yields `null` for that field, never a guess.
+- Keyless statements are derived from us-gaap XBRL tags; a filer that uses
+  extension tags for a line item yields `null` for that field, never a guess,
+  apart from the three disclosed stand-ins (cash interest paid for interest
+  expense, pretax income plus interest for operating income, total equity net
+  of the noncontrolling interest for stockholders' equity). IFRS filers
+  (`ifrs-full`) and successor registrants without an annual report yet get no
+  keyless statements, and the manifest says which case applies.
+- The verification stage traces numbers only against the numeric registry. A
+  number the model lifted from filing or transcript prose is logged as
+  `text-source` and stays unverified. A period written in fiscal spelling
+  ("FY2025" or "Q2 2026" for a cell registered as 2025-12-31 or 2026-06-30)
+  and a unit with a trailing qualifier ("index (0-100)") are read as the
+  registry's spelling, with the reading noted in the log; a period naming
+  another year still fails. Macro figures render in registry units, so a
+  series FRED serves in thousands or billions is shown as the scaled count or
+  dollar amount with the conversion named in the section note.
 
 ## Contributing
 

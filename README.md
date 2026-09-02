@@ -151,11 +151,14 @@ cross-check on those rows is recorded as a passing identity check rather than
 a numeric comparison.
 
 Any FMP plan works. Lower tiers cap the `limit` parameter (5 periods on the
-entry plans) and restrict some endpoints: Thesis reads the cap from FMP's own
-rejection, retries within it, and records the truncated history depth in the
-missing-data manifest, while restricted endpoints (insider trades,
-institutional ownership, news, transcripts) become disclosed gaps rather than
-failures. Sector-ETF price history that an entry-tier plan refuses is instead
+entry plans), restrict some endpoints, and on the entry plans restrict which
+symbols are served at all (an uncovered symbol returns HTTP 402 on every
+endpoint): Thesis reads the cap from FMP's own rejection, retries within it,
+and records the truncated history depth in the missing-data manifest, while
+restricted endpoints (insider trades, institutional ownership, news,
+transcripts) become disclosed gaps rather than failures, and every statement,
+price, share or profile member an uncovered symbol loses is served the keyless
+way (EDGAR and Yahoo) once EDGAR confirms the issuer. Sector-ETF price history that an entry-tier plan refuses is instead
 served from Yahoo once a CIK resolves and the run is not in fixture mode, the
 same fallback real tickers use with no key at all (see *Without an FMP
 subscription* above).

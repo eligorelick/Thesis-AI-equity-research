@@ -327,7 +327,6 @@ describe("public release contract", () => {
     const workflowSource = read(".github/workflows/ci.yml");
     const workflow = await parseWorkflow(workflowSource);
     const full = workflow.jobs?.full;
-    const compatibility = workflow.jobs?.compatibility;
     const windows = workflow.jobs?.["windows-smoke"];
     const expectedSteps = (nodeVersion: number, commands: readonly string[]) => [
       { uses: "actions/checkout@v4" },
@@ -345,21 +344,17 @@ describe("public release contract", () => {
       group: "${{ github.workflow }}-${{ github.ref }}",
       "cancel-in-progress": true,
     });
-    expect(Object.keys(workflow.jobs ?? {}).sort()).toEqual([
-      "compatibility",
-      "full",
-      "windows-smoke",
-    ]);
+    // Node 20 reached end-of-life in April 2026 and its lane was retired on
+    // 2026-09-01: the test harness spawns TypeScript workers and eval scripts
+    // that depend on Node 24's native type stripping, so the lane could never
+    // pass and no longer describes a supported runtime.
+    expect(Object.keys(workflow.jobs ?? {}).sort()).toEqual(["full", "windows-smoke"]);
     expect(full).toMatchObject({ "runs-on": "ubuntu-latest", "timeout-minutes": 60 });
-    expect(compatibility).toMatchObject({
-      "runs-on": "ubuntu-latest",
-      "timeout-minutes": 30,
-    });
     expect(windows).toMatchObject({
       "runs-on": "windows-latest",
       "timeout-minutes": 45,
     });
-    for (const job of [full, compatibility, windows]) {
+    for (const job of [full, windows]) {
       expect(job?.permissions).toBeUndefined();
       for (const step of job?.steps ?? []) {
         expect(step.if).toBeUndefined();
@@ -367,13 +362,7 @@ describe("public release contract", () => {
       }
     }
     expect(full?.steps).toEqual(expectedSteps(24, ["npm ci", ...VERIFY_GATES]));
-    expect(compatibility?.steps).toEqual(
-      expectedSteps(20, [
-        "npm ci",
-        "npm run test:product",
-        "npm run test:integration",
-      ]),
-    );
+    expect(workflowSource).not.toMatch(/node-version:\s*20\b/);
     expect(windows?.steps).toEqual(
       expectedSteps(24, [
         "npm ci",
@@ -410,10 +399,11 @@ describe("public release contract", () => {
     ]);
   });
 
-  it("documents supported CI, Node 20 residual compatibility, and branch protection", () => {
+  it("documents supported CI, the retired Node 20 lane, and branch protection", () => {
     const readme = read("README.md");
     expect(readme).toContain("Node.js 24 LTS");
-    expect(readme).toContain("Node.js 20 compatibility");
+    expect(readme).toMatch(/Node\.js 20 .*end-of-life/s);
+    expect(readme).not.toContain("compatibility lane");
     expect(readme).toMatch(/branch protection.*require.*CI \/ full/is);
   });
 

@@ -33,8 +33,9 @@ Requirements:
 - Node.js 24 LTS
 - npm
 
-Node.js 20 compatibility is retained as a transitional CI lane, but Node 20 is
-end-of-life and is not the supported runtime for new deployments.
+Node.js 20 reached end-of-life in April 2026 and is not supported: the test
+harness spawns TypeScript workers that rely on Node 24's native type stripping,
+so its former CI lane was retired rather than left permanently red.
 
 ```powershell
 npm ci
@@ -252,8 +253,8 @@ npm test
 It issues exactly two keyless requests (ticker→CIK and submissions) and fails
 rather than degrading, which is the point of opting in.
 
-GitHub Actions runs the same required gates on Node.js 24 LTS, retains a
-Node.js 20 compatibility lane, and performs a single-worker Windows smoke run.
+GitHub Actions runs the same required gates on Node.js 24 LTS and performs a
+single-worker Windows smoke run.
 Repository administrators must configure branch protection to require the
 `CI / full` check; the workflow cannot enable branch protection by itself.
 

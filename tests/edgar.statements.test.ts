@@ -476,3 +476,77 @@ describe("buildStatementsFromCompanyFacts — chain and derivation coverage", ()
     expect(built.balanceAnnual.rows[0]).toMatchObject({ date: "2025-12-31", totalAssets: 1200 });
   });
 });
+
+describe("buildStatementsFromCompanyFacts — comparative copies carried in a later filing", () => {
+  // The JPM mechanic (fixtures/edgar/jpm_companyfacts_revenue_tags.json): the FY2025 year-end
+  // Assets/Deposits instants exist BOTH as the 10-K original {fy:2025, fp:"FY", filed:"2026-02-13"}
+  // and as the Q1-2026 10-Q comparative {fy:2026, fp:"Q1", filed:"2026-05-01"}. max(filed) keeps
+  // the 10-Q copy, whose fy/fp describe the 10-Q, not the fiscal year it restates.
+  it("keeps the restated value but labels the row from the filing that first reported the period", () => {
+    const f = facts({
+      Revenues: [{ start: "2025-01-01", end: "2025-12-31", val: 182_447, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" }],
+      NetIncomeLoss: [{ start: "2025-01-01", end: "2025-12-31", val: 57_048, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" }],
+      Assets: [
+        { end: "2025-12-31", val: 4_424_900, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" },
+        { end: "2025-12-31", val: 4_424_950, form: "10-Q", fp: "Q1", fy: 2026, filed: "2026-05-01" },
+      ],
+      Deposits: [
+        { end: "2025-12-31", val: 2_559_320, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" },
+        { end: "2025-12-31", val: 2_559_400, form: "10-Q", fp: "Q1", fy: 2026, filed: "2026-05-01" },
+      ],
+    });
+    const built = buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "JPM" });
+    expect(built.balanceAnnual.rows).toHaveLength(1);
+    expect(built.balanceAnnual.rows[0]).toMatchObject({
+      date: "2025-12-31",
+      totalAssets: 4_424_950, // the later filing's value still wins (max(filed) dedup)
+      deposits: 2_559_400,
+      fiscalYear: "2025", // ...but not its fy
+      period: "FY",
+      filingDate: "2026-02-13", // ...nor its filing date
+      acceptedDate: "2026-02-13",
+    });
+    // The year end is still discovered even though the deduped Assets instant now looks like a 10-Q.
+    expect(built.balanceQuarterly.rows[0]).toMatchObject({ date: "2025-12-31", period: "Q4", filingDate: "2026-02-13" });
+  });
+
+  it("keeps the fiscal-year label when the next 10-K carries the period as an FY comparative", () => {
+    const f = facts({
+      Revenues: [
+        { start: "2025-01-01", end: "2025-12-31", val: 182_447, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" },
+        // FY2026's 10-K restates FY2025 and stamps the comparative with ITS OWN fy/fp.
+        { start: "2025-01-01", end: "2025-12-31", val: 182_500, form: "10-K", fp: "FY", fy: 2026, filed: "2027-02-12" },
+      ],
+      NetIncomeLoss: [
+        { start: "2025-01-01", end: "2025-12-31", val: 57_048, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" },
+        { start: "2025-01-01", end: "2025-12-31", val: 57_100, form: "10-K", fp: "FY", fy: 2026, filed: "2027-02-12" },
+      ],
+      Assets: [{ end: "2025-12-31", val: 4_424_900, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" }],
+    });
+    const built = buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "JPM" });
+    expect(built.incomeAnnual.rows[0]).toMatchObject({
+      date: "2025-12-31",
+      revenue: 182_500, // restated value wins
+      netIncome: 57_100,
+      fiscalYear: "2025", // label comes from the original 10-K, not the fy:2026 comparative
+      period: "FY",
+      filingDate: "2026-02-13",
+    });
+  });
+
+  it("ignores fy on a stale comparative when no original filing of the period survives", () => {
+    const f = facts({
+      // Only the FY2026 10-K's comparative of FY2025 is present: its fy is a year too high and its
+      // filing lag (~410 days) shows it is not this period's own report.
+      Revenues: [{ start: "2025-01-01", end: "2025-12-31", val: 182_500, form: "10-K", fp: "FY", fy: 2026, filed: "2027-02-12" }],
+      NetIncomeLoss: [{ start: "2025-01-01", end: "2025-12-31", val: 57_100, form: "10-K", fp: "FY", fy: 2026, filed: "2027-02-12" }],
+      Assets: [{ end: "2025-12-31", val: 4_424_900, form: "10-K", fp: "FY", fy: 2026, filed: "2027-02-12" }],
+    });
+    const built = buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "JPM" });
+    expect(built.incomeAnnual.rows[0]).toMatchObject({
+      date: "2025-12-31",
+      fiscalYear: "2025", // from the period end, not from fy:2026
+      filingDate: "2027-02-12", // the only filing there is
+    });
+  });
+});

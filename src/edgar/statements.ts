@@ -17,8 +17,10 @@
  *
  *  2. THE CRITICAL DEDUP RULE (see xbrl.ts): facts are filtered to the audited
  *     core forms BEFORE deduping, then grouped by period and reduced to
- *     max(filed) with amendments winning a tie. That is `dedupFactPoints`,
- *     applied once per (tag, unit) when the index is built.
+ *     max(filed) with amendments winning a tie, applied once per (tag, unit)
+ *     when the index is built. That rule governs the VALUE; row LABELS come
+ *     from the earliest core-form filing of the same period, because `fy`/`fp`
+ *     on a later comparative describe that later FILING (see UnitPoints.reporters).
  *
  * The module is pure: no network, no clock, no environment. The companyfacts
  * JSON comes from src/providers/edgar.ts.
@@ -29,7 +31,8 @@ import type { ManifestEntry } from "@/types/core";
 import {
   CORE_FACT_FORMS,
   conceptFactsSchema,
-  dedupFactPoints,
+  dedupByPeriod,
+  filterToCoreForms,
   looksLikeBankTagging,
   parseFactPoints,
   type CompanyFacts,
@@ -343,9 +346,54 @@ const FY_ANCHOR_DURATION_TAGS = [...REVENUE_TAGS, "NetIncomeLoss", "ProfitLoss"]
 
 interface UnitPoints {
   unit: string;
+  /** Deduped: the max(filed) winner per period. This is where a VALUE comes from. */
   points: FactPoint[];
+  /**
+   * Per period, the EARLIEST core-form filing that reported it — the filing whose
+   * `fy`/`fp`/`form`/`filed` actually describe this period.
+   *
+   * The mandated max(filed) dedup deliberately keeps the newest copy of a period so a
+   * restatement wins, but the newest copy is frequently a COMPARATIVE carried in a later
+   * filing, and `fy`/`fp` describe the FILING, not the fact's own period (xbrl.ts:37).
+   * JPM is the live example: the FY2025 year-end `Assets`/`Deposits` instants appear both
+   * as {fy:2025, fp:"FY", form:"10-K", filed:"2026-02-13"} and as
+   * {fy:2026, fp:"Q1", form:"10-Q", filed:"2026-05-01", frame:"CY2025Q4I"}. Labelling from
+   * the dedup winner would stamp the FY2025 balance row with a 10-Q filing date, and once
+   * the next 10-K lands with an fp:"FY" comparative it would stamp the FY2025 income row
+   * `fiscalYear: "2026"`. So: VALUE from the newest copy, LABELS from the first one.
+   */
+  reporters: Map<string, FactPoint>;
 }
 type FactIndex = Map<string, UnitPoints[]>;
+
+/** Dedup/grouping key: durations by (start, end), instants by end. Mirrors dedupByPeriod. */
+function periodKey(p: FactPoint): string {
+  return `${p.start ?? ""}|${p.end}`;
+}
+
+/** The filing that first reported a point's period; the point itself when it stands alone. */
+function reporterFor(up: UnitPoints, p: FactPoint): FactPoint {
+  return up.reporters.get(periodKey(p)) ?? p;
+}
+
+/** Earliest `filed` wins; ties prefer the original over an amendment, then the lower accession. */
+function buildReporters(corePoints: FactPoint[]): Map<string, FactPoint> {
+  const reporters = new Map<string, FactPoint>();
+  for (const p of corePoints) {
+    const key = periodKey(p);
+    const cur = reporters.get(key);
+    if (cur === undefined || p.filed < cur.filed) {
+      reporters.set(key, p);
+      continue;
+    }
+    if (p.filed > cur.filed) continue;
+    const pAmend = p.form.trim().endsWith("/A");
+    const curAmend = cur.form.trim().endsWith("/A");
+    if (curAmend && !pAmend) reporters.set(key, p);
+    else if (pAmend === curAmend && p.accn < cur.accn) reporters.set(key, p);
+  }
+  return reporters;
+}
 
 function collectTags(spec: ChainSpec, into: Set<string>): void {
   if (spec.kind === "chain") {
@@ -400,8 +448,9 @@ function buildFactIndex(facts: CompanyFacts): FactIndex {
       const entries: UnitPoints[] = [];
       for (const [unit, rawPoints] of Object.entries(parsed.data.units)) {
         if (!Array.isArray(rawPoints)) continue;
-        const points = dedupFactPoints(parseFactPoints(rawPoints));
-        if (points.length > 0) entries.push({ unit, points });
+        const core = filterToCoreForms(parseFactPoints(rawPoints));
+        const points = dedupByPeriod(core);
+        if (points.length > 0) entries.push({ unit, points, reporters: buildReporters(core) });
       }
       if (entries.length === 0) continue;
       entries.sort((a, b) => (a.unit === "USD" ? -1 : b.unit === "USD" ? 1 : a.unit.localeCompare(b.unit)));
@@ -491,9 +540,16 @@ interface Resolved {
   value: number;
   /** The fact the value is anchored to (the FY point for a derived quarter). */
   point: FactPoint;
+  /** The filing that FIRST reported `point`'s period. Row labels are read off this. */
+  reporter: FactPoint;
   unit: string;
   derivation?: Derivation;
   derivedFrom?: string[];
+}
+
+/** Value and period from `point`; labels from the filing that first reported that period. */
+function resolvedPoint(up: UnitPoints, point: FactPoint, value: number): Resolved {
+  return { value, point, reporter: reporterFor(up, point), unit: up.unit };
 }
 
 type TagResolver = (tag: string, kind: UnitKind) => Resolved | null;
@@ -520,12 +576,17 @@ function describePoint(tag: string, p: FactPoint): string {
   return `${tag} ${p.start ?? "(instant)"}..${p.end}`;
 }
 
-/** Merge component resolutions into one: first point/unit wins, provenance unions. */
+/**
+ * Merge component resolutions into one: first point/unit wins, provenance unions, and the
+ * reporter is the earliest-filed of the components — the first filing in which every part of
+ * this combined figure had been reported at least once.
+ */
 function combine(value: number, parts: Resolved[]): Resolved {
   const head = parts[0] as Resolved;
   const derived = parts.find((p) => p.derivation !== undefined);
   const derivedFrom = [...new Set(parts.flatMap((p) => p.derivedFrom ?? []))];
-  const out: Resolved = { value, point: head.point, unit: head.unit };
+  const reporter = parts.reduce((a, b) => (b.reporter.filed < a.reporter.filed ? b : a), head).reporter;
+  const out: Resolved = { value, point: head.point, reporter, unit: head.unit };
   if (derived !== undefined) out.derivation = derived.derivation;
   if (derivedFrom.length > 0) out.derivedFrom = derivedFrom;
   return out;
@@ -631,7 +692,9 @@ function discoverFiscalYears(index: FactIndex): FiscalYear[] {
   for (const tag of FY_ANCHOR_DURATION_TAGS) {
     const up = pickUnitPoints(index, tag, "money");
     if (up === null) continue;
-    for (const p of up.points) {
+    // Iterate the REPORTERS, not the dedup winners: a period first reported on a 10-K but
+    // later carried as a comparative in a 10-Q would otherwise stop looking like a year end.
+    for (const p of up.reporters.values()) {
       if (!ANNUAL_FORMS.has(p.form.trim())) continue;
       const d = durationDays(p);
       if (d === null || d < ANNUAL_MIN_DAYS || d > ANNUAL_MAX_DAYS) continue;
@@ -644,7 +707,7 @@ function discoverFiscalYears(index: FactIndex): FiscalYear[] {
   }
   const assets = pickUnitPoints(index, "Assets", "money");
   if (assets !== null) {
-    for (const p of assets.points) {
+    for (const p of assets.reporters.values()) {
       if (p.start !== undefined || !ANNUAL_FORMS.has(p.form.trim())) continue;
       ends.add(p.end);
     }
@@ -666,7 +729,7 @@ function discoverQuarterEnds(index: FactIndex, fiscalYearEnds: ReadonlySet<strin
   const ends = new Set<string>(fiscalYearEnds);
   const assets = pickUnitPoints(index, "Assets", "money");
   if (assets !== null) {
-    for (const p of assets.points) {
+    for (const p of assets.reporters.values()) {
       if (p.start !== undefined || !QUARTERLY_FORMS.has(p.form.trim())) continue;
       ends.add(p.end);
     }
@@ -744,7 +807,7 @@ function annualResolver(index: FactIndex, fy: FiscalYear): TagResolver {
     const up = pickUnitPoints(index, tag, kind);
     if (up === null) return null;
     const p = findDurationForAnnual(up.points, fy.start, fy.end);
-    return p === null ? null : { value: p.val, point: p, unit: up.unit };
+    return p === null ? null : resolvedPoint(up, p, p.val);
   };
 }
 
@@ -753,7 +816,7 @@ function instantResolver(index: FactIndex, end: string): TagResolver {
     const up = pickUnitPoints(index, tag, kind);
     if (up === null) return null;
     const p = findInstant(up.points, end);
-    return p === null ? null : { value: p.val, point: p, unit: up.unit };
+    return p === null ? null : resolvedPoint(up, p, p.val);
   };
 }
 
@@ -803,12 +866,11 @@ function quarterResolver(index: FactIndex, ctx: QuarterContext, quarterEnds: str
     const up = pickUnitPoints(index, tag, kind);
     if (up === null) return null;
     const pts = up.points;
-    const unit = up.unit;
     const decimals = decimalsFor(kind);
 
     if (!ytdOnly) {
       const threeMonth = findByDurationDays(pts, ctx.end, QUARTER_MIN_DAYS, QUARTER_MAX_DAYS);
-      if (threeMonth !== null) return { value: threeMonth.val, point: threeMonth, unit };
+      if (threeMonth !== null) return resolvedPoint(up, threeMonth, threeMonth.val);
     }
     if (kind === "shares") return null;
 
@@ -820,9 +882,7 @@ function quarterResolver(index: FactIndex, ctx: QuarterContext, quarterEnds: str
         const ytdPrev = findDurationExact(pts, fy.start, ctx.previousEnd);
         if (ytdPrev !== null) {
           return {
-            value: tidy(fy.val - ytdPrev.val, decimals),
-            point: fy,
-            unit,
+            ...resolvedPoint(up, fy, tidy(fy.val - ytdPrev.val, decimals)),
             derivation: "fy-minus-ytd",
             derivedFrom: [describePoint(tag, fy), describePoint(tag, ytdPrev)],
           };
@@ -833,9 +893,7 @@ function quarterResolver(index: FactIndex, ctx: QuarterContext, quarterEnds: str
       if (quarters === null) return null;
       const sum = quarters.reduce((s, p) => s + p.val, 0);
       return {
-        value: tidy(fy.val - sum, decimals),
-        point: fy,
-        unit,
+        ...resolvedPoint(up, fy, tidy(fy.val - sum, decimals)),
         derivation: "fy-minus-quarters",
         derivedFrom: [describePoint(tag, fy), ...quarters.map((p) => describePoint(tag, p))],
       };
@@ -845,14 +903,12 @@ function quarterResolver(index: FactIndex, ctx: QuarterContext, quarterEnds: str
     const ytd = findDurationExact(pts, ctx.fyStart, ctx.end);
     if (ytd === null || ytd.start === undefined) return null;
     // First quarter of the fiscal year: the year-to-date fact IS the quarter.
-    if (daysBetween(ctx.fyStart, ctx.end) <= QUARTER_MAX_DAYS) return { value: ytd.val, point: ytd, unit };
+    if (daysBetween(ctx.fyStart, ctx.end) <= QUARTER_MAX_DAYS) return resolvedPoint(up, ytd, ytd.val);
     if (ctx.previousEnd === null) return null;
     const prior = findDurationExact(pts, ytd.start, ctx.previousEnd);
     if (prior === null) return null;
     return {
-      value: tidy(ytd.val - prior.val, decimals),
-      point: ytd,
-      unit,
+      ...resolvedPoint(up, ytd, tidy(ytd.val - prior.val, decimals)),
       derivation: "ytd-difference",
       derivedFrom: [describePoint(tag, ytd), describePoint(tag, prior)],
     };
@@ -944,10 +1000,26 @@ interface BuildState {
   filesTwentyF: boolean;
 }
 
+/**
+ * How long after a period ends its own report may still arrive. SEC annual deadlines top out
+ * at 120 days (20-F; a 10-K is 60-90), so 270 days leaves generous slack for a late filer —
+ * while staying well under the ~410 days at which the SAME period reappears as a comparative
+ * inside the NEXT year's annual report, whose `fy` is one year too high.
+ */
+const MAX_OWN_PERIOD_FILING_LAG_DAYS = 270;
+
+/**
+ * `fy`/`fp` describe the FILING, not the fact's period (xbrl.ts:37), so they may only be
+ * trusted when this filing is plausibly the period's OWN report: an annual `fp`/form, filed
+ * within the window above. A comparative carried in a later filing fails one test or both,
+ * and the fiscal-year end's own year is used instead.
+ */
 function fiscalYearLabel(anchor: FactPoint, slot: PeriodSlot): string {
   const form = anchor.form.trim();
   const fromAnnualFiling = anchor.fp === "FY" || form.startsWith("10-K") || form.startsWith("20-F");
-  if (fromAnnualFiling && typeof anchor.fy === "number") return String(anchor.fy);
+  const lag = daysBetween(anchor.end, anchor.filed);
+  const reportsOwnPeriod = lag >= 0 && lag <= MAX_OWN_PERIOD_FILING_LAG_DAYS;
+  if (fromAnnualFiling && reportsOwnPeriod && typeof anchor.fy === "number") return String(anchor.fy);
   return (slot.quarter?.fyEnd ?? slot.date).slice(0, 4);
 }
 
@@ -991,18 +1063,21 @@ function buildStatementRows<TRow>(
     def.compute(values, notes, ctxLabel);
     for (const field of def.unsourced) values[field] ??= null;
 
-    const anchorForm = anchor.point.form.trim();
-    if (anchorForm.startsWith("20-F")) state.filesTwentyF = true;
+    if (anchor.point.form.trim().startsWith("20-F") || anchor.reporter.form.trim().startsWith("20-F")) {
+      state.filesTwentyF = true;
+    }
 
     const row: Record<string, unknown> = {
       symbol: opts.symbol,
       cik: opts.cik,
       date: slot.date,
       reportedCurrency: anchor.unit,
-      fiscalYear: fiscalYearLabel(anchor.point, slot),
-      period: slot.quarter === null ? "FY" : quarterLabel(anchor.point, slot.quarter),
-      filingDate: anchor.point.filed,
-      acceptedDate: anchor.point.filed,
+      // Labels and dates come from the filing that FIRST reported the period; the VALUE above
+      // still comes from the max(filed) dedup winner, so a restatement wins the number.
+      fiscalYear: fiscalYearLabel(anchor.reporter, slot),
+      period: slot.quarter === null ? "FY" : quarterLabel(anchor.reporter, slot.quarter),
+      filingDate: anchor.reporter.filed,
+      acceptedDate: anchor.reporter.filed,
     };
     for (const field of fieldNames) row[field] = values[field] ?? null;
 

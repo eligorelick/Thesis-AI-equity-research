@@ -507,6 +507,10 @@ interface WiringOpts {
   bigQuarterlyInterest?: boolean;
   /** Override latest-two annual totalDebt observations (before the fixture's $M scaling). */
   annualDebt?: readonly [number, number];
+  /** Drop the FMP key-metrics-TTM row — the keyless (SEC + Yahoo) path has none. */
+  noKeyMetricsTtm?: boolean;
+  /** Zero the latest annual and TTM-window interest expense (FMP zero-for-undisclosed). */
+  zeroInterestExpense?: boolean;
 }
 
 function wiringBundle(opts: WiringOpts = {}): DataBundle {
@@ -546,6 +550,11 @@ function wiringBundle(opts: WiringOpts = {}): DataBundle {
       incomeQuarterly[i].ebit = null;
       incomeQuarterly[i].operatingIncome = null;
     }
+  }
+  if (opts.zeroInterestExpense) {
+    // Latest fiscal year undisclosed; FY2024 (15 on 290 avg debt) still discloses it.
+    incomeAnnual[0].interestExpense = 0;
+    for (let i = 0; i < 4; i++) incomeQuarterly[i].interestExpense = 0;
   }
   const annualDebt = opts.annualDebt ?? [300, 290];
   const balanceAnnual = [
@@ -594,7 +603,9 @@ function wiringBundle(opts: WiringOpts = {}): DataBundle {
       periods: { annualRequested: 10, quarterlyRequested: 8 },
     },
     keyMetrics: gapF,
-    keyMetricsTtm: fmpP([{ returnOnEquityTTM: 0.12 }], "2026-03-31", "key-metrics-ttm"),
+    keyMetricsTtm: opts.noKeyMetricsTtm
+      ? gapF
+      : fmpP([{ returnOnEquityTTM: 0.12 }], "2026-03-31", "key-metrics-ttm"),
     ratios: gapF,
     ratiosTtm: fmpP([{ effectiveTaxRateTTM: 0.2 }], "2026-03-31", "ratios-ttm"),
     enterpriseValues: gapF,
@@ -1024,6 +1035,73 @@ describe("runStageB wiring — excess-return CoE suppression + payout wiring (au
     const expected = ((40 / 150 + 56 / 140 + 39 / 130) / 3) * 100;
     expect(er.payoutRatioPct.value).toBeCloseTo(expected, 9);
     expect(er.payoutRatioPct.basis).toMatch(/caller-provided/i);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Task 8 — fallbacks the live keyless (SEC + Yahoo) run on JPM needed.
+ * ------------------------------------------------------------------------- */
+
+describe("runStageB wiring — keyless excess-return and WACC fallbacks (task 8)", () => {
+  // DuPont FY2025: net income 150 / average equity (500 + 450) / 2 = 475.
+  const DUPONT_ROE_PCT = (150 / 475) * 100;
+
+  it("bank with no key-metrics TTM: current ROE falls back to the DuPont decomposition", () => {
+    const computed = runStageB(wiringBundle({ bank: true, noKeyMetricsTtm: true }));
+    expect(computed.returns.dupont.latest?.roePct).toBeCloseTo(DUPONT_ROE_PCT, 9);
+    expect(computed.valuation.kind).toBe("excess-return");
+    if (computed.valuation.kind !== "excess-return") return;
+    const er = computed.valuation.excessReturn;
+    // The model RUNS on the statements-derived ROE instead of being suppressed.
+    expect(er.roePathPct.value[0]).toBeCloseTo(DUPONT_ROE_PCT, 9);
+    expect(er.equityValue).not.toBeNull();
+    expect(er.perShare).not.toBeNull();
+    expect(er.gaps.some((g) => g.field === "valuation.excessReturn.currentRoe")).toBe(false);
+    expect(computed.gaps.some((g) => g.field === "valuation.excessReturn.currentRoe")).toBe(false);
+    // The substituted basis is named rather than passed off as the TTM figure.
+    expect(
+      computed.valuation.notes.some(
+        (n) => /DuPont/i.test(n) && /key-metrics TTM unavailable/i.test(n),
+      ),
+    ).toBe(true);
+  });
+
+  it("control: the vendor key-metrics TTM ROE still wins when present, with no DuPont note", () => {
+    const computed = runStageB(wiringBundle({ bank: true }));
+    expect(computed.valuation.kind).toBe("excess-return");
+    if (computed.valuation.kind !== "excess-return") return;
+    expect(computed.valuation.excessReturn.roePathPct.value[0]).toBeCloseTo(12, 9);
+    expect(computed.valuation.notes.some((n) => /DuPont/i.test(n))).toBe(false);
+  });
+
+  it("bank with an undisclosed interest expense: no historical cost-of-debt inference", () => {
+    const computed = runStageB(wiringBundle({ bank: true, zeroInterestExpense: true }));
+    const w = computed.returns.wacc;
+    // Deposits fund a bank; interest expense / long-term debt is not its cost of
+    // debt, and the financial route's valuation never consumes the figure.
+    expect(w.costOfDebtMethod).toBe("unavailable");
+    expect(w.costOfDebtPct).toBeNull();
+    expect(computed.returns.notes.some((n) => /cost of debt taken from FY/i.test(n))).toBe(false);
+    expect(
+      computed.returns.gaps.some(
+        (g) => g.field === "returns.wacc.interestExpense" && /inferred from the FY/i.test(g.reason),
+      ),
+    ).toBe(false);
+    // Existing behaviour is otherwise untouched: cost of equity is still carried.
+    expect(w.costOfEquityPct).not.toBeNull();
+  });
+
+  it("control: a non-financial route still infers the historical cost of debt", () => {
+    const computed = runStageB(wiringBundle({ zeroInterestExpense: true }));
+    const w = computed.returns.wacc;
+    // FY2024 interest 15 / 290 (no FY2023 balance row to average) ≈ 5.17%.
+    expect(w.costOfDebtMethod).toBe("historical");
+    expect(w.costOfDebtPct).toBeCloseTo((15 / 290) * 100, 9);
+    expect(
+      computed.returns.gaps.some(
+        (g) => g.field === "returns.wacc.interestExpense" && /inferred from the FY 2024-12-31/i.test(g.reason),
+      ),
+    ).toBe(true);
   });
 });
 

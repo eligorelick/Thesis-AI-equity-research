@@ -140,11 +140,18 @@ type UnitKind = "money" | "perShare" | "shares";
  * revenue chain and the SG&A chain interleave a `sum` step between `first`
  * steps, which the flat kinds cannot express. It resolves its steps in order
  * and the first step that produces a value wins.
+ *
+ * `sumAnyOf` is `sumAny` over SPECS rather than tags: the lease chain adds an
+ * operating-lease subtotal (tagged total, else current + noncurrent) to a
+ * finance-lease subtotal resolved the same way, which neither `sumAny` (flat
+ * tags) nor `chain` (first-wins) can express. Its `label`s name the parts in
+ * the absent-component note, exactly as tag names do for `sumAny`.
  */
 export type ChainSpec =
   | { kind: "first"; tags: string[]; unit: UnitKind; sign?: -1 }
   | { kind: "sum"; tags: string[]; unit: "money" }
   | { kind: "sumAny"; tags: string[]; unit: "money" }
+  | { kind: "sumAnyOf"; parts: { label: string; spec: ChainSpec }[]; unit: "money" }
   | { kind: "diff"; plus: string; minus: string; unit: "money" }
   | { kind: "chain"; steps: ChainSpec[]; unit: UnitKind };
 
@@ -197,6 +204,9 @@ const INCOME_CHAINS: Record<string, ChainSpec> = {
       { kind: "sum", tags: ["SellingAndMarketingExpense", "GeneralAndAdministrativeExpense"], unit: "money" },
     ],
   },
+  /** The two SG&A components FMP also publishes on their own; Stage B's forensics read both. */
+  sellingAndMarketingExpenses: { kind: "first", tags: ["SellingAndMarketingExpense"], unit: "money" },
+  generalAndAdministrativeExpenses: { kind: "first", tags: ["GeneralAndAdministrativeExpense"], unit: "money" },
   operatingExpenses: { kind: "first", tags: ["OperatingExpenses"], unit: "money" },
   operatingIncome: { kind: "first", tags: ["OperatingIncomeLoss"], unit: "money" },
   interestExpense: {
@@ -219,7 +229,14 @@ const INCOME_CHAINS: Record<string, ChainSpec> = {
     unit: "money",
   },
   incomeTaxExpense: { kind: "first", tags: ["IncomeTaxExpenseBenefit"], unit: "money" },
+  totalOtherIncomeExpensesNet: { kind: "first", tags: ["NonoperatingIncomeExpense"], unit: "money" },
   netIncome: { kind: "first", tags: ["NetIncomeLoss", "ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"], unit: "money" },
+  netIncomeFromContinuingOperations: { kind: "first", tags: ["IncomeLossFromContinuingOperations"], unit: "money" },
+  netIncomeFromDiscontinuedOperations: {
+    kind: "first",
+    tags: ["IncomeLossFromDiscontinuedOperationsNetOfTax"],
+    unit: "money",
+  },
   depreciationAndAmortization: DEPRECIATION_SPEC,
   eps: { kind: "first", tags: ["EarningsPerShareBasic"], unit: "perShare" },
   epsDiluted: { kind: "first", tags: ["EarningsPerShareDiluted"], unit: "perShare" },
@@ -227,15 +244,69 @@ const INCOME_CHAINS: Record<string, ChainSpec> = {
   weightedAverageShsOutDil: { kind: "first", tags: ["WeightedAverageNumberOfDilutedSharesOutstanding"], unit: "shares" },
 };
 
+/**
+ * Operating and finance lease liabilities, each as "tagged total, else the
+ * current + noncurrent split". FMP's `capitalLeaseObligations` carries BOTH
+ * (Apple FY2025: operating ~12.5B + finance ~1.2B = 13.72B) and its `totalDebt`
+ * includes the pair, so both belong here or net debt, ROIC's invested capital
+ * and the historical cost-of-debt denominator all drift off the house numbers.
+ */
+const LEASE_LIABILITY_SPEC: ChainSpec = {
+  kind: "sumAnyOf",
+  unit: "money",
+  parts: [
+    {
+      label: "operatingLeaseLiability",
+      spec: {
+        kind: "chain",
+        unit: "money",
+        steps: [
+          { kind: "first", tags: ["OperatingLeaseLiability"], unit: "money" },
+          { kind: "sumAny", tags: ["OperatingLeaseLiabilityCurrent", "OperatingLeaseLiabilityNoncurrent"], unit: "money" },
+        ],
+      },
+    },
+    {
+      label: "financeLeaseLiability",
+      spec: {
+        kind: "chain",
+        unit: "money",
+        steps: [
+          { kind: "first", tags: ["FinanceLeaseLiability", "CapitalLeaseObligations"], unit: "money" },
+          { kind: "sumAny", tags: ["FinanceLeaseLiabilityCurrent", "FinanceLeaseLiabilityNoncurrent"], unit: "money" },
+        ],
+      },
+    },
+  ],
+};
+
 const BALANCE_CHAINS: Record<string, ChainSpec> = {
+  /**
+   * Bank tagging (JPM): `CashAndCashEquivalentsAtCarryingValue` goes stale — its
+   * last point is 2018 — while `CashAndDueFromBanks` carries the operating cash.
+   * The restricted-cash catch-all stays last: at a bank it equals cash + the
+   * interest-bearing deposits that `shortTermInvestments` below claims, so
+   * letting it win here would double-count them in cashAndShortTermInvestments.
+   */
   cashAndCashEquivalents: {
     kind: "first",
-    tags: ["CashAndCashEquivalentsAtCarryingValue", "Cash", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+    tags: [
+      "CashAndCashEquivalentsAtCarryingValue",
+      "CashAndDueFromBanks",
+      "Cash",
+      "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+    ],
     unit: "money",
   },
   shortTermInvestments: {
     kind: "first",
-    tags: ["ShortTermInvestments", "MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesDebtSecuritiesCurrent"],
+    tags: [
+      "ShortTermInvestments",
+      "MarketableSecuritiesCurrent",
+      "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+      // A bank's near-cash: JPM's 321.60B of interest-bearing deposits in banks.
+      "InterestBearingDepositsInBanks",
+    ],
     unit: "money",
   },
   cashAndShortTermInvestments: { kind: "first", tags: ["CashCashEquivalentsAndShortTermInvestments"], unit: "money" },
@@ -269,7 +340,8 @@ const BALANCE_CHAINS: Record<string, ChainSpec> = {
   totalCurrentLiabilities: { kind: "first", tags: ["LiabilitiesCurrent"], unit: "money" },
   totalLiabilities: { kind: "first", tags: ["Liabilities"], unit: "money" },
   deferredRevenue: { kind: "first", tags: ["ContractWithCustomerLiabilityCurrent", "DeferredRevenueCurrent"], unit: "money" },
-  capitalLeaseObligations: { kind: "first", tags: ["FinanceLeaseLiability", "CapitalLeaseObligations"], unit: "money" },
+  taxPayables: { kind: "first", tags: ["AccruedIncomeTaxesCurrent", "TaxesPayableCurrent"], unit: "money" },
+  capitalLeaseObligations: LEASE_LIABILITY_SPEC,
   preferredStock: { kind: "first", tags: ["PreferredStockValue"], unit: "money" },
   commonStock: { kind: "first", tags: ["CommonStockValue"], unit: "money" },
   retainedEarnings: { kind: "first", tags: ["RetainedEarningsAccumulatedDeficit"], unit: "money" },
@@ -308,6 +380,7 @@ const CASHFLOW_CHAINS: Record<string, ChainSpec> = {
   acquisitionsNet: { kind: "first", tags: ["PaymentsToAcquireBusinessesNetOfCashAcquired"], unit: "money", sign: -1 },
   netDebtIssuance: { kind: "diff", plus: "ProceedsFromIssuanceOfLongTermDebt", minus: "RepaymentsOfLongTermDebt", unit: "money" },
   netStockIssuance: { kind: "diff", plus: "ProceedsFromIssuanceOfCommonStock", minus: "PaymentsForRepurchaseOfCommonStock", unit: "money" },
+  commonStockIssuance: { kind: "first", tags: ["ProceedsFromIssuanceOfCommonStock"], unit: "money" },
   commonStockRepurchased: { kind: "first", tags: ["PaymentsForRepurchaseOfCommonStock"], unit: "money", sign: -1 },
   netDividendsPaid: { kind: "first", tags: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], unit: "money", sign: -1 },
   preferredDividendsPaid: {
@@ -318,9 +391,14 @@ const CASHFLOW_CHAINS: Record<string, ChainSpec> = {
   },
   incomeTaxesPaid: { kind: "first", tags: ["IncomeTaxesPaidNet", "IncomeTaxesPaid"], unit: "money" },
   interestPaid: { kind: "first", tags: ["InterestPaidNet", "InterestPaid"], unit: "money" },
-  /** Extra keys; legal via the FmpRawRow index signature. */
-  investingCashFlow: { kind: "first", tags: ["NetCashProvidedByUsedInInvestingActivities"], unit: "money" },
-  financingCashFlow: { kind: "first", tags: ["NetCashProvidedByUsedInFinancingActivities"], unit: "money" },
+  /**
+   * FMP's own names for the two remaining cash-flow subtotals. Stage B's
+   * forensics accruals ratio reads `netCashProvidedByInvestingActivities`
+   * literally, so emitting only the short `investingCashFlow` key left the
+   * ratio unresolvable on the keyless path.
+   */
+  netCashProvidedByInvestingActivities: { kind: "first", tags: ["NetCashProvidedByUsedInInvestingActivities"], unit: "money" },
+  netCashProvidedByFinancingActivities: { kind: "first", tags: ["NetCashProvidedByUsedInFinancingActivities"], unit: "money" },
 };
 
 /** Fields whose value is a verbatim copy of another resolved field. */
@@ -328,6 +406,14 @@ const CASHFLOW_ALIASES: Record<string, string> = {
   netCashProvidedByOperatingActivities: "operatingCashFlow",
   investmentsInPropertyPlantAndEquipment: "capitalExpenditure",
   commonDividendsPaid: "netDividendsPaid",
+  /** Short forms kept for existing consumers; legal via the FmpRawRow index signature. */
+  investingCashFlow: "netCashProvidedByInvestingActivities",
+  financingCashFlow: "netCashProvidedByFinancingActivities",
+};
+
+/** Balance-sheet aliases: FMP publishes the same receivables figure under two names. */
+const BALANCE_ALIASES: Record<string, string> = {
+  accountsReceivables: "netReceivables",
 };
 
 /**
@@ -398,6 +484,10 @@ function buildReporters(corePoints: FactPoint[]): Map<string, FactPoint> {
 function collectTags(spec: ChainSpec, into: Set<string>): void {
   if (spec.kind === "chain") {
     for (const step of spec.steps) collectTags(step, into);
+    return;
+  }
+  if (spec.kind === "sumAnyOf") {
+    for (const part of spec.parts) collectTags(part.spec, into);
     return;
   }
   if (spec.kind === "diff") {
@@ -646,6 +736,28 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
       if (absent.length > 0) {
         notes.add(
           `${label}: sum of present components (${present.map((p) => p.tag).join(", ")}); absent and excluded: ${absent.join(", ")}`,
+        );
+      }
+      const total = present.reduce((s, p) => s + p.r.value, 0);
+      return combine(tidy(total, MONEY_DECIMALS), present.map((p) => p.r));
+    }
+    case "sumAnyOf": {
+      // Same contract as `sumAny`, one level up: at least one part must resolve,
+      // parts in a foreign currency are dropped, and every absent part is named.
+      const present: { label: string; r: Resolved }[] = [];
+      const absent: string[] = [];
+      for (const part of spec.parts) {
+        const r = resolveSpec(part.spec, resolve, notes, `${label} (${part.label})`);
+        if (r === null || (present.length > 0 && present[0]!.r.unit !== r.unit)) {
+          absent.push(part.label);
+          continue;
+        }
+        present.push({ label: part.label, r });
+      }
+      if (present.length === 0) return null;
+      if (absent.length > 0) {
+        notes.add(
+          `${label}: sum of present components (${present.map((p) => p.label).join(", ")}); absent and excluded: ${absent.join(", ")}`,
         );
       }
       const total = present.reduce((s, p) => s + p.r.value, 0);
@@ -957,10 +1069,15 @@ function computeBalance(v: FieldValues, notes: NoteSink, ctx: string): void {
   v.cashAndShortTermInvestments ??= add(v.cashAndCashEquivalents ?? null, v.shortTermInvestments ?? null);
   v.totalEquity ??= add(v.totalStockholdersEquity ?? null, v.minorityInterest ?? null);
   v.totalLiabilities ??= sub(v.totalAssets ?? null, v.totalEquity ?? null);
+  // FMP's definition: shortTermDebt + longTermDebt + capitalLeaseObligations
+  // (Apple FY2025 20.329 + 78.328 + 13.720 = 112.377B). Dropping the leases
+  // moved net debt, invested capital and the cost-of-debt denominator off the
+  // house numbers every band was calibrated against.
   v.totalDebt ??= sumAnyValues(
     [
       ["shortTermDebt", v.shortTermDebt ?? null],
       ["longTermDebt", v.longTermDebt ?? null],
+      ["capitalLeaseObligations", v.capitalLeaseObligations ?? null],
     ],
     notes,
     `totalDebt ${ctx}`,
@@ -1148,7 +1265,7 @@ const BALANCE_DEF: StatementDef = {
   statement: "balance",
   chains: BALANCE_CHAINS,
   anchors: ["totalAssets"],
-  aliases: {},
+  aliases: BALANCE_ALIASES,
   unsourced: BALANCE_UNSOURCED,
   computed: ["cashAndShortTermInvestments", "totalEquity", "totalLiabilities", "totalDebt", "netDebt"],
   compute: computeBalance,

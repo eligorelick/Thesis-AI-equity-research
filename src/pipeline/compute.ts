@@ -1091,6 +1091,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     ttmCf,
     growth,
     wacc: returns.wacc,
+    dupont: returns.dupont,
     profile,
     quote,
   });
@@ -1367,8 +1368,13 @@ function computeReturns(
     riskFreePct: rf.pct,
     erpPct: usErpPct,
     interestExpenseTtm: interestExpenseForWacc,
+    // Never inferred on a financial route: a bank is deposit-funded, so
+    // interest expense / long-term debt is not its cost of debt (JPM's keyless
+    // run produced 183.28%), the financial-route valuation does not consume the
+    // figure, and the number would only mislead in the report. Financials keep
+    // the existing "cost of debt unavailable, cost of equity carried" outcome.
     priorYearCostOfDebt:
-      interestExpenseForWacc === null || interestExpenseForWacc <= 0
+      !isFinancial && (interestExpenseForWacc === null || interestExpenseForWacc <= 0)
         ? priorYearCostOfDebt(incomeAnnual, balanceAnnual)
         : null,
     totalDebtAvg: debtSnapshot.average,
@@ -1431,6 +1437,8 @@ interface ValuationCtx {
   ttmCf: TtmCashFlow | null;
   growth: GrowthResult;
   wacc: WaccResult;
+  /** Latest fiscal-year DuPont decomposition — the excess-return ROE fallback. */
+  dupont: DupontResult;
   profile: FmpRawRow | null;
   quote: FmpRawRow | null;
 }
@@ -1640,13 +1648,21 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
   };
 
   // --- Excess-return inputs (financials) ------------------------------------
+  // Same FMP TTM-suffix drift as effectiveTaxRate above (returnOnEquity ->
+  // returnOnEquityTTM on key-metrics-ttm). That row is FMP-only: on the keyless
+  // path it never exists, and a null here SUPPRESSES the entire bank/insurer
+  // valuation with a critical gap. The latest fiscal-year DuPont ROE (net income
+  // / average equity) is computed from the same statements the rest of the
+  // route runs on, so it is a defensible — and disclosed — second basis.
+  const vendorRoePct = pctFromFraction(num(keyMetricsTtm?.returnOnEquityTTM ?? keyMetricsTtm?.returnOnEquity));
+  const dupontRoePct = ctx.dupont.latest?.roePct ?? null;
+  const currentRoeFromDupont = vendorRoePct === null && dupontRoePct !== null;
+
   const excessReturn: ExcessReturnInputs | null =
     route.base === "bank" || route.base === "insurer" || route.base === "reit-mortgage"
       ? {
           bookValue: balPoint ? num(balPoint.totalStockholdersEquity) : null,
-          // Same FMP TTM-suffix drift as effectiveTaxRate above
-          // (returnOnEquity -> returnOnEquityTTM on key-metrics-ttm).
-          currentRoePct: pctFromFraction(num(keyMetricsTtm?.returnOnEquityTTM ?? keyMetricsTtm?.returnOnEquity)),
+          currentRoePct: vendorRoePct ?? dupontRoePct,
           // Audit M5: null CoE SUPPRESSES the model inside excessReturnModel
           // (critical gap) — never a silent 10% default.
           costOfEquityPct: wacc.costOfEquityPct,
@@ -1703,6 +1719,11 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
     const c = netDebtInfo.components;
     result.notes.push(
       `${netDebtInfo.version}: net debt ${netDebtInfo.value} as of ${netDebtInfo.asOf ?? "?"}; totalDebt ${c.totalDebt}, cashAndShortTermInvestments ${c.cashAndShortTermInvestments ?? "derived from cash + shortTermInvestments"}`,
+    );
+  }
+  if (excessReturn !== null && currentRoeFromDupont) {
+    result.notes.push(
+      `current ROE from the latest fiscal-year DuPont decomposition (statements, FY ${ctx.dupont.latest?.date ?? "?"}: net income / average equity) — FMP key-metrics TTM unavailable`,
     );
   }
   if (dilutedSharesBasis === "annual") {

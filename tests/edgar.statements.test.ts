@@ -114,7 +114,18 @@ function appleLike(): CompanyFacts {
   );
 }
 
+/** Merge extra us-gaap concepts into an existing payload (same point encoding as `facts`). */
+function addTags(f: CompanyFacts, extra: Record<string, Pt[]>): CompanyFacts {
+  return {
+    ...f,
+    facts: { ...f.facts, "us-gaap": { ...f.facts["us-gaap"], ...facts(extra).facts["us-gaap"] } },
+  };
+}
+
 const OPTS = { symbol: "AAPL", cik: "0000320193", annualPeriods: 10, quarterlyPeriods: 24 };
+
+/** FY2025 balance-sheet instant with the appleLike() filing labels. */
+const FY25_INSTANT = { end: "2025-09-27", form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" } as const;
 
 describe("buildStatementsFromCompanyFacts — annual rows", () => {
   it("builds FMP-shaped annual income rows newest first with computed totals only from present operands", () => {
@@ -547,6 +558,220 @@ describe("buildStatementsFromCompanyFacts — comparative copies carried in a la
       date: "2025-12-31",
       fiscalYear: "2025", // from the period end, not from fy:2026
       filingDate: "2027-02-12", // the only filing there is
+    });
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Task 8 — gaps found running the keyless path live on AAPL and JPM.
+ * ------------------------------------------------------------------------- */
+
+describe("buildStatementsFromCompanyFacts — lease obligations belong in total debt", () => {
+  it("sums the operating and finance lease liabilities into capitalLeaseObligations and totalDebt", () => {
+    // FMP's totalDebt for Apple FY2025 is shortTermDebt + longTermDebt +
+    // capitalLeaseObligations, and netDebt = totalDebt − cash. Apple tags the
+    // noncurrent operating portion and a finance-lease total.
+    const built = buildStatementsFromCompanyFacts(
+      addTags(appleLike(), {
+        OperatingLeaseLiabilityCurrent: [{ ...FY25_INSTANT, val: 1.6 }],
+        OperatingLeaseLiabilityNoncurrent: [{ ...FY25_INSTANT, val: 10.91 }],
+        FinanceLeaseLiability: [{ ...FY25_INSTANT, val: 1.23 }],
+      }),
+      OPTS,
+    );
+    const fy25 = built.balanceAnnual.rows.find((r) => r.date === "2025-09-27")!;
+    expect(fy25).toMatchObject({
+      capitalLeaseObligations: 13.74, // (1.6 + 10.91) + 1.23
+      shortTermDebt: 15,
+      longTermDebt: 80,
+      totalDebt: 108.74,
+      netDebt: 78.74, // totalDebt − cashAndCashEquivalents (30)
+    });
+  });
+
+  it("prefers a tagged operating-lease total over the current + noncurrent split", () => {
+    const built = buildStatementsFromCompanyFacts(
+      addTags(appleLike(), {
+        OperatingLeaseLiability: [{ ...FY25_INSTANT, val: 12 }],
+        OperatingLeaseLiabilityCurrent: [{ ...FY25_INSTANT, val: 1.6 }],
+        OperatingLeaseLiabilityNoncurrent: [{ ...FY25_INSTANT, val: 10.91 }],
+        FinanceLeaseLiabilityCurrent: [{ ...FY25_INSTANT, val: 0.4 }],
+        FinanceLeaseLiabilityNoncurrent: [{ ...FY25_INSTANT, val: 0.8 }],
+      }),
+      OPTS,
+    );
+    expect(built.balanceAnnual.rows.find((r) => r.date === "2025-09-27")).toMatchObject({
+      capitalLeaseObligations: 13.2, // 12 (tagged total) + (0.4 + 0.8)
+      totalDebt: 108.2,
+    });
+  });
+
+  it("uses finance leases alone when no operating lease is tagged, and discloses the absent half", () => {
+    const built = buildStatementsFromCompanyFacts(
+      addTags(appleLike(), {
+        FinanceLeaseLiabilityCurrent: [{ ...FY25_INSTANT, val: 0.4 }],
+        FinanceLeaseLiabilityNoncurrent: [{ ...FY25_INSTANT, val: 0.8 }],
+      }),
+      OPTS,
+    );
+    expect(built.balanceAnnual.rows.find((r) => r.date === "2025-09-27")).toMatchObject({
+      capitalLeaseObligations: 1.2,
+      totalDebt: 96.2,
+      netDebt: 66.2,
+    });
+    expect(
+      built.balanceAnnual.notes.some(
+        (n) => /capitalLeaseObligations/.test(n) && /absent and excluded: operatingLeaseLiability/.test(n),
+      ),
+    ).toBe(true);
+  });
+
+  it("leaves totalDebt unchanged when no lease liability is tagged at all", () => {
+    const built = buildStatementsFromCompanyFacts(appleLike(), OPTS);
+    const fy25 = built.balanceAnnual.rows.find((r) => r.date === "2025-09-27")!;
+    expect(fy25.capitalLeaseObligations).toBeNull();
+    expect(fy25).toMatchObject({ totalDebt: 95, netDebt: 65 });
+    expect(
+      built.balanceAnnual.notes.some(
+        (n) => /^totalDebt /.test(n) && /absent and excluded: capitalLeaseObligations/.test(n),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("buildStatementsFromCompanyFacts — bank cash tags", () => {
+  /** JPM: CashAndCashEquivalentsAtCarryingValue is stale (last 2018); the live tags are these. */
+  function bankCash(extra: Record<string, Pt[]> = {}): CompanyFacts {
+    const k = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" } as const;
+    return facts({
+      InterestIncomeExpenseNet: [{ start: "2025-01-01", end: "2025-12-31", val: 92_000, ...k }],
+      NoninterestIncome: [{ start: "2025-01-01", end: "2025-12-31", val: 90_447, ...k }],
+      NetIncomeLoss: [{ start: "2025-01-01", end: "2025-12-31", val: 57_048, ...k }],
+      Assets: [{ end: "2025-12-31", val: 4_424_900, ...k }],
+      CashAndDueFromBanks: [{ end: "2025-12-31", val: 21_740, ...k }],
+      InterestBearingDepositsInBanks: [{ end: "2025-12-31", val: 321_600, ...k }],
+      CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents: [{ end: "2025-12-31", val: 343_340, ...k }],
+      ...extra,
+    });
+  }
+
+  it("resolves cash from CashAndDueFromBanks and short-term investments from InterestBearingDepositsInBanks", () => {
+    const built = buildStatementsFromCompanyFacts(bankCash(), { ...OPTS, symbol: "JPM" });
+    expect(built.balanceAnnual.rows[0]).toMatchObject({
+      cashAndCashEquivalents: 21_740,
+      shortTermInvestments: 321_600,
+      // Matches the restricted-cash catch-all total, which is no longer what cash resolves to.
+      cashAndShortTermInvestments: 343_340,
+    });
+  });
+
+  it("still prefers CashAndCashEquivalentsAtCarryingValue when the filer tags it for the period", () => {
+    const built = buildStatementsFromCompanyFacts(
+      bankCash({
+        CashAndCashEquivalentsAtCarryingValue: [
+          { end: "2025-12-31", val: 25_000, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" },
+        ],
+      }),
+      { ...OPTS, symbol: "JPM" },
+    );
+    expect(built.balanceAnnual.rows[0]).toMatchObject({
+      cashAndCashEquivalents: 25_000,
+      shortTermInvestments: 321_600,
+      cashAndShortTermInvestments: 346_600,
+    });
+  });
+});
+
+describe("buildStatementsFromCompanyFacts — FMP field names Stage B reads", () => {
+  const K = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20" } as const;
+  const annual = (val: number): Pt[] => [{ start: "2025-01-01", end: "2025-12-31", val, ...K }];
+  const instant = (val: number): Pt[] => [{ end: "2025-12-31", val, ...K }];
+
+  function fmpNamed(): CompanyFacts {
+    return facts({
+      Revenues: annual(1000),
+      NetIncomeLoss: annual(100),
+      Assets: instant(900),
+      NonoperatingIncomeExpense: annual(-15),
+      IncomeLossFromContinuingOperations: annual(105),
+      IncomeLossFromDiscontinuedOperationsNetOfTax: annual(-5),
+      GeneralAndAdministrativeExpense: annual(45),
+      SellingAndMarketingExpense: annual(30),
+      AccountsReceivableNetCurrent: instant(120),
+      AccruedIncomeTaxesCurrent: instant(9),
+      NetCashProvidedByUsedInOperatingActivities: annual(400),
+      NetCashProvidedByUsedInInvestingActivities: annual(-120),
+      NetCashProvidedByUsedInFinancingActivities: annual(-180),
+      ProceedsFromIssuanceOfCommonStock: annual(20),
+    });
+  }
+
+  it("emits the income-statement names Stage B's forensics mappers read", () => {
+    const built = buildStatementsFromCompanyFacts(fmpNamed(), { ...OPTS, symbol: "FMPN" });
+    expect(built.incomeAnnual.rows[0]).toMatchObject({
+      totalOtherIncomeExpensesNet: -15,
+      netIncomeFromContinuingOperations: 105,
+      netIncomeFromDiscontinuedOperations: -5,
+      generalAndAdministrativeExpenses: 45,
+      sellingAndMarketingExpenses: 30,
+      // The SG&A sum step still folds the two components together.
+      sellingGeneralAndAdministrativeExpenses: 75,
+    });
+  });
+
+  it("emits accountsReceivables beside netReceivables and taxPayables on the balance sheet", () => {
+    const built = buildStatementsFromCompanyFacts(fmpNamed(), { ...OPTS, symbol: "FMPN" });
+    expect(built.balanceAnnual.rows[0]).toMatchObject({
+      netReceivables: 120,
+      accountsReceivables: 120,
+      taxPayables: 9,
+    });
+  });
+
+  it("emits the FMP investing/financing cash-flow names so the accruals ratio can compute", () => {
+    const built = buildStatementsFromCompanyFacts(fmpNamed(), { ...OPTS, symbol: "FMPN" });
+    const cf = built.cashflowAnnual.rows[0]!;
+    // forensics.ts reads cashFlow.netCashProvidedByInvestingActivities; the key
+    // must EXIST, not merely be reachable under the old investingCashFlow name.
+    expect(Object.keys(cf)).toEqual(
+      expect.arrayContaining([
+        "netCashProvidedByInvestingActivities",
+        "netCashProvidedByFinancingActivities",
+        "commonStockIssuance",
+      ]),
+    );
+    expect(cf).toMatchObject({
+      netIncome: 100,
+      netCashProvidedByOperatingActivities: 400,
+      netCashProvidedByInvestingActivities: -120,
+      netCashProvidedByFinancingActivities: -180,
+      investingCashFlow: -120, // legacy key kept
+      financingCashFlow: -180,
+      commonStockIssuance: 20,
+    });
+  });
+
+  it("falls back to TaxesPayableCurrent and leaves every unresolved name null", () => {
+    const built = buildStatementsFromCompanyFacts(
+      facts({
+        Revenues: annual(1000),
+        NetIncomeLoss: annual(100),
+        Assets: instant(900),
+        TaxesPayableCurrent: instant(7),
+      }),
+      { ...OPTS, symbol: "FMPN" },
+    );
+    expect(built.balanceAnnual.rows[0]).toMatchObject({
+      taxPayables: 7,
+      accountsReceivables: null,
+      netReceivables: null,
+    });
+    expect(built.incomeAnnual.rows[0]).toMatchObject({
+      totalOtherIncomeExpensesNet: null,
+      netIncomeFromContinuingOperations: null,
+      netIncomeFromDiscontinuedOperations: null,
+      generalAndAdministrativeExpenses: null,
+      sellingAndMarketingExpenses: null,
     });
   });
 });

@@ -125,7 +125,8 @@ leaving the report empty:
 
 Beta is estimated from five years of monthly returns against SPY; market cap
 is price times shares outstanding. Quarterly cash-flow figures, and any
-quarter a filer reports only year-to-date, are derived by subtraction and
+quarter a filer reports only year-to-date, are derived by subtraction after
+the first quarter of a fiscal year (Q1 is the year-to-date fact itself) and
 marked `derivation` on the row; a line item a filer tags with a non-standard
 extension tag yields `null`, never a guess. Every replaced member is recorded
 in the missing-data manifest as `keyless.<member>`, naming why FMP could not
@@ -143,8 +144,9 @@ User-Agent, are rate-limited and cached, and any failure becomes a disclosed
 gap rather than an error. The same fallback also fills members that an
 entry-tier FMP plan refuses outright, such as sector-ETF price history, even
 when a key is configured. `DEMO` and `DBNK` remain the fictional fixtures,
-served only when no `FMP_API_KEY` is configured; they never reach EDGAR or
-Yahoo. Because keyless statements are sourced from XBRL, the FMP-versus-XBRL
+served only when no `FMP_API_KEY` is configured; they never reach the keyless
+layer, so no Yahoo request is made for them, while EDGAR is still queried for
+filings as on any run. Because keyless statements are sourced from XBRL, the FMP-versus-XBRL
 cross-check on those rows is recorded as a passing identity check rather than
 a numeric comparison.
 
@@ -154,8 +156,9 @@ rejection, retries within it, and records the truncated history depth in the
 missing-data manifest, while restricted endpoints (insider trades,
 institutional ownership, news, transcripts) become disclosed gaps rather than
 failures. Sector-ETF price history that an entry-tier plan refuses is instead
-served from Yahoo when `EDGAR_CONTACT` is configured, the same fallback real
-tickers use with no key at all (see *Without an FMP subscription* above).
+served from Yahoo once a CIK resolves and the run is not in fixture mode, the
+same fallback real tickers use with no key at all (see *Without an FMP
+subscription* above).
 Five fiscal years still support the growth, returns, forensic, DCF and
 scoring modules; own-history multiple percentiles need eight quarters and are
 withheld until the plan supplies them.

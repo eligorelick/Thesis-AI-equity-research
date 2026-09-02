@@ -8,6 +8,7 @@ import {
   type KeylessInputs,
   type KeylessMembers,
 } from "@/pipeline/keyless";
+import { classifyInstrumentSupport } from "@/pipeline/stageB/instrumentSupport";
 import { createYahooClient, type YahooClient } from "@/providers/yahoo";
 import { makeLimiter } from "@/providers/http";
 import type { CompanyFacts } from "@/edgar/xbrl";
@@ -175,7 +176,7 @@ function appleFacts(): CompanyFacts {
 }
 
 /** Yahoo fake serving 5y of synthetic daily bars for any symbol and a quote meta. */
-function fakeYahoo(opts: { fail?: Set<string> } = {}) {
+function fakeYahoo(opts: { fail?: Set<string>; instrumentType?: string } = {}) {
   const impl = (async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     const symbol = /chart\/([^?]+)/.exec(url)![1]!;
@@ -185,7 +186,7 @@ function fakeYahoo(opts: { fail?: Set<string> } = {}) {
     const n = isQuote ? 5 : 1250;
     const timestamp = Array.from({ length: n }, (_, i) => start + i * 86400);
     const close = timestamp.map((_, i) => (symbol === "SPY" ? 400 : 150) * Math.exp(0.0002 * i));
-    return new Response(JSON.stringify({ chart: { result: [{ meta: { currency: "USD", symbol, exchangeName: "NMS", fullExchangeName: "NasdaqGS", instrumentType: "EQUITY", firstTradeDate: 345479400, regularMarketTime: timestamp[n - 1]! + 23400, gmtoffset: -14400, regularMarketPrice: close[n - 1], regularMarketDayHigh: 1, regularMarketDayLow: 1, regularMarketVolume: 5, fiftyTwoWeekHigh: 1, fiftyTwoWeekLow: 1, chartPreviousClose: 1, longName: "Apple Inc." }, timestamp, indicators: { quote: [{ open: close, high: close, low: close, close, volume: close.map(() => 1000) }], adjclose: [{ adjclose: close }] } }], error: null } }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ chart: { result: [{ meta: { currency: "USD", symbol, exchangeName: "NMS", fullExchangeName: "NasdaqGS", instrumentType: opts.instrumentType ?? "EQUITY", firstTradeDate: 345479400, regularMarketTime: timestamp[n - 1]! + 23400, gmtoffset: -14400, regularMarketPrice: close[n - 1], regularMarketDayHigh: 1, regularMarketDayLow: 1, regularMarketVolume: 5, fiftyTwoWeekHigh: 1, fiftyTwoWeekLow: 1, chartPreviousClose: 1, longName: "Apple Inc." }, timestamp, indicators: { quote: [{ open: close, high: close, low: close, close, volume: close.map(() => 1000) }], adjclose: [{ adjclose: close }] } }], error: null } }), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
   return createYahooClient({ fetchImpl: impl, limiter: makeLimiter(1000, 1000), now: () => NOW, maxRetries: 0 });
 }
@@ -397,6 +398,68 @@ describe("applyKeylessFallbacks", () => {
     expect(out.replaced).toEqual([]);
     expect(out.gaps).toEqual([]);
     expect(out.notes[0]).toMatch(/skipped/);
+  });
+
+  it("classifies an ETF from Yahoo's instrumentType so the instrument guard refuses it", async () => {
+    // SPY, QQQ and the closed-end trusts are SEC registrants with tickers and
+    // 10-K filings, so they clear the issuer gate and the whole keyless
+    // fallback runs for them. Hard-coding isEtf/isFund false meant
+    // `classifyInstrumentSupport` could never refuse one on a keyless run.
+    const out = await applyKeylessFallbacks(
+      inputs({ symbol: "SPY", yahoo: fakeYahoo({ instrumentType: "ETF" }) }),
+    );
+    expect(out.members.profile.ok).toBe(true);
+    if (!out.members.profile.ok) return;
+    const profile = out.members.profile.value.data.rows[0]!;
+    expect(profile).toMatchObject({ isEtf: true, isFund: false });
+    expect(classifyInstrumentSupport(profile as { isEtf?: boolean; isFund?: boolean })).toMatchObject({
+      supported: false,
+      kind: "etf",
+    });
+    expect(out.notes.some((n) => n === "profile: instrument type ETF (Yahoo chart meta)")).toBe(true);
+    expect(out.gaps.some((g) => g.field === "profile.instrumentType")).toBe(false);
+  });
+
+  it.each([
+    ["MUTUALFUND", "fund"],
+    ["CLOSEDEND", "fund"],
+  ])("classifies %s as a fund the instrument guard refuses", async (instrumentType, kind) => {
+    const out = await applyKeylessFallbacks(inputs({ yahoo: fakeYahoo({ instrumentType }) }));
+    expect(out.members.profile.ok).toBe(true);
+    if (!out.members.profile.ok) return;
+    const profile = out.members.profile.value.data.rows[0]!;
+    expect(profile).toMatchObject({ isEtf: false, isFund: true });
+    expect(classifyInstrumentSupport(profile as { isEtf?: boolean; isFund?: boolean })).toMatchObject({
+      supported: false,
+      kind,
+    });
+  });
+
+  it("leaves both flags false for an EQUITY and records the type in the profile note", async () => {
+    const out = await applyKeylessFallbacks(inputs({ yahoo: fakeYahoo({ instrumentType: "EQUITY" }) }));
+    expect(out.members.profile.ok).toBe(true);
+    if (!out.members.profile.ok) return;
+    const profile = out.members.profile.value.data.rows[0]!;
+    expect(profile).toMatchObject({ isEtf: false, isFund: false });
+    expect(classifyInstrumentSupport(profile as { isEtf?: boolean; isFund?: boolean })).toMatchObject({
+      supported: true,
+    });
+    expect(out.notes.some((n) => n === "profile: instrument type EQUITY (Yahoo chart meta)")).toBe(true);
+    expect(out.gaps.some((g) => g.field === "profile.instrumentType")).toBe(false);
+  });
+
+  it("discloses that the instrument was not classified when Yahoo's meta is unavailable", async () => {
+    const out = await applyKeylessFallbacks(
+      inputs({ yahoo: fakeYahoo({ fail: new Set(["AAPL", "SPY", "XLK"]) }) }),
+    );
+    expect(out.members.profile.ok).toBe(true);
+    if (!out.members.profile.ok) return;
+    expect(out.members.profile.value.data.rows[0]).toMatchObject({ isEtf: false, isFund: false });
+    const g = out.gaps.find((entry) => entry.field === "profile.instrumentType");
+    expect(g?.severity).toBe("info");
+    expect(g?.reason).toMatch(/not classified .* Yahoo meta unavailable; treated as a company/);
+    expect(g?.attemptedSources).toEqual(["yahoo:chart(meta.instrumentType)"]);
+    expect(out.notes.some((n) => /^profile: instrument type /.test(n))).toBe(false);
   });
 
   it("flags a 20-F filer as an ADR and leaves country null for a foreign incorporation", async () => {

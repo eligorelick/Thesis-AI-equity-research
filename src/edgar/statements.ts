@@ -1085,7 +1085,21 @@ function computeIncome(v: FieldValues, notes: NoteSink, ctx: string): void {
 }
 
 function computeBalance(v: FieldValues, notes: NoteSink, ctx: string): void {
-  v.cashAndShortTermInvestments ??= add(v.cashAndCashEquivalents ?? null, v.shortTermInvestments ?? null);
+  // A strict `add` here returned null for every filer that presents a single
+  // "Cash and cash equivalents" line and tags no short-term-investment concept
+  // (Home Depot, McDonald's, UPS, Costco and hundreds like them). That
+  // suppressed the net-debt cash basis and with it the whole DCF equity bridge,
+  // for a shape FMP publishes as cash. Sum what is present and name what is not.
+  v.cashAndShortTermInvestments ??= sumAnyValues(
+    [
+      ["cashAndCashEquivalents", v.cashAndCashEquivalents ?? null],
+      ["shortTermInvestments", v.shortTermInvestments ?? null],
+    ],
+    notes,
+    `cashAndShortTermInvestments ${ctx}`,
+  );
+  // `totalEquity` deliberately stays strict: `validate.ts` and `forensics.ts`
+  // both fall back to `totalStockholdersEquity`, so nothing is suppressed.
   v.totalEquity ??= add(v.totalStockholdersEquity ?? null, v.minorityInterest ?? null);
   v.totalLiabilities ??= sub(v.totalAssets ?? null, v.totalEquity ?? null);
   // FMP's definition: shortTermDebt + longTermDebt + capitalLeaseObligations

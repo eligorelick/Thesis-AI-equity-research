@@ -1,7 +1,7 @@
 # Keyless data path — design
 
 **Date:** 2026-09-02
-**Status:** implemented on `feat/keyless-data-path` (2026-09-02). Live keyless verification, no FMP key, isolated data directory: AAPL resolved through EDGAR; six statement members from company facts, prices from Yahoo, profile/enterprise values/market-cap history computed; forensics, multiples, a DCF and the composite score produced; free cash flow, capex intensity, operating margins, net debt and technicals identical to the FMP-based run, with ten fiscal years of history where the entry-tier FMP plan served five. JPM took the bank route with return on tangible common equity and the excess-return valuation. A fictional ticker rendered the not-found page. Deviations from this design: the fallback gate is issuer identity (EDGAR-sourced CIK, registrant, or company facts) rather than "a CIK exists", because the fixtures carry placeholder CIKs; the SPY and sector-ETF fallbacks also run for keyed plans without issuer confirmation; the profile does not carry a fiscal year end; total debt includes lease obligations to match FMP; bank cash and interest tags were added; current ROE falls back to the DuPont figure; financial routes skip cost-of-debt inference.
+**Status:** implemented on `feat/keyless-data-path` (2026-09-02). Live keyless verification, no FMP key, isolated data directory: AAPL resolved through EDGAR; six statement members from company facts, prices from Yahoo, profile/enterprise values/market-cap history computed; forensics, multiples, a DCF and the composite score produced; free cash flow, capex intensity, operating margins, net debt and technicals identical to the FMP-based run, with ten fiscal years of history where the entry-tier FMP plan served five. JPM took the bank route with return on tangible common equity and the excess-return valuation. A fictional ticker rendered the not-found page. Deviations from this design: the fallback gate is issuer identity (EDGAR-sourced CIK, registrant, or company facts) rather than "a CIK exists", because the fixtures carry placeholder CIKs; the SPY and sector-ETF fallbacks also run for keyed plans without issuer confirmation; the profile does not carry a fiscal year end; total debt includes lease obligations to match FMP; bank cash and interest tags were added; current ROE falls back to the DuPont figure; financial routes skip cost-of-debt inference; `isEtf`/`isFund` come from Yahoo's `instrumentType` rather than from a "no core forms on file" rule, which would have marked 40-F filers and newly listed issuers unsupported; `cashAndShortTermInvestments` sums whichever of cash and short-term investments a filer tags, rather than requiring both.
 
 **Original status:** approved for implementation (owner directive of 2026-09-02: "make sure it works if users don't have an FMP subscription")
 **Plan:** [`../plans/2026-09-02-keyless-data-path.md`](../plans/2026-09-02-keyless-data-path.md)
@@ -156,8 +156,12 @@ returns replacements for: `profile`, `quote`, the six statement members,
   fiscal year end, `isAdr` = files 20-F), Yahoo meta (currency, exchange name,
   `firstTradeDate` → `ipoDate`), `price` = Yahoo quote, `marketCap` = price ×
   latest `dei:EntityCommonStockSharesOutstanding` (else latest diluted
-  weighted shares), `beta` = `estimateBeta` result. `isEtf`/`isFund` false —
-  an entity with no 10-K/10-Q/20-F on file is reported as unsupported.
+  weighted shares), `beta` = `estimateBeta` result. `isEtf` =
+  Yahoo meta `instrumentType === "ETF"`, `isFund` = `"MUTUALFUND"` or
+  `"CLOSEDEND"`, so `classifyInstrumentSupport` refuses a fund on the keyless
+  path as it does on the keyed one; when the meta is unavailable both stay
+  false and an `info` gap `profile.instrumentType` discloses that the
+  instrument was not classified.
   `country` = `US` when the submissions' state of incorporation is a US
   state or `DC`, else null (ERP falls back to the US premium with the
   existing disclosed gap).

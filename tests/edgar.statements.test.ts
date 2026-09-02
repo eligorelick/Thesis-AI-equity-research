@@ -639,6 +639,66 @@ describe("buildStatementsFromCompanyFacts — lease obligations belong in total 
   });
 });
 
+describe("buildStatementsFromCompanyFacts — cash-only filers", () => {
+  /** Home Depot / McDonald's / UPS shape: one "Cash and cash equivalents" line, no marketable securities. */
+  function cashOnly(extra: Record<string, Pt[]> = {}): CompanyFacts {
+    const k = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-03-01" } as const;
+    return facts({
+      Revenues: [{ start: "2025-01-01", end: "2025-12-31", val: 160_000, ...k }],
+      NetIncomeLoss: [{ start: "2025-01-01", end: "2025-12-31", val: 15_000, ...k }],
+      Assets: [{ end: "2025-12-31", val: 96_000, ...k }],
+      CashAndCashEquivalentsAtCarryingValue: [{ end: "2025-12-31", val: 1_650, ...k }],
+      LongTermDebtNoncurrent: [{ end: "2025-12-31", val: 44_000, ...k }],
+      ...extra,
+    });
+  }
+
+  it("reports cashAndShortTermInvestments as the cash figure and names the absent component", () => {
+    const built = buildStatementsFromCompanyFacts(cashOnly(), { ...OPTS, symbol: "HD" });
+    const fy25 = built.balanceAnnual.rows[0]!;
+    expect(fy25.shortTermInvestments).toBeNull();
+    // Before this, a strict `add` returned null here and the DCF equity bridge
+    // was suppressed for every filer that tags no short-term-investment concept.
+    expect(fy25.cashAndShortTermInvestments).toBe(1_650);
+    expect(fy25.cashAndShortTermInvestments).toBe(fy25.cashAndCashEquivalents);
+    expect(
+      built.balanceAnnual.notes.some(
+        (n) =>
+          /^cashAndShortTermInvestments 2025-12-31:/.test(n) &&
+          /sum of present components \(cashAndCashEquivalents\)/.test(n) &&
+          /absent and excluded: shortTermInvestments/.test(n),
+      ),
+    ).toBe(true);
+  });
+
+  it("still sums both components, with no note, when the filer tags short-term investments", () => {
+    const built = buildStatementsFromCompanyFacts(
+      cashOnly({
+        ShortTermInvestments: [{ end: "2025-12-31", val: 350, form: "10-K", fp: "FY", fy: 2025, filed: "2026-03-01" }],
+      }),
+      { ...OPTS, symbol: "HD" },
+    );
+    expect(built.balanceAnnual.rows[0]).toMatchObject({
+      cashAndCashEquivalents: 1_650,
+      shortTermInvestments: 350,
+      cashAndShortTermInvestments: 2_000,
+    });
+    expect(built.balanceAnnual.notes.some((n) => /^cashAndShortTermInvestments /.test(n))).toBe(false);
+  });
+
+  it("leaves cashAndShortTermInvestments null when neither component is tagged", () => {
+    const k = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-03-01" } as const;
+    const built = buildStatementsFromCompanyFacts(
+      facts({
+        Revenues: [{ start: "2025-01-01", end: "2025-12-31", val: 160_000, ...k }],
+        Assets: [{ end: "2025-12-31", val: 96_000, ...k }],
+      }),
+      { ...OPTS, symbol: "HD" },
+    );
+    expect(built.balanceAnnual.rows[0]!.cashAndShortTermInvestments).toBeNull();
+  });
+});
+
 describe("buildStatementsFromCompanyFacts — bank cash tags", () => {
   /** JPM: CashAndCashEquivalentsAtCarryingValue is stale (last 2018); the live tags are these. */
   function bankCash(extra: Record<string, Pt[]> = {}): CompanyFacts {

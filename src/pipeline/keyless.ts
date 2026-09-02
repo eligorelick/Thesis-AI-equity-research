@@ -283,6 +283,45 @@ export function deiSharePoints(facts: CompanyFacts): { value: number; asOf: stri
     .sort((a, b) => (a.asOf < b.asOf ? -1 : a.asOf > b.asOf ? 1 : 0));
 }
 
+/**
+ * Instrument classification for the profile's `isEtf`/`isFund` flags, from
+ * Yahoo's chart meta (`EQUITY`, `ETF`, `MUTUALFUND`, `INDEX`, `CRYPTOCURRENCY`,
+ * `CURRENCY`, `FUTURE`, `OPTION`, and the rare `CLOSEDEND`).
+ *
+ * When the meta is unavailable the flags stay false — the profile still has to
+ * say something — but "not classified" is filed as an `info` gap rather than
+ * silently read downstream as "this is a company".
+ */
+export function classifyInstrument(meta: YahooMeta | null): {
+  isEtf: boolean;
+  isFund: boolean;
+  note: string | null;
+  gap: ManifestEntry | null;
+} {
+  const type = meta?.instrumentType ?? null;
+  if (type === null) {
+    return {
+      isEtf: false,
+      isFund: false,
+      note: null,
+      gap: {
+        field: "profile.instrumentType",
+        reason:
+          "instrument type not classified — Yahoo meta unavailable; treated as a company",
+        severity: "info",
+        attemptedSources: ["yahoo:chart(meta.instrumentType)"],
+      },
+    };
+  }
+  const normalized = type.trim().toUpperCase();
+  return {
+    isEtf: normalized === "ETF",
+    isFund: normalized === "MUTUALFUND" || normalized === "CLOSEDEND",
+    note: `instrument type ${normalized} (Yahoo chart meta)`,
+    gap: null,
+  };
+}
+
 function closePoints(rows: readonly FmpEodBarRow[]): ClosePoint[] {
   return rows.flatMap((row) => {
     const day = isoDay(row.date);
@@ -546,6 +585,9 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       const beta = estimateBeta(closePoints(eodRows), closePoints(spyRows));
       if (beta.gap !== null) gaps.push(beta.gap);
       notes.push(`profile: ${beta.note}`);
+      const instrument = classifyInstrument(meta);
+      if (instrument.gap !== null) gaps.push(instrument.gap);
+      if (instrument.note !== null) notes.push(`profile: ${instrument.note}`);
       // A registrant name in EDGAR's all-caps house style reads poorly in a
       // report; Yahoo's longName is the cased version of the same entity.
       const allCaps = registrant.name === registrant.name.toUpperCase() && /[A-Z]/.test(registrant.name);
@@ -563,8 +605,14 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         price,
         marketCap,
         beta: beta.beta,
-        isEtf: false,
-        isFund: false,
+        // The instrument guard (`classifyInstrumentSupport`) decides support
+        // from these two flags alone, so hard-coding them false meant a keyless
+        // `/company/SPY` produced a company report for a fund: ETF and
+        // closed-end trusts are SEC registrants with tickers and 10-K filings,
+        // so they clear the issuer gate and the whole fallback runs for them.
+        // Yahoo's chart meta already carries the classification.
+        isEtf: instrument.isEtf,
+        isFund: instrument.isFund,
         // The statements builder reads the form on the facts it actually used,
         // so `filesTwentyF` describes the periods this profile reports. The
         // submissions form list is only a fallback for when no statements could

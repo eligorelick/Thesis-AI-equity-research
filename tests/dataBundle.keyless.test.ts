@@ -7,7 +7,9 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { runStageB } from "@/pipeline/compute";
 import { buildDataBundle } from "@/pipeline/dataBundle";
+import { UnsupportedInstrumentError } from "@/pipeline/stageB/instrumentSupport";
 import {
   createEdgarClient,
   type EdgarTransport,
@@ -144,7 +146,7 @@ function appleFacts(): CompanyFacts {
 }
 
 /** Yahoo fake serving 5y of synthetic daily bars for any symbol and a quote meta (verbatim from tests/keyless.test.ts). */
-function fakeYahoo(opts: { fail?: Set<string> } = {}) {
+function fakeYahoo(opts: { fail?: Set<string>; instrumentType?: string } = {}) {
   const impl = (async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     const symbol = /chart\/([^?]+)/.exec(url)![1]!;
@@ -154,7 +156,7 @@ function fakeYahoo(opts: { fail?: Set<string> } = {}) {
     const n = isQuote ? 5 : 1250;
     const timestamp = Array.from({ length: n }, (_, i) => start + i * 86400);
     const close = timestamp.map((_, i) => (symbol === "SPY" ? 400 : 150) * Math.exp(0.0002 * i));
-    return new Response(JSON.stringify({ chart: { result: [{ meta: { currency: "USD", symbol, exchangeName: "NMS", fullExchangeName: "NasdaqGS", instrumentType: "EQUITY", firstTradeDate: 345479400, regularMarketTime: timestamp[n - 1]! + 23400, gmtoffset: -14400, regularMarketPrice: close[n - 1], regularMarketDayHigh: 1, regularMarketDayLow: 1, regularMarketVolume: 5, fiftyTwoWeekHigh: 1, fiftyTwoWeekLow: 1, chartPreviousClose: 1, longName: "Apple Inc." }, timestamp, indicators: { quote: [{ open: close, high: close, low: close, close, volume: close.map(() => 1000) }], adjclose: [{ adjclose: close }] } }], error: null } }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ chart: { result: [{ meta: { currency: "USD", symbol, exchangeName: "NMS", fullExchangeName: "NasdaqGS", instrumentType: opts.instrumentType ?? "EQUITY", firstTradeDate: 345479400, regularMarketTime: timestamp[n - 1]! + 23400, gmtoffset: -14400, regularMarketPrice: close[n - 1], regularMarketDayHigh: 1, regularMarketDayLow: 1, regularMarketVolume: 5, fiftyTwoWeekHigh: 1, fiftyTwoWeekLow: 1, chartPreviousClose: 1, longName: "Apple Inc." }, timestamp, indicators: { quote: [{ open: close, high: close, low: close, close, volume: close.map(() => 1000) }], adjclose: [{ adjclose: close }] } }], error: null } }), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
   return createYahooClient({ fetchImpl: impl, limiter: makeLimiter(1000, 1000), now: () => NOW, maxRetries: 0 });
 }
@@ -242,6 +244,21 @@ describe("buildDataBundle without an FMP key", () => {
       ? bundle.statements.incomeAnnual.value.data.rows.map((r) => r.date)
       : [];
     expect(annualDates).toEqual([...annualDates].sort().reverse());
+  });
+
+  it("refuses a fund: an ETF instrumentType reaches runStageB as UnsupportedInstrumentError", async () => {
+    // ETF trusts are SEC registrants with tickers and 10-K filings, so they
+    // clear the issuer gate and the keyless layer builds a profile for them.
+    // The instrument guard has to see the fund, exactly as on the FMP path.
+    const bundle = await buildDataBundle("AAPL", {
+      now: () => NOW,
+      fmp: createFmpClient({ apiKey: "", fixturesDir: "fixtures/fmp" }),
+      edgar: createEdgarClient({ transport: edgarTransport() }),
+      yahoo: fakeYahoo({ instrumentType: "ETF" }),
+      ...noNetworkConfigs(),
+    });
+    expect(bundle.profile.ok && bundle.profile.value.data.rows[0]).toMatchObject({ isEtf: true, isFund: false });
+    expect(() => runStageB(bundle)).toThrow(UnsupportedInstrumentError);
   });
 
   it("respects keyless: false", async () => {

@@ -370,6 +370,26 @@ describe("applyKeylessFallbacks", () => {
     expect(out.gaps).toEqual([]);
   });
 
+  it("blames the FMP profile, not a SIC lookup that never ran, for an unresolved sector ETF", async () => {
+    // Unconfirmed issuer means no registrant and no SIC taxonomy lookup, so the
+    // disclosure must not claim EDGAR's submissions were consulted.
+    // An unconfirmed issuer is exactly the shape buildDataBundle passes: no
+    // registrant, so no SIC to map, and FMP's profile supplied no sector either.
+    const out = await applyKeylessFallbacks(
+      inputs({
+        edgarConfirmedIssuer: false,
+        fmpKeyless: false,
+        sectorEtfSymbol: null,
+        edgar: { ...inputs().edgar, registrant: null },
+      }),
+    );
+    const g = out.gaps.find((entry) => entry.field === "keyless.sectorEtf");
+    expect(g?.severity).toBe("warn");
+    expect(g?.reason).toMatch(/FMP's profile carried no mappable sector/);
+    expect(g?.attemptedSources).toEqual(["fmp:profile.sector"]);
+    expect(g?.attemptedSources).not.toContain("edgar:submissions.sic");
+  });
+
   it("does nothing when EDGAR did not resolve the ticker", async () => {
     const fmp = allGaps();
     const out = await applyKeylessFallbacks(inputs({ fmp, edgar: { cik: { ok: false, gap: { field: "edgar.cik(DEMO)", reason: 'ticker "DEMO" not in SEC company_tickers.json', severity: "warn" } }, registrant: null, companyFacts: { ok: false, gap: { field: "x", reason: "n/a", severity: "warn" } } } }));

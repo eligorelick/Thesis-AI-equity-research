@@ -405,6 +405,13 @@ describe("degradation: EDGAR down (filings + companyfacts)", () => {
         return jsonResponse([]);
       }),
       edgar: createEdgarClient({ transport: edgarDownTransport() }),
+      // This is the ONE scenario in this file whose FMP profile carries a `cik`,
+      // so `edgar.cik` resolves through the profile fallback even with EDGAR
+      // 404ing. On a keyed plan (`makeFmp` sets a key) that satisfies
+      // buildDataBundle's benchmark-only keyless branch, which would fetch SPY
+      // and XLK from the real Yahoo endpoint. This scenario is about EDGAR's
+      // outage, not the fallback layer, and the suite makes no live requests.
+      keyless: false,
       fred: fredUp(),
       finra: finraUp(),
       finnhub: finnhubNoKey(),

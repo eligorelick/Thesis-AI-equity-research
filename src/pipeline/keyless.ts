@@ -499,11 +499,23 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   takeHistory("spy", spy);
   takeHistory("sectorEtf", sectorEtf);
   if (needs("sectorEtf") && sectorEtfSymbol === null) {
-    failKeyless(
-      "sectorEtf",
-      `no sector ETF resolved: the registrant's SIC maps to sector ${classification.sector ?? "unknown"}`,
-      ["edgar:submissions.sic"],
-    );
+    // Name the lookup that actually ran. With an unconfirmed issuer there is no
+    // registrant and the SIC taxonomy was never consulted, so claiming
+    // `edgar:submissions.sic` was attempted would put a lookup in the manifest
+    // that never happened.
+    if (inputs.edgarConfirmedIssuer) {
+      failKeyless(
+        "sectorEtf",
+        `no sector ETF resolved: the registrant's SIC maps to sector ${classification.sector ?? "unknown"}`,
+        ["edgar:submissions.sic"],
+      );
+    } else {
+      failKeyless(
+        "sectorEtf",
+        "no sector ETF resolved: FMP's profile carried no mappable sector, and EDGAR did not confirm the registrant whose SIC would supply one",
+        ["fmp:profile.sector"],
+      );
+    }
   }
 
   // Post-fallback prices: FMP's rows when it had them, otherwise Yahoo's.

@@ -23,12 +23,14 @@ import {
   FRED_TTL_SECONDS,
   SECTOR_SERIES,
   applyFredUnits,
+  fredFigureUnit,
   inferObsPerYear,
   parseFredCsv,
   series,
   ttlForFredSeries,
   type GicsSector,
 } from "@/providers/fred";
+import { canonicalizeTracedUnit } from "@/pipeline/stageC/provenance";
 import { insiderSentiment, usptoPatents } from "@/providers/finnhub";
 
 // ---------------------------------------------------------------------------
@@ -524,6 +526,31 @@ describe("fred series catalogs", () => {
         expect(id).toMatch(/^[A-Z0-9]+$/); // FRED ids are uppercase alphanumeric
       }
     }
+  });
+
+  it("maps every catalogued series to a unit the verification registry accepts", () => {
+    // A series rendered in a spelling the registry cannot canonicalize is
+    // never registered and every citation of it fails unknown-source.
+    const ids = new Set<string>([...CORE_SERIES.map((s) => s.id), ...Object.values(SECTOR_SERIES).flat()]);
+    for (const id of ids) {
+      const figure = fredFigureUnit(id, "lin");
+      expect(canonicalizeTracedUnit(figure.unit, figure.unit === "USD" ? "USD" : null), id).not.toBeNull();
+      expect(figure.unit, id).not.toBe("");
+    }
+  });
+
+  it.each([
+    ["DGS10", "lin", { unit: "%", scale: 1, qualifier: null }],
+    ["CPIAUCSL", "pc1", { unit: "%", scale: 1, qualifier: null }],
+    ["T10Y2Y", "lin", { unit: "pp", scale: 1, qualifier: null }],
+    ["VIXCLS", "lin", { unit: "index", scale: 1, qualifier: null }],
+    ["PAYEMS", "chg", { unit: "count", scale: 1e3, qualifier: "persons (FRED serves thousands; shown ×1,000)" }],
+    ["TOTALSA", "lin", { unit: "count", scale: 1e6, qualifier: "units (FRED serves millions; shown ×1,000,000)" }],
+    ["DCOILWTICO", "lin", { unit: "USD", scale: 1, qualifier: "USD per barrel" }],
+    ["PCE", "lin", { unit: "USD", scale: 1e9, qualifier: "USD (FRED serves billions; shown ×1,000,000,000)" }],
+    ["NOSUCHSERIES", "lin", { unit: "", scale: 1, qualifier: null }],
+  ] as const)("figure unit of %s under %s", (id, units, expected) => {
+    expect(fredFigureUnit(id, units)).toEqual(expected);
   });
 
   it("spot-checks research-verified sector series", () => {

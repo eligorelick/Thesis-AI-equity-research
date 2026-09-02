@@ -28,6 +28,7 @@
 
 import type { ManifestEntry } from "@/types/core";
 import type { DataBundle } from "@/pipeline/types";
+import { CORE_SERIES, fredFigureUnit, type FredUnits } from "@/providers/fred";
 import type { ComputedMetrics } from "@/pipeline/compute";
 import type { ValidationReport } from "@/pipeline/stageA/validate";
 import type { DegradationPlan } from "@/pipeline/stageB/sectorRouting";
@@ -882,7 +883,15 @@ function segmentsSection(bundle: DataBundle): PayloadSection {
 
 function macroSection(bundle: DataBundle): PayloadSection {
   const figures: PayloadFigureInput[] = [];
-  const emit = (record: Record<string, { ok: boolean; value?: { data: unknown } }>, tag: string): void => {
+  const conversions: string[] = [];
+  // Core series carry the transform the dashboard fetched them with (CPI is
+  // YoY %); sector series are fetched as levels (dataBundle: units "lin").
+  const coreUnits = new Map(CORE_SERIES.map((spec) => [spec.id, spec.units]));
+  const emit = (
+    record: Record<string, { ok: boolean; value?: { data: unknown } }>,
+    tag: string,
+    unitsOf: (seriesId: string) => FredUnits,
+  ): void => {
     // Deterministic ordering: sort series ids.
     for (const seriesId of Object.keys(record).sort()) {
       const res = record[seriesId];
@@ -890,23 +899,33 @@ function macroSection(bundle: DataBundle): PayloadSection {
         const obs = res.value.data as { date: string; value: number }[];
         const last = obs[obs.length - 1];
         if (last) {
+          const figureUnit = fredFigureUnit(seriesId, unitsOf(seriesId));
+          const served = numOrNull(last.value);
           figures.push({
             label: `${seriesId}${tag}`,
-            value: numOrNull(last.value),
-            unit: "",
+            // FRED serves its scaled series with at most three decimals, so a
+            // ×1,000 or larger product is a whole number; rounding only removes
+            // binary float noise that would otherwise fail the value match.
+            value: served === null || figureUnit.scale === 1 ? served : Math.round(served * figureUnit.scale),
+            unit: figureUnit.unit,
             source: `fred:${seriesId}`,
             asOf: last.date,
           });
+          if (figureUnit.qualifier !== null) conversions.push(`${seriesId}: ${figureUnit.qualifier}`);
         }
       }
     }
   };
-  emit(bundle.macro.core as Record<string, { ok: boolean; value?: { data: unknown } }>, " (core)");
-  emit(bundle.macro.sector as Record<string, { ok: boolean; value?: { data: unknown } }>, " (sector)");
+  emit(
+    bundle.macro.core as Record<string, { ok: boolean; value?: { data: unknown } }>,
+    " (core)",
+    (seriesId) => coreUnits.get(seriesId) ?? "lin",
+  );
+  emit(bundle.macro.sector as Record<string, { ok: boolean; value?: { data: unknown } }>, " (sector)", () => "lin");
   return payloadSection({
     title: "Macro (FRED latest values)",
     figures,
-    notes: [bundle.macro.attribution],
+    notes: [bundle.macro.attribution, ...(conversions.length > 0 ? [`Units: ${conversions.join("; ")}`] : [])],
   });
 }
 

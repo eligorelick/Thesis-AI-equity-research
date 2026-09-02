@@ -71,10 +71,15 @@ export function withLenientLegacyRead<T>(fn: () => T): T {
 
 const STRICT_ISO_DATE = z.iso.date();
 
-/** Strict calendar date used by newly generated evidence objects. */
+/**
+ * Strict calendar date used by newly generated evidence objects. The rejected
+ * value is named in the issue: a model pass that fails here is billed and
+ * discarded, and "Invalid ISO date" alone left no way to tell a timestamp
+ * from a bare month or a fiscal-quarter label (live haiku run, 2026-09-02).
+ */
 export const IsoDateSchema = z.string().refine(
   (v) => lenientLegacyRead || STRICT_ISO_DATE.safeParse(v).success,
-  { message: "Invalid ISO date" },
+  { error: (issue) => `Invalid ISO date (expected YYYY-MM-DD): ${JSON.stringify(issue.input)}` },
 );
 
 /* ------------------------------------------------------------------------ *
@@ -992,6 +997,7 @@ export const VerificationLogEntrySchema = z
       .enum([
         "supported",
         "unknown-source",
+        "text-source",
         "value-mismatch",
         "unit-mismatch",
         "currency-mismatch",

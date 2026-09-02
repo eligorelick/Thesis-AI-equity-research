@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalizeFetchedUrl,
   canonicalizeTracedUnit,
+  periodsAgree,
   calculateCoverage,
   matchProvenanceRecord,
   validateCitationRegistry,
@@ -153,5 +154,49 @@ describe("canonical traced units", () => {
 
   it("fails closed for an unknown unit", () => {
     expect(canonicalizeTracedUnit("widgets per fortnight", null)).toBeNull();
+  });
+
+  it.each([
+    // The payload's own aspect-score spelling and the two spellings a live
+    // haiku run (2026-09-02) echoed back, which stranded every grade-strip key
+    // number as unit-mismatch.
+    ["0-100 (grade B, completeness 0.9)", { unit: "score", currency: null }],
+    ["0-100 score", { unit: "score", currency: null }],
+    ["index (0-100)", { unit: "index", currency: null }],
+    // A scale qualifier is stripped too; the value match catches the ×1e6.
+    ["USD (millions)", { unit: "currency", currency: "USD" }],
+    ["count", { unit: "count", currency: null }],
+  ])("reads a qualified unit spelling %s", (unit, expected) => {
+    expect(canonicalizeTracedUnit(unit, null)).toEqual(expected);
+  });
+});
+
+describe("period agreement", () => {
+  it.each([
+    ["FY2025", "2025-12-31"],
+    ["total debt FY2025", "2025-12-31"],
+    ["Q2 2026", "2026-06-30"],
+    ["cash+STI Q2 2026", "2026-06-30"],
+    ["fy25", "2025-12-31"],
+    ["2025-12-31", "2025-12-31"],
+    ["revenue FY2027E", "FY2027E"],
+  ])("reads %s as the registered period %s", (supplied, registered) => {
+    expect(periodsAgree(supplied, registered)).toBe(true);
+  });
+
+  it.each([
+    ["FY2024", "2025-12-31"],
+    ["FY2024 vs FY2025", "2025-12-31"],
+    ["FY1999", "FY2027"],
+    ["Q1 FY2026", "2025-12-27"],
+    ["trailing twelve months", "2025-12-31"],
+  ])("rejects %s against the registered period %s", (supplied, registered) => {
+    expect(periodsAgree(supplied, registered)).toBe(false);
+  });
+
+  it("treats an omitted period, or a record without one, as agreement", () => {
+    expect(periodsAgree(null, "2025-12-31")).toBe(true);
+    expect(periodsAgree(undefined, "2025-12-31")).toBe(true);
+    expect(periodsAgree("anything", null)).toBe(true);
   });
 });

@@ -48,6 +48,8 @@ import {
   runBullThenBear,
   runJudgePass,
   runVerifyPass,
+  buildAnalystRunPassArgs,
+  buildAnalystRepairRunPassArgs,
   runJudgeVerifyAssemble,
   assembleReport,
   buildSources,
@@ -490,10 +492,17 @@ describe("payload determinism + provenance", () => {
       // thresholds — were previously dropped, so the Stage C passes reasoned
       // about forensic scores without seeing the conditions attached to them.
       // The larger prompt is the point of the fix, not a side effect.
-      fingerprint: "1.3.0:1af0bb68",
-      promptBytes: 85_556,
+      // Changed 2026-09-02 (+1 prompt byte): macro figures now carry their
+      // FRED display units (DGS10 "%", the YoY CPI "%") instead of an empty
+      // unit the registry read as an index level, so a cited yield traces —
+      // provenanceHash moves with the two registered units. financeHash moves
+      // because the DCF assumption notes now state why the terminal ROIC was
+      // held at WACC (the terminal excess-return house rule reads the ROIC
+      // history and this fixture has too few years of it).
+      fingerprint: "1.3.0:63a11064",
+      promptBytes: 85_557,
       provenanceCount: 306,
-      provenanceHash: "79e54a43",
+      provenanceHash: "b9ec901b",
       provenanceIdsHash: "1e316594",
       citationCount: 11,
       citationHash: "7ebe5276",
@@ -505,7 +514,7 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "c8f4a621",
+      financeHash: "2b9b8ba3",
     });
   });
 
@@ -1227,6 +1236,58 @@ describe("verify-pass tracing", () => {
     const { verificationRate, log } = await runVerifyPass(deps, payload, root as unknown as JudgeOutput, { fetchedUrls: [] });
     expect(verificationRate).toBe(0.5); // omitted-period verifies; wrong-period does not
     expect(log.find((entry) => entry.reason === "period-mismatch")).toBeTruthy();
+  });
+
+  it("resolves a citation that supplies a period for a record the payload registered without one", async () => {
+    // Aspect scores, CAGRs, technicals and returns are registered with NO period
+    // (nothing in their label names one), and the prompt never renders a period
+    // tag. A live haiku run (2026-09-02) filled `period` with the as-of date on
+    // 40 such numbers and every one failed period-mismatch, capping citation
+    // coverage at 71% for figures whose id, value and as-of all matched exactly.
+    // A dimension the registry does not carry cannot be wrong: it is adopted
+    // from the record (null) and the number traces.
+    const { payload } = buildInputs();
+    const deps = makeDeps(new MockRunPass());
+    const record = payload.provenanceRegistry!.find(
+      (entry) => entry.period === null && entry.kind === "computed" && entry.asOf !== null,
+    )!;
+    expect(record).toBeTruthy();
+    const root = {
+      numbers: [
+        { value: record.value, unit: record.unit, currency: record.currency, period: record.asOf, source: record.id, asOf: record.asOf, verified: null },
+        { value: record.value, unit: record.unit, currency: record.currency, period: "FY1999", source: record.id, asOf: record.asOf, verified: null },
+      ],
+    };
+    const { verificationRate, log, verifiedReport } = await runVerifyPass(deps, payload, root as unknown as JudgeOutput, { fetchedUrls: [] });
+    expect(verificationRate).toBe(1);
+    expect(log.some((entry) => entry.reason === "period-mismatch")).toBe(false);
+    // The decoration is normalised away so the persisted number carries the
+    // registry's (absent) period, not an invented one.
+    for (const number of collectTracedNumbers(verifiedReport)) expect(number.period ?? null).toBeNull();
+  });
+
+  it("reads a fiscal spelling of a registered ISO period as that period, and still rejects another year", async () => {
+    // Statement cells register their ISO period end; a live haiku run
+    // (2026-09-02) wrote the column's fiscal spelling ("total debt FY2025")
+    // and every balance-sheet citation failed period-mismatch on spelling
+    // alone. The persisted number now carries the registry's spelling and the
+    // log says how it was read.
+    const { payload } = buildInputs();
+    const deps = makeDeps(new MockRunPass());
+    const cell = payload.provenanceRegistry!.find(
+      (entry) => /^payload\.statements\./.test(entry.id) && entry.period !== null && /^\d{4}-\d{2}-\d{2}$/.test(entry.period),
+    )!;
+    expect(cell).toBeTruthy();
+    const year = cell.period!.slice(0, 4);
+    const cite = (period: string) => ({
+      value: cell.value, unit: cell.unit, currency: cell.currency, period, source: cell.id, asOf: cell.asOf, verified: null,
+    });
+    const root = { numbers: [cite(`total debt FY${year}`), cite(`FY${Number(year) - 1}`)] };
+    const { verificationRate, log, verifiedReport } = await runVerifyPass(deps, payload, root as unknown as JudgeOutput, { fetchedUrls: [] });
+    expect(verificationRate).toBe(0.5);
+    expect(log[0]).toMatchObject({ outcome: "verified", note: `exact provenance record matched (period "total debt FY${year}" read as ${cell.period})` });
+    expect(log[1]).toMatchObject({ outcome: "unverified", reason: "period-mismatch" });
+    expect(collectTracedNumbers(verifiedReport).map((number) => number.period)).toEqual([cell.period, `FY${Number(year) - 1}`]);
   });
 
   it("resolves a monetary citation with the generic 'currency' unit and no ISO code, but rejects a wrong currency", async () => {
@@ -2829,5 +2890,94 @@ describe("runBullThenBear per-pass lifecycle hooks", () => {
     });
     expect(bull.ok && bear.ok).toBe(true);
     expect(events).toEqual(["start:bull", "finish:bull", "start:bear", "finish:bear"]);
+  });
+});
+
+describe("macro figures carry their units", () => {
+  it("shows FRED rates in percent and registers them so a cited yield traces", () => {
+    const { payload } = buildInputs();
+    const dgs10 = payload.macro.figures.find((f) => f.source === "fred:DGS10");
+    const cpi = payload.macro.figures.find((f) => f.source === "fred:CPIAUCSL");
+    // DGS10 is a level series quoted in percent; the core CPI series is
+    // fetched as a YoY % transform, so it is percent too.
+    expect(dgs10?.unit).toBe("%");
+    expect(cpi?.unit).toBe("%");
+    const record = payload.provenanceRegistry!.find((entry) => entry.origin === "fred:DGS10");
+    expect(record).toMatchObject({ unit: "percent", currency: null, value: 4.4, asOf: "2026-07-04" });
+  });
+
+  it("renders a scaled or per-quantity series in a registrable unit and names the conversion", async () => {
+    // PAYEMS is served in thousands of persons and WTI in dollars per barrel.
+    // Rendered in those spellings neither could be registered, so a citation
+    // of either failed unknown-source (live haiku CAT run, 2026-09-02).
+    const bundle = fixtureBundle("AAPL");
+    bundle.macro.core.PAYEMS = ok([{ date: "2026-08-01", value: -23 }], "2026-08-01", "/fred/series/observations?series_id=PAYEMS", "fred");
+    bundle.macro.sector.DCOILWTICO = ok([{ date: "2026-07-03", value: 68.42 }], "2026-07-03", "/fred/series/observations?series_id=DCOILWTICO", "fred");
+    bundle.macro.sector.PCE = ok([{ date: "2026-06-01", value: 20123.4 }], "2026-06-01", "/fred/series/observations?series_id=PCE", "fred");
+    const payload = assembleContextPayload(bundle, runStageB(bundle), validateBundle(bundle, { now: new Date("2026-07-06T00:00:00Z") }));
+    const figure = (source: string) => payload.macro.figures.find((f) => f.source === source)!;
+    expect(figure("fred:PAYEMS")).toMatchObject({ value: -23_000, unit: "count", provenanceId: "payload.macro.payems-core" });
+    expect(figure("fred:DCOILWTICO")).toMatchObject({ value: 68.42, unit: "USD", currency: "USD", provenanceId: "payload.macro.dcoilwtico-sector" });
+    expect(figure("fred:PCE")).toMatchObject({ value: 20_123_400_000_000, unit: "USD", currency: "USD" });
+    expect(payload.macro.notes).toContain(
+      "Units: PAYEMS: persons (FRED serves thousands; shown ×1,000); DCOILWTICO: USD per barrel; PCE: USD (FRED serves billions; shown ×1,000,000,000)",
+    );
+    const deps = makeDeps(new MockRunPass());
+    const root = {
+      numbers: [
+        { value: -23_000, unit: "count", currency: null, period: null, source: "payload.macro.payems-core", asOf: "2026-08-01", verified: null },
+        { value: 68.42, unit: "USD", currency: "USD", period: null, source: "payload.macro.dcoilwtico-sector", asOf: "2026-07-03", verified: null },
+      ],
+    };
+    const { coverage } = await runVerifyPass(deps, payload, root as unknown as JudgeOutput, { fetchedUrls: [] });
+    expect(coverage.numeric).toEqual({ supported: 2, total: 2, rate: 1 });
+  });
+
+  it("traces a judge number that cites the 10-year yield in percent", async () => {
+    const { payload } = buildInputs();
+    const deps = makeDeps(new MockRunPass());
+    const record = payload.provenanceRegistry!.find((entry) => entry.origin === "fred:DGS10")!;
+    const root = {
+      numbers: [{ value: 4.4, unit: "%", currency: null, period: null, source: record.id, asOf: "2026-07-04", verified: null }],
+    };
+    const { coverage } = await runVerifyPass(deps, payload, root as unknown as JudgeOutput, { fetchedUrls: [] });
+    expect(coverage.numeric).toEqual({ supported: 1, total: 1, rate: 1 });
+  });
+});
+
+describe("verify-pass reasons for prose-sourced numbers", () => {
+  it("names a number cited to a registered text source as text-sourced, not unknown", async () => {
+    const { payload } = buildInputs();
+    const deps = makeDeps(new MockRunPass());
+    const text = payload.citationRegistry!.find((entry) => entry.kind === "payload-text")!;
+    const root = {
+      numbers: [
+        { value: 12.5, unit: "%", currency: null, period: null, source: text.id, asOf: text.asOf ?? "2025-09-27", verified: null },
+        { value: 12.5, unit: "%", currency: null, period: null, source: "fmp:invented-path", asOf: "2025-09-27", verified: null },
+      ],
+    };
+    const { verifiedReport, log } = await runVerifyPass(deps, payload, root as unknown as JudgeOutput, { fetchedUrls: [] });
+    expect(collectTracedNumbers(verifiedReport).map((number) => number.verified)).toEqual([false, false]);
+    expect(log.find((entry) => entry.source === text.id)?.reason).toBe("text-source");
+    expect(log.find((entry) => entry.source === "fmp:invented-path")?.reason).toBe("unknown-source");
+  });
+});
+
+describe("analyst repair request", () => {
+  it("keeps the cached payload turn, tools and schema identical and appends the feedback as a second user turn", () => {
+    const { payload } = buildInputs();
+    const deps = makeDeps(new MockRunPass());
+    const first = buildAnalystRunPassArgs(deps, payload, "bull");
+    const repair = buildAnalystRepairRunPassArgs(deps, payload, "bull", 'Invalid ISO date (expected YYYY-MM-DD): "2026-Q1"');
+    // Byte-identical prefix = a prompt-cache read on the repair attempt.
+    expect(repair.system).toBe(first.system);
+    expect(repair.messages[0]).toEqual(first.messages[0]);
+    expect(repair.tools).toEqual(first.tools);
+    expect(repair.outputSchema).toEqual(first.outputSchema);
+    expect(repair.field).toBe("llm.bull");
+    expect(repair.messages).toHaveLength(2);
+    expect(repair.messages[1]?.role).toBe("user");
+    expect(repair.messages[1]?.content).toMatch(/^Your previous output FAILED the ANALYST_CASE schema validation/);
+    expect(repair.messages[1]?.content).toContain('Invalid ISO date (expected YYYY-MM-DD): "2026-Q1"');
   });
 });

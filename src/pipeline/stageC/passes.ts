@@ -73,6 +73,7 @@ import {
   canonicalizeFetchedUrl,
   canonicalizeTracedUnit,
   matchProvenanceRecord,
+  periodsAgree,
   type CitationProvenanceRecord,
   type NumericProvenanceRecord,
   type ProvenanceFailureReason,
@@ -827,6 +828,53 @@ export async function runBearPass(
   await beforeProviderLaunch?.();
   const outcome = await deps.runPass(request);
   const run = finishStructuredPass(outcome, parseAnalystCase, "llm.bear", deps.model);
+  return settlePassRun(run, deps.model, settlement);
+}
+
+/**
+ * The feedback turn of an analyst REPAIR attempt: the side's first output was
+ * received but rejected by the ANALYST_CASE schema (a haiku bull pass wrote
+ * "2026-Q1" for `asOf` on 2026-09-02 and the pair was lost). The runner
+ * drives the attempt under its own settlement checkpoint; here the cached
+ * payload turn and the tools stay byte-identical to the first attempt (a
+ * cache read) and the error plus the rejected output ride in a second user
+ * turn, exactly as the judge's repair turn does.
+ */
+export function analystRepairFeedback(validationFeedback: string): string {
+  return (
+    "Your previous output FAILED the ANALYST_CASE schema validation with this error. Fix EXACTLY these issues and " +
+    `re-emit the full ANALYST_CASE JSON — same evidence, same citations, corrected fields only:\n${validationFeedback}`
+  );
+}
+
+/** Exact provider request of an analyst repair attempt. */
+export function buildAnalystRepairRunPassArgs(
+  deps: PassDeps,
+  payload: ContextPayload,
+  side: "bull" | "bear",
+  validationFeedback: string,
+): RunPassArgs {
+  const base = buildAnalystRunPassArgs(deps, payload, side);
+  return {
+    ...base,
+    messages: [...base.messages, { role: "user", content: analystRepairFeedback(validationFeedback) }],
+  };
+}
+
+/** Run one analyst repair attempt (see analystRepairFeedback). */
+export async function runAnalystRepairPass(
+  deps: PassDeps,
+  payload: ContextPayload,
+  side: "bull" | "bear",
+  validationFeedback: string,
+  settlement?: PassSettlementHook<AnalystCase>,
+  beforeProviderLaunch?: () => void | Promise<void>,
+): Promise<PassRun<AnalystCase>> {
+  const request = buildAnalystRepairRunPassArgs(deps, payload, side, validationFeedback);
+  deps.validateRunPass?.(request);
+  await beforeProviderLaunch?.();
+  const outcome = await deps.runPass(request);
+  const run = finishStructuredPass(outcome, parseAnalystCase, `llm.${side}`, deps.model);
   return settlePassRun(run, deps.model, settlement);
 }
 
@@ -1599,13 +1647,21 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
     const sourceId = citationSourceId(number);
     const sourceAsOf = citationAsOf(number);
     if (sourceId !== null) number.sourceId = sourceId;
+    let periodNote: string | null = null;
     const record = sourceId === null
       ? undefined
       : registry.find((entry) => entry.id === sourceId);
     let reason: ProvenanceFailureReason;
     let ok = false;
     if (!record) {
-      reason = "unknown-source";
+      // A number lifted from filing or transcript prose cites a registered
+      // TEXT source. It is still unverifiable (numbers trace only against
+      // numeric records) but the log should say that, not call a source the
+      // payload itself advertised "unknown".
+      reason =
+        sourceId !== null && citationRegistry.some((entry) => entry.id === sourceId)
+          ? "text-source"
+          : "unknown-source";
     } else {
       const normalized = canonicalizeTracedUnit(number.unit, number.currency);
       if (normalized === null) {
@@ -1618,6 +1674,29 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
         // drops one, adopt the record's value — the registry id already pins the
         // exact record (and hence its period/currency). A SUPPLIED-but-wrong
         // period or currency still mismatches, so a genuine error is not masked.
+        // A dimension the registry does not carry cannot be wrong. Aspect
+        // scores, CAGRs, technicals and returns are registered with NO period
+        // (their labels name none) and the prompt never renders one, yet a
+        // model that fills `period` with the as-of date — haiku did, on 40
+        // numbers in one live run (2026-09-02) — failed every one of them as
+        // period-mismatch while id, value and as-of matched exactly, capping
+        // citation coverage at 71%. Adopt the record's null and drop the
+        // decoration so the stored figure carries the registry's period, not
+        // an invented one. A registered period is still compared exactly.
+        if (record.period === null && number.period != null) number.period = null;
+        // A fiscal spelling of the registered period ("FY2025", "Q2 2026",
+        // "total debt FY2025" against 2025-12-31) is the same period read off
+        // the statement column; adopt the registry's spelling and say so in
+        // the log. A period naming another year still mismatches.
+        if (
+          record.period !== null &&
+          number.period != null &&
+          number.period !== record.period &&
+          periodsAgree(number.period, record.period)
+        ) {
+          periodNote = `period "${number.period}" read as ${record.period}`;
+          number.period = record.period;
+        }
         const period = resolveOmittedIdentity(number.period, record.period);
         const currency = resolveOmittedIdentity(normalized.currency, record.currency);
         const match = matchProvenanceRecord(
@@ -1650,7 +1729,7 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
       log.push({
         claim: rendered,
         outcome: "verified",
-        note: "exact provenance record matched",
+        note: periodNote === null ? "exact provenance record matched" : `exact provenance record matched (${periodNote})`,
         traceKind,
         path,
         evidenceKind: "number",

@@ -61,6 +61,7 @@ import type {
 } from "@/pipeline/jobRunner";
 import {
   BullBearPassFailure,
+  type BullBearPassFailureDetails,
   DURABLE_LAUNCH_AUTHORITY_CAPABILITY,
   PIPELINE_VERSION,
 } from "@/pipeline/jobRunner";
@@ -77,6 +78,7 @@ import {
   matchProvenanceRecord,
 } from "@/pipeline/stageC/provenance";
 import {
+  runAnalystRepairPass,
   runBullPass,
   runBearPass,
   buildAnalystRunPassArgs,
@@ -234,6 +236,22 @@ function billedAttemptFromRun<T>(run: PassRun<T>): BilledPassAttempt | undefined
       : undefined,
     webSearches: run.webSearches,
   };
+}
+
+/**
+ * Repair-attempt details of one analyst side for BullBearPassFailure: a
+ * received-but-rejected output (schema or JSON failure) is retryable and
+ * carries the raw text the repair turn echoes back; a successful side or a
+ * transport failure contributes nothing.
+ */
+function repairDetailsOf<T>(
+  run: PassRun<T>,
+  side: "bull" | "bear",
+): Partial<Pick<BullBearPassFailureDetails, "bullRetryable" | "bearRetryable" | "bullRawText" | "bearRawText">> {
+  if (run.ok) return {};
+  return side === "bull"
+    ? { bullRetryable: run.validationError !== undefined, bullRawText: run.rawText }
+    : { bearRetryable: run.validationError !== undefined, bearRawText: run.rawText };
 }
 
 function passRunFailureMessage<T>(run: PassRun<T>, label: string): string {
@@ -400,6 +418,7 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
         bullBilledAttempt: error.bull.ok ? undefined : billedAttemptFromRun(error.bull),
         bullLaunched: true,
         bearLaunched: error.bearLaunched,
+        ...repairDetailsOf(error.bull, "bull"),
       });
     }
     const bullResult = bull.ok ? toPassResultLike(bull.result) : undefined;
@@ -418,6 +437,8 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
         bearBilledAttempt: bear.ok ? undefined : billedAttemptFromRun(bear),
         bullLaunched: bull.ok || bull.error.notLaunched !== true,
         bearLaunched: bear.ok || bear.error.notLaunched !== true,
+        ...repairDetailsOf(bull, "bull"),
+        ...repairDetailsOf(bear, "bear"),
       });
     }
     return {
@@ -431,16 +452,19 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
     side: "bull" | "bear",
     settlement?: PassSettlementHook<AnalystCase>,
     beforeProviderLaunch?: () => void | Promise<void>,
+    validationFeedback?: string,
   ): Promise<PassResultLike<AnalystCase>> {
-    // Partial resume: the sibling's persisted snapshot is being reused, so a
-    // lone pass simply writes (or re-reads) its own payload cache entry — no
-    // bull-first sequencing applies. runPass auto-streams above 16K tokens,
-    // so this path gets the provider's transport retries too.
+    // Partial resume, or a repair attempt: the sibling's output is being
+    // reused, so a lone pass simply writes (or re-reads) its own payload cache
+    // entry — no bull-first sequencing applies. runPass auto-streams above 16K
+    // tokens, so this path gets the provider's transport retries too.
     const passDeps = toPassDeps(deps);
     const run =
-      side === "bull"
-        ? await runBullPass(passDeps, deps.payload, settlement, beforeProviderLaunch)
-        : await runBearPass(passDeps, deps.payload, settlement, beforeProviderLaunch);
+      validationFeedback !== undefined
+        ? await runAnalystRepairPass(passDeps, deps.payload, side, validationFeedback, settlement, beforeProviderLaunch)
+        : side === "bull"
+          ? await runBullPass(passDeps, deps.payload, settlement, beforeProviderLaunch)
+          : await runBearPass(passDeps, deps.payload, settlement, beforeProviderLaunch);
     return toPassResultLike(unwrap(run, side));
   },
 

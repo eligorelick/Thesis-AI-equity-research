@@ -7658,3 +7658,126 @@ describe("review regressions — cost rehydration, live-job guard, resumability 
     expect(handle.db.select().from(reports).all()).toHaveLength(0);
   });
 });
+
+describe("analyst repair attempt after schema-invalid output", () => {
+  const SCHEMA_ERROR =
+    'bear pass failed (schema): schema-invalid structured output for llm.bear: Invalid ISO date (expected YYYY-MM-DD): "2026-Q1"';
+  const RAW = '{"thesis":"x","asOf":"2026-Q1"}';
+  const bearBilledAttempt = {
+    model: "claude-opus-4-8",
+    costUsd: 0.31,
+    fallbackUsed: false,
+    usage: { input_tokens: 14000, output_tokens: 5000, cache_creation_input_tokens: 0, cache_read_input_tokens: 300000 },
+    webSearches: 6,
+  };
+  function schemaInvalidBear(bull: PassResultLike<AnalystCase>, retryable: boolean): Error {
+    return Object.assign(new Error(SCHEMA_ERROR), {
+      bull,
+      bearError: SCHEMA_ERROR,
+      bearBilledAttempt,
+      bearRetryable: retryable,
+      bearRawText: RAW,
+    });
+  }
+
+  it("repairs a schema-invalid bear once with the error and raw output fed back, then synthesizes", async () => {
+    // 2026-09-02: a haiku analyst wrote "2026-Q1" for asOf and, with no
+    // retry, both paid passes and the whole analysis were lost ($0.25).
+    const { jobId } = createJob("AAPL");
+    const { passes, calls } = mockPasses();
+    const bull = testAnalystPass("bull");
+    const bear = testAnalystPass("bear");
+    passes.runBullThenBear = async (_deps, hooks) => {
+      await launchTestAnalystSide(hooks, "bull");
+      await launchTestAnalystSide(hooks, "bear");
+      throw schemaInvalidBear(bull, true);
+    };
+    const feedbacks: Array<string | undefined> = [];
+    passes.runAnalystPass = async (_deps, side, settlement, beforeProviderLaunch, feedback) => {
+      calls.push(`runAnalystPass:${side}`);
+      feedbacks.push(feedback);
+      await beforeProviderLaunch?.();
+      await settlement?.(testSuccessSettlement(bear));
+      return bear;
+    };
+
+    const result = await runJob(jobId, passes, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW });
+
+    expect(calls.filter((c) => c.startsWith("runAnalystPass:"))).toEqual(["runAnalystPass:bear"]);
+    expect(feedbacks[0]).toContain('Invalid ISO date (expected YYYY-MM-DD): "2026-Q1"');
+    expect(feedbacks[0]).toContain(`YOUR PREVIOUS OUTPUT (repair this JSON in place — do not start over):\n${RAW}`);
+    expect(result.status).toBe("done");
+    expect(result.dataOnly).toBe(false);
+    expect(result.reportId).not.toBeNull();
+
+    const jobRow = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
+    const steps = JSON.parse(jobRow?.stepsJson ?? "[]") as StepProgress[];
+    const byStep = new Map(steps.map((s) => [s.step, s]));
+    expect(byStep.get("bull")?.status).toBe("done");
+    expect(byStep.get("bear")?.status).toBe("done");
+    expect(byStep.get("synthesize")?.status).toBe("done");
+    expect(byStep.get("verify")?.status).toBe("done");
+
+    // Both bear attempts are billed and logged; bull's single pass is kept.
+    const costRows = handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all();
+    expect(costRows.filter((r) => r.step === "bear").map((r) => r.costUsd).sort()).toEqual([0.31, 0.47]);
+    expect(costRows.filter((r) => r.step === "bull")).toHaveLength(1);
+    expect(result.totalCostUsd).toBeCloseTo(0.9 + 0.31 + 0.47 + 0.4 + 0.2, 6);
+  });
+
+  it("persists data-only when the repair attempt fails too, naming the second failure", async () => {
+    const { jobId } = createJob("AAPL");
+    const { passes } = mockPasses();
+    const bull = testAnalystPass("bull");
+    passes.runBullThenBear = async (_deps, hooks) => {
+      await launchTestAnalystSide(hooks, "bull");
+      await launchTestAnalystSide(hooks, "bear");
+      throw schemaInvalidBear(bull, true);
+    };
+    passes.runAnalystPass = async (_deps, _side, _settlement, beforeProviderLaunch) => {
+      await beforeProviderLaunch?.();
+      throw Object.assign(new Error("bear pass failed (schema): schema-invalid structured output for llm.bear (again)"), {
+        billedAttempt: { model: "claude-opus-4-8", costUsd: 0.2, fallbackUsed: false },
+        retryable: true,
+      });
+    };
+
+    const result = await runJob(jobId, passes, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW });
+
+    expect(result.status).toBe("done");
+    expect(result.dataOnly).toBe(true);
+    const jobRow = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
+    const steps = JSON.parse(jobRow?.stepsJson ?? "[]") as StepProgress[];
+    const byStep = new Map(steps.map((s) => [s.step, s]));
+    expect(byStep.get("bull")?.status).toBe("done");
+    expect(byStep.get("bear")?.status).toBe("error");
+    expect(byStep.get("synthesize")?.status).toBe("skipped");
+    const costRows = handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all();
+    expect(costRows.filter((r) => r.step === "bear").map((r) => r.costUsd).sort()).toEqual([0.2, 0.31]);
+
+    const reportRow = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const report = ReportSchema.parse(JSON.parse(reportRow.reportJson ?? "{}"));
+    const bearGap = report.appendix.missingData.find((gap) => gap.field === "llm.bear");
+    expect(bearGap?.reason).toMatch(/^repair attempt after schema-invalid output also failed: .*\(again\)/);
+  });
+
+  it("does not attempt a repair for a failure that was not a schema rejection", async () => {
+    const { jobId } = createJob("AAPL");
+    const { passes, calls } = mockPasses();
+    const bull = testAnalystPass("bull");
+    passes.runBullThenBear = async (_deps, hooks) => {
+      await launchTestAnalystSide(hooks, "bull");
+      await launchTestAnalystSide(hooks, "bear");
+      throw schemaInvalidBear(bull, false);
+    };
+    passes.runAnalystPass = async () => {
+      calls.push("runAnalystPass");
+      throw new Error("must not be called");
+    };
+
+    const result = await runJob(jobId, passes, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW });
+
+    expect(calls).not.toContain("runAnalystPass");
+    expect(result.dataOnly).toBe(true);
+  });
+});

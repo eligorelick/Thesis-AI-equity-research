@@ -124,6 +124,112 @@ export const SECTOR_SERIES: Record<GicsSector, readonly string[]> = {
   "Real Estate": ["HOUST", "MORTGAGE30US", "CSUSHPINSA", "CUSR0000SEHA"],
 };
 
+/**
+ * Native unit of each level series' observations, as the Stage C payload
+ * shows them to the model and registers them for citation tracing. A `pc1`
+ * transform (YoY %) is always "%", resolved by {@link fredDisplayUnit}; a
+ * `chg` transform keeps the native unit (a change in thousands is thousands).
+ * "%" and "pp" canonicalize to the provenance registry's percent and
+ * percentage-point units and "index" to its index unit, so a cited rate or
+ * spread traces; the remaining spellings are shown as written and are not
+ * numerically traceable. Before this table every macro figure was registered
+ * with an empty unit (which the registry reads as an index level), so a model
+ * citing the 10-year yield as "4.2 %" failed with a unit mismatch.
+ */
+const FRED_NATIVE_UNITS: Readonly<Record<string, string>> = {
+  DGS10: "%",
+  DGS2: "%",
+  DFII10: "%",
+  EFFR: "%",
+  FEDFUNDS: "%",
+  UNRATE: "%",
+  T10YIE: "%",
+  BAMLH0A0HYM2: "%",
+  MORTGAGE30US: "%",
+  DRTSCILM: "%",
+  T10Y2Y: "pp",
+  T10Y3M: "pp",
+  VIXCLS: "index",
+  NASDAQCOM: "index",
+  PPIACO: "index",
+  WPU101: "index",
+  INDPRO: "index",
+  IPUTIL: "index",
+  TSIFRGHT: "index",
+  UMCSENT: "index",
+  CPIAUCSL: "index",
+  CPILFESL: "index",
+  CPIMEDSL: "index",
+  CSUSHPINSA: "index",
+  CUSR0000SEHA: "index",
+  PAYEMS: "thousands",
+  CES6562000001: "thousands",
+  HOUST: "thousands of units",
+  TOTALSA: "millions of units",
+  DCOILWTICO: "USD/bbl",
+  DCOILBRENTEU: "USD/bbl",
+  DHHNGSP: "USD/MMBtu",
+  GASREGW: "USD/gal",
+  APU000072610: "USD/therm",
+  PCOPPUSDM: "USD/tonne",
+  DGORDER: "USD millions",
+  RSAFS: "USD millions",
+  PCE: "USD billions",
+  PCEND: "USD billions",
+  PCEDG: "USD billions",
+  DPSACBW027SBOG: "USD billions",
+};
+
+/**
+ * How a macro figure renders in the Stage C payload and registers for
+ * verification. The registry accepts a fixed unit vocabulary (provenance.ts
+ * CANONICAL_UNITS), so a series FRED serves in a scaled or per-quantity unit
+ * — payrolls in thousands of persons, PCE in billions of dollars, oil in
+ * dollars per barrel — is shown as a plain count or currency amount (the
+ * served value × `scale`) with the conversion named in a section note. A
+ * figure rendered in the native spelling ("thousands") could not be
+ * registered at all, so every citation of it failed as unknown-source (live
+ * haiku CAT run, 2026-09-02).
+ */
+export interface FredFigureUnit {
+  /** Unit rendered on the figure and matched by the verification pass. */
+  unit: string;
+  /** Multiply the served value by this before rendering (1 = as served). */
+  scale: number;
+  /** Conversion note for the payload section; null when nothing was converted. */
+  qualifier: string | null;
+}
+
+const AS_SERVED = (unit: string): FredFigureUnit => ({ unit, scale: 1, qualifier: null });
+const FRED_FIGURE_UNITS: Readonly<Record<string, FredFigureUnit>> = {
+  "%": AS_SERVED("%"),
+  pp: AS_SERVED("pp"),
+  index: AS_SERVED("index"),
+  thousands: { unit: "count", scale: 1e3, qualifier: "persons (FRED serves thousands; shown ×1,000)" },
+  "thousands of units": { unit: "count", scale: 1e3, qualifier: "units (FRED serves thousands; shown ×1,000)" },
+  "millions of units": { unit: "count", scale: 1e6, qualifier: "units (FRED serves millions; shown ×1,000,000)" },
+  "USD/bbl": { unit: "USD", scale: 1, qualifier: "USD per barrel" },
+  "USD/MMBtu": { unit: "USD", scale: 1, qualifier: "USD per MMBtu" },
+  "USD/gal": { unit: "USD", scale: 1, qualifier: "USD per gallon" },
+  "USD/therm": { unit: "USD", scale: 1, qualifier: "USD per therm" },
+  "USD/tonne": { unit: "USD", scale: 1, qualifier: "USD per tonne" },
+  "USD millions": { unit: "USD", scale: 1e6, qualifier: "USD (FRED serves millions; shown ×1,000,000)" },
+  "USD billions": { unit: "USD", scale: 1e9, qualifier: "USD (FRED serves billions; shown ×1,000,000,000)" },
+};
+const PERCENT_TRANSFORMS: ReadonlySet<FredUnits> = new Set<FredUnits>(["pc1", "pch", "pca", "cch", "cca"]);
+
+/**
+ * Figure unit of a series under the transform it was fetched with: "%" for
+ * any percent-change transform, otherwise the native unit mapped through
+ * FRED_FIGURE_UNITS. An unknown series renders with an empty unit, which the
+ * registry reads as a dimensionless index.
+ */
+export function fredFigureUnit(seriesId: string, units: FredUnits): FredFigureUnit {
+  if (PERCENT_TRANSFORMS.has(units)) return AS_SERVED("%");
+  const native = FRED_NATIVE_UNITS[seriesId.trim().toUpperCase()];
+  return native === undefined ? AS_SERVED("") : FRED_FIGURE_UNITS[native] ?? AS_SERVED(native);
+}
+
 /** One parsed observation. `date` is the PERIOD START (May 2026 CPI = 2026-05-01). */
 export interface FredObservation {
   date: string;

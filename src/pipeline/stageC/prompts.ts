@@ -53,6 +53,8 @@ export const SHARED_RULES_BLOCK = [
   "",
   "CITATION (hard rule): cite the payload path or fetched URL for every claim and every number.",
   "Copy only the exact source ID into `source`/`sourceId`; keep its ISO date only in `asOf`.",
+  "`asOf` is a calendar date written YYYY-MM-DD (never a time component, a month, a quarter or a year alone); use null when no date is known.",
+  "`period` is the period exactly as the payload renders it (a statement column's ISO period end, a projection's FY label); omit it when the figure shows none.",
   "Never paste a rendered `[source · as-of]` token into a source field or duplicate its date.",
   "If you cannot supply a registered source ID, preserve an explicit unsupported state rather than implying support.",
   "A number with no traceable source will be removed or flagged [unverified] by the verification pass.",

@@ -160,6 +160,16 @@ export interface BullBearPassFailureDetails {
   /** False only when cache sequencing prevented this provider pass from launching. */
   bullLaunched?: boolean;
   bearLaunched?: boolean;
+  /**
+   * True when the side's output was RECEIVED but rejected by the ANALYST_CASE
+   * schema (or was not JSON) — the one failure class worth a repair attempt.
+   * A transport failure, a refusal or a never-launched sibling is not.
+   */
+  bullRetryable?: boolean;
+  bearRetryable?: boolean;
+  /** Raw text of the rejected output, echoed back on the repair attempt. */
+  bullRawText?: string;
+  bearRawText?: string;
 }
 
 /**
@@ -176,6 +186,10 @@ export class BullBearPassFailure extends Error {
   readonly bearBilledAttempt?: BilledPassAttempt;
   readonly bullLaunched?: boolean;
   readonly bearLaunched?: boolean;
+  readonly bullRetryable?: boolean;
+  readonly bearRetryable?: boolean;
+  readonly bullRawText?: string;
+  readonly bearRawText?: string;
 
   constructor(message: string, details: BullBearPassFailureDetails) {
     super(message);
@@ -188,6 +202,10 @@ export class BullBearPassFailure extends Error {
     this.bearBilledAttempt = details.bearBilledAttempt;
     this.bullLaunched = details.bullLaunched;
     this.bearLaunched = details.bearLaunched;
+    this.bullRetryable = details.bullRetryable;
+    this.bearRetryable = details.bearRetryable;
+    this.bullRawText = details.bullRawText;
+    this.bearRawText = details.bearRawText;
   }
 }
 
@@ -307,12 +325,18 @@ export interface PipelinePasses<TPayload = unknown> {
    * noop facade may omit it; the resume path then requires both snapshots.
    * Throws (with a `billedAttempt` when the attempt billed) on failure, same
    * contract as runJudgePass.
+   *
+   * With `validationFeedback` it is the REPAIR attempt for a side whose first
+   * output was received but rejected by the schema: the same cached payload
+   * turn plus a feedback turn carrying the error and the previous output,
+   * exactly as runJudgePass repairs the judge.
    */
   runAnalystPass?(
     deps: PassDeps<TPayload>,
     side: "bull" | "bear",
     settlement?: PassSettlementHook<AnalystCase>,
     beforeProviderLaunch?: () => void | Promise<void>,
+    validationFeedback?: string,
   ): Promise<PassResultLike<AnalystCase>>;
 
   /** Judge/synthesis pass: bull + bear + payload → JudgeOutput (report minus meta/appendix). */
@@ -1102,15 +1126,29 @@ function bullBearFailureFromError(err: unknown): BullBearPassFailureDetails | nu
  */
 const JUDGE_RETRY_RAW_OUTPUT_CAP = 200_000;
 
+/** Bound a rejected output before it is echoed back for repair. */
+function capRawOutput(raw: string): string {
+  return raw.length > JUDGE_RETRY_RAW_OUTPUT_CAP
+    ? `${raw.slice(0, JUDGE_RETRY_RAW_OUTPUT_CAP)}\n[...truncated]`
+    : raw;
+}
+
 /** Raw text of a received-but-invalid pass output, when the error carries it. */
 function rawTextOfError(err: unknown): string {
   if (err === null || typeof err !== "object" || !("rawText" in err)) return "";
   const raw = (err as { rawText?: unknown }).rawText;
   if (typeof raw !== "string") return "";
-  return raw.length > JUDGE_RETRY_RAW_OUTPUT_CAP
-    ? `${raw.slice(0, JUDGE_RETRY_RAW_OUTPUT_CAP)}\n[...truncated]`
-    : raw;
+  return capRawOutput(raw);
 }
+
+/**
+ * Repair attempts per analyst side after a schema-invalid output (each
+ * attempt is its own settlement checkpoint and cost row). One: the judge's
+ * two retries guard a 60-100K-token document; an analyst case is a tenth of
+ * that and a second slip on the same feedback is a model problem, not a
+ * formatting one.
+ */
+export const MAX_ANALYST_REPAIRS = 1;
 
 function isRetryableJudgeError(err: unknown): boolean {
   if (err !== null && typeof err === "object" && "retryable" in err) {
@@ -3054,6 +3092,81 @@ export async function runJob<TPayload = unknown>(
     };
     let bull: PassResultLike<AnalystCase> | null = null;
     let bear: PassResultLike<AnalystCase> | null = null;
+    /**
+     * Re-run ONE analyst side with the schema error and its rejected output
+     * fed back, under its own settlement checkpoint (own lease, own cost row,
+     * own attempt id) — the partial-resume single-side contract. Returns null
+     * after recording the failure and skipping synthesis, so the caller can
+     * persist data-only exactly as the first-attempt path does.
+     */
+    const runAnalystRepairAttempt = async (
+      side: "bull" | "bear",
+      feedback: string,
+      failureDetail: string,
+    ): Promise<PassResultLike<AnalystCase> | null> => {
+      startStep(state, side);
+      updateRunningStepDetail(
+        state,
+        side,
+        `${side} attempt 2/${MAX_ANALYST_REPAIRS + 1}: repairing schema-invalid output — ${failureDetail}`,
+      );
+      const checkpoint = createSettlementCheckpoint<AnalystCase>(
+        state,
+        side,
+        fingerprint,
+        maximumPassCostUsd(analysisModel, side),
+        jobSignal,
+        jobController,
+      );
+      try {
+        await passes.preflightPass?.(deps, { pass: side });
+        await checkpoint.beforeLaunch();
+        const fresh = await awaitJobStage(
+          passes.runAnalystPass!(
+            deps,
+            side,
+            checkpoint.hook,
+            () => {
+              checkpoint.authorizeLaunch(false);
+            },
+            feedback,
+          ),
+          jobSignal,
+          jobController,
+          side,
+          modelStageDeadlineMs,
+        );
+        throwIfJobAborted(jobSignal);
+        if (!checkpoint.wasCalled() && checkpoint.hasLease()) {
+          await checkpoint.hook(successSettlement(fresh));
+        }
+        return fresh;
+      } catch (repairErr) {
+        throwIfJobAborted(jobSignal);
+        if (repairErr instanceof PassSettlementHookError) throw repairErr;
+        const billedAttempt = billedAttemptFromError(repairErr);
+        if (
+          !checkpoint.wasCalled() &&
+          (checkpoint.wasLaunched() || billedAttempt !== null)
+        ) {
+          await checkpoint.hook(
+            failureSettlement(repairErr, telemetryFromAttempt(billedAttempt, analysisModel)),
+          );
+        }
+        computed.gaps.push({
+          field: `llm.${side}`,
+          reason: `repair attempt after schema-invalid output also failed: ${errMessage(repairErr)}`,
+          severity: "critical",
+          attemptedSources: ["anthropic"],
+        });
+        markSkipped(state, "synthesize", "upstream bull/bear pass failed");
+        markSkipped(state, "verify", "upstream bull/bear pass failed");
+        return null;
+      } finally {
+        checkpoint.releaseIfPrelaunch();
+        checkpoint.stopRenewal();
+      }
+    };
     try {
       await passes.preflightPass?.(deps, { pass: "bull" });
       await passes.preflightPass?.(deps, { pass: "bear" });
@@ -3117,6 +3230,7 @@ export async function runJob<TPayload = unknown>(
         sideError: string | undefined,
         billed: BilledPassAttempt | undefined,
         launched: boolean | undefined,
+        retryable: boolean | undefined,
       ): Promise<void> => {
         if (checkpoint.wasCalled()) return;
         if (launched === false) return;
@@ -3128,6 +3242,7 @@ export async function runJob<TPayload = unknown>(
           failureSettlement(
             new Error(sideError ?? errMessage(err)),
             telemetryFromAttempt(billed ?? null, analysisModel),
+            { retryable: retryable === true },
           ),
         );
       };
@@ -3138,6 +3253,7 @@ export async function runJob<TPayload = unknown>(
           partial?.bullError,
           partial?.bullBilledAttempt,
           bullLaunched,
+          partial?.bullRetryable,
         ),
         settleMissingSide(
           bearCheckpoint,
@@ -3145,9 +3261,48 @@ export async function runJob<TPayload = unknown>(
           partial?.bearError,
           partial?.bearBilledAttempt,
           bearLaunched,
+          partial?.bearRetryable,
         ),
       ]);
       throwFirstSettlementRejection(fallbackSettlements);
+
+      // One repair attempt per side whose output was RECEIVED but rejected by
+      // the schema — the judge has had this loop all along; the analysts had
+      // none, so a haiku bull pass writing "2026-Q1" for `asOf` (2026-09-02)
+      // lost both paid passes and the whole analysis. The sibling's paid
+      // output is kept. A transport failure, a refusal, or a sibling that
+      // never launched (the non-streaming path stops at a failed bull) still
+      // degrades to data-only below.
+      const sideResult = (side: "bull" | "bear"): PassResultLike<AnalystCase> | undefined =>
+        side === "bull" ? partial?.bull : partial?.bear;
+      const repairable = (side: "bull" | "bear"): boolean =>
+        passes.runAnalystPass !== undefined &&
+        sideResult(side) === undefined &&
+        (side === "bull" ? partial?.bullRetryable : partial?.bearRetryable) === true;
+      const recoverable = (["bull", "bear"] as const).every(
+        (side) => sideResult(side) !== undefined || repairable(side),
+      );
+      if (recoverable && MAX_ANALYST_REPAIRS > 0) {
+        let repairedBull = sideResult("bull") ?? null;
+        let repairedBear = sideResult("bear") ?? null;
+        for (const side of ["bull", "bear"] as const) {
+          if (sideResult(side) !== undefined) continue;
+          const detail =
+            (side === "bull" ? partial?.bullError : partial?.bearError) ?? errMessage(err);
+          const raw = capRawOutput((side === "bull" ? partial?.bullRawText : partial?.bearRawText) ?? "");
+          const feedback =
+            raw.length > 0
+              ? `${detail}\n\nYOUR PREVIOUS OUTPUT (repair this JSON in place — do not start over):\n${raw}`
+              : detail;
+          const repaired = await runAnalystRepairAttempt(side, feedback, detail);
+          if (repaired === null) {
+            return persistDataOnly(state, bundle, validation, computed, now, hasKey);
+          }
+          if (side === "bull") repairedBull = repaired;
+          else repairedBear = repaired;
+        }
+        return await runSynthesisAndFinish(repairedBull, repairedBear);
+      }
       // Disclose the per-pass failures in the report's missing-data manifest —
       // the report page has no access to step details, so without these the
       // data-only report could not say WHY analysis is absent (2026-07-10:

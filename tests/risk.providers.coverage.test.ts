@@ -1339,6 +1339,50 @@ describe("Stage C provider adapter branches", () => {
       bearError: expect.stringMatching(/schema|invalid|failed/i),
       bullLaunched: true,
       bearLaunched: true,
+      // A received-but-rejected output is marked for the runner's repair
+      // attempt and carries the raw text the repair turn echoes back.
+      bullRetryable: undefined,
+      bearRetryable: true,
+      bearRawText: expect.any(String),
+    });
+  });
+
+  it("runs an analyst repair attempt with the feedback appended as a second user turn", async () => {
+    const requests: Array<{ messages: Array<{ role: string; content: unknown }> }> = [];
+    const inner = streamingClient([analystCase()]);
+    const capturing = {
+      beta: {
+        messages: {
+          stream: (params: { messages: Array<{ role: string; content: unknown }> }) => {
+            requests.push(params);
+            return (inner as unknown as { beta: { messages: { stream: (p: unknown) => unknown } } }).beta.messages.stream(params);
+          },
+          create: async () => {
+            throw new Error("unexpected non-streaming request");
+          },
+        },
+      },
+    } as unknown as Anthropic;
+    _resetAnthropicForTests(capturing);
+    const deps: PassDeps<ContextPayload> = {
+      analysisModel: "claude-opus-4-8",
+      payload: emptyPayload(),
+    };
+
+    const repaired = await pipelinePasses.runAnalystPass?.(
+      deps,
+      "bear",
+      undefined,
+      undefined,
+      'Invalid ISO date (expected YYYY-MM-DD): "2026-Q1"',
+    );
+
+    expect(repaired).toMatchObject({ data: { priceTarget: { value: 100 } } });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.messages).toHaveLength(2);
+    expect(requests[0]?.messages[1]).toMatchObject({
+      role: "user",
+      content: expect.stringContaining('Invalid ISO date (expected YYYY-MM-DD): "2026-Q1"'),
     });
   });
 });

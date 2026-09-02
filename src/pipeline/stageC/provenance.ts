@@ -23,6 +23,8 @@ export type CanonicalUnit =
 
 export type ProvenanceFailureReason =
   | "unknown-source"
+  /** The id names a registered text source (a filing section, a transcript); numbers trace only against numeric records. */
+  | "text-source"
   | "value-mismatch"
   | "unit-mismatch"
   | "currency-mismatch"
@@ -101,7 +103,13 @@ export function canonicalizeTracedUnit(
   displayUnit: string,
   explicitCurrency: string | null | undefined,
 ): CanonicalizedTracedUnit | null {
-  const raw = displayUnit.trim();
+  // A trailing parenthetical is a qualifier, not a unit: the payload renders
+  // aspect scores as "0-100 (grade B, completeness 0.9)" and a live haiku run
+  // (2026-09-02) echoed RSI as "index (0-100)" and scores as "0-100 score",
+  // failing every grade-strip key number as unit-mismatch while id, value and
+  // as-of matched exactly. A qualifier that names a scale ("USD (millions)")
+  // is still caught, by the value match.
+  const raw = displayUnit.trim().replace(/\s*\(.*\)$/, "");
   const normalized = raw.toLowerCase();
   const declaredCurrency = explicitCurrency?.toUpperCase() ?? null;
   if (declaredCurrency !== null && !ISO_CURRENCY.test(declaredCurrency)) return null;
@@ -126,7 +134,7 @@ export function canonicalizeTracedUnit(
   if (normalized === "x" || normalized === "fraction" || normalized === "frac") {
     return { unit: "ratio", currency: null };
   }
-  if (normalized === "0-100" || normalized.startsWith("0-100 (")) {
+  if (/^0-100\b/.test(normalized)) {
     return { unit: "score", currency: null };
   }
   // Stage-B aspect-score SIGNAL unit spellings (grading.ts): dimensionless
@@ -213,6 +221,40 @@ export function validateCitationRegistry(
       throw new Error(`Invalid citation date: ${record.id}`);
     }
   }
+}
+
+/**
+ * Whether a model-supplied `period` names the period the registry recorded.
+ * Registry ids are unique, so the id already pins the exact record and the
+ * period is a cross-check on the model's reading, not a lookup key — and the
+ * prompt never renders a citable period tag. A statement cell registers its
+ * ISO period end (2025-12-31) while a model writes the fiscal spelling it
+ * read off the column ("FY2025", "Q2 2026", or a label such as "total debt
+ * FY2025"). Equality, containment, or the same set of calendar years all
+ * count as agreement; "FY2024" against a 2025-12-31 record does not, so a
+ * misread period still fails. A live haiku run (2026-09-02) failed every
+ * balance-sheet citation as period-mismatch on spelling alone while id,
+ * value, unit, currency and as-of matched. Fiscal years ending outside
+ * December keep the calendar-year rule: Apple's Q1 FY2026 (ends 2025-12-27)
+ * written as "Q1 FY2026" does not agree, which is why the shared rules ask
+ * for the ISO period end as rendered.
+ */
+export function periodsAgree(supplied: string | null | undefined, registered: string | null): boolean {
+  if (supplied == null || registered === null) return true;
+  const a = supplied.trim().toLowerCase();
+  const b = registered.trim().toLowerCase();
+  if (a === b || a.includes(b)) return true;
+  const yearsOf = (text: string): Set<string> => {
+    const years = new Set<string>();
+    // Digit boundaries, not word boundaries: "fy2025" has no word boundary
+    // before its year.
+    for (const match of text.matchAll(/(?<![0-9])((?:19|20)\d{2})(?![0-9])/g)) years.add(match[1]);
+    for (const match of text.matchAll(/\bfy\s?'?(\d{2})(?![0-9])/g)) years.add(`20${match[1]}`);
+    return years;
+  };
+  const ya = yearsOf(a);
+  const yb = yearsOf(b);
+  return ya.size > 0 && ya.size === yb.size && [...ya].every((year) => yb.has(year));
 }
 
 /** Match every numeric dimension against the exact named registry record. */

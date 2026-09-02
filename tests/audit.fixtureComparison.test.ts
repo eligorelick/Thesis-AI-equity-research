@@ -81,6 +81,11 @@ const OLD_BALANCE_BASIS =
 const NEW_BALANCE_BASIS =
   "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)";
 
+const TERMINAL_ROIC_HOLD_NOTE =
+  "terminal ROIC held at WACC: 2 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house rule)";
+const NET_DEBT_NOTE =
+  "NET_DEBT_V1: net debt -1300000000 as of 2025-12-31; totalDebt 1200000000, cashAndShortTermInvestments 2500000000";
+
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
   // Added 2026-09-01: fixture provenance strings are built with POSIX
   // separators so a Windows-generated baseline and a Linux CI runner agree on
@@ -920,6 +925,28 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
     path: "stageB.valuation.assumptions.salesToCapital.basis",
     before: OLD_BALANCE_BASIS,
     after: NEW_BALANCE_BASIS,
+  },
+  // Added 2026-09-02 (terminal excess-return house rule): the DCF builder now
+  // reads the annual ROIC series and, when ROIC beat WACC in each of the last
+  // four-plus fiscal years, carries half the median spread (capped at 5pp)
+  // into the terminal ROIC. This fixture has two fiscal years of ROIC, so the
+  // default (terminal ROIC = WACC) holds and only the disclosure is new: the
+  // assumption notes gain the hold reason, which also lands ahead of the
+  // net-debt note in the valuation notes.
+  {
+    path: "stageB.valuation.assumptions.notes.1",
+    beforeMissing: true,
+    after: TERMINAL_ROIC_HOLD_NOTE,
+  },
+  {
+    path: "stageB.valuation.notes.1",
+    before: NET_DEBT_NOTE,
+    after: TERMINAL_ROIC_HOLD_NOTE,
+  },
+  {
+    path: "stageB.valuation.notes.2",
+    beforeMissing: true,
+    after: NET_DEBT_NOTE,
   },
 ];
 

@@ -203,6 +203,61 @@ describe("routeCompany overlays", () => {
     expect(r.overlays).toContain("unprofitable");
   });
 
+  it("negative OCF alone does not trigger unprofitable on a bank, insurer or mortgage-REIT route", () => {
+    // A deposit- or float-funded balance sheet reports operating cash flow
+    // dominated by loan, deposit, trading-asset and reserve flows; JPMorgan
+    // has reported negative OCF in record-profit years. Net income is the
+    // only profitability trigger on those routes.
+    for (const industry of ["Banks - Diversified", "Insurance - Property & Casualty", "REIT - Mortgage"]) {
+      const r = route(
+        { sector: "Financial Services", industry },
+        {
+          incomeTtm: { date: "2026-06-30", revenue: 180_000_000_000, netIncome: 58_000_000_000, reportedCurrency: "USD" },
+          cashflowTtm: { date: "2026-06-30", operatingCashFlow: -42_000_000_000 },
+        },
+      );
+      expect(r.overlays, industry).not.toContain("unprofitable");
+      expect(
+        r.notes.some((n) =>
+          /^unprofitable overlay not applied: operating cash flow -42000000000 \(ttm\) is negative, but on the '(bank|insurer|reit-mortgage)' route/.test(n),
+        ),
+        industry,
+      ).toBe(true);
+    }
+  });
+
+  it("negative net income still triggers unprofitable on the bank route, and a positive bank OCF adds no note", () => {
+    const loss = route(
+      { sector: "Financial Services", industry: "Banks - Regional" },
+      {
+        incomeTtm: { date: "2026-06-30", revenue: 1_000_000_000, netIncome: -50_000_000, reportedCurrency: "USD" },
+        cashflowTtm: { date: "2026-06-30", operatingCashFlow: 20_000_000 },
+      },
+    );
+    expect(loss.overlays).toContain("unprofitable");
+    const profit = route(
+      { sector: "Financial Services", industry: "Banks - Regional" },
+      {
+        incomeTtm: { date: "2026-06-30", revenue: 1_000_000_000, netIncome: 50_000_000, reportedCurrency: "USD" },
+        cashflowTtm: { date: "2026-06-30", operatingCashFlow: 20_000_000 },
+      },
+    );
+    expect(profit.overlays).not.toContain("unprofitable");
+    expect(profit.notes.some((n) => n.includes("unprofitable overlay not applied"))).toBe(false);
+  });
+
+  it("a bank with no net income on either basis records the overlay as not evaluated even when OCF exists", () => {
+    const r = route(
+      { sector: "Financial Services", industry: "Banks - Diversified" },
+      { incomeTtm: null, incomeAnnual: null, cashflowTtm: { date: "2026-06-30", operatingCashFlow: -1 } },
+    );
+    expect(r.overlays).not.toContain("unprofitable");
+    const gap = r.gaps.find((g) => g.field === "route.overlays.unprofitable");
+    expect(gap?.reason).toBe(
+      "netIncome unavailable on both TTM and annual bases, and operatingCashFlow is not a profitability signal on the 'bank' route — overlay not evaluated",
+    );
+  });
+
   it("netIncome/OCF of exactly 0 does not trigger unprofitable", () => {
     const r = route(
       {},

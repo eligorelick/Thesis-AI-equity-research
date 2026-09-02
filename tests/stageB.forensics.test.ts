@@ -1228,3 +1228,29 @@ describe("runForensics", () => {
     expect(dsriFlag!.message).toContain("1.465");
   });
 });
+
+describe("computePiotroski — financial route", () => {
+  it("withholds the current-ratio, gross-margin and both operating-cash-flow signals for a financial company", () => {
+    // JPMorgan graded 2/6 in the 2026-09-02 keyless sweep with both misses on
+    // the OCF tests — a bank's operating cash flow is loan, deposit, trading
+    // and reserve flows, not a profitability or accrual read.
+    const { current, prior, prior2 } = piotroskiPeriods();
+    const r = computePiotroski(current, prior, prior2, { financialsSuppressed: true });
+    expect(r.outOf).toBe(5);
+    expect(r.score).toBe(5);
+    for (const name of ["cfoPositive", "accrualQuality", "liquidityUp", "marginUp"] as const) {
+      expect(r.signals[name].value).toBeNull();
+      expect(r.signals[name].detail).toMatch(/withheld/);
+    }
+    expect(r.signals.cfoPositive.detail).toBe(
+      "operating cash flow is not a profitability or accrual signal for a financial company (loan, deposit, trading and reserve flows dominate it) — signal withheld",
+    );
+    expect(r.signals.accrualQuality.detail).toBe(r.signals.cfoPositive.detail);
+  });
+
+  it("keeps all nine signals for a non-financial company", () => {
+    const { current, prior, prior2 } = piotroskiPeriods();
+    const r = computePiotroski(current, prior, prior2, { financialsSuppressed: false });
+    expect(r.outOf).toBe(9);
+  });
+});

@@ -489,6 +489,8 @@ interface WiringOpts {
   quarterlyRevenue?: number;
   /** Replace the quarterly balance rows (empty array = annual fallback). */
   balanceQuarterly?: Record<string, unknown>[];
+  /** Drop both cash fields from every annual balance row (no whole row anywhere). */
+  annualCashMissing?: boolean;
   /** Null out quarterly weightedAverageShsOutDil (annual-shares fallback). */
   nullQuarterlyShares?: boolean;
   /** Zero quarterly weightedAverageShsOutDil (FMP zero-for-undisclosed sentinel). */
@@ -560,7 +562,10 @@ function wiringBundle(opts: WiringOpts = {}): DataBundle {
   const balanceAnnual = [
     { date: "2025-12-31", totalAssets: 2000, totalLiabilities: 1500, totalStockholdersEquity: 500, totalEquity: 500, totalDebt: annualDebt[0], netDebt: 240, cashAndCashEquivalents: 60, cashAndShortTermInvestments: 100, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0 },
     { date: "2024-12-31", totalAssets: 1900, totalLiabilities: 1450, totalStockholdersEquity: 450, totalEquity: 450, totalDebt: annualDebt[1], netDebt: 230, cashAndCashEquivalents: 60, cashAndShortTermInvestments: 95, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0 },
-  ];
+  ].map((row) => {
+    if (!opts.annualCashMissing) return row;
+    return Object.fromEntries(Object.entries(row).filter(([key]) => key !== "cashAndCashEquivalents" && key !== "cashAndShortTermInvestments"));
+  });
   // Derived (house convention) net debt on the quarterly row: 280 - 120 = 160.
   // The vendor field is deliberately DIFFERENT (210 = 280 - 70, cash-only) so a
   // test can tell exactly which one the bridge used.
@@ -887,19 +892,26 @@ describe("runStageB wiring — net debt convention + point-in-time anchors (audi
     expect(pb?.basis).toMatch(/quarter/i);
   });
 
-  it("rejects vendor cash-only netDebt when house-convention components are missing", () => {
+  it("rejects vendor cash-only netDebt when house-convention components are missing: the whole annual row anchors instead", () => {
     const computed = runStageB(
       wiringBundle({
         balanceQuarterly: [
-          // No totalDebt/cash components: derivation impossible; vendor netDebt present.
+          // No totalDebt/cash components: derivation impossible on this row; vendor netDebt present.
           { date: "2026-03-31", totalStockholdersEquity: 520, netDebt: 210, minorityInterest: 0, preferredStock: 0 },
         ],
       }),
     );
     if (computed.valuation.kind !== "dcf") throw new Error("expected dcf kind");
-    expect(computed.valuation.dcf).toBeNull();
-    expect(computed.valuation.notes.some((n) => /net debt unavailable/i.test(n))).toBe(true);
-    expect(computed.gaps.some((g) => g.field === "valuation.netDebt")).toBe(true);
+    // The newest row is not whole while the 2025-12-31 annual row is, so the
+    // anchor falls back to the annual row (disclosed) and the bridge carries
+    // its derived 300 − 100 = 200 — never the quarterly vendor 210.
+    const dcf = computed.valuation.dcf!;
+    expect((dcf.enterpriseValue - (dcf.equityValue as number)) / M).toBeCloseTo(200, 6);
+    expect(computed.valuation.notes).toContain(
+      "balance anchor: the newest balance row (quarter 2026-03-31) lacks totalDebt and cashAndShortTermInvestments, so net debt, invested capital and the EV bridge use the annual row as of 2025-12-31, the newest row carrying totalDebt, totalStockholdersEquity and cashAndShortTermInvestments",
+    );
+    expect(computed.gaps.some((g) => g.field === "valuation.balanceAnchor" && g.severity === "info")).toBe(true);
+    expect(computed.gaps.some((g) => g.field === "valuation.netDebt")).toBe(false);
   });
 
   it("missing cash is NOT zero and does not fall back to incompatible vendor netDebt", () => {
@@ -913,12 +925,28 @@ describe("runStageB wiring — net debt convention + point-in-time anchors (audi
       }),
     );
     if (computed.valuation.kind !== "dcf") throw new Error("expected dcf kind");
+    // Neither 280 (cash as zero) nor 210 (vendor): the whole annual row anchors.
+    const dcf = computed.valuation.dcf!;
+    expect((dcf.enterpriseValue - (dcf.equityValue as number)) / M).toBeCloseTo(200, 6);
+    expect(computed.valuation.assumptions!.salesToCapital.basis).toContain("annual balance as of 2025-12-31");
+    expect(computed.valuation.notes.some((n) => n.startsWith("balance anchor: the newest balance row (quarter 2026-03-31) lacks cashAndShortTermInvestments, so"))).toBe(true);
+  });
+
+  it("with no whole balance row anywhere, missing cash is still NOT zero and vendor netDebt is still rejected", () => {
+    const computed = runStageB(
+      wiringBundle({
+        annualCashMissing: true,
+        balanceQuarterly: [
+          { date: "2026-03-31", totalAssets: 2050, totalLiabilities: 1530, totalStockholdersEquity: 520, totalEquity: 520, totalDebt: 280, netDebt: 210, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0 },
+        ],
+      }),
+    );
+    if (computed.valuation.kind !== "dcf") throw new Error("expected dcf kind");
     expect(computed.valuation.assumptions).toBeNull();
-    expect(
-      computed.valuation.gaps.some((g) => g.field === "valuation.dcf.salesToCapital"),
-    ).toBe(true);
+    expect(computed.valuation.gaps.some((g) => g.field === "valuation.dcf.salesToCapital")).toBe(true);
     expect(computed.valuation.dcf).toBeNull();
     expect(computed.valuation.notes.some((n) => /vendor.*rejected|net debt unavailable/i.test(n))).toBe(true);
+    expect(computed.valuation.notes.some((n) => n.startsWith("balance anchor:"))).toBe(false);
   });
 
   it("a quarterly share count of literal 0 (zero-for-undisclosed) falls back to the ANNUAL count (fix-review)", () => {

@@ -1091,6 +1091,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     ttmCf,
     growth,
     wacc: returns.wacc,
+    roic: returns.roic,
     dupont: returns.dupont,
     profile,
     quote,
@@ -1153,8 +1154,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   const projRowDate = (r: { date?: unknown } | null | undefined): string =>
     typeof r?.date === "string" ? r.date : "";
   const balQProj = balanceQuarterly[0] ?? null;
-  const balPointProj =
-    (projRowDate(balQProj) >= projRowDate(balanceAnnual[0]) ? (balQProj ?? balanceAnnual[0]) : (balanceAnnual[0] ?? balQProj)) ?? null;
+  const balPointProj = pickBalanceAnchor(balQProj, balanceAnnual[0] ?? null).row;
   const posSharesProj = (v: number | null): number | null => (v !== null && v > 0 ? v : null);
   const sharesQProj = posSharesProj(num(incomeQuarterly[0]?.weightedAverageShsOutDil));
   const sharesAProj = posSharesProj(num(inc0Proj?.weightedAverageShsOutDil));
@@ -1445,6 +1445,8 @@ interface ValuationCtx {
   ttmCf: TtmCashFlow | null;
   growth: GrowthResult;
   wacc: WaccResult;
+  /** Annual ROIC series — evidence for the DCF terminal excess-return rule. */
+  roic: RoicResult;
   /** Latest fiscal-year DuPont decomposition — the excess-return ROE fallback. */
   dupont: DupontResult;
   profile: FmpRawRow | null;
@@ -1457,7 +1459,7 @@ function cagrPctFor(growth: GrowthResult, window: number): number | null {
 }
 
 function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResult {
-  const { route, incomeAnnual, balanceAnnual, balanceQuarterly, incomeQuarterly, ttmInc, ttmCf, growth, wacc, profile, quote } = ctx;
+  const { route, incomeAnnual, balanceAnnual, balanceQuarterly, incomeQuarterly, ttmInc, ttmCf, growth, wacc, roic, profile, quote } = ctx;
 
   const bal0 = balanceAnnual[0];
   const inc0 = incomeAnnual[0];
@@ -1468,9 +1470,9 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
   // lagging quarterly feed must not beat a fresher annual row, and fields are
   // never mixed across periods. Same pattern runway already uses.
   const balQ = balanceQuarterly[0] ?? null;
-  const balPoint = (rowDate(balQ) >= rowDate(bal0) ? (balQ ?? bal0) : (bal0 ?? balQ)) ?? null;
-  const balPointBasis: "quarter" | "annual" | undefined =
-    balPoint === null ? undefined : balPoint === balQ ? "quarter" : "annual";
+  const balanceAnchor = pickBalanceAnchor(balQ, bal0);
+  const balPoint = balanceAnchor.row;
+  const balPointBasis = balanceAnchor.basis;
   const ratiosTtm = rowsOf(bundle.ratiosTtm)[0] ?? rowsOf(bundle.ratios)[0];
   const keyMetricsTtm = rowsOf(bundle.keyMetricsTtm)[0] ?? rowsOf(bundle.keyMetrics)[0];
 
@@ -1558,6 +1560,9 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
           incomeHistory: dcfIncomeHistory,
           balance: dcfBalance,
           marketCap,
+          // The terminal excess-return rule reads the same annual ROIC series
+          // the returns section reports.
+          roicHistory: roic.series.map((y) => ({ date: y.date, roicPct: y.roicPct })),
           // ADR guard (audit H3): same currency pair the multiples framework
           // already flags — valueCompany suppresses the DCF on mismatch.
           reportedCurrency: str(inc0?.reportedCurrency),
@@ -1719,6 +1724,10 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
   void ratiosTtm; // reserved for future ratio cross-checks
   const result = valueCompany(route, bundleInputs);
   // Basis disclosures for the point-in-time anchors chosen above (audit H2/M3).
+  if (balanceAnchor.fallback !== null) {
+    result.notes.push(balanceAnchor.fallback);
+    result.gaps.push({ field: "valuation.balanceAnchor", reason: balanceAnchor.fallback, severity: "info" });
+  }
   if (netDebtInfo.value === null && balPoint !== null) {
     result.notes.push(
       `${netDebtInfo.version}: net debt unavailable — ${netDebtInfo.reason}`,
@@ -1788,6 +1797,56 @@ function netDebtFromBalance(
  * coverage lags. Runway must measure the most recent balance actually known, so
  * pick by date and fall back to whichever row exists.
  */
+/** The balance fields the valuation anchors read: net debt, invested capital and the EV bridge. */
+const BALANCE_ANCHOR_FIELDS = ["totalDebt", "totalStockholdersEquity", "cashAndShortTermInvestments"] as const;
+
+export interface BalanceAnchor<TRow> {
+  row: TRow | null;
+  basis: "quarter" | "annual" | undefined;
+  /** Why the newest row was passed over, when it was; null otherwise. */
+  fallback: string | null;
+}
+
+/**
+ * The valuation's point-in-time balance row: the NEWER of the latest quarterly
+ * and annual whole rows (audit H2/M3/M4 — fields are never mixed across
+ * periods), unless that newer row lacks one of the fields the anchors read
+ * while the older row carries all three. Caterpillar's 10-Q balance sheet
+ * tags no us-gaap debt line at all (its 10-K carries the debt through the
+ * maturity schedule), so the newest row had equity and cash but no
+ * totalDebt, invested capital was undefined and the DCF, net debt and EV
+ * multiples were suppressed while a complete fiscal-year row sat one period
+ * back. A stale-but-whole row is the disclosed compromise: the fallback is a
+ * valuation note and an info gap. When no row is whole the newest stands.
+ */
+export function pickBalanceAnchor<TRow extends { date?: unknown } & Partial<Record<(typeof BALANCE_ANCHOR_FIELDS)[number], unknown>>>(
+  quarterlyRow: TRow | null | undefined,
+  annualRow: TRow | null | undefined,
+): BalanceAnchor<TRow> {
+  const quarterly = quarterlyRow ?? null;
+  const annual = annualRow ?? null;
+  const date = (r: TRow | null): string => (typeof r?.date === "string" ? r.date : "");
+  const missing = (r: TRow): string[] =>
+    BALANCE_ANCHOR_FIELDS.filter((field) => !(typeof r[field] === "number" && Number.isFinite(r[field] as number)));
+  const newer: TRow | null = quarterly !== null && (annual === null || date(quarterly) >= date(annual)) ? quarterly : annual;
+  const older: TRow | null = newer === quarterly ? annual : quarterly;
+  if (newer === null) return { row: null, basis: undefined, fallback: null };
+  const basisOf = (r: TRow): "quarter" | "annual" => (r === quarterly ? "quarter" : "annual");
+  const lacking = missing(newer);
+  if (older !== null && lacking.length > 0 && missing(older).length === 0) {
+    const list = lacking.length === 1 ? lacking[0] : `${lacking.slice(0, -1).join(", ")} and ${lacking[lacking.length - 1]}`;
+    return {
+      row: older,
+      basis: basisOf(older),
+      fallback:
+        `balance anchor: the newest balance row (${basisOf(newer)} ${date(newer)}) lacks ${list}, so net debt, invested capital and ` +
+        `the EV bridge use the ${basisOf(older)} row as of ${date(older)}, the newest row carrying totalDebt, totalStockholdersEquity ` +
+        `and cashAndShortTermInvestments`,
+    };
+  }
+  return { row: newer, basis: basisOf(newer), fallback: null };
+}
+
 export function newestBalanceRow<TRow extends { date?: unknown }>(
   quarterly: TRow | undefined,
   annual: TRow | undefined,

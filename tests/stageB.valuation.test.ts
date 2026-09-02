@@ -14,6 +14,7 @@ import {
   BISECTION_TOL_PP,
   DCF_HORIZON_YEARS,
   SECTOR_APPROPRIATE_MULTIPLES,
+  TERMINAL_EXCESS_RETURN_CAP_PP,
   buildDcfAssumptions,
   excessReturnModel,
   fadePath,
@@ -25,6 +26,7 @@ import {
   runDcf,
   safeDiv,
   sensitivityGrid,
+  terminalRoic,
   valueCompany,
   type AnalystEstimateRow,
   type DcfAssumptionInputs,
@@ -1873,5 +1875,144 @@ describe("valueCompany dispatch", () => {
       expect(r.dcf).not.toBeNull();
       expect(r.gaps.some((g) => g.field === "valuation.dcf.currency")).toBe(false);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// terminalRoic — the terminal excess-return house rule
+// ---------------------------------------------------------------------------
+
+describe("terminalRoic — evidenced excess returns carried into the terminal", () => {
+  const year = (date: string, roicPct: number | null) => ({ date, roicPct });
+  const fiveAbove = [year("2025-12-31", 26), year("2024-12-31", 24), year("2023-12-31", 25), year("2022-12-31", 22), year("2021-12-31", 20)];
+
+  it("keeps terminal ROIC at WACC, silently, when no history is supplied", () => {
+    const t = terminalRoic(9, null);
+    expect(t).toEqual({ roicTermPct: 9, excessPp: 0, basis: "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)", note: null });
+  });
+
+  it("carries half the median spread, capped at 5pp, when ROIC beat WACC in every one of the last five years", () => {
+    // spreads over WACC 9: 17, 15, 16, 13, 11 → median 15 → half 7.5 → capped at 5
+    const t = terminalRoic(9, fiveAbove);
+    expect(t.roicTermPct).toBe(14);
+    expect(t.excessPp).toBe(TERMINAL_EXCESS_RETURN_CAP_PP);
+    expect(t.note).toBeNull();
+    expect(t.basis).toMatch(/^terminal ROIC = WACC 9% \+ 5pp evidenced excess return: ROIC exceeded WACC in each of the last 5 fiscal years \(2021-12-31 to 2025-12-31, median spread 15pp\)/);
+  });
+
+  it("carries less than the cap when the spread is modest", () => {
+    // spreads over WACC 8: 4, 5, 6, 4, 5 → median 5 → half 2.5
+    const t = terminalRoic(8, [year("2025-12-31", 12), year("2024-12-31", 13), year("2023-12-31", 14), year("2022-12-31", 12), year("2021-12-31", 13)]);
+    expect(t.roicTermPct).toBeCloseTo(10.5, 9);
+    expect(t.excessPp).toBeCloseTo(2.5, 9);
+  });
+
+  it("holds the default, and says why, when one year fell to or below WACC", () => {
+    const t = terminalRoic(9, [...fiveAbove.slice(0, 4), year("2021-12-31", 9)]);
+    expect(t.roicTermPct).toBe(9);
+    expect(t.note).toBe(
+      "terminal ROIC held at WACC: ROIC was at or below WACC 9% in 1 of the last 5 fiscal years (2021-12-31) — excess returns not evidenced as durable (house rule)",
+    );
+  });
+
+  it("holds the default when fewer than four fiscal years carry a ROIC", () => {
+    const t = terminalRoic(9, [year("2025-12-31", 30), year("2024-12-31", 28), year("2023-12-31", null), year("2022-12-31", 27)]);
+    expect(t.roicTermPct).toBe(9);
+    expect(t.note).toBe("terminal ROIC held at WACC: 3 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house rule)");
+  });
+
+  it("holds the default when the spread is too thin to carry", () => {
+    const t = terminalRoic(9, [year("2025-12-31", 9.6), year("2024-12-31", 9.5), year("2023-12-31", 9.4), year("2022-12-31", 9.8)]);
+    expect(t.roicTermPct).toBe(9);
+    expect(t.note).toMatch(/median spread 0\.55pp is too thin to carry/);
+  });
+
+  it("reads only the newest five years, in any order", () => {
+    const t = terminalRoic(9, [year("2019-12-31", 2), year("2020-12-31", 3), ...fiveAbove].reverse());
+    expect(t.roicTermPct).toBe(14);
+  });
+
+  it("flows into the assumption block and raises the intrinsic value of an evidenced compounder", () => {
+    const inputs: DcfAssumptionInputs = {
+      revenueCagr3yPct: 6,
+      revenueCagr5yPct: 6,
+      analystEstimates: null,
+      waccPct: 9,
+      riskFreePct: 4,
+      incomeTtm: { date: "2025-12-31", revenue: 1000, operatingIncome: 250, incomeBeforeTax: 240, incomeTaxExpense: 48 },
+      incomeHistory: [
+        { date: "2025-12-31", revenue: 1000, operatingIncome: 250 },
+        { date: "2024-12-31", revenue: 940, operatingIncome: 235 },
+        { date: "2023-12-31", revenue: 890, operatingIncome: 220 },
+      ],
+      balance: { date: "2025-12-31", basis: "annual", totalDebt: 200, totalStockholdersEquity: 700, cashAndShortTermInvestments: 150 },
+      marketCap: 8000,
+    };
+    const plain = buildDcfAssumptions(inputs).assumptions as DcfAssumptions;
+    const moat = buildDcfAssumptions({ ...inputs, roicHistory: fiveAbove }).assumptions as DcfAssumptions;
+    expect(plain.terminal.roicTermPct.value).toBe(9);
+    expect(moat.terminal.roicTermPct.value).toBe(14);
+    expect(moat.terminal.reinvestmentRate.value).toBeCloseTo(2.5 / 14, 12);
+    expect(moat.notes.some((n) => n.startsWith("terminal ROIC held"))).toBe(false);
+    const run = { waccPct: 9, netDebt: 50, dilutedShares: 100 };
+    expect(runDcf(moat, run).enterpriseValue).toBeGreaterThan(runDcf(plain, run).enterpriseValue);
+  });
+
+  it("writes the hold reason into the assumption notes when history is supplied but falls short", () => {
+    const built = buildDcfAssumptions({
+      revenueCagr3yPct: 6,
+      revenueCagr5yPct: 6,
+      analystEstimates: null,
+      waccPct: 9,
+      riskFreePct: 4,
+      incomeTtm: { date: "2025-12-31", revenue: 1000, operatingIncome: 250, incomeBeforeTax: 240, incomeTaxExpense: 48 },
+      incomeHistory: [{ date: "2025-12-31", revenue: 1000, operatingIncome: 250 }],
+      balance: { date: "2025-12-31", basis: "annual", totalDebt: 200, totalStockholdersEquity: 700, cashAndShortTermInvestments: 150 },
+      marketCap: 8000,
+      roicHistory: [year("2025-12-31", 30), year("2024-12-31", 28)],
+    });
+    const a = built.assumptions as DcfAssumptions;
+    expect(a.terminal.roicTermPct.value).toBe(9);
+    expect(a.notes.at(-1)).toBe("terminal ROIC held at WACC: 2 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house rule)");
+  });
+});
+
+describe("buildDcfAssumptions — revenue history with a spike or a collapse", () => {
+  const inputs = (cagr3: number, cagr5: number | null): DcfAssumptionInputs => ({
+    revenueCagr3yPct: cagr3,
+    revenueCagr5yPct: cagr5,
+    analystEstimates: null,
+    waccPct: 9,
+    riskFreePct: 4,
+    incomeTtm: { date: "2025-12-31", revenue: 63_000, operatingIncome: 10_000, incomeBeforeTax: 7_500, incomeTaxExpense: 1_500 },
+    incomeHistory: [
+      { date: "2025-12-31", revenue: 63_000, operatingIncome: 10_000 },
+      { date: "2024-12-31", revenue: 63_600, operatingIncome: 9_000 },
+      { date: "2023-12-31", revenue: 58_500, operatingIncome: 4_000 },
+    ],
+    balance: { date: "2025-12-31", basis: "annual", totalDebt: 60_000, totalStockholdersEquity: 90_000, cashAndShortTermInvestments: 10_000 },
+    marketCap: 140_000,
+  });
+
+  it("starts the growth path at the terminal rate when the 3y and 5y CAGRs disagree in sign", () => {
+    // Pfizer 2025: 3y −12% (post-COVID collapse) against 5y +8.5%.
+    const built = buildDcfAssumptions(inputs(-12, 8.5));
+    const a = built.assumptions as DcfAssumptions;
+    expect(a.growthPath.value[0]).toBe(2.5);
+    expect(a.growthPath.basis).toMatch(/^linear fade from 2\.5% \(terminal growth rate \(3y and 5y historical revenue CAGRs disagree in sign/);
+    expect(a.notes.some((n) => /disagree in sign — revenue history holds a spike or a collapse, not a trend; near-term growth set to the terminal rate 2\.5%/.test(n))).toBe(true);
+  });
+
+  it("keeps the min(3y, 5y) conservatism rule when both windows agree in sign", () => {
+    const up = buildDcfAssumptions(inputs(12, 20)).assumptions as DcfAssumptions;
+    expect(up.growthPath.value[0]).toBeCloseTo(12, 9);
+    const down = buildDcfAssumptions(inputs(-3, -9)).assumptions as DcfAssumptions;
+    expect(down.growthPath.value[0]).toBeCloseTo(-9, 9);
+    expect(down.growthPath.basis).toMatch(/min\(3y, 5y\)/);
+  });
+
+  it("uses the 3y CAGR alone when no 5y window exists", () => {
+    const a = buildDcfAssumptions(inputs(-6, null)).assumptions as DcfAssumptions;
+    expect(a.growthPath.value[0]).toBeCloseTo(-6, 9);
   });
 });

@@ -1063,15 +1063,22 @@ export interface PiotroskiSignal {
 export interface PiotroskiOptions {
   /**
    * True for bank / insurer / mortgage-REIT and other financial classifications.
-   * Two of the nine signals are fed by ratios this codebase HARD-SUPPRESSES for
+   * Four of the nine signals rest on figures that are not economic for a
+   * financial company. Two are ratios this codebase HARD-SUPPRESSES for
    * financials elsewhere — the current ratio (an unclassified financial balance
    * sheet has no meaningful current/non-current split) and the gross margin
    * (FMP's revenue − costOfRevenue is meaningless on a net-interest-spread or
-   * premium income statement). Scoring them produced two coin-flips inside a
-   * 9-point score that the report then presents as a solvency read. When set,
-   * those two signals report not-applicable and the F-score is reported out of
-   * the signals that remain, exactly as it already is when a prior year is
-   * missing.
+   * premium income statement). The other two read operating cash flow (CFO > 0
+   * and CFO > net income): a bank's operating cash flow is dominated by loan,
+   * deposit, trading-asset and reserve flows, so it is neither a profitability
+   * nor an accrual-quality signal there — the same house rule that keeps the
+   * unprofitable overlay off OCF on financial routes. Piotroski (2000) built
+   * the score on non-financial firms, and scoring those four on a bank produced
+   * coin-flips inside a 9-point score the report presents as a solvency read
+   * (JPMorgan graded 2/6 in the 2026-09-02 keyless sweep, both misses being the
+   * OCF tests). When set, the four signals report not-applicable and the
+   * F-score is reported out of the signals that remain, exactly as it already
+   * is when a prior year is missing.
    */
   financialsSuppressed?: boolean;
   /**
@@ -1129,9 +1136,13 @@ export function computePiotroski(
       : na("net income or beginning-of-year total assets missing");
 
   // 2. F_CFO — CFO / beginning-of-year TA > 0
+  const finSuppressed = options?.financialsSuppressed === true;
+  const ocfWithheld =
+    "operating cash flow is not a profitability or accrual signal for a financial company (loan, deposit, trading and reserve flows dominate it) — signal withheld";
   const cfoScaled = div(cfoT, taBeginT);
-  const s2 =
-    cfoScaled !== null
+  const s2 = finSuppressed
+    ? na(ocfWithheld)
+    : cfoScaled !== null
       ? sig(cfoScaled > 0, `CFO/TA_begin ${(cfoScaled * 100).toFixed(2)}%`)
       : na("operating cash flow or beginning-of-year total assets missing");
 
@@ -1150,8 +1161,9 @@ export function computePiotroski(
   }
 
   // 4. F_ACCRUAL — CFO > ROA on the same TA_begin denominator ⇔ CFO_t > NI_t
-  const s4 =
-    niT !== null && cfoT !== null && taBeginT !== null
+  const s4 = finSuppressed
+    ? na(ocfWithheld)
+    : niT !== null && cfoT !== null && taBeginT !== null
       ? sig(cfoT > niT, `CFO ${cfoT} vs NI ${niT} (accruals ${niT - cfoT < 0 ? "<" : ">="} 0)`)
       : na("net income, CFO, or beginning-of-year total assets missing");
 
@@ -1190,7 +1202,6 @@ export function computePiotroski(
   }
 
   // 6. F_ΔLIQUID — current ratio rose
-  const finSuppressed = options?.financialsSuppressed === true;
   const crT = div(nv(current.balance?.totalCurrentAssets), posOrNull(current.balance?.totalCurrentLiabilities));
   const crP = div(nv(prior.balance?.totalCurrentAssets), posOrNull(prior.balance?.totalCurrentLiabilities));
   const s6 = finSuppressed
@@ -2048,14 +2059,16 @@ export function runForensics(route: CompanyRoute, inputs: ForensicsInputs): Fore
   } else {
     piotroski = computePiotroski(cur, pri, pri2, {
       equityIssuanceDeMinimis: inputs.equityIssuanceDeMinimis ?? undefined,
-      // Withhold the two signals fed by ratios this route hard-suppresses
-      // everywhere else, rather than scoring a bank on a current ratio and a
-      // gross margin the report refuses to print.
+      // Withhold the four signals that are not economic on this route: the
+      // current ratio and gross margin it hard-suppresses everywhere else, and
+      // the two operating-cash-flow tests (OCF is not a profit or accrual
+      // signal for a bank, insurer or mortgage REIT).
       financialsSuppressed: suppressed,
     });
     if (suppressed) {
       notes.push(
-        "Piotroski F-score shown for a financial company — note the model was validated on non-financial value stocks (research §6.3).",
+        "Piotroski F-score shown for a financial company — the model was validated on non-financial value stocks (research §6.3); " +
+          "the current-ratio, gross-margin and both operating-cash-flow signals are withheld and the score is reported out of the signals that remain.",
       );
     }
   }

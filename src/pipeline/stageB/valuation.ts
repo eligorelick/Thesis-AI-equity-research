@@ -46,6 +46,32 @@ export const DCF_HORIZON_YEARS = 10;
 export const NEAR_TERM_GROWTH_CLAMP_PP: readonly [number, number] = [-10, 25];
 export const S2C_CLAMP: readonly [number, number] = [0.5, 5.0];
 export const TERMINAL_G_CAP_PCT = 2.5;
+
+/**
+ * Terminal excess-return house rule.
+ *
+ * The default terminal ROIC equals WACC: growth adds nothing after the
+ * explicit horizon. That is McKinsey's recommendation for most firms and it
+ * is what the 21-issuer keyless sweep of 2026-09-02 ran on — where it valued
+ * every evidenced compounder (Apple at 92% ROIC, Home Depot 22%, Coca-Cola
+ * 18%) as if its returns collapsed to the cost of capital in year 11, and
+ * graded 19 of 21 large caps D or F on valuation. McKinsey (Valuation,
+ * "Estimating continuing value") sets RONIC above WACC only for firms with
+ * sustainable advantages, and its ROIC-persistence data show a top-quintile
+ * spread over WACC roughly halving over 10-15 years rather than closing;
+ * Damodaran allows perpetual excess returns only when they are modest.
+ *
+ * So: when ROIC exceeded WACC in every one of the last
+ * TERMINAL_EXCESS_RETURN_MIN_YEARS+ fiscal years on record, half the median
+ * spread is carried in perpetuity, capped at TERMINAL_EXCESS_RETURN_CAP_PP.
+ * Anything short of that evidence keeps the default, and the reason is
+ * written into the assumption notes.
+ */
+export const TERMINAL_EXCESS_RETURN_CAP_PP = 5;
+export const TERMINAL_EXCESS_RETURN_MIN_YEARS = 4;
+export const TERMINAL_EXCESS_RETURN_CARRY = 0.5;
+/** Below this carried spread the evidence is noise; the default applies. */
+export const TERMINAL_EXCESS_RETURN_MIN_PP = 0.5;
 /** Base-case Gordon TV guard: require WACC − g_term ≥ 2.0pp (spec §2.3 line 313). */
 export const TV_GUARD_PP = 2.0;
 /**
@@ -233,6 +259,69 @@ export interface DcfAssumptionInputs {
   /** Selected newest whole balance row; required invested-capital fields fail closed. */
   balance: DcfBalanceRow | null;
   marketCap: number | null;
+  /**
+   * Annual ROIC history (any order; the newest five count), the evidence
+   * behind the terminal excess-return house rule. Omitted or null: the
+   * terminal ROIC stays at WACC without comment.
+   */
+  roicHistory?: DcfRoicYear[] | null;
+}
+
+export interface DcfRoicYear {
+  date: string;
+  roicPct: number | null;
+}
+
+export interface TerminalRoic {
+  roicTermPct: number;
+  /** Excess return carried in perpetuity, percentage points above WACC (0 = default). */
+  excessPp: number;
+  basis: string;
+  /** Why the default held when history was supplied; null when none is owed. */
+  note: string | null;
+}
+
+const TERMINAL_ROIC_DEFAULT_BASIS = "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)";
+
+/** Apply the terminal excess-return house rule (see TERMINAL_EXCESS_RETURN_CAP_PP). */
+export function terminalRoic(waccPct: number, history: DcfRoicYear[] | null): TerminalRoic {
+  const hold = (note: string | null): TerminalRoic => ({ roicTermPct: waccPct, excessPp: 0, basis: TERMINAL_ROIC_DEFAULT_BASIS, note });
+  if (history === null) return hold(null);
+  const years = history
+    .filter((y): y is { date: string; roicPct: number } => isNum(y.roicPct))
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 5);
+  const n = years.length;
+  if (n < TERMINAL_EXCESS_RETURN_MIN_YEARS) {
+    return hold(
+      `terminal ROIC held at WACC: ${n} fiscal year${n === 1 ? "" : "s"} of ROIC on record, ${TERMINAL_EXCESS_RETURN_MIN_YEARS} needed to evidence durable excess returns (house rule)`,
+    );
+  }
+  const below = years.filter((y) => y.roicPct <= waccPct);
+  if (below.length > 0) {
+    return hold(
+      `terminal ROIC held at WACC: ROIC was at or below WACC ${fmtNum(waccPct)}% in ${below.length} of the last ${n} fiscal years (${below.map((y) => y.date).join(", ")}) — excess returns not evidenced as durable (house rule)`,
+    );
+  }
+  const spreads = years.map((y) => y.roicPct - waccPct);
+  const median = medianOf(spreads) as number;
+  const excess = Math.min(TERMINAL_EXCESS_RETURN_CAP_PP, TERMINAL_EXCESS_RETURN_CARRY * median);
+  if (excess < TERMINAL_EXCESS_RETURN_MIN_PP) {
+    return hold(
+      `terminal ROIC held at WACC: ROIC exceeded WACC in all ${n} fiscal years but the median spread ${fmtNum(median)}pp is too thin to carry (house rule floor ${TERMINAL_EXCESS_RETURN_MIN_PP}pp)`,
+    );
+  }
+  const oldest = years[n - 1].date;
+  const newest = years[0].date;
+  return {
+    roicTermPct: waccPct + excess,
+    excessPp: excess,
+    basis:
+      `terminal ROIC = WACC ${fmtNum(waccPct)}% + ${fmtNum(excess)}pp evidenced excess return: ROIC exceeded WACC in each of the last ${n} fiscal years ` +
+      `(${oldest} to ${newest}, median spread ${fmtNum(median)}pp); half the spread is carried in perpetuity, capped at ${TERMINAL_EXCESS_RETURN_CAP_PP}pp ` +
+      "(house rule after McKinsey's RONIC guidance and Damodaran's modest-excess-return cap)",
+    note: null,
+  };
 }
 
 export interface DcfAssumptions {
@@ -350,6 +439,12 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
     return { assumptions: null, notes, gaps };
   }
 
+  // --- Terminal growth: min(2.5, rf) — Damodaran g <= rf rule --------------
+  // Computed first: the near-term anchor falls back to it when revenue
+  // history shows no trend.
+  const gTerm = Math.min(TERMINAL_G_CAP_PCT, inputs.riskFreePct);
+  const gTermBasis = `min(${TERMINAL_G_CAP_PCT}%, risk-free ${fmtNum(inputs.riskFreePct)}%) — house rule: nothing grows faster than rf forever`;
+
   // --- Near-term growth: analyst 2y avg if available, else 3y CAGR ---------
   const analyst = analystTwoYearGrowthPct(inputs.analystEstimates, startRev, ttm?.date ?? null);
   notes.push(...analyst.notes);
@@ -361,10 +456,23 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
   } else if (isNum(inputs.revenueCagr3yPct)) {
     g1 = inputs.revenueCagr3yPct;
     g1Basis = "3y historical revenue CAGR (no analyst estimates available)";
-    if (isNum(inputs.revenueCagr5yPct) && Math.abs(inputs.revenueCagr3yPct - inputs.revenueCagr5yPct) > 5) {
-      const smaller = Math.min(inputs.revenueCagr3yPct, inputs.revenueCagr5yPct);
+    const cagr5 = isNum(inputs.revenueCagr5yPct) ? inputs.revenueCagr5yPct : null;
+    if (cagr5 !== null && inputs.revenueCagr3yPct !== 0 && cagr5 !== 0 && Math.sign(inputs.revenueCagr3yPct) !== Math.sign(cagr5)) {
+      // A spike or a collapse inside the window (Pfizer after the 2022 COVID
+      // peak: 3y −12% against 5y +8.5%) is an event, not a trend, and either
+      // window would anchor ten years of growth on it — the min rule below
+      // produced a −10% start and an $3 fair value. Damodaran's guidance for
+      // an erratic history is the stable rate, so the path starts at the
+      // terminal growth rate and the note says why.
       notes.push(
-        `3y CAGR ${fmtNum(inputs.revenueCagr3yPct)}% vs 5y CAGR ${fmtNum(inputs.revenueCagr5yPct)}% differ by >5pp — took smaller ${fmtNum(smaller)}% (house rule: conservatism against re-acceleration)`,
+        `3y CAGR ${fmtNum(inputs.revenueCagr3yPct)}% and 5y CAGR ${fmtNum(cagr5)}% disagree in sign — revenue history holds a spike or a collapse, not a trend; near-term growth set to the terminal rate ${fmtNum(gTerm)}% (house rule: no trend, no extrapolation)`,
+      );
+      g1 = gTerm;
+      g1Basis = "terminal growth rate (3y and 5y historical revenue CAGRs disagree in sign — no trend to extrapolate, house rule)";
+    } else if (cagr5 !== null && Math.abs(inputs.revenueCagr3yPct - cagr5) > 5) {
+      const smaller = Math.min(inputs.revenueCagr3yPct, cagr5);
+      notes.push(
+        `3y CAGR ${fmtNum(inputs.revenueCagr3yPct)}% vs 5y CAGR ${fmtNum(cagr5)}% differ by >5pp — took smaller ${fmtNum(smaller)}% (house rule: conservatism against re-acceleration)`,
       );
       g1 = smaller;
       g1Basis = "min(3y, 5y) historical revenue CAGR (>5pp divergence, conservatism house rule)";
@@ -384,9 +492,6 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
   }
   g1 = clampWithNote(g1, NEAR_TERM_GROWTH_CLAMP_PP[0], NEAR_TERM_GROWTH_CLAMP_PP[1], "near-term growth (pct)", notes);
 
-  // --- Terminal growth: min(2.5, rf) — Damodaran g <= rf rule --------------
-  const gTerm = Math.min(TERMINAL_G_CAP_PCT, inputs.riskFreePct);
-  const gTermBasis = `min(${TERMINAL_G_CAP_PCT}%, risk-free ${fmtNum(inputs.riskFreePct)}%) — house rule: nothing grows faster than rf forever`;
   const growthPath = fadePath(g1, gTerm, years);
 
   // --- EBIT margin path -----------------------------------------------------
@@ -514,7 +619,9 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
   const s2cBasis = `${periodBasis} revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, ${bal.basis} balance as of ${bal.date})`;
 
   // --- Terminal economics ----------------------------------------------------
-  const roicTerm = inputs.waccPct;
+  const terminal = terminalRoic(inputs.waccPct, inputs.roicHistory ?? null);
+  if (terminal.note !== null) notes.push(terminal.note);
+  const roicTerm = terminal.roicTermPct;
   const reinvestRate = roicTerm > 0 ? gTerm / roicTerm : 0;
 
   const assumptions: DcfAssumptions = {
@@ -529,7 +636,7 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
     salesToCapital: { value: s2c, basis: s2cBasis },
     terminal: {
       gTermPct: { value: gTerm, basis: gTermBasis },
-      roicTermPct: { value: roicTerm, basis: "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)" },
+      roicTermPct: { value: roicTerm, basis: terminal.basis },
       reinvestmentRate: {
         value: reinvestRate,
         basis: "terminal reinvestment = gTerm / ROICterm (Damodaran consistency rule)",

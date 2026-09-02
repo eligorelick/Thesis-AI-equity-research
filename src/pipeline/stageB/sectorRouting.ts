@@ -331,19 +331,40 @@ export function routeCompany(
     );
   }
 
-  if (ni === null && ocf === null) {
+  // On a deposit- or float-funded balance sheet, operating cash flow is
+  // dominated by loan, deposit, trading-asset and reserve flows — JPMorgan
+  // reported negative OCF in record-profit years — so it says nothing about
+  // profitability. Those routes evaluate the overlay on net income alone;
+  // otherwise a profitable bank was labelled unprofitable, its headline metrics
+  // replaced by cash runway and burn, and the analyst passes briefed on a
+  // loss-maker. Same balance-sheet gate as the ROTE/ROIC switch in
+  // `metricPolicy`.
+  const ocfIsProfitSignal = !(base === "bank" || base === "insurer" || base === "reit-mortgage");
+  const ocfCounts = ocf !== null && ocfIsProfitSignal;
+
+  if (ni === null && !ocfCounts) {
     gaps.push({
       field: "route.overlays.unprofitable",
-      reason: "netIncome and operatingCashFlow unavailable on both TTM and annual bases — overlay not evaluated",
+      reason:
+        ocf === null
+          ? "netIncome and operatingCashFlow unavailable on both TTM and annual bases — overlay not evaluated"
+          : `netIncome unavailable on both TTM and annual bases, and operatingCashFlow is not a profitability signal on the '${base}' route — overlay not evaluated`,
       severity: "warn",
       attemptedSources: ["fmp:/stable/income-statement(-ttm)", "fmp:/stable/cash-flow-statement(-ttm)"],
     });
-  } else if ((ni !== null && ni < 0) || (ocf !== null && ocf < 0)) {
+  } else if ((ni !== null && ni < 0) || (ocfIsProfitSignal && ocf !== null && ocf < 0)) {
     overlays.push("unprofitable");
     notes.push(
       `unprofitable overlay applied: netIncome=${ni === null ? "n/a" : ni} (${niBasis ?? "n/a"}), ` +
         `operatingCashFlow=${ocf === null ? "n/a" : ocf} (${ocfBasis ?? "n/a"}). ` +
-        "Trigger (house rule, SPEC §13.7): TTM netIncome < 0 OR TTM operatingCashFlow < 0.",
+        "Trigger (house rule, SPEC §13.7): TTM netIncome < 0 OR TTM operatingCashFlow < 0" +
+        (ocfIsProfitSignal ? "." : ` (net income only on the '${base}' route).`),
+    );
+  } else if (!ocfIsProfitSignal && ocf !== null && ocf < 0) {
+    notes.push(
+      `unprofitable overlay not applied: operating cash flow ${ocf} (${ocfBasis ?? "n/a"}) is negative, but on the '${base}' route ` +
+        "OCF is dominated by loan, deposit, trading-asset and reserve flows and is not a profitability signal (house rule); " +
+        `net income ${ni === null ? "n/a" : ni} (${niBasis ?? "n/a"}) is the only trigger there.`,
     );
   }
 

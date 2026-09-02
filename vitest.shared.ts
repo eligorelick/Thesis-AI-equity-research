@@ -5,6 +5,13 @@ export const PRODUCT_TEST_INCLUDE = ["tests/**/*.test.ts"];
 export const PRODUCT_TEST_EXCLUDE = [DB_CLI_TEST];
 export const INTEGRATION_TEST_INCLUDE = [DB_CLI_TEST];
 
+/**
+ * Installed for every test file in every config: replaces `globalThis.fetch`
+ * with a guard that rejects any non-loopback request, so a test can never reach
+ * a live provider. See `tests/setup/noLiveNetwork.ts`.
+ */
+export const SHARED_SETUP_FILES = ["./tests/setup/noLiveNetwork.ts"];
+
 export const SHARED_RESOLVE_ALIAS = {
   "@": path.resolve(__dirname, "src"),
   "server-only": path.resolve(__dirname, "tests", "server-only.mock.ts"),

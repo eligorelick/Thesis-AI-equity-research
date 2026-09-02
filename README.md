@@ -120,9 +120,8 @@ leaving the report empty:
 | Member | Source | Provenance |
 | --- | --- | --- |
 | Statements (income statement, balance sheet, cash flow), shares outstanding, public float | SEC EDGAR XBRL company facts | `edgar` |
-| Registrant name, sector and industry (from SIC), exchange, fiscal year end | SEC EDGAR submissions | `edgar` |
-| Daily prices for the symbol, SPY, and the sector ETF; quote; listing date | Yahoo Finance chart endpoint | `yahoo` |
-| Beta, market cap, quarterly enterprise values, daily market-cap history, float | computed from the above | `computed` |
+| Daily prices for the symbol, SPY, and the sector ETF; quote | Yahoo Finance chart endpoint | `yahoo` |
+| Profile (registrant name, sector and industry from SIC, exchange, listing date, price, market cap, beta), quarterly enterprise values, daily market-cap history | derived from EDGAR submissions, Yahoo's chart data and EDGAR share counts | `computed` |
 
 Beta is estimated from five years of monthly returns against SPY; market cap
 is price times shares outstanding. Quarterly cash-flow figures, and any

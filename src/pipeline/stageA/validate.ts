@@ -564,8 +564,24 @@ function checkFmpXbrlCross(bundle: ValidatableBundle, c: Collector): void {
     );
   }
 
+  // A statement built FROM companyfacts cannot disagree with companyfacts: the
+  // cross-check would be comparing a number with itself. Running it anyway
+  // would report a vacuous "pass" as though two independent sources had been
+  // reconciled, so it is recorded as the identity it is and skipped.
+  const isXbrlSourced = (result: FetchResult<unknown>): boolean =>
+    result.ok && result.value.source === "edgar";
+  const identityDetail =
+    "statements are XBRL-sourced (EDGAR companyfacts); the cross-check is an identity";
+
   const annual = bundle.statements.incomeAnnual;
-  if (annual.ok && annual.value.data.rows.length > 0) {
+  if (isXbrlSourced(annual)) {
+    c.checks.push({
+      id: "xbrlCrossCheck.FY",
+      name: "FMP↔XBRL cross-check (latest FY)",
+      status: "pass",
+      detail: identityDetail,
+    });
+  } else if (annual.ok && annual.value.data.rows.length > 0) {
     crossCheckRow(facts, byDateDesc(annual.value.data.rows)[0], "FY", bankRevenue, c);
   } else {
     c.checks.push({
@@ -577,7 +593,14 @@ function checkFmpXbrlCross(bundle: ValidatableBundle, c: Collector): void {
   }
 
   const quarterly = bundle.statements.incomeQuarterly;
-  if (quarterly.ok && quarterly.value.data.rows.length > 0) {
+  if (isXbrlSourced(quarterly)) {
+    c.checks.push({
+      id: "xbrlCrossCheck.Q",
+      name: "FMP↔XBRL cross-check (latest quarter)",
+      status: "pass",
+      detail: identityDetail,
+    });
+  } else if (quarterly.ok && quarterly.value.data.rows.length > 0) {
     crossCheckRow(facts, byDateDesc(quarterly.value.data.rows)[0], "Q", bankRevenue, c);
   } else {
     c.checks.push({

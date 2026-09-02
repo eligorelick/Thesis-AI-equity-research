@@ -24,6 +24,7 @@ import {
   quarterEndIso,
   resolve13FQuarter,
 } from "@/pipeline/types";
+import { buildDataCompleteness } from "@/report/completeness";
 
 const NOW = new Date("2026-07-06T00:00:00Z");
 
@@ -627,6 +628,26 @@ describe("FMP↔XBRL cross-check", () => {
     const c = report.checks.find((x) => x.id === "xbrlCrossCheck");
     expect(c?.status).toBe("skipped");
     expect(report.gaps.some((g) => g.field === "validation.xbrlCrossCheck")).toBe(true);
+  });
+
+  it("records an identity pass, and no gap, when the statements are themselves XBRL-sourced", () => {
+    // Keyless path: the income statements were built FROM companyfacts, so
+    // cross-checking them against companyfacts compares a number with itself.
+    const bundle = makeBundle({
+      incomeAnnual: ok({ rows: annualIncomeRows() }, "2025-09-27", { source: "edgar" }),
+      incomeQuarterly: ok({ rows: quarterlyIncomeRows() }, "2026-03-28", { source: "edgar" }),
+    });
+    const report = validateBundle(bundle, { now: NOW });
+    const fy = report.checks.find((c) => c.id === "xbrlCrossCheck.FY");
+    const q = report.checks.find((c) => c.id === "xbrlCrossCheck.Q");
+    expect(fy?.status).toBe("pass");
+    expect(q?.status).toBe("pass");
+    expect(fy?.detail).toMatch(/identity/);
+    // No per-field comparison ran, and nothing about the cross-check is missing.
+    expect(report.checks.some((c) => c.id.startsWith("xbrlCrossCheck.revenue"))).toBe(false);
+    expect(report.checks.some((c) => c.id.startsWith("xbrlCrossCheck.netIncome"))).toBe(false);
+    expect(report.gaps.some((g) => g.field.startsWith("validation.xbrlCrossCheck"))).toBe(false);
+    expect(buildDataCompleteness(report.gaps).xbrl).toBe("checked");
   });
 
   it("treats FMP zero revenue as undisclosed and skips instead of comparing", () => {

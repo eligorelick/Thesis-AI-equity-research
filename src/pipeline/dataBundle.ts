@@ -40,12 +40,15 @@ import {
   createDbCachedEdgarTransport,
   createEdgarClient,
   findDocumentByType,
+  hasConfiguredEdgarIdentity,
   padCik,
+  resolveEdgarUserAgent,
   type CikMapping,
   type EdgarClient,
   type EdgarFiling,
   type EdgarSubmissions,
 } from "@/providers/edgar";
+import { createYahooClient, type YahooClient } from "@/providers/yahoo";
 import {
   extractFromExhibit,
   extractSection,
@@ -94,6 +97,7 @@ import {
   type XbrlSummary,
 } from "@/pipeline/types";
 import { mergeManifest } from "@/pipeline/stageA/manifest";
+import { applyKeylessFallbacks } from "@/pipeline/keyless";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -213,6 +217,38 @@ export function makeFmpCachedFetch(): CachedFetchFn {
         if (inner === null || inner === undefined) return true;
         return Array.isArray(inner) && inner.length === 0;
       },
+    });
+    const out: CachedFetchResult<T> = { value: sourced.data, fetchedAt: sourced.fetchedAt };
+    if (sourced.stale === true) out.stale = true;
+    if (sourced.staleReason !== undefined) out.staleReason = sourced.staleReason;
+    return out;
+  };
+}
+
+/**
+ * The Yahoo analogue of makeFmpCachedFetch. The Yahoo client already encodes
+ * the endpoint and its query in the cache key it passes, so that key rides in
+ * `endpoint` exactly as FMP's does.
+ *
+ * The empty-body guard differs: the Yahoo loader stores the parsed chart
+ * result directly (no LiveExchange envelope), and its only "carries nothing"
+ * value is a literal `null` — a zero-length body. Any other shape has already
+ * survived the schema parse and the error-envelope check inside the client, so
+ * treating it as empty would discard good data.
+ */
+export function makeYahooCachedFetch(): CachedFetchFn {
+  let mod: Promise<typeof import("@/cache/apiCache")> | null = null;
+  return async <T>(key: string, ttlMs: number, loader: () => Promise<T>): Promise<CachedFetchResult<T>> => {
+    mod ??= import("@/cache/apiCache");
+    const { cachedFetch } = await mod;
+    const sourced = await cachedFetch<T>({
+      provider: "yahoo",
+      endpoint: key,
+      params: {},
+      ttlSeconds: Math.max(0, Math.floor(ttlMs / 1000)),
+      maxStaleSeconds: PROVIDER_MAX_STALE_SECONDS,
+      fetcher: async () => ({ body: await loader(), asOf: new Date().toISOString().slice(0, 10) }),
+      isEmptyBody: (value: T): boolean => value === null,
     });
     const out: CachedFetchResult<T> = { value: sourced.data, fetchedAt: sourced.fetchedAt };
     if (sourced.stale === true) out.stale = true;
@@ -1220,6 +1256,13 @@ export interface BuildDataBundleOptions {
   /** Injectable clients/configs (tests, special flows). */
   fmp?: FmpClient;
   edgar?: EdgarClient;
+  /** Keyless price/quote source for the EDGAR + Yahoo fallback layer. */
+  yahoo?: YahooClient;
+  /**
+   * Fill core members FMP cannot serve from EDGAR + Yahoo once a CIK resolves.
+   * Default true.
+   */
+  keyless?: boolean;
   fred?: FredConfig;
   /**
    * Explicit FRED fetcher override. When absent, production wraps FRED in the
@@ -1256,6 +1299,21 @@ export async function buildDataBundle(
   const edgar =
     opts.edgar ??
     createEdgarClient({ transport: createDbCachedEdgarTransport({ signal: opts.signal }) });
+  // Yahoo's chart edge answers 429 to a client that declares nothing. When the
+  // operator has configured a reachable EDGAR contact, reuse it so the same
+  // identity that SEC access is declared under also identifies these requests;
+  // otherwise the client's own honest default applies.
+  const edgarContact = hasConfiguredEdgarIdentity() ? resolveEdgarUserAgent() : null;
+  const yahoo =
+    opts.yahoo ??
+    createYahooClient({
+      cachedFetch: makeYahooCachedFetch(),
+      signal: opts.signal,
+      userAgent:
+        edgarContact === null
+          ? undefined
+          : `Mozilla/5.0 Thesis/1.0 equity-analyzer (${edgarContact})`,
+    });
   const fredBase: FredConfig =
     opts.fred ?? (cfg.fredApiKey !== undefined ? { apiKey: cfg.fredApiKey } : {});
   const fredCfg: FredConfig = { ...fredBase, signal: opts.signal ?? fredBase.signal };
@@ -1290,7 +1348,11 @@ export async function buildDataBundle(
 
   // ---- profile first: sector drives ETF + FRED routing ----------------------
   progress(`fetch: profile ${sym}`);
-  const profile = await settle(`fmp.profile(${sym})`, fmp.profile(sym));
+  // `let`: the keyless layer below may replace this with an EDGAR + Yahoo
+  // profile once the CIK resolves. `sectorName`/`profileCik`/`gicsSector` are
+  // read from FMP's answer here because they route work that is already in
+  // flight by the time the fallback can run.
+  let profile = await settle(`fmp.profile(${sym})`, fmp.profile(sym));
   const profileRow = profile.ok ? profile.value.data.rows[0] : undefined;
   const sectorName = typeof profileRow?.sector === "string" ? profileRow.sector : null;
   const profileCik = typeof profileRow?.cik === "string" ? profileRow.cik : null;
@@ -1396,7 +1458,7 @@ export async function buildDataBundle(
   const pEdgar = buildEdgarBundle(sym, profileCik, edgar, progress, builtAt, edgarSectionBudgetMs);
 
   // ---- await + assemble (deterministic ordering applied here) ---------------
-  const statements: StatementSet = {
+  let statements: StatementSet = {
     incomeAnnual: sortRows(await pIncomeA),
     incomeQuarterly: sortRows(await pIncomeQ),
     balanceAnnual: sortRows(await pBalanceA),
@@ -1406,14 +1468,14 @@ export async function buildDataBundle(
     periods: { annualRequested: ANNUAL_PERIODS, quarterlyRequested: QUARTERLY_PERIODS },
   };
 
-  const quote = await pQuote;
+  let quote = await pQuote;
   const keyMetrics = sortRows(await pKeyMetrics);
   const keyMetricsTtm = await pKeyMetricsTtm;
   const ratios = sortRows(await pRatios);
   const ratiosTtm = await pRatiosTtm;
   const financialGrowth = sortRows(await pGrowth);
   const financialScores = await pScores;
-  const enterpriseValues = sortRows(await pEv);
+  let enterpriseValues = sortRows(await pEv);
   const analystEstimates = sortRows(await pEstimates);
   const priceTargetConsensus = await pPtConsensus;
   const priceTargetSummary = await pPtSummary;
@@ -1445,17 +1507,15 @@ export async function buildDataBundle(
   const segGeo = markSegmentationGapExpected(sortRows(await pSegGeo));
   const executives = await pExecs;
   const compensation = sortRowsNumeric(await pComp, "year");
-  const marketCapHistory = sortRows(await pMcapHist);
-  const sharesFloat = await pFloat;
+  let marketCapHistory = sortRows(await pMcapHist);
+  let sharesFloat = await pFloat;
   const secFilings = sortRows(await pSecFilings, "filingDate");
   const news = sortRows(await pNews, "publishedDate");
   const pressReleases = sortRows(await pPress, "publishedDate");
-  const eodPrices = sortRows(await pEod);
-  const benchmarkPrices: BenchmarkPrices = {
-    spy: sortRows(await pSpy),
-    sectorEtf: sortRows(await pSectorEtf),
-    sectorEtfSymbol,
-  };
+  let eodPrices = sortRows(await pEod);
+  let spyPrices = sortRows(await pSpy);
+  let sectorEtfPrices = sortRows(await pSectorEtf);
+  let resolvedSectorEtfSymbol = sectorEtfSymbol;
   const shortInterestRes = await pShort;
   const shortInterestTrendRes = await pShortTrend;
   const insiderSentimentRes = await pSentiment;
@@ -1469,6 +1529,127 @@ export async function buildDataBundle(
     attribution: FRED_ATTRIBUTION,
   };
   const edgarBundle = await pEdgar;
+
+  // ---- keyless fallbacks: fill what FMP could not serve from EDGAR + Yahoo ---
+  // Runs only after EDGAR resolved the ticker to a registrant, never overwrites
+  // an FMP member that carries rows, and discloses every substitution as its own
+  // `keyless.<member>` manifest entry.
+  //
+  // The gate is issuer identity, not merely "a CIK exists". buildEdgarBundle
+  // will synthesize a CIK from FMP's own profile when company_tickers.json
+  // misses (`cik.value.source === "fmp"`); that is FMP vouching for itself, and
+  // in fixture mode it is a synthetic number for a fictional issuer. Fetching a
+  // Yahoo series for such a ticker would attach a real market's prices to an
+  // identity nothing independent confirmed. So the layer needs either SEC's own
+  // ticker table to have made the match, or SEC to have answered for that CIK
+  // (submissions or companyfacts) — which is also exactly the evidence every
+  // derived member is built from.
+  const keylessGaps: ManifestEntry[] = [];
+  const edgarConfirmedIssuer =
+    edgarBundle.cik.ok &&
+    (edgarBundle.cik.value.source === "edgar" ||
+      edgarBundle.registrant !== null ||
+      edgarBundle.companyFacts.ok);
+  if (opts.keyless !== false && edgarConfirmedIssuer) {
+    const keyless = await applyKeylessFallbacks({
+      symbol: sym,
+      today,
+      eodFrom,
+      sectorEtfSymbol,
+      fmp: {
+        profile,
+        quote,
+        incomeAnnual: statements.incomeAnnual,
+        incomeQuarterly: statements.incomeQuarterly,
+        balanceAnnual: statements.balanceAnnual,
+        balanceQuarterly: statements.balanceQuarterly,
+        cashflowAnnual: statements.cashflowAnnual,
+        cashflowQuarterly: statements.cashflowQuarterly,
+        eodPrices,
+        spy: spyPrices,
+        sectorEtf: sectorEtfPrices,
+        enterpriseValues,
+        marketCapHistory,
+        sharesFloat,
+      },
+      fmpKeyless: fmp.fixtureMode,
+      edgar: {
+        cik: edgarBundle.cik,
+        registrant: edgarBundle.registrant,
+        companyFacts: edgarBundle.companyFacts,
+      },
+      yahoo,
+      annualPeriods: ANNUAL_PERIODS,
+      quarterlyPeriods: QUARTERLY_PERIODS,
+      now,
+      resolveSectorEtf,
+    });
+    const m = keyless.members;
+    // A member the fallback left alone is the very object that went in; only a
+    // genuinely new result is re-sorted, so a skipped run cannot perturb
+    // anything (the fictional-fixture projection depends on that).
+    const swap = <TRow extends FmpRawRow>(
+      next: FetchResult<FmpPayload<TRow>>,
+      prev: FetchResult<FmpPayload<TRow>>,
+    ): FetchResult<FmpPayload<TRow>> => (next === prev ? prev : sortRows(next));
+
+    profile = swap(m.profile, profile);
+    quote = swap(m.quote, quote);
+    statements = {
+      ...statements,
+      incomeAnnual: swap(m.incomeAnnual, statements.incomeAnnual),
+      incomeQuarterly: swap(m.incomeQuarterly, statements.incomeQuarterly),
+      balanceAnnual: swap(m.balanceAnnual, statements.balanceAnnual),
+      balanceQuarterly: swap(m.balanceQuarterly, statements.balanceQuarterly),
+      cashflowAnnual: swap(m.cashflowAnnual, statements.cashflowAnnual),
+      cashflowQuarterly: swap(m.cashflowQuarterly, statements.cashflowQuarterly),
+    };
+    eodPrices = swap(m.eodPrices, eodPrices);
+    spyPrices = swap(m.spy, spyPrices);
+    sectorEtfPrices = swap(m.sectorEtf, sectorEtfPrices);
+    resolvedSectorEtfSymbol = keyless.sectorEtfSymbol ?? sectorEtfSymbol;
+    enterpriseValues = swap(m.enterpriseValues, enterpriseValues);
+    marketCapHistory = swap(m.marketCapHistory, marketCapHistory);
+    sharesFloat = swap(m.sharesFloat, sharesFloat);
+    keylessGaps.push(...keyless.gaps);
+
+    // FRED's sector overlay was routed from FMP's profile long before this
+    // point, so a sector that only the keyless profile knows arrives too late to
+    // fetch. The series are simply not in this bundle; say so rather than let a
+    // reader assume the overlay was considered and found empty.
+    if (gicsSector === null) {
+      const keylessSector = profile.ok ? profile.value.data.rows[0]?.sector : undefined;
+      const keylessGics = resolveGicsSector(
+        typeof keylessSector === "string" ? keylessSector : null,
+      );
+      if (keylessGics !== null) {
+        const entry: ManifestEntry = {
+          field: "keyless.macroSectorOverlay",
+          reason: `keyless profile resolved after macro routing; sector FRED overlay not fetched (sector ${keylessGics} was only known once EDGAR + Yahoo filled the profile)`,
+          severity: "info",
+          attemptedSources: ["fred"],
+          // Same rule as the substitution entries: structural on a plan with no
+          // FMP key, an incident on a keyed one.
+          expected: fmp.fixtureMode,
+        };
+        keylessGaps.push(entry);
+      }
+    }
+
+    // Derivation notes are per-period bookkeeping ("this quarter had no debt
+    // tag"), not missing-data disclosures: they belong in the run log, not the
+    // manifest. The member-level failures they accompany are already gaps.
+    for (const note of keyless.notes) progress(`keyless: ${note}`);
+    progress(`keyless: replaced ${keyless.replaced.join(", ") || "nothing"}`);
+  } else if (opts.keyless !== false) {
+    progress(`keyless: skipped — EDGAR did not confirm ${sym} as a registrant`);
+  }
+
+  const benchmarkPrices: BenchmarkPrices = {
+    spy: spyPrices,
+    sectorEtf: sectorEtfPrices,
+    sectorEtfSymbol: resolvedSectorEtfSymbol,
+  };
 
   progress("assemble: source + missing-data manifests");
 
@@ -1580,6 +1761,9 @@ export async function buildDataBundle(
             ]
           : [],
       ),
+      // Every keyless substitution and every keyless failure, disclosed beside
+      // the provider gaps. Empty whenever the fallback layer was off or skipped.
+      ...keylessGaps,
     ],
   );
 

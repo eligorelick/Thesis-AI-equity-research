@@ -350,6 +350,34 @@ describe("applyKeylessFallbacks", () => {
     expect(out.members.profile.ok && out.members.profile.value.data.rows[0]).toMatchObject({ isAdr: true, country: null });
   });
 
+  it("does not flag a since-converted domestic filer as an ADR on one historical 20-F", async () => {
+    // The submissions form list spans up to a thousand filings, so it can carry
+    // a 20-F the registrant stopped filing years ago. The statements the profile
+    // actually reports are 10-K/10-Q, so `isAdr` must be false.
+    const out = await applyKeylessFallbacks(
+      inputs({
+        edgar: {
+          ...inputs().edgar,
+          registrant: { ...inputs().edgar.registrant!, forms: ["10-K", "10-Q", "8-K", "20-F"] },
+        },
+      }),
+    );
+    expect(out.members.profile.ok && out.members.profile.value.data.rows[0]!.isAdr).toBe(false);
+  });
+
+  it("falls back to the submissions form list only when no statements could be built", async () => {
+    const out = await applyKeylessFallbacks(
+      inputs({
+        edgar: {
+          ...inputs().edgar,
+          registrant: { ...inputs().edgar.registrant!, forms: ["20-F", "6-K"] },
+          companyFacts: { ok: false, gap: { field: "edgar.companyFacts(AAPL)", reason: "EDGAR HTTP 503", severity: "warn" } },
+        },
+      }),
+    );
+    expect(out.members.profile.ok && out.members.profile.value.data.rows[0]!.isAdr).toBe(true);
+  });
+
   it("keeps the six statement gaps when companyfacts is unavailable and records the EDGAR attempt", async () => {
     const out = await applyKeylessFallbacks(
       inputs({

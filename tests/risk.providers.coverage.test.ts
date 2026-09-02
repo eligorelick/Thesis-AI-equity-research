@@ -1119,6 +1119,7 @@ describe("data-bundle provider boundaries", () => {
         eodYears: 1,
         fmp: createFmpClient({ apiKey: "" }),
         edgar: createEdgarClient({ transport }),
+        keyless: false,
         fred: {
           fetchImpl: noNetwork,
           retryDelaysMs: [],

@@ -430,7 +430,7 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   const wantProfile = needs("profile");
   const wantQuote = needs("quote");
 
-  const [history, spy, sectorEtf, metaResult, quoteResult] = await Promise.all([
+  const [history, spy, sectorEtf, metaResult] = await Promise.all([
     wantHistory
       ? attempt(`yahoo.dailyHistory(${inputs.symbol})`, () => inputs.yahoo.dailyHistory(inputs.symbol, inputs.eodFrom, inputs.today))
       : null,
@@ -441,8 +441,15 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       ? attempt(`yahoo.dailyHistory(${sectorEtfSymbol})`, () => inputs.yahoo.dailyHistory(sectorEtfSymbol, inputs.eodFrom, inputs.today))
       : null,
     wantProfile ? attempt(`yahoo.meta(${inputs.symbol})`, () => inputs.yahoo.meta(inputs.symbol)) : null,
-    wantQuote ? attempt(`yahoo.quote(${inputs.symbol})`, () => inputs.yahoo.quote(inputs.symbol)) : null,
   ]);
+  // `quote()` is `meta()` plus a row mapping: both read the SAME chart request
+  // (range=5d&interval=1d), so issuing them together would race two identical
+  // requests to an unofficial endpoint. Sequencing the quote AFTER the meta
+  // lets it resolve from the durable cache the first one just populated. The
+  // three history series stay concurrent above — they are distinct requests.
+  const quoteResult = wantQuote
+    ? await attempt(`yahoo.quote(${inputs.symbol})`, () => inputs.yahoo.quote(inputs.symbol))
+    : null;
 
   const takeHistory = (
     member: "eodPrices" | "spy" | "sectorEtf",
@@ -514,7 +521,15 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         beta: beta.beta,
         isEtf: false,
         isFund: false,
-        isAdr: (built?.filesTwentyF ?? false) || registrant.forms.some((form) => form.trim().startsWith("20-F")),
+        // The statements builder reads the form on the facts it actually used,
+        // so `filesTwentyF` describes the periods this profile reports. The
+        // submissions form list is only a fallback for when no statements could
+        // be built at all: it spans up to a thousand recent filings, so a single
+        // historical 20-F would otherwise flag an issuer that has since
+        // converted to domestic 10-K reporting as an ADR forever.
+        isAdr: built !== null
+          ? built.filesTwentyF
+          : registrant.forms.some((form) => form.trim().startsWith("20-F")),
         isActivelyTrading: true,
         description: null,
         ceo: null,

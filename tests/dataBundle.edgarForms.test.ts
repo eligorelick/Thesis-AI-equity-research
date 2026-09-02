@@ -126,6 +126,7 @@ describe("buildDataBundle EDGAR filing boundary", () => {
       eodYears: 1,
       fmp: createFmpClient({ apiKey: "" }),
       edgar: createEdgarClient({ transport }),
+      keyless: false,
       fred: { fetchImpl: noNetworkResponse, retryDelaysMs: [], minRequestIntervalMs: 0 },
       finnhub: { fetchImpl: noNetworkResponse, retryDelaysMs: [] },
       finra: { fetchImpl: noNetworkResponse, retryDelaysMs: [], minRequestIntervalMs: 0 },

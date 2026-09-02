@@ -688,6 +688,7 @@ describe("degradation: foreign-private-issuer EDGAR coverage", () => {
         }
         return jsonResponse([]);
       }),
+      keyless: false,
       edgar: createEdgarClient({
         transport: edgarRouterTransport({
           "company_tickers.json": { body: tickerMapBody("FPI", 1046179, "Foreign Private Issuer Co") },
@@ -735,6 +736,7 @@ describe("degradation: foreign-private-issuer EDGAR coverage", () => {
         }
         return jsonResponse([]);
       }),
+      keyless: false,
       edgar: createEdgarClient({
         transport: edgarRouterTransport({
           "company_tickers.json": { body: tickerMapBody("FPI", 1046179, "Foreign Private Issuer Co") },
@@ -806,6 +808,7 @@ describe("degradation: EDGAR 10-K extraction time budget (JPM performance fix)",
         }
         return jsonResponse([]);
       }),
+      keyless: false,
       edgar: createEdgarClient({
         transport: edgarRouterTransport({
           "company_tickers.json": { body: tickerMapBody("SYNF", 1234567, "Synthetic Filer Inc") },
@@ -833,6 +836,7 @@ describe("degradation: EDGAR 10-K extraction time budget (JPM performance fix)",
         }
         return jsonResponse([]);
       }),
+      keyless: false,
       edgar: createEdgarClient({
         transport: edgarRouterTransport({
           "company_tickers.json": { body: tickerMapBody("SYNF", 1234567, "Synthetic Filer Inc") },

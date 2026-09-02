@@ -29,6 +29,35 @@ vi.mock("@/app/company/[symbol]/GenerateReport", () => ({
 
 import CompanyPage, { CompanyBody } from "@/app/company/[symbol]/page";
 
+/** An `edgar.cik` FetchResult that resolved — the ticker is a known registrant. */
+function resolvedCik(symbol: string): unknown {
+  return {
+    ok: true,
+    value: {
+      data: { cik10: "0000000001", cik: 1, ticker: symbol, title: symbol },
+      asOf: "2026-08-07",
+      source: "edgar",
+      endpoint: "company_tickers.json",
+      fetchedAt: "2026-08-07T00:00:00.000Z",
+    },
+  };
+}
+
+/** An `edgar.cik` gap — `reason` decides whether the miss is confirmed or merely unreached. */
+function cikGap(symbol: string, reason: string): unknown {
+  return { ok: false, gap: { field: `edgar.cik(${symbol})`, reason, severity: "warn" } };
+}
+
+const NO_FMP_PROFILE = {
+  ok: false,
+  gap: {
+    field: "fmp.profile",
+    reason: "no API key + no fixture",
+    severity: "warn",
+    attemptedSources: ["fmp", "profile"],
+  },
+};
+
 describe("company page — unsupported instruments", () => {
   beforeEach(() => {
     pageHarness.buildDataBundle.mockReset();
@@ -60,6 +89,9 @@ describe("company page — unsupported instruments", () => {
           stale: false,
         },
       },
+      // `isConfirmedUnknownProfile` now consults EDGAR's ticker table before it
+      // calls a keyless miss a 404, so every stub carries an `edgar.cik`.
+      edgar: { cik: resolvedCik("SPY") },
     };
   });
 
@@ -128,6 +160,7 @@ describe("company page — unsupported instruments", () => {
           attemptedSources: ["fmp", "profile"],
         },
       },
+      edgar: { cik: resolvedCik("ONCE") },
     });
     await Promise.all([first, second]);
     expect(callsBeforeResolve).toBe(1);
@@ -231,6 +264,43 @@ describe("company page — unsupported instruments", () => {
     expect(pageHarness.buildDataBundle).toHaveBeenCalledTimes(2);
     expect(first).toContain("no API key + no fixture");
     expect(second).toContain("no API key + no fixture");
+  });
+
+  it("renders the not-found page for a keyless symbol SEC's ticker table does not list", async () => {
+    pageHarness.bundle = {
+      ...(pageHarness.bundle as object),
+      symbol: "KLMISS",
+      profile: NO_FMP_PROFILE,
+      edgar: { cik: cikGap("KLMISS", 'ticker "KLMISS" not in SEC company_tickers.json') },
+    };
+
+    const html = renderToStaticMarkup(await CompanyBody({ symbol: "KLMISS" }));
+    expect(html).toMatch(/ticker not found/i);
+    // The confirmed miss renders no provider gap line — nothing failed, the
+    // ticker simply does not exist.
+    expect(html).not.toContain("no API key + no fixture");
+    // ...and it is negative-cached like any other confirmed unknown.
+    await CompanyBody({ symbol: "KLMISS" });
+    expect(pageHarness.buildDataBundle).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the disclosed-gap page, not a 404, when EDGAR was merely unreachable", async () => {
+    pageHarness.bundle = {
+      ...(pageHarness.bundle as object),
+      symbol: "KLCOOL",
+      profile: NO_FMP_PROFILE,
+      edgar: {
+        cik: cikGap(
+          "KLCOOL",
+          "fetch failed: EDGAR rate-limited (403) at https://www.sec.gov/files/company_tickers.json; back off ~10 min",
+        ),
+      },
+    };
+
+    const html = renderToStaticMarkup(await CompanyBody({ symbol: "KLCOOL" }));
+    expect(html).toContain("no API key + no fixture");
+    await CompanyBody({ symbol: "KLCOOL" });
+    expect(pageHarness.buildDataBundle).toHaveBeenCalledTimes(2);
   });
 
   it("does not cache a near-match gap that merely contains the empty-array reason", async () => {

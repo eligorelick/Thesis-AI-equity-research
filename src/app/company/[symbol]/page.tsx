@@ -90,9 +90,21 @@ const COMPANY_LOAD_MAX_CONCURRENT = 2;
 const COMPANY_LOAD_MAX_QUEUED = 8;
 const UNKNOWN_SYMBOL_NEGATIVE_TTL_MS = 15_000;
 
+/**
+ * "This ticker does not exist" — as opposed to "we could not reach anyone who
+ * would know". Only an affirmative answer counts: FMP replying with an empty
+ * result, or, on a plan with no FMP key, SEC's own ticker table not listing the
+ * symbol at all. A transport failure, a cooldown or a 403 is a degraded run and
+ * must render the disclosed-gap page, never a 404.
+ */
 function isConfirmedUnknownProfile(bundle: DataBundle): boolean {
   if (bundle.profile.ok) return bundle.profile.value.data.rows.length === 0;
-  return bundle.profile.gap.reason === FMP_EMPTY_ARRAY_REASON;
+  if (bundle.profile.gap.reason === FMP_EMPTY_ARRAY_REASON) return true;
+  // Keyless: FMP had nothing (no key, no fixture) AND EDGAR's ticker table has
+  // no such registrant.
+  const edgarMiss =
+    !bundle.edgar.cik.ok && /not in SEC company_tickers\.json/.test(bundle.edgar.cik.gap.reason);
+  return edgarMiss && /no API key/.test(bundle.profile.gap.reason);
 }
 
 async function loadCompany(symbol: string): Promise<PageData | null> {

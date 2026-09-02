@@ -107,6 +107,10 @@ const DEFAULT_PROVIDER_RATES: Record<string, { ratePerSec: number; burst: number
   finra: { ratePerSec: 5, burst: 5 },
   fred: { ratePerSec: 2, burst: 8 },
   finnhub: { ratePerSec: 1, burst: 5 },
+  // Unofficial endpoint: the same numbers as FALLBACK_RATE, made explicit so
+  // the pace Yahoo is queried at is a declared policy rather than a default
+  // that a later change to FALLBACK_RATE could move without anyone noticing.
+  yahoo: { ratePerSec: 2, burst: 2 },
 };
 
 const FALLBACK_RATE = { ratePerSec: 2, burst: 2 };

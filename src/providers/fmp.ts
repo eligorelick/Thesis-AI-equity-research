@@ -1387,7 +1387,9 @@ export class FmpClient {
     const attempted: string[] = [endpointPath];
     for (const candidate of candidates) {
       const fixturePath = path.join(this.fixturesDir, spec.method, `${candidate}.json`);
-      attempted.push(`fixture:${path.join("fixtures", "fmp", spec.method, `${candidate}.json`)}`);
+      // Provenance strings must not depend on the host OS: a Windows-built
+      // baseline and a Linux CI runner must agree on this text.
+      attempted.push(`fixture:${path.posix.join("fixtures", "fmp", spec.method, `${candidate}.json`)}`);
       let text: string;
       try {
         text = await fs.readFile(fixturePath, "utf8");

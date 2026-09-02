@@ -82,6 +82,301 @@ const NEW_BALANCE_BASIS =
   "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)";
 
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
+  // Added 2026-09-01: fixture provenance strings are built with POSIX
+  // separators so a Windows-generated baseline and a Linux CI runner agree on
+  // the text. The baseline was generated on Windows, so every fixture path it
+  // recorded carries backslashes; the current projection carries slashes. The
+  // content of each string is otherwise identical.
+  {
+    path: "stageB.gaps.8.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\historicalMarketCap\\DEMO_2021-07-06_2026-07-06.json",
+    after: "fixture:fixtures/fmp/historicalMarketCap/DEMO_2021-07-06_2026-07-06.json",
+  },
+  {
+    path: "stageB.gaps.8.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\historicalMarketCap\\DEMO.json",
+    after: "fixture:fixtures/fmp/historicalMarketCap/DEMO.json",
+  },
+  {
+    path: "stageB.gaps.8.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\historicalMarketCap\\default.json",
+    after: "fixture:fixtures/fmp/historicalMarketCap/default.json",
+  },
+  {
+    path: "stageB.gaps.9.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\historicalPriceEodFull\\SPY_2021-07-06_2026-07-06.json",
+    after: "fixture:fixtures/fmp/historicalPriceEodFull/SPY_2021-07-06_2026-07-06.json",
+  },
+  {
+    path: "stageB.gaps.9.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\historicalPriceEodFull\\SPY.json",
+    after: "fixture:fixtures/fmp/historicalPriceEodFull/SPY.json",
+  },
+  {
+    path: "stageB.gaps.9.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\historicalPriceEodFull\\default.json",
+    after: "fixture:fixtures/fmp/historicalPriceEodFull/default.json",
+  },
+  {
+    path: "stageB.gaps.10.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\historicalPriceEodFull\\XLK_2021-07-06_2026-07-06.json",
+    after: "fixture:fixtures/fmp/historicalPriceEodFull/XLK_2021-07-06_2026-07-06.json",
+  },
+  {
+    path: "stageB.gaps.10.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\historicalPriceEodFull\\XLK.json",
+    after: "fixture:fixtures/fmp/historicalPriceEodFull/XLK.json",
+  },
+  {
+    path: "stageB.gaps.10.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\historicalPriceEodFull\\default.json",
+    after: "fixture:fixtures/fmp/historicalPriceEodFull/default.json",
+  },
+  {
+    path: "stageB.gaps.11.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\DEMO_2026_Q1.json",
+    after: "fixture:fixtures/fmp/institutionalHolderAnalytics/DEMO_2026_Q1.json",
+  },
+  {
+    path: "stageB.gaps.11.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\DEMO.json",
+    after: "fixture:fixtures/fmp/institutionalHolderAnalytics/DEMO.json",
+  },
+  {
+    path: "stageB.gaps.11.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\default.json",
+    after: "fixture:fixtures/fmp/institutionalHolderAnalytics/default.json",
+  },
+  {
+    path: "stageB.gaps.12.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\keyMetricsTtm\\DEMO.json",
+    after: "fixture:fixtures/fmp/keyMetricsTtm/DEMO.json",
+  },
+  {
+    path: "stageB.gaps.12.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\keyMetricsTtm\\default.json",
+    after: "fixture:fixtures/fmp/keyMetricsTtm/default.json",
+  },
+  {
+    path: "stageB.gaps.13.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\pressReleases\\DEMO.json",
+    after: "fixture:fixtures/fmp/pressReleases/DEMO.json",
+  },
+  {
+    path: "stageB.gaps.13.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\pressReleases\\default.json",
+    after: "fixture:fixtures/fmp/pressReleases/default.json",
+  },
+  {
+    path: "stageB.gaps.14.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\ratiosTtm\\DEMO.json",
+    after: "fixture:fixtures/fmp/ratiosTtm/DEMO.json",
+  },
+  {
+    path: "stageB.gaps.14.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\ratiosTtm\\default.json",
+    after: "fixture:fixtures/fmp/ratiosTtm/default.json",
+  },
+  {
+    path: "stageB.gaps.15.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\secFilingsSearch\\DEMO_2025-07-06_2026-07-06.json",
+    after: "fixture:fixtures/fmp/secFilingsSearch/DEMO_2025-07-06_2026-07-06.json",
+  },
+  {
+    path: "stageB.gaps.15.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\secFilingsSearch\\DEMO.json",
+    after: "fixture:fixtures/fmp/secFilingsSearch/DEMO.json",
+  },
+  {
+    path: "stageB.gaps.15.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\secFilingsSearch\\default.json",
+    after: "fixture:fixtures/fmp/secFilingsSearch/default.json",
+  },
+  {
+    path: "stageB.gaps.16.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\stockNews\\DEMO.json",
+    after: "fixture:fixtures/fmp/stockNews/DEMO.json",
+  },
+  {
+    path: "stageB.gaps.16.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\stockNews\\default.json",
+    after: "fixture:fixtures/fmp/stockNews/default.json",
+  },
+  {
+    path: "stageB.gaps.17.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\symbolPositionsSummary\\DEMO_2026_Q1.json",
+    after: "fixture:fixtures/fmp/symbolPositionsSummary/DEMO_2026_Q1.json",
+  },
+  {
+    path: "stageB.gaps.17.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\symbolPositionsSummary\\DEMO.json",
+    after: "fixture:fixtures/fmp/symbolPositionsSummary/DEMO.json",
+  },
+  {
+    path: "stageB.gaps.17.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\symbolPositionsSummary\\default.json",
+    after: "fixture:fixtures/fmp/symbolPositionsSummary/default.json",
+  },
+  {
+    path: "stageB.gaps.18.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\transcript\\DEMO_2025_Q4.json",
+    after: "fixture:fixtures/fmp/transcript/DEMO_2025_Q4.json",
+  },
+  {
+    path: "stageB.gaps.18.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\transcript\\DEMO.json",
+    after: "fixture:fixtures/fmp/transcript/DEMO.json",
+  },
+  {
+    path: "stageB.gaps.18.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\transcript\\default.json",
+    after: "fixture:fixtures/fmp/transcript/default.json",
+  },
+  {
+    path: "report.appendix.missingData.8.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\historicalMarketCap\\DEMO_2021-07-06_2026-07-06.json",
+    after: "fixture:fixtures/fmp/historicalMarketCap/DEMO_2021-07-06_2026-07-06.json",
+  },
+  {
+    path: "report.appendix.missingData.8.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\historicalMarketCap\\DEMO.json",
+    after: "fixture:fixtures/fmp/historicalMarketCap/DEMO.json",
+  },
+  {
+    path: "report.appendix.missingData.8.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\historicalMarketCap\\default.json",
+    after: "fixture:fixtures/fmp/historicalMarketCap/default.json",
+  },
+  {
+    path: "report.appendix.missingData.9.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\historicalPriceEodFull\\SPY_2021-07-06_2026-07-06.json",
+    after: "fixture:fixtures/fmp/historicalPriceEodFull/SPY_2021-07-06_2026-07-06.json",
+  },
+  {
+    path: "report.appendix.missingData.9.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\historicalPriceEodFull\\SPY.json",
+    after: "fixture:fixtures/fmp/historicalPriceEodFull/SPY.json",
+  },
+  {
+    path: "report.appendix.missingData.9.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\historicalPriceEodFull\\default.json",
+    after: "fixture:fixtures/fmp/historicalPriceEodFull/default.json",
+  },
+  {
+    path: "report.appendix.missingData.10.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\historicalPriceEodFull\\XLK_2021-07-06_2026-07-06.json",
+    after: "fixture:fixtures/fmp/historicalPriceEodFull/XLK_2021-07-06_2026-07-06.json",
+  },
+  {
+    path: "report.appendix.missingData.10.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\historicalPriceEodFull\\XLK.json",
+    after: "fixture:fixtures/fmp/historicalPriceEodFull/XLK.json",
+  },
+  {
+    path: "report.appendix.missingData.10.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\historicalPriceEodFull\\default.json",
+    after: "fixture:fixtures/fmp/historicalPriceEodFull/default.json",
+  },
+  {
+    path: "report.appendix.missingData.11.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\DEMO_2026_Q1.json",
+    after: "fixture:fixtures/fmp/institutionalHolderAnalytics/DEMO_2026_Q1.json",
+  },
+  {
+    path: "report.appendix.missingData.11.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\DEMO.json",
+    after: "fixture:fixtures/fmp/institutionalHolderAnalytics/DEMO.json",
+  },
+  {
+    path: "report.appendix.missingData.11.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\default.json",
+    after: "fixture:fixtures/fmp/institutionalHolderAnalytics/default.json",
+  },
+  {
+    path: "report.appendix.missingData.12.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\keyMetricsTtm\\DEMO.json",
+    after: "fixture:fixtures/fmp/keyMetricsTtm/DEMO.json",
+  },
+  {
+    path: "report.appendix.missingData.12.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\keyMetricsTtm\\default.json",
+    after: "fixture:fixtures/fmp/keyMetricsTtm/default.json",
+  },
+  {
+    path: "report.appendix.missingData.13.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\pressReleases\\DEMO.json",
+    after: "fixture:fixtures/fmp/pressReleases/DEMO.json",
+  },
+  {
+    path: "report.appendix.missingData.13.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\pressReleases\\default.json",
+    after: "fixture:fixtures/fmp/pressReleases/default.json",
+  },
+  {
+    path: "report.appendix.missingData.14.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\ratiosTtm\\DEMO.json",
+    after: "fixture:fixtures/fmp/ratiosTtm/DEMO.json",
+  },
+  {
+    path: "report.appendix.missingData.14.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\ratiosTtm\\default.json",
+    after: "fixture:fixtures/fmp/ratiosTtm/default.json",
+  },
+  {
+    path: "report.appendix.missingData.15.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\secFilingsSearch\\DEMO_2025-07-06_2026-07-06.json",
+    after: "fixture:fixtures/fmp/secFilingsSearch/DEMO_2025-07-06_2026-07-06.json",
+  },
+  {
+    path: "report.appendix.missingData.15.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\secFilingsSearch\\DEMO.json",
+    after: "fixture:fixtures/fmp/secFilingsSearch/DEMO.json",
+  },
+  {
+    path: "report.appendix.missingData.15.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\secFilingsSearch\\default.json",
+    after: "fixture:fixtures/fmp/secFilingsSearch/default.json",
+  },
+  {
+    path: "report.appendix.missingData.16.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\stockNews\\DEMO.json",
+    after: "fixture:fixtures/fmp/stockNews/DEMO.json",
+  },
+  {
+    path: "report.appendix.missingData.16.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\stockNews\\default.json",
+    after: "fixture:fixtures/fmp/stockNews/default.json",
+  },
+  {
+    path: "report.appendix.missingData.17.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\symbolPositionsSummary\\DEMO_2026_Q1.json",
+    after: "fixture:fixtures/fmp/symbolPositionsSummary/DEMO_2026_Q1.json",
+  },
+  {
+    path: "report.appendix.missingData.17.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\symbolPositionsSummary\\DEMO.json",
+    after: "fixture:fixtures/fmp/symbolPositionsSummary/DEMO.json",
+  },
+  {
+    path: "report.appendix.missingData.17.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\symbolPositionsSummary\\default.json",
+    after: "fixture:fixtures/fmp/symbolPositionsSummary/default.json",
+  },
+  {
+    path: "report.appendix.missingData.18.attemptedSources.1",
+    before: "fixture:fixtures\\fmp\\transcript\\DEMO_2025_Q4.json",
+    after: "fixture:fixtures/fmp/transcript/DEMO_2025_Q4.json",
+  },
+  {
+    path: "report.appendix.missingData.18.attemptedSources.2",
+    before: "fixture:fixtures\\fmp\\transcript\\DEMO.json",
+    after: "fixture:fixtures/fmp/transcript/DEMO.json",
+  },
+  {
+    path: "report.appendix.missingData.18.attemptedSources.3",
+    before: "fixture:fixtures\\fmp\\transcript\\default.json",
+    after: "fixture:fixtures/fmp/transcript/default.json",
+  },
   // Added 2026-08-31 (final pass): bestCagr now refuses a window whose
   // MEASURED span is not that window. This fixture's 3y and 5y revenue CAGRs
   // both span only 2.0 years, so the growth driver and the reverse-DCF

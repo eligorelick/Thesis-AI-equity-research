@@ -33,6 +33,7 @@ export const RISK_SOURCE_MANIFEST = [
   "src/symbol.ts",
   "src/pipeline/companyLoad.ts",
   "src/pipeline/dataBundle.ts",
+  "src/pipeline/keyless.ts",
   "src/pipeline/stageA/manifest.ts",
   "src/pipeline/stageA/validate.ts",
   "src/pipeline/stageC/citations.ts",

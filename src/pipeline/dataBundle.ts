@@ -988,6 +988,7 @@ async function buildEdgarBundle(
       companyFacts: dep("companyFacts", "warn"),
       xbrlSummary: null,
       sic: null,
+      registrant: null,
     };
   }
 
@@ -1189,6 +1190,21 @@ async function buildEdgarBundle(
     // Altman's variant selection is SIC-decisive; FMP's profile has no SIC, so
     // the submissions payload is the only source and was previously discarded.
     sic: sub.ok ? sub.value.data.sic : null,
+    // Registrant identity for the keyless profile: the name, listing venue,
+    // jurisdiction and filed form mix a vendor profile would otherwise supply.
+    registrant: sub.ok
+      ? {
+          name: sub.value.data.name,
+          cik10: cikRes.value.data.cik10,
+          sic: sub.value.data.sic,
+          sicDescription: sub.value.data.sicDescription,
+          exchanges: sub.value.data.exchanges.filter((e): e is string => typeof e === "string" && e !== ""),
+          tickers: sub.value.data.tickers,
+          fiscalYearEnd: sub.value.data.fiscalYearEnd,
+          stateOfIncorporation: sub.value.data.stateOfIncorporation,
+          forms: [...new Set(sub.value.data.recentFilings.map((f) => f.form))],
+        }
+      : null,
   };
 }
 

@@ -1,0 +1,462 @@
+import { describe, expect, it } from "vitest";
+import {
+  applyKeylessFallbacks,
+  isUsJurisdiction,
+  lastCloseOnOrBefore,
+  needsFallback,
+  sharesOnOrBefore,
+  type KeylessInputs,
+  type KeylessMembers,
+} from "@/pipeline/keyless";
+import { createYahooClient, type YahooClient } from "@/providers/yahoo";
+import { makeLimiter } from "@/providers/http";
+import type { CompanyFacts } from "@/edgar/xbrl";
+import type { FetchResult } from "@/types/core";
+import type { FmpPayload, FmpRawRow } from "@/providers/fmp";
+
+const NOW = new Date("2026-09-01T00:00:00Z");
+const gap = <T extends FmpRawRow>(field: string, reason = "no API key + no fixture"): FetchResult<FmpPayload<T>> => ({
+  ok: false,
+  gap: { field, reason, severity: "warn" },
+});
+const okRows = <T extends FmpRawRow>(rows: T[], endpoint = "/stable/x"): FetchResult<FmpPayload<T>> => ({
+  ok: true,
+  value: {
+    data: { rows, raw: null },
+    asOf: "2026-09-01",
+    source: "fmp",
+    endpoint,
+    fetchedAt: NOW.toISOString(),
+  },
+});
+
+function allGaps(): KeylessMembers {
+  return {
+    profile: gap("fmp.profile(AAPL)"),
+    quote: gap("fmp.quote(AAPL)"),
+    incomeAnnual: gap("fmp.incomeStatement(AAPL,annual)"),
+    incomeQuarterly: gap("fmp.incomeStatement(AAPL,quarter)"),
+    balanceAnnual: gap("fmp.balanceSheet(AAPL,annual)"),
+    balanceQuarterly: gap("fmp.balanceSheet(AAPL,quarter)"),
+    cashflowAnnual: gap("fmp.cashFlow(AAPL,annual)"),
+    cashflowQuarterly: gap("fmp.cashFlow(AAPL,quarter)"),
+    eodPrices: gap("fmp.historicalPriceEodFull(AAPL)"),
+    spy: gap("fmp.historicalPriceEodFull(SPY)"),
+    sectorEtf: gap(
+      "fmp.historicalPriceEodFull(XLK)",
+      "FMP returned unparseable body (HTTP 402): symbol not available",
+    ),
+    enterpriseValues: gap("fmp.enterpriseValues(AAPL,quarter)"),
+    marketCapHistory: gap("fmp.historicalMarketCap(AAPL)"),
+    sharesFloat: gap("fmp.sharesFloat(AAPL)"),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// companyfacts fixture — `facts` and `appleLike` are copied verbatim from
+// tests/edgar.statements.test.ts (tests never import from each other here).
+// ---------------------------------------------------------------------------
+
+interface Pt { start?: string; end: string; val: number; form?: string; fy?: number; fp?: string; filed?: string; accn?: string }
+
+/** Build a companyfacts payload from `{ tag: [points] }` (unit USD unless the tag says otherwise). */
+function facts(usGaap: Record<string, Pt[]>, dei: Record<string, Pt[]> = {}, units: Record<string, string> = {}): CompanyFacts {
+  const toConcept = (tag: string, points: Pt[]) => ({
+    label: tag,
+    units: {
+      [units[tag] ?? (tag.startsWith("EarningsPerShare") ? "USD/shares" : /Shares/.test(tag) ? "shares" : "USD")]: points.map((p, i) => ({
+        start: p.start,
+        end: p.end,
+        val: p.val,
+        accn: p.accn ?? `0000000000-26-${String(i).padStart(6, "0")}`,
+        fy: p.fy ?? Number(p.end.slice(0, 4)),
+        fp: p.fp ?? (p.start === undefined || dur(p) > 300 ? "FY" : "Q1"),
+        form: p.form ?? (p.start === undefined || dur(p) > 300 ? "10-K" : "10-Q"),
+        filed: p.filed ?? `${Number(p.end.slice(0, 4)) + (p.end >= `${p.end.slice(0, 4)}-10` ? 1 : 0)}-02-01`,
+      })),
+    },
+  });
+  return {
+    cik: 320193,
+    entityName: "Test Corp",
+    facts: {
+      "us-gaap": Object.fromEntries(Object.entries(usGaap).map(([t, p]) => [t, toConcept(t, p)])),
+      dei: Object.fromEntries(Object.entries(dei).map(([t, p]) => [t, toConcept(t, p)])),
+    },
+  };
+}
+const dur = (p: Pt) => (p.start ? (Date.parse(p.end) - Date.parse(p.start)) / 86_400_000 : 0);
+
+/** A September fiscal year like Apple's: FY2025 = 2024-09-29..2025-09-27, three 10-Qs with 3-month + YTD income and YTD-only cash flow. */
+function appleLike(): CompanyFacts {
+  const fyStart = "2024-09-29";
+  const fyEnd = "2025-09-27";
+  const q1 = "2024-12-28";
+  const q2 = "2025-03-29";
+  const q3 = "2025-06-28";
+  return facts(
+    {
+      RevenueFromContractWithCustomerExcludingAssessedTax: [
+        { start: fyStart, end: fyEnd, val: 400, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" },
+        { start: fyStart, end: q1, val: 120, form: "10-Q", fp: "Q1", fy: 2025, filed: "2025-01-31" },
+        { start: fyStart, end: q2, val: 210, form: "10-Q", fp: "Q2", fy: 2025, filed: "2025-05-02" },
+        { start: "2024-12-29", end: q2, val: 90, form: "10-Q", fp: "Q2", fy: 2025, filed: "2025-05-02" },
+        { start: fyStart, end: q3, val: 300, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+        { start: "2025-03-30", end: q3, val: 90, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+        // prior year, for the annual list
+        { start: "2023-10-01", end: "2024-09-28", val: 380, form: "10-K", fp: "FY", fy: 2024, filed: "2024-11-01" },
+      ],
+      NetIncomeLoss: [
+        { start: fyStart, end: fyEnd, val: 100, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" },
+        { start: fyStart, end: q1, val: 30, form: "10-Q", fp: "Q1", fy: 2025, filed: "2025-01-31" },
+        { start: fyStart, end: q2, val: 55, form: "10-Q", fp: "Q2", fy: 2025, filed: "2025-05-02" },
+        { start: "2024-12-29", end: q2, val: 25, form: "10-Q", fp: "Q2", fy: 2025, filed: "2025-05-02" },
+        { start: fyStart, end: q3, val: 78, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+        { start: "2025-03-30", end: q3, val: 23, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+        { start: "2023-10-01", end: "2024-09-28", val: 90, form: "10-K", fp: "FY", fy: 2024, filed: "2024-11-01" },
+      ],
+      CostOfRevenue: [{ start: fyStart, end: fyEnd, val: 220, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      OperatingIncomeLoss: [{ start: fyStart, end: fyEnd, val: 130, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      DepreciationDepletionAndAmortization: [{ start: fyStart, end: fyEnd, val: 12, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      InterestExpense: [{ start: fyStart, end: fyEnd, val: 4, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest: [{ start: fyStart, end: fyEnd, val: 128, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      EarningsPerShareDiluted: [
+        { start: fyStart, end: fyEnd, val: 7.5, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" },
+        { start: fyStart, end: q1, val: 2.3, form: "10-Q", fp: "Q1", fy: 2025, filed: "2025-01-31" },
+        { start: fyStart, end: q3, val: 5.9, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+        { start: "2025-03-30", end: q3, val: 1.7, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+      ],
+      WeightedAverageNumberOfDilutedSharesOutstanding: [
+        { start: fyStart, end: fyEnd, val: 15_000, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" },
+        { start: "2025-03-30", end: q3, val: 14_900, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+      ],
+      Assets: [
+        { end: fyEnd, val: 360, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" },
+        { end: q1, val: 340, form: "10-Q", fp: "Q1", fy: 2025, filed: "2025-01-31" },
+        { end: q2, val: 345, form: "10-Q", fp: "Q2", fy: 2025, filed: "2025-05-02" },
+        { end: q3, val: 350, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+        { end: "2024-09-28", val: 365, form: "10-K", fp: "FY", fy: 2024, filed: "2024-11-01" },
+      ],
+      StockholdersEquity: [{ end: fyEnd, val: 65, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      Liabilities: [{ end: fyEnd, val: 295, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      CashAndCashEquivalentsAtCarryingValue: [{ end: fyEnd, val: 30, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      ShortTermInvestments: [{ end: fyEnd, val: 25, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      LongTermDebtNoncurrent: [{ end: fyEnd, val: 80, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      LongTermDebtCurrent: [{ end: fyEnd, val: 10, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      CommercialPaper: [{ end: fyEnd, val: 5, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      NetCashProvidedByUsedInOperatingActivities: [
+        { start: fyStart, end: fyEnd, val: 110, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" },
+        { start: fyStart, end: q1, val: 50, form: "10-Q", fp: "Q1", fy: 2025, filed: "2025-01-31" },
+        { start: fyStart, end: q2, val: 80, form: "10-Q", fp: "Q2", fy: 2025, filed: "2025-05-02" },
+        { start: fyStart, end: q3, val: 95, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+      ],
+      PaymentsToAcquirePropertyPlantAndEquipment: [
+        { start: fyStart, end: fyEnd, val: 12, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" },
+        { start: fyStart, end: q1, val: 2, form: "10-Q", fp: "Q1", fy: 2025, filed: "2025-01-31" },
+        { start: fyStart, end: q2, val: 5, form: "10-Q", fp: "Q2", fy: 2025, filed: "2025-05-02" },
+        { start: fyStart, end: q3, val: 8, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+      ],
+      PaymentsForRepurchaseOfCommonStock: [{ start: fyStart, end: fyEnd, val: 90, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      PaymentsOfDividends: [{ start: fyStart, end: fyEnd, val: 15, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+    },
+    {
+      EntityCommonStockSharesOutstanding: [
+        { end: "2025-10-17", val: 14_776, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" },
+        { end: "2025-07-18", val: 14_900, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+      ],
+      EntityPublicFloat: [{ end: "2025-03-28", val: 3_000_000, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+    },
+  );
+}
+
+/** Minimal Apple-like facts: two fiscal years, one 10-Q quarter, dei shares. */
+function appleFacts(): CompanyFacts {
+  return appleLike();
+}
+
+/** Yahoo fake serving 5y of synthetic daily bars for any symbol and a quote meta. */
+function fakeYahoo(opts: { fail?: Set<string> } = {}) {
+  const impl = (async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const symbol = /chart\/([^?]+)/.exec(url)![1]!;
+    if (opts.fail?.has(symbol)) return new Response("Too Many Requests", { status: 429 });
+    const isQuote = url.includes("range=5d");
+    const start = Date.UTC(2021, 8, 1, 13, 30) / 1000;
+    const n = isQuote ? 5 : 1250;
+    const timestamp = Array.from({ length: n }, (_, i) => start + i * 86400);
+    const close = timestamp.map((_, i) => (symbol === "SPY" ? 400 : 150) * Math.exp(0.0002 * i));
+    return new Response(JSON.stringify({ chart: { result: [{ meta: { currency: "USD", symbol, exchangeName: "NMS", fullExchangeName: "NasdaqGS", instrumentType: "EQUITY", firstTradeDate: 345479400, regularMarketTime: timestamp[n - 1]! + 23400, gmtoffset: -14400, regularMarketPrice: close[n - 1], regularMarketDayHigh: 1, regularMarketDayLow: 1, regularMarketVolume: 5, fiftyTwoWeekHigh: 1, fiftyTwoWeekLow: 1, chartPreviousClose: 1, longName: "Apple Inc." }, timestamp, indicators: { quote: [{ open: close, high: close, low: close, close, volume: close.map(() => 1000) }], adjclose: [{ adjclose: close }] } }], error: null } }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof fetch;
+  return createYahooClient({ fetchImpl: impl, limiter: makeLimiter(1000, 1000), now: () => NOW, maxRetries: 0 });
+}
+
+function inputs(over: Partial<KeylessInputs> = {}): KeylessInputs {
+  return {
+    symbol: "AAPL",
+    today: "2026-09-01",
+    eodFrom: "2021-09-01",
+    sectorEtfSymbol: null,
+    fmp: allGaps(),
+    fmpKeyless: true,
+    edgar: {
+      cik: { ok: true, value: { data: { cik10: "0000320193", cik: 320193, ticker: "AAPL", title: "Apple Inc." }, asOf: "2026-09-01", source: "edgar", endpoint: "company_tickers.json", fetchedAt: NOW.toISOString() } },
+      registrant: { name: "Apple Inc.", cik10: "0000320193", sic: "3571", sicDescription: "ELECTRONIC COMPUTERS", exchanges: ["Nasdaq"], tickers: ["AAPL"], fiscalYearEnd: "0927", stateOfIncorporation: "CA", forms: ["10-K", "10-Q", "8-K"] },
+      companyFacts: { ok: true, value: { data: appleFacts(), asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+    },
+    yahoo: fakeYahoo(),
+    annualPeriods: 10,
+    quarterlyPeriods: 24,
+    now: () => NOW,
+    resolveSectorEtf: (sector) => (sector === "Technology" ? "XLK" : null),
+    ...over,
+  };
+}
+
+describe("needsFallback", () => {
+  it("is true for a gap or an empty ok result and false for rows", () => {
+    expect(needsFallback(gap("x"))).toBe(true);
+    expect(needsFallback(okRows([]))).toBe(true);
+    expect(needsFallback(okRows([{ a: 1 }]))).toBe(false);
+  });
+});
+
+describe("pure keyless helpers", () => {
+  it("takes the last close on or before a date and nothing from an empty or all-later series", () => {
+    const rows = [
+      { date: "2025-02-01", close: 3 },
+      { date: "2025-01-15", close: 2 },
+      { date: "2024-12-31", close: 1 },
+    ];
+    expect(lastCloseOnOrBefore(rows, "2025-06-01")).toBe(3);
+    expect(lastCloseOnOrBefore(rows, "2025-01-20")).toBe(2);
+    expect(lastCloseOnOrBefore(rows, "2024-12-31")).toBe(1);
+    expect(lastCloseOnOrBefore(rows, "2024-01-01")).toBeNull();
+    expect(lastCloseOnOrBefore([], "2025-01-01")).toBeNull();
+    expect(lastCloseOnOrBefore([{ date: "2025-01-02" }, { date: "2025-01-01", close: 7 }], "2025-01-03")).toBe(7);
+  });
+
+  it("takes the latest share cover date on or before a date and falls back to the earliest", () => {
+    const points = [
+      { value: 100, asOf: "2025-01-31" },
+      { value: 110, asOf: "2025-07-31" },
+    ];
+    expect(sharesOnOrBefore(points, "2025-12-31")).toBe(110);
+    expect(sharesOnOrBefore(points, "2025-02-01")).toBe(100);
+    expect(sharesOnOrBefore(points, "2020-01-01")).toBe(100);
+    expect(sharesOnOrBefore([], "2025-01-01")).toBeNull();
+  });
+
+  it("recognises the 50 states, DC and the five territories and nothing else", () => {
+    expect(isUsJurisdiction("CA")).toBe(true);
+    expect(isUsJurisdiction("DE")).toBe(true);
+    expect(isUsJurisdiction("DC")).toBe(true);
+    expect(isUsJurisdiction("PR")).toBe(true);
+    expect(isUsJurisdiction("MP")).toBe(true);
+    expect(isUsJurisdiction("L3")).toBe(false);
+    expect(isUsJurisdiction("E9")).toBe(false);
+    expect(isUsJurisdiction(null)).toBe(false);
+  });
+});
+
+describe("applyKeylessFallbacks", () => {
+  it("fills every core member from EDGAR and Yahoo with provenance and expected info gaps", async () => {
+    const out = await applyKeylessFallbacks(inputs());
+    const m = out.members;
+    expect(m.profile.ok && m.profile.value.source).toBe("computed");
+    if (!m.profile.ok) return;
+    const profile = m.profile.value.data.rows[0]!;
+    expect(profile).toMatchObject({ symbol: "AAPL", companyName: "Apple Inc.", sector: "Technology", industry: "Computer Hardware", currency: "USD", country: "US", isEtf: false, isFund: false, isAdr: false, ipoDate: "1980-12-12", cik: "0000320193" });
+    expect(profile.price).toBeGreaterThan(0);
+    expect(profile.marketCap).toBeCloseTo(profile.price! * 14_776, 3);
+    expect(typeof profile.beta).toBe("number");
+    expect(m.quote.ok && m.quote.value.source).toBe("yahoo");
+    expect(m.quote.ok && m.quote.value.data.rows[0]!.marketCap).toBeCloseTo(profile.price! * 14_776, 3);
+    expect(m.incomeAnnual.ok && m.incomeAnnual.value.source).toBe("edgar");
+    expect(m.incomeAnnual.ok && m.incomeAnnual.value.endpoint).toBe("companyfacts→income-statement(annual)");
+    expect(m.incomeAnnual.ok && m.incomeAnnual.value.asOf).toBe("2025-09-27");
+    expect(m.incomeAnnual.ok && m.incomeAnnual.value.data.rows[0]!.revenue).toBe(400);
+    expect(m.balanceQuarterly.ok && m.balanceQuarterly.value.data.rows.length).toBeGreaterThan(0);
+    expect(m.eodPrices.ok && m.eodPrices.value.data.rows.length).toBeGreaterThan(1000);
+    expect(m.spy.ok && m.spy.value.source).toBe("yahoo");
+    expect(m.sectorEtf.ok && m.sectorEtf.value.source).toBe("yahoo");
+    expect(out.sectorEtfSymbol).toBe("XLK");
+    expect(m.enterpriseValues.ok && m.enterpriseValues.value.source).toBe("computed");
+    if (m.enterpriseValues.ok) {
+      const ev = m.enterpriseValues.value.data.rows[0]!;
+      expect(ev.date).toBe("2025-09-27");
+      // No diluted share count on the derived Q4 income row, so the cover-page
+      // count within 60 days of the period end is used: 14,776 @ 2025-10-17.
+      expect(ev.numberOfShares).toBe(14_776);
+      expect(ev.addTotalDebt).toBe(95);
+      expect(ev.minusCashAndCashEquivalents).toBe(30);
+      expect(ev.marketCapitalization).toBeCloseTo(ev.stockPrice! * 14_776, 6);
+      expect(ev.enterpriseValue).toBeCloseTo(ev.marketCapitalization! + ev.addTotalDebt! - ev.minusCashAndCashEquivalents!, 6);
+    }
+    expect(m.marketCapHistory.ok && m.marketCapHistory.value.data.rows.length).toBeGreaterThan(1000);
+    expect(m.sharesFloat.ok && m.sharesFloat.value.data.rows[0]).toMatchObject({ outstandingShares: 14_776 });
+    expect(out.replaced.sort()).toEqual(Object.keys(allGaps()).sort());
+    const fields = out.gaps.map((g) => g.field);
+    expect(fields).toContain("keyless.incomeAnnual");
+    expect(out.gaps.every((g) => g.severity === "info" && g.expected === true)).toBe(true);
+    expect(out.gaps.find((g) => g.field === "keyless.profile")?.reason).toMatch(/served by computed .* because FMP no API key \+ no fixture/);
+  });
+
+  it("never overwrites an FMP member that has rows, and marks gaps as unexpected on a keyed plan", async () => {
+    const fmp = allGaps();
+    fmp.incomeAnnual = okRows([{ date: "2025-09-27", revenue: 1 }]);
+    const out = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false }));
+    expect(out.members.incomeAnnual).toBe(fmp.incomeAnnual);
+    expect(out.replaced).not.toContain("incomeAnnual");
+    expect(out.gaps.every((g) => g.expected === undefined || g.expected === false)).toBe(true);
+    expect(out.gaps.find((g) => g.field === "keyless.sectorEtf")?.reason).toMatch(/HTTP 402/);
+  });
+
+  it("leaves the FMP gap in place and records the keyless failure when Yahoo is unavailable", async () => {
+    const out = await applyKeylessFallbacks(inputs({ yahoo: fakeYahoo({ fail: new Set(["AAPL", "SPY", "XLK"]) }) }));
+    expect(out.members.eodPrices.ok).toBe(false);
+    if (out.members.eodPrices.ok) return;
+    expect(out.members.eodPrices.gap.reason).toBe("no API key + no fixture");
+    expect(out.members.eodPrices.gap.attemptedSources).toEqual(expect.arrayContaining([expect.stringMatching(/yahoo/)]));
+    expect(out.gaps.find((g) => g.field === "keyless.eodPrices")?.severity).toBe("warn");
+    // Statements still come from EDGAR; the profile still exists but without price-derived fields.
+    expect(out.members.incomeAnnual.ok).toBe(true);
+    expect(out.members.profile.ok && out.members.profile.value.data.rows[0]!.price).toBeNull();
+    expect(out.members.profile.ok && out.members.profile.value.data.rows[0]!.marketCap).toBeNull();
+    // No Yahoo meta: currency falls back to the filed reporting currency and the
+    // exchange to the registrant's.
+    expect(out.members.profile.ok && out.members.profile.value.data.rows[0]).toMatchObject({ currency: "USD", exchange: "Nasdaq", exchangeFullName: null, ipoDate: null });
+    expect(out.gaps.some((g) => g.field === "profile.beta")).toBe(true);
+    expect(out.members.enterpriseValues.ok).toBe(false);
+    expect(out.members.marketCapHistory.ok).toBe(false);
+    // Float needs a price to turn the filed dollar float into shares.
+    expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.data.rows[0]).toMatchObject({ outstandingShares: 14_776, floatShares: null, freeFloat: null });
+  });
+
+  it("does nothing when EDGAR did not resolve the ticker", async () => {
+    const fmp = allGaps();
+    const out = await applyKeylessFallbacks(inputs({ fmp, edgar: { cik: { ok: false, gap: { field: "edgar.cik(DEMO)", reason: 'ticker "DEMO" not in SEC company_tickers.json', severity: "warn" } }, registrant: null, companyFacts: { ok: false, gap: { field: "x", reason: "n/a", severity: "warn" } } } }));
+    expect(out.members).toEqual(fmp);
+    expect(out.replaced).toEqual([]);
+    expect(out.gaps).toEqual([]);
+    expect(out.notes[0]).toMatch(/skipped/);
+  });
+
+  it("flags a 20-F filer as an ADR and leaves country null for a foreign incorporation", async () => {
+    const facts = appleFacts();
+    for (const concept of Object.values(facts.facts["us-gaap"]!)) {
+      for (const pts of Object.values((concept as { units: Record<string, { form: string }[]> }).units)) for (const p of pts) if (p.form === "10-K") p.form = "20-F";
+    }
+    const out = await applyKeylessFallbacks(inputs({ edgar: { ...inputs().edgar, registrant: { ...inputs().edgar.registrant!, stateOfIncorporation: "L3", forms: ["20-F", "6-K"] }, companyFacts: { ok: true, value: { data: facts, asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } } } }));
+    expect(out.members.profile.ok && out.members.profile.value.data.rows[0]).toMatchObject({ isAdr: true, country: null });
+  });
+
+  it("keeps the six statement gaps when companyfacts is unavailable and records the EDGAR attempt", async () => {
+    const out = await applyKeylessFallbacks(
+      inputs({
+        edgar: {
+          ...inputs().edgar,
+          companyFacts: { ok: false, gap: { field: "edgar.companyFacts(AAPL)", reason: "EDGAR HTTP 503", severity: "warn" } },
+        },
+      }),
+    );
+    const income = out.members.incomeAnnual;
+    expect(income.ok).toBe(false);
+    if (income.ok) return;
+    expect(income.gap.reason).toMatch(/no API key \+ no fixture.*EDGAR HTTP 503/);
+    expect(income.gap.attemptedSources).toContain("edgar:companyfacts");
+    expect(out.gaps.find((g) => g.field === "keyless.cashflowQuarterly")?.severity).toBe("warn");
+    expect(out.replaced).not.toContain("balanceAnnual");
+    // Prices are independent of companyfacts and still arrive.
+    expect(out.members.eodPrices.ok).toBe(true);
+    // Without dei shares nothing capitalization-derived can be built.
+    expect(out.members.marketCapHistory.ok).toBe(false);
+    expect(out.members.sharesFloat.ok).toBe(false);
+    expect(out.members.profile.ok && out.members.profile.value.data.rows[0]!.marketCap).toBeNull();
+  });
+
+  it("skips an enterprise-value period rather than fabricating an operand", async () => {
+    // The fixture's three 10-Q periods file total assets only, so debt and cash
+    // are genuinely absent there; only the fiscal-year end has every operand.
+    const out = await applyKeylessFallbacks(inputs());
+    expect(out.members.enterpriseValues.ok && out.members.enterpriseValues.value.data.rows.map((r) => r.date)).toEqual(["2025-09-27"]);
+    for (const date of ["2025-06-28", "2025-03-29", "2024-12-28"]) {
+      expect(out.notes).toContain(`keyless enterprise value ${date} skipped: no totalDebt, no cashAndCashEquivalents`);
+    }
+  });
+
+  it("cannot build a profile without a registrant and says so", async () => {
+    const out = await applyKeylessFallbacks(inputs({ edgar: { ...inputs().edgar, registrant: null } }));
+    expect(out.members.profile.ok).toBe(false);
+    expect(out.gaps.find((g) => g.field === "keyless.profile")?.severity).toBe("warn");
+    expect(out.gaps.find((g) => g.field === "keyless.profile")?.reason).toMatch(/registrant/);
+    // The sector ETF is unresolvable without a SIC, so that member stays gapped too.
+    expect(out.sectorEtfSymbol).toBeNull();
+    expect(out.members.sectorEtf.ok).toBe(false);
+    // Statements and prices are unaffected.
+    expect(out.members.incomeAnnual.ok).toBe(true);
+    expect(out.members.eodPrices.ok).toBe(true);
+  });
+
+  it("turns a thrown keyless fetch into a disclosed gap instead of a rejection", async () => {
+    const throwing = {
+      dailyHistory: () => Promise.reject(new Error("socket hang up")),
+      meta: () => Promise.reject(new Error("socket hang up")),
+      quote: () => Promise.reject("not an Error"),
+    } as unknown as YahooClient;
+    const out = await applyKeylessFallbacks(inputs({ yahoo: throwing }));
+    expect(out.members.eodPrices.ok).toBe(false);
+    expect(out.gaps.find((g) => g.field === "keyless.eodPrices")?.reason).toMatch(/threw: socket hang up/);
+    expect(out.gaps.find((g) => g.field === "keyless.quote")?.reason).toMatch(/threw: not an Error/);
+    // The EDGAR half of the fallback is untouched by a broken price source.
+    expect(out.members.incomeAnnual.ok).toBe(true);
+    expect(out.members.sharesFloat.ok).toBe(true);
+  });
+
+  it("keeps the FMP gap when companyfacts holds no usable facts for a statement", async () => {
+    const empty = facts({});
+    const out = await applyKeylessFallbacks(
+      inputs({
+        edgar: {
+          ...inputs().edgar,
+          companyFacts: { ok: true, value: { data: empty, asOf: "2026-09-01", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+        },
+      }),
+    );
+    const income = out.members.incomeAnnual;
+    expect(income.ok).toBe(false);
+    if (income.ok) return;
+    expect(income.gap.reason).toMatch(/no API key \+ no fixture; EDGAR companyfacts produced no incomeAnnual rows/);
+    expect(income.gap.attemptedSources).toContain("edgar:companyfacts");
+    expect(out.gaps.find((g) => g.field === "keyless.balanceQuarterly")?.severity).toBe("warn");
+    expect(out.replaced).not.toContain("cashflowAnnual");
+    // No shares either, so nothing capitalization-derived can be built.
+    expect(out.members.sharesFloat.ok).toBe(false);
+    expect(out.members.enterpriseValues.ok).toBe(false);
+  });
+
+  it("derives capitalization from FMP prices when only the derived members are missing", async () => {
+    const fmp = allGaps();
+    fmp.eodPrices = okRows([
+      { symbol: "AAPL", date: "2025-06-27", close: 200 },
+      { symbol: "AAPL", date: "2025-03-28", close: 190 },
+      { symbol: "AAPL", date: "2024-12-27", close: 180 },
+    ]);
+    const out = await applyKeylessFallbacks(inputs({ fmp, sectorEtfSymbol: "XLK" }));
+    expect(out.members.eodPrices).toBe(fmp.eodPrices);
+    expect(out.replaced).not.toContain("eodPrices");
+    expect(out.members.enterpriseValues.ok && out.members.enterpriseValues.value.data.rows[0]).toMatchObject({
+      date: "2025-09-27",
+      stockPrice: 200,
+      numberOfShares: 14_776,
+      marketCapitalization: 200 * 14_776,
+      addTotalDebt: 95,
+      minusCashAndCashEquivalents: 30,
+      enterpriseValue: 200 * 14_776 + 95 - 30,
+    });
+    expect(out.members.marketCapHistory.ok && out.members.marketCapHistory.value.data.rows).toEqual([
+      { symbol: "AAPL", date: "2025-06-27", marketCap: 200 * 14_900 },
+      { symbol: "AAPL", date: "2025-03-28", marketCap: 190 * 14_900 },
+      { symbol: "AAPL", date: "2024-12-27", marketCap: 180 * 14_900 },
+    ]);
+  });
+});

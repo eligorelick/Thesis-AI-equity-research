@@ -109,6 +109,24 @@ export interface XbrlSummary {
   bankTagging: boolean;
 }
 
+/**
+ * Registrant identity from the EDGAR submissions payload — the keyless
+ * profile's only source of a company name, listing venue, jurisdiction and
+ * filed form mix.
+ */
+export interface EdgarRegistrant {
+  name: string;
+  cik10: string;
+  sic: string | null;
+  sicDescription: string | null;
+  exchanges: string[];
+  tickers: string[];
+  fiscalYearEnd: string | null;
+  stateOfIncorporation: string | null;
+  /** Distinct form types among recent filings (e.g. ["10-K","10-Q","8-K"]). */
+  forms: string[];
+}
+
 export interface EdgarBundle {
   cik: FetchResult<CikMapping>;
   /** Latest annual primary filing: prefer 10-K, otherwise Form 20-F. */
@@ -137,6 +155,11 @@ export interface EdgarBundle {
    * submissions were unavailable.
    */
   sic: string | null;
+  /**
+   * Plain object, deliberately not a FetchResult: the producer registry
+   * discovers FetchResult members and the audit fixture pins their gaps.
+   */
+  registrant: EdgarRegistrant | null;
 }
 
 /** 13F data resolved to a specific reporting quarter (see resolve13FQuarter). */

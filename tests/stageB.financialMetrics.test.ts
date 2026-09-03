@@ -343,6 +343,58 @@ describe("insurer route metrics", () => {
     expect(combined.withheldReason).toContain("understate underwriting cost");
   });
 
+  it("does not add commission and fee INCOME to underwriting expense", () => {
+    // InsuranceCommissionsAndFees is a credit-balance revenue element. Summing
+    // it into underwriting expense inflated both ratios: on these figures it
+    // published a 37% expense ratio and a 97% combined ratio instead of 28% and
+    // 92%. Tagging it must change nothing.
+    const r = computeFinancialMetrics(
+      "insurer",
+      insurerInputs({
+        companyFacts: okFacts({
+          PremiumsEarnedNet: [{ ...FY, val: 50_000 }],
+          PolicyholderBenefitsAndClaimsIncurredNet: [{ ...FY, val: 32_000 }],
+          OtherUnderwritingExpense: [{ ...FY, val: 9_000 }],
+          DeferredPolicyAcquisitionCostAmortizationExpense: [{ ...FY, val: 5_000 }],
+          InsuranceCommissionsAndFees: [{ ...FY, val: 4_500 }],
+        }),
+      }),
+    );
+
+    const expense = find(r.metrics, "expenseRatio");
+    expect(expense.value).toBeCloseTo(28, 9);
+    expect(expense.basis).not.toContain("InsuranceCommissionsAndFees");
+    expect(find(r.metrics, "combinedRatio").value).toBeCloseTo(92, 9);
+  });
+
+  it("withholds the expense ratio on a PARTIAL component sum, naming the missing component", () => {
+    // With only the deferred-acquisition-cost amortisation tagged, the old
+    // any-component-resolves rule published a 12% expense ratio and a 77%
+    // combined ratio — an underwriter that does not exist.
+    const r = computeFinancialMetrics(
+      "insurer",
+      insurerInputs({
+        companyFacts: okFacts({
+          PremiumsEarnedNet: [{ ...FY, val: 50_000 }],
+          PolicyholderBenefitsAndClaimsIncurredNet: [{ ...FY, val: 32_000 }],
+          DeferredPolicyAcquisitionCostAmortizationExpense: [{ ...FY, val: 6_000 }],
+        }),
+      }),
+    );
+
+    const expense = find(r.metrics, "expenseRatio");
+    expect(expense.value).toBeNull();
+    expect(expense.withheldReason).toContain("OtherUnderwritingExpense");
+    expect(expense.withheldReason).toContain("PARTIAL component sum");
+    // ...and the combined ratio follows it into the withheld column, never zero.
+    const combined = find(r.metrics, "combinedRatio");
+    expect(combined.value).toBeNull();
+    expect(combined.withheldReason).toContain("expense ratio");
+    expect(
+      r.gaps.some((g) => g.field === "financialMetrics.expenseRatio"),
+    ).toBe(true);
+  });
+
   it("reports prior-year reserve development with its sign convention stated", () => {
     const development = find(computeFinancialMetrics("insurer", insurerInputs()).metrics, "reserveDevelopment");
 

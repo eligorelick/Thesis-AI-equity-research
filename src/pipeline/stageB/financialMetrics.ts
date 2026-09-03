@@ -168,10 +168,19 @@ export const INCURRED_CLAIMS_TAGS = [
   "PolicyholderBenefitsAndClaimsIncurredHealthCare",
   "LiabilityForClaimsAndClaimsAdjustmentExpenseIncurredClaims",
 ] as const;
+/**
+ * The two components a GAAP underwriting-expense figure is made of. BOTH are
+ * required before an expense ratio is published — see `insurerMetrics`.
+ *
+ * `InsuranceCommissionsAndFees` used to sit here and does not belong: it is a
+ * credit-balance REVENUE element (commission and fee income an insurer earns),
+ * so adding it inflated both the expense ratio and the combined ratio. us-gaap
+ * carries no unambiguous single underwriting-expense total to fall back on, so
+ * there is no third "total" element in this list.
+ */
 export const UNDERWRITING_EXPENSE_TAGS = [
   "OtherUnderwritingExpense",
   "DeferredPolicyAcquisitionCostAmortizationExpense",
-  "InsuranceCommissionsAndFees",
 ] as const;
 export const PRIOR_YEAR_DEVELOPMENT_TAGS = [
   "LiabilityForUnpaidClaimsAndClaimsAdjustmentExpenseIncurredClaimsPriorYears",
@@ -650,7 +659,18 @@ function insurerMetrics(
 
   const premiums = flow === null ? null : resolveTag(facts, PREMIUMS_EARNED_TAGS, flow);
   const claims = flow === null ? null : resolveTag(facts, INCURRED_CLAIMS_TAGS, flow);
-  const underwriting = flow === null ? null : resolveSum(facts, UNDERWRITING_EXPENSE_TAGS, flow);
+  // `resolveSum` returns a value as soon as ANY component resolves. A partial
+  // component sum is not an underwriting-expense total: an insurer tagging only
+  // its deferred-acquisition-cost amortisation would publish a 12% expense ratio
+  // and a 77% combined ratio — an underwriter that does not exist — which is the
+  // very failure the "combined ratio is withheld when either half is missing"
+  // rule exists to prevent. Both components are required, and the withholding
+  // names the one that is absent.
+  const underwritingSum = flow === null ? null : resolveSum(facts, UNDERWRITING_EXPENSE_TAGS, flow);
+  const underwritingMissing = UNDERWRITING_EXPENSE_TAGS.filter(
+    (tag) => !(underwritingSum?.hits ?? []).some((h) => h.tag === tag),
+  );
+  const underwriting = underwritingMissing.length === 0 ? underwritingSum : null;
 
   const premiumBase = premiums === null ? null : pos(premiums.value);
   const denomNote =
@@ -706,9 +726,11 @@ function insurerMetrics(
           "%",
           facts === null
             ? noFacts
-            : underwriting === null
+            : underwritingSum === null
               ? `the filer tags no underwriting-expense element for ${end} (acquisition costs and other underwriting expenses are often reported only in the expense footnote)`
-              : "premiums earned unavailable or not positive — expense ratio denominator missing",
+              : underwritingMissing.length > 0
+                ? `the filer tags ${underwritingSum.hits.map((h) => h.tag).join(" + ")} but not ${underwritingMissing.join(" or ")} for ${end} — a PARTIAL component sum is not an underwriting-expense total, and publishing it would understate the expense ratio and the combined ratio, so it is withheld`
+                : "premiums earned unavailable or not positive — expense ratio denominator missing",
           "underwriting expenses / premiums earned",
           [...UNDERWRITING_EXPENSE_TAGS.map(tagPath), ...PREMIUMS_EARNED_TAGS.slice(0, 1).map(tagPath)],
         ),

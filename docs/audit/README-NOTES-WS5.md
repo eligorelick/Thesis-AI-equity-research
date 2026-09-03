@@ -164,7 +164,7 @@ the manifest as `financialMetrics.<key>`.
 | Route | Metrics |
 | --- | --- |
 | Bank | NIM, net interest income / average total assets (labeled stand-in), efficiency ratio, CET1 as reported **or** tangible common equity / tangible assets (labeled stand-in), NPL ratio, provisions / loans, cost of deposits |
-| Insurer | loss ratio, expense ratio, combined ratio, prior-year reserve development |
+| Insurer | loss ratio, expense ratio (both `OtherUnderwritingExpense` **and** `DeferredPolicyAcquisitionCostAmortizationExpense` required; commission and fee INCOME is not an expense), combined ratio, prior-year reserve development |
 | Mortgage REIT | book value per share, leverage (assets / equity), net interest spread |
 
 Two rules the README should state, because they are what make the figures
@@ -181,7 +181,9 @@ trustworthy:
    assets appears as a *leverage* ratio and never as a capital ratio.
 
 The combined ratio is withheld outright when either half is missing: a
-loss-ratio-only figure reads materially flattering.
+loss-ratio-only figure reads materially flattering. The expense ratio applies
+the same rule one level down — a partial sum of its two components is withheld
+naming the missing one, rather than published as a complete figure.
 
 ## 7. Statements that are now wrong in the README
 

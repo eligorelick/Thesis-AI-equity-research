@@ -259,9 +259,18 @@ every metric:
 | Metric | Definition |
 | --- | --- |
 | Loss ratio | incurred claims / premiums earned |
-| Expense ratio | underwriting expenses / premiums earned |
+| Expense ratio | (other underwriting expense **+** deferred-policy-acquisition-cost amortisation) / premiums earned — **both** components required |
 | Combined ratio | loss ratio + expense ratio |
 | Reserve development | incurred claims attributable to prior accident years; positive is adverse, negative is a favourable release |
+
+The expense ratio's numerator is the sum of `OtherUnderwritingExpense` and
+`DeferredPolicyAcquisitionCostAmortizationExpense`, and **both** must resolve.
+A partial component sum is not a total: an insurer tagging only the
+acquisition-cost amortisation would publish a 12% expense ratio and a 77%
+combined ratio — an underwriter that does not exist — so the ratio is withheld
+naming the component that is missing. `InsuranceCommissionsAndFees` is not in
+the numerator: it is a credit-balance revenue element, and summing it inflated
+both the expense and combined ratios.
 
 The denominator is **GAAP premiums earned**. A statutory expense ratio divides by
 premiums *written*, so the computed figure is not directly comparable to a

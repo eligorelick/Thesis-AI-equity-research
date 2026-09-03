@@ -58,7 +58,11 @@ async function fetchCostReport(adminKey, startTime, endTime) {
 
 async function main(argv) {
   const write = argv.includes("--write");
-  const adminKey = process.env.ANTHROPIC_ADMIN_KEY?.trim();
+  // The validated config is the single reader of ANTHROPIC_ADMIN_KEY: it
+  // trims, treats a blank value as absent, and fails loudly on a malformed
+  // environment before any paid-account read is attempted.
+  const { getConfig } = await import("../src/config/env.ts");
+  const adminKey = getConfig().anthropicAdminKey;
   const scheduler = await import("../src/pipeline/jobScheduler.ts");
   const presumed = scheduler.listPresumedCosts();
   if (presumed.length === 0) {

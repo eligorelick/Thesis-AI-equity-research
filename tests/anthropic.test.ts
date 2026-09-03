@@ -14,6 +14,7 @@ import {
   RateLimitError,
 } from "@anthropic-ai/sdk";
 import type { BetaMessage, BetaUsage } from "@anthropic-ai/sdk/resources/beta/messages/messages";
+import { resetConfigCache } from "@/config/env";
 import {
   CLIENT_MAX_RETRIES,
   FABLE_FALLBACK_MODEL,
@@ -1312,23 +1313,35 @@ describe("runPass transport failures at stream construction", () => {
 describe("stream idle timeout", () => {
   const idleOpts = { ...streamingOpts, model: "claude-sonnet-5", effort: "low" as const };
 
+  /** The provider reads the validated config, so the cache must be dropped. */
+  const setIdleSeconds = (value: string | undefined): void => {
+    if (value === undefined) delete process.env.THESIS_STREAM_IDLE_SECONDS;
+    else process.env.THESIS_STREAM_IDLE_SECONDS = value;
+    resetConfigCache();
+  };
+
   afterEach(() => {
-    delete process.env.THESIS_STREAM_IDLE_SECONDS;
+    setIdleSeconds(undefined);
   });
 
-  it("reads the idle limit from THESIS_STREAM_IDLE_SECONDS and falls back to the default", () => {
-    delete process.env.THESIS_STREAM_IDLE_SECONDS;
+  it("reads the idle limit from the validated THESIS_STREAM_IDLE_SECONDS config", () => {
+    setIdleSeconds(undefined);
     expect(streamIdleTimeoutMs()).toBe(120_000);
-    process.env.THESIS_STREAM_IDLE_SECONDS = "30";
+    setIdleSeconds("30");
     expect(streamIdleTimeoutMs()).toBe(30_000);
-    process.env.THESIS_STREAM_IDLE_SECONDS = "0";
+    // Zero still disables the guard.
+    setIdleSeconds("0");
     expect(streamIdleTimeoutMs()).toBe(0);
-    process.env.THESIS_STREAM_IDLE_SECONDS = "not-a-number";
-    expect(streamIdleTimeoutMs()).toBe(120_000);
+    // There is one parser now, and it fails loudly instead of quietly
+    // substituting a default the rest of the process does not agree with.
+    setIdleSeconds("not-a-number");
+    expect(() => streamIdleTimeoutMs()).toThrow(/THESIS_STREAM_IDLE_SECONDS/);
+    setIdleSeconds("3601");
+    expect(() => streamIdleTimeoutMs()).toThrow(/THESIS_STREAM_IDLE_SECONDS/);
   });
 
   it("abandons a silent stream and settles reported usage plus the presumed remainder", async () => {
-    process.env.THESIS_STREAM_IDLE_SECONDS = "1";
+    setIdleSeconds("1");
     const aborts: number[] = [];
     const stalled = makeFakeStream({
       events: [
@@ -1361,7 +1374,7 @@ describe("stream idle timeout", () => {
   }, 15_000);
 
   it("does not fire while the stream keeps producing events", async () => {
-    process.env.THESIS_STREAM_IDLE_SECONDS = "1";
+    setIdleSeconds("1");
     const final = syntheticMessage({
       model: "claude-sonnet-5",
       usage: syntheticUsage({ input_tokens: 1_000, output_tokens: 10 }),

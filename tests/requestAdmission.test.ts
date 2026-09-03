@@ -18,6 +18,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { APIError } from "@anthropic-ai/sdk";
 import type { BetaMessage, BetaUsage } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 
+import { resetConfigCache } from "@/config/env";
 import { createDatabase, setDbForTests, type DatabaseHandle, type ThesisDb } from "@/db";
 import { costLog, jobLlmLeases, jobs } from "@/db/schema";
 import { initialSteps } from "@/pipeline/jobRunner";
@@ -414,6 +415,7 @@ describe("every provider request is admitted and settled on its own", () => {
     const claim = claimNextQueuedJob("owner", NOW, LIMITS, first.db)!;
     const { admission } = schedulerAdmission(claim, "bull", "pass-attempt", first.db);
     process.env.THESIS_STREAM_IDLE_SECONDS = "1";
+    resetConfigCache();
     try {
       _resetAnthropicForTests(fakeClient([
         // Accepted, streamed a little, then silence.
@@ -431,6 +433,7 @@ describe("every provider request is admitted and settled on its own", () => {
       expect(rows[0]!.costUsd).toBeLessThanOrEqual(maximumRequestCostUsd("claude-sonnet-5", "bull"));
     } finally {
       delete process.env.THESIS_STREAM_IDLE_SECONDS;
+      resetConfigCache();
     }
   }, 15_000);
 

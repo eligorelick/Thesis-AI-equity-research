@@ -50,9 +50,9 @@ import type {
   BetaWebSearchTool20260318,
   MessageCreateParamsNonStreaming,
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
+import { getConfig } from "@/config/env";
 import {
   ANTHROPIC_REQUEST_TIMEOUT_MS as REQUEST_TIMEOUT_MS,
-  DEFAULT_STREAM_IDLE_SECONDS,
 } from "@/pipeline/leaseTiming";
 import { modelSupportsEffort } from "@/report/execution";
 import {
@@ -124,18 +124,19 @@ export const WEB_SEARCH_TOOL_TYPE = "web_search_20260318" as const;
 export const WEB_SEARCH_TOOL_TYPE_BASIC = "web_search_20250305" as const;
 
 /**
- * Gap with no stream event after which a paid request is abandoned, from
- * THESIS_STREAM_IDLE_SECONDS. Every paid pass streams, so a provider that
- * accepts a request and then goes quiet would otherwise hold a durable lease
- * (and its reservation) until the 10-minute transport timeout with nothing to
- * show for it. Zero disables the idle guard.
+ * Gap with no stream event after which a paid request is abandoned. Every paid
+ * pass streams, so a provider that accepts a request and then goes quiet would
+ * otherwise hold a durable lease (and its reservation) until the 10-minute
+ * transport timeout with nothing to show for it. Zero disables the guard.
+ *
+ * THESIS_STREAM_IDLE_SECONDS has exactly ONE parser: the config schema, which
+ * validates it once at startup. This used to re-read and re-parse the raw
+ * environment variable here with a different accepted range, so an out-of-range
+ * value silently became the default in the provider while the config held
+ * something else.
  */
 export function streamIdleTimeoutMs(): number {
-  const raw = process.env.THESIS_STREAM_IDLE_SECONDS?.trim();
-  if (raw === undefined || raw.length === 0) return DEFAULT_STREAM_IDLE_SECONDS * 1_000;
-  const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) return DEFAULT_STREAM_IDLE_SECONDS * 1_000;
-  return parsed * 1_000;
+  return getConfig().streamIdleTimeoutMs;
 }
 
 /** A stream that accepted the request and then produced nothing for too long. */
@@ -283,8 +284,10 @@ function boundedInteger(value: number, label: string, maximum: number): number {
 
 /**
  * Conservative standard-price upper bound for every request that one durable
- * attempt can expose. It covers all six SDK executions, all three transport
- * executions, and all six pause/resumption executions (108 total).
+ * attempt can expose: {@link PASS_BILLING_EXPOSURE_MULTIPLIER} request maxima,
+ * which is PASS_TRANSPORT_MAX_ATTEMPTS transport executions × one pause
+ * resumption cycle each (CLIENT_MAX_RETRIES is 0 under D-10, so the SDK adds
+ * no executions of its own).
  */
 export function maximumPassCostUsd(
   selectedModel: string,
@@ -929,7 +932,10 @@ export type PassErrorKind =
  */
 export const MAX_PAUSE_RESUMPTIONS = 5;
 
-/** Six SDK executions × three transport executions × six pause executions. */
+/**
+ * SDK executions × transport executions × pause executions. With
+ * CLIENT_MAX_RETRIES at 0 (D-10 owns the retry loop) this is 1 × 6 × 6 = 36.
+ */
 export const PASS_BILLING_EXPOSURE_MULTIPLIER =
   (CLIENT_MAX_RETRIES + 1) * PASS_TRANSPORT_MAX_ATTEMPTS * (MAX_PAUSE_RESUMPTIONS + 1);
 

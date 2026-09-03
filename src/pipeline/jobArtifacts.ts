@@ -848,6 +848,28 @@ export function costRowBelongsToAttempt(
     costAttemptId.startsWith(`${attemptId}${REQUEST_ATTEMPT_SEPARATOR}`);
 }
 
+/**
+ * Drop the presumed row for an attempt whose real settlement just landed
+ * (DECISIONS D-07). Always called INSIDE the settlement transaction, so the
+ * exact cost replaces the presumed maximum atomically and no admission window
+ * ever counts both. It lives beside the pass settlement writer, and the
+ * scheduler's per-request settlement calls it too, so the two paths cannot
+ * drift apart.
+ */
+export function reconcilePresumedCostFromSettlement(
+  db: Pick<ThesisDb, "delete">,
+  identity: { jobId: string; runGeneration: number; attemptId: string; pass: string },
+): number {
+  return db.delete(costLog)
+    .where(and(
+      eq(costLog.jobId, identity.jobId),
+      eq(costLog.runGeneration, identity.runGeneration),
+      eq(costLog.presumedAttemptId, identity.attemptId),
+      eq(costLog.step, identity.pass),
+    ))
+    .run().changes;
+}
+
 export function serializeLegacyAnalystProjection<T>(data: T, telemetry: PassTelemetry): string {
   return JSON.stringify({
     data,
@@ -958,16 +980,12 @@ export function persistPassSettlementInTransaction<T>(
   // for this attempt when its lease expired (DECISIONS D-07). Deleting inside
   // the same transaction means no admission window ever counts both, and an
   // unbillable settlement still clears the presumption it replaces.
-  tx.delete(costLog)
-    .where(
-      and(
-        eq(costLog.jobId, input.jobId),
-        eq(costLog.runGeneration, input.runGeneration),
-        eq(costLog.presumedAttemptId, input.attemptId),
-        eq(costLog.step, input.pass),
-      ),
-    )
-    .run();
+  reconcilePresumedCostFromSettlement(tx, {
+    jobId: input.jobId,
+    runGeneration: input.runGeneration,
+    attemptId: input.attemptId,
+    pass: input.pass,
+  });
 
   let currentGeneration = false;
   if (

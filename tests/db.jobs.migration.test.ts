@@ -366,6 +366,54 @@ describe("durable job schema migration", () => {
     }
   });
 
+  /**
+   * A FRESH database is created by the base DDL alone, so its column order has
+   * to match src/db/schema.ts exactly — otherwise `npm run db:push` reports a
+   * diff on a database that is already correct. `job_llm_leases` was updated
+   * this way when it gained `model`; `cost_log` was not, and still declared
+   * only its pre-WS2 columns.
+   */
+  it("creates a fresh cost_log whose column order matches the drizzle schema", () => {
+    const dbPath = tempDbPath();
+    const sqlite = openSqlite(dbPath);
+    try {
+      bootstrapSchema(sqlite);
+      const fresh = (sqlite.pragma("table_info(cost_log)") as { name: string }[])
+        .map(({ name }) => name);
+      expect(fresh).toEqual([
+        "id",
+        "jobId",
+        "runGeneration",
+        "attemptId",
+        "step",
+        "model",
+        "inputTokens",
+        "outputTokens",
+        "cacheReadTokens",
+        "cacheWriteTokens",
+        "webSearches",
+        "costUsd",
+        "fallbackUsed",
+        "settlementKind",
+        "presumedAttemptId",
+        "reconciledAt",
+        "createdAt",
+      ]);
+      // The WS2 columns must arrive with their schema defaults, not as bare
+      // nullable add-ons.
+      const columns = columnInfo(sqlite, "cost_log");
+      expect(columns.get("settlementKind")).toEqual({
+        notnull: 1,
+        dflt_value: "'actual'",
+        pk: 0,
+      });
+      expect(columns.get("presumedAttemptId")?.notnull).toBe(0);
+      expect(columns.get("reconciledAt")?.notnull).toBe(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("enforces exact artifact, billed-attempt, and paid-pass lease uniqueness", () => {
     const dbPath = tempDbPath();
     createAuditedLegacyDatabase(dbPath);

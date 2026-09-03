@@ -301,8 +301,9 @@ export const ANALYST_MAX_WEB_SEARCHES = 8;
  * case JSON only ~4–6K. A clipped pass fails typed (`max_tokens`), discarding
  * the pass's full sunk cost (cache write + searches + thinking). max_tokens is
  * a free ceiling: OTPM rate limits count actual generated tokens only, and
- * these passes already stream (> STREAMING_THRESHOLD_TOKENS). 64K is also
- * exactly Haiku 4.5's output ceiling, so the cap stays valid on every model.
+ * every paid pass streams unconditionally (DECISIONS D-09 removed the old
+ * token threshold). 64K is also exactly Haiku 4.5's output ceiling, so the cap
+ * stays valid on every model.
  */
 export const ANALYST_MAX_TOKENS = 64_000;
 /**

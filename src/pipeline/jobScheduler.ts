@@ -27,6 +27,7 @@ import {
   REQUEST_ATTEMPT_SEPARATOR,
   persistPassSettlementInTransaction,
   preparePassSettlement,
+  reconcilePresumedCostFromSettlement,
   serializeLegacyAnalystProjection,
   type DurablePass,
   type PassSettlement,
@@ -297,8 +298,8 @@ function finalizeTerminalPaidLeasesInTransaction(
  * a crash loop could spend without limit. Instead the whole reservation is
  * written to `cost_log` as a `presumed` row, which every admission path
  * already counts, and only evidence moves it down: a late settlement for the
- * same attempt ({@link reconcilePresumedCostFromSettlement}) or the Usage &
- * Cost API ({@link reconcilePresumedCostsAgainstReportedTotals}).
+ * same attempt (`reconcilePresumedCostFromSettlement` in jobArtifacts) or the
+ * Usage & Cost API ({@link reconcilePresumedCostsAgainstReportedTotals}).
  *
  * The row carries `presumedAttemptId` rather than `attemptId` so the billed
  * attempt slot stays free: a settlement that arrives after expiry can still be
@@ -486,12 +487,12 @@ export function settleRequestCost(
     // because a presumed settlement now claims the same `presumedAttemptId`,
     // which the presumed-attempt unique index would reject and which a delete
     // afterwards would remove again.
-    tx.delete(costLog).where(and(
-      eq(costLog.jobId, lease.jobId),
-      eq(costLog.runGeneration, lease.runGeneration),
-      eq(costLog.presumedAttemptId, lease.attemptId),
-      eq(costLog.step, lease.pass),
-    )).run();
+    reconcilePresumedCostFromSettlement(tx, {
+      jobId: lease.jobId,
+      runGeneration: lease.runGeneration,
+      attemptId: lease.attemptId,
+      pass: lease.pass,
+    });
     if (settledMicro > 0n) {
       const presumed = settlement.presumed === true;
       tx.insert(costLog).values({
@@ -556,25 +557,6 @@ export function listPresumedCosts(db: ThesisDb = getDb()): PresumedCostRow[] {
       costUsd: row.costUsd,
       createdAt: row.createdAt,
     }));
-}
-
-/**
- * Drop the presumed row for an attempt whose real settlement just landed.
- * Called inside the settlement transaction, so the exact cost replaces the
- * presumed maximum atomically and no window counts both.
- */
-export function reconcilePresumedCostFromSettlement(
-  db: Pick<ThesisDb, "delete">,
-  identity: { jobId: string; runGeneration: number; attemptId: string; pass: string },
-): number {
-  return db.delete(costLog)
-    .where(and(
-      eq(costLog.jobId, identity.jobId),
-      eq(costLog.runGeneration, identity.runGeneration),
-      eq(costLog.presumedAttemptId, identity.attemptId),
-      eq(costLog.step, identity.pass),
-    ))
-    .run().changes;
 }
 
 export interface ReportedCostBucket {

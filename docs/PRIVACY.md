@@ -45,11 +45,18 @@ Each key is sent only to the provider it belongs to, in a header wherever the
 provider supports one, so keys stay out of logged URLs and out of the
 `api_cache` rows.
 
-The `X-Thesis-Token` that non-browser clients use for mutating routes is a
-local access token, not a credential for anything remote. It is minted fresh at
-every server start into the data directory (see below), restricted to its owner
-where the operating system enforces file modes, never logged, and never sent to
-the browser or to any provider.
+The `X-Thesis-Token` that non-browser clients use for mutating routes is not a
+credential for anything remote, and not a lock on the API either. It is a marker
+for clients that send no browser headers: `src/app/api/sameOrigin.ts` accepts a
+mutating request as soon as it carries browser Fetch Metadata or a matching
+`Origin`, so the token is asked for only when both are absent. That makes it a
+cross-site-request-forgery guard for the browser — a page on another site cannot
+forge those headers — and not local access control: any process on this machine
+can set them by hand, and one with access to your account already has the
+database and `.env`. The token is minted fresh at every server start into the
+data directory (see below), restricted to its owner where the operating system
+enforces file modes, never logged, and never sent to the browser or to any
+provider.
 
 ## Where local data is kept
 
@@ -61,11 +68,21 @@ application-data directory (`src/db/paths.ts`):
 - Linux: `$XDG_DATA_HOME/thesis/thesis.db`, else `$HOME/.local/share/thesis/thesis.db`
 
 `THESIS_DB_PATH` overrides the file; `THESIS_DATA_DIR` overrides the directory.
-SQLite writes `thesis.db-wal` and `thesis.db-shm` beside it, and the
-`csrf-token` file lives in the same directory.
+SQLite writes `thesis.db-wal` and `thesis.db-shm` beside the database file.
 
 It holds your watchlist, generated reports, job history and per-pass cost
 records, saved settings, and the `api_cache` table of provider responses.
+
+The `csrf-token` file does not follow `THESIS_DB_PATH`. It is written to
+`THESIS_TOKEN_FILE` when that is set, and otherwise to `csrf-token` in the
+application-data directory listed above — the directory `THESIS_DATA_DIR`
+overrides (`src/app/api/sameOrigin.ts`, `requestTokenPath`). Set only
+`THESIS_DB_PATH` and the database moves while the token file stays where it
+was. The server prints the resolved path at every start:
+
+```
+[security] X-Thesis-Token for non-browser clients written to <path>
+```
 
 ## Retention
 
@@ -81,12 +98,22 @@ records, saved settings, and the `api_cache` table of provider responses.
 ## Deleting local data
 
 - Everything: quit Thesis and delete the database file together with its
-  `-wal` and `-shm` siblings. The next start creates an empty database. Delete
-  the `csrf-token` file in the same directory too if you want no trace.
+  `-wal` and `-shm` siblings. The next start creates an empty database. The
+  `csrf-token` file is deleted separately, at the path the server printed at
+  startup — `THESIS_TOKEN_FILE` if you set it, otherwise `csrf-token` in the
+  application-data directory, which is not necessarily the directory the
+  database is in.
 - Start clean while keeping the old data: point `THESIS_DATA_DIR` at a fresh
   directory (or `THESIS_DB_PATH` at a new file). Nothing reads the previous
   location afterwards.
-- Stored settings only: `npm run settings:reset -- --yes`.
+- Stored settings only: `npm run settings:reset -- --yes`. Settings resolve in
+  one order — a value stored in the database beats the matching environment
+  variable, which beats the built-in default (`src/settings/settings.ts`,
+  `resolveValue`) — so a model or effort choice saved from the Settings page
+  goes on overriding `.env` until this command deletes it. Without `--yes` it
+  prints the rows it would delete and changes nothing. Two internal rows are
+  always kept, because neither is a setting: the cache-maintenance stamp and
+  the settings revision counter.
 
 ## Sharing a report
 

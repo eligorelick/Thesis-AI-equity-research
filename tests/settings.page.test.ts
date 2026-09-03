@@ -80,6 +80,7 @@ function payload(
       hasFredKey: false,
       hasAnthropicKey: false,
       fixtureMode: true,
+      resumeOnStart: true,
     },
   };
 }

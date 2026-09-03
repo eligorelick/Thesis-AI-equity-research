@@ -160,7 +160,9 @@ export function SettingsPageView({
           ) : null}
         </Panel>
 
-        <ResumeQueueControl />
+        {settings !== null && !settings.capabilities.resumeOnStart && (
+          <ResumeQueueControl />
+        )}
 
         <Panel title="verification">
           <p className="py-1 text-[11px] leading-snug text-faint">

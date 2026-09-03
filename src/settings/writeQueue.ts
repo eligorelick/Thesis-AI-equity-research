@@ -393,6 +393,7 @@ function decodeCapabilities(value: unknown): SettingsCapabilities | null {
     "hasFredKey",
     "hasAnthropicKey",
     "fixtureMode",
+    "resumeOnStart",
   ] as const;
   if (!isRecord(value) || !hasExactKeys(value, keys)) return null;
   for (const key of keys) {
@@ -404,6 +405,7 @@ function decodeCapabilities(value: unknown): SettingsCapabilities | null {
     hasFredKey: value.hasFredKey as boolean,
     hasAnthropicKey: value.hasAnthropicKey as boolean,
     fixtureMode: value.fixtureMode as boolean,
+    resumeOnStart: value.resumeOnStart as boolean,
   };
 }
 

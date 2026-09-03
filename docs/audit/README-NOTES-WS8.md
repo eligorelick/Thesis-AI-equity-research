@@ -18,6 +18,17 @@ Facts WS9 needs for the README. Everything here matches the code on branch
 > retrieves; sharing a generated report shares that provider data with it. See
 > [License and data rights](docs/DATA-RIGHTS.md).
 
+**Settings precedence** → state it in the README itself; this one is required,
+not a suggestion. Criterion (c) of this workstream is met only when a
+user-facing document says which layer wins. Until the README carries it, the
+order lives in a script header (`scripts/settings-reset.ts`), in this
+hand-off note, and in `docs/PRIVACY.md` under "Deleting local data" — none of
+which is the README. The sentence to carry:
+
+> Stored settings take precedence over environment variables, which take
+> precedence over defaults; reset the stored ones with
+> `npm run settings:reset -- --yes`.
+
 ## Settings precedence and reset (R-41)
 
 The sentence the reconciliation asked for, verbatim:
@@ -26,16 +37,23 @@ The sentence the reconciliation asked for, verbatim:
 > precedence over defaults; reset with `npm run settings:reset -- --yes` or the
 > Settings page.
 
+Carry the first clause verbatim, but drop or reword "or the Settings page":
+the page edits settings, it does not reset them, and the bullet below says the
+README would be wrong to claim a UI reset.
+
 Notes for whoever writes the surrounding paragraph:
 
 - Precedence is implemented in `src/settings/settings.ts` (`resolveValue`).
 - `npm run settings:reset` with no `--yes` prints the exact rows it would
   delete and changes nothing. `--yes` deletes them. `--db <path>` targets a
   specific database file; otherwise the configured path is used.
-- The reset keeps `cacheMaintenanceLastRunAt`, which is bookkeeping rather than
-  a setting.
-- The Settings page has no reset control. It does have a **resume queued work**
-  control (below). If the README claims a UI reset, it would be wrong today.
+- The reset keeps two internal rows, neither of which is a setting:
+  `cacheMaintenanceLastRunAt` (the cache-sweep stamp) and
+  `__writableSettingsRevision` (the monotonic counter behind the settings
+  compare-and-swap). Neither is listed in the preview.
+- The Settings page has no reset control. It has a **resume queued work**
+  control (below), but only under `THESIS_RESUME_ON_START=0`. If the README
+  claims a UI reset, it would be wrong today.
 
 ## Startup hold (R-42)
 
@@ -45,6 +63,12 @@ New env key, belongs in the README's configuration table:
 > not claim queued jobs and arms no wake timer, so paid work left by a restart
 > waits until you resume it with `POST /api/jobs/resume`, the Settings page
 > "resume queued work" button, or any new report/retry/cancel request.
+
+The Settings page shows that button only when the server reports
+`THESIS_RESUME_ON_START=0`: `GET /api/settings` carries the resolved flag as
+`capabilities.resumeOnStart`, and `SettingsPageView` renders
+`ResumeQueueControl` only when it is false. On the default `1` there is nothing
+held, so the panel is absent rather than inert.
 
 New route worth a line in any endpoint list: `POST /api/jobs/resume` → `202
 { resumed: true, queued: n }`. Same-origin guarded like the other mutating
@@ -65,12 +89,26 @@ against the API:
 > `X-Thesis-Token` with the contents of the `csrf-token` file that the server
 > writes into its data directory at every start.
 
-A curl example that works, if the README wants one:
+A curl example that works, if the README wants one. Do not write
+`$THESIS_DATA_DIR/csrf-token`: that variable is unset unless the user set it,
+so the path expands to `/csrf-token` and `cat` fails. The server prints the
+resolved path on every start —
 
 ```
+[security] X-Thesis-Token for non-browser clients written to <path>
+```
+
+— so take it from there, or from the platform default:
+
+```
+# Linux default. macOS: "$HOME/Library/Application Support/Thesis/csrf-token".
+# Windows: "$LOCALAPPDATA/Thesis/csrf-token".
+# THESIS_TOKEN_FILE overrides the whole path; THESIS_DATA_DIR moves the directory.
+TOKEN_FILE="${THESIS_TOKEN_FILE:-${XDG_DATA_HOME:-$HOME/.local/share}/thesis/csrf-token}"
+
 curl -X POST http://127.0.0.1:3000/api/report \
   -H "content-type: application/json" \
-  -H "X-Thesis-Token: $(cat "$THESIS_DATA_DIR/csrf-token")" \
+  -H "X-Thesis-Token: $(cat "$TOKEN_FILE")" \
   -d '{"symbol":"AAPL"}'
 ```
 

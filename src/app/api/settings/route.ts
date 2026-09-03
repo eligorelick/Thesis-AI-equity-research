@@ -39,6 +39,7 @@ function payloadFor(authority: WritableSettingsAuthority): SettingsPayload {
       hasFredKey: config.hasFredKey,
       hasAnthropicKey: config.hasAnthropicKey,
       fixtureMode: config.fixtureMode,
+      resumeOnStart: config.resumeOnStart,
     },
   };
 }

@@ -8,8 +8,11 @@
  * environment, and then to the built-in defaults.
  *
  * Without `--yes` this prints exactly which rows it would delete and changes
- * nothing. The cache-maintenance stamp is bookkeeping rather than a setting, so
- * it is preserved — deleting it would force a VACUUM sweep on the next start.
+ * nothing. Two internal rows are preserved because neither is a setting: the
+ * cache-maintenance stamp (deleting it would force a VACUUM sweep on the next
+ * start) and the writable-settings revision counter (deleting it would restart
+ * the monotonic sequence behind the settings compare-and-swap, so a stale
+ * browser tab's `If-Match` etag could match again and overwrite a newer value).
  *
  * Run through npm so the `@/` path alias and the `react-server` condition
  * (which makes the `server-only` marker inert outside Next) are both applied:
@@ -18,6 +21,7 @@
  *   npm run settings:reset -- --yes --db /path/to/thesis.db
  */
 
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -25,9 +29,13 @@ import Database from "better-sqlite3";
 
 import { MAINTENANCE_LAST_RUN_KEY } from "@/cache/maintenance";
 import { defaultDbPath } from "@/db/paths";
+import { WRITABLE_SETTINGS_REVISION_KEY } from "@/settings/settings";
 
 /** Keys the reset leaves in place: internal bookkeeping, not user settings. */
-export const PRESERVED_SETTING_KEYS: readonly string[] = [MAINTENANCE_LAST_RUN_KEY];
+export const PRESERVED_SETTING_KEYS: readonly string[] = [
+  MAINTENANCE_LAST_RUN_KEY,
+  WRITABLE_SETTINGS_REVISION_KEY,
+];
 
 export interface SettingsResetArguments {
   dbFile: string;
@@ -77,16 +85,16 @@ export function parseSettingsResetArguments(
 
 /**
  * Read the stored settings and, when confirmed, delete them in one statement.
- * Never creates a database: an absent file means nothing is stored.
+ * Never creates a database: an absent file means nothing is stored. A file that
+ * is present but cannot be opened — locked, truncated, or unreadable — is an
+ * error, not "nothing to reset": swallowing it would exit 0 while the stored
+ * settings survived.
  */
 export function runSettingsReset({
   dbFile,
   confirmed,
 }: SettingsResetArguments): SettingsResetSummary {
-  let sqlite: Database.Database;
-  try {
-    sqlite = new Database(dbFile, { fileMustExist: true });
-  } catch {
+  if (!existsSync(dbFile)) {
     return {
       dbFile,
       confirmed,
@@ -95,6 +103,17 @@ export function runSettingsReset({
       deleted: 0,
       preserved: [],
     };
+  }
+
+  let sqlite: Database.Database;
+  try {
+    sqlite = new Database(dbFile, { fileMustExist: true });
+  } catch (error) {
+    throw new Error(
+      `cannot open the database at ${dbFile}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
 
   try {

@@ -330,6 +330,7 @@ describe("risk runtime behavior coverage", () => {
         hasFredKey: false,
         hasAnthropicKey: false,
         fixtureMode: true,
+        resumeOnStart: true,
       },
     };
     const fetcher = vi.fn(async () => new Response(JSON.stringify(payload), {

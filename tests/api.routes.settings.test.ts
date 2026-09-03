@@ -131,6 +131,7 @@ function expectFullSettingsPayload(body: SettingsPayload): void {
     "hasFinnhubKey",
     "hasFmpKey",
     "hasFredKey",
+    "resumeOnStart",
   ]);
   for (const value of Object.values(body.capabilities)) expect(typeof value).toBe("boolean");
 }
@@ -217,7 +218,14 @@ describe("GET /api/settings", () => {
     expect(body.analysisEffortOptions).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(body.analysisEffortOptions).toContain(body.analysisEffort);
     // Capability flags are booleans (values depend on the ambient env).
-    for (const key of ["hasFmpKey", "hasFinnhubKey", "hasFredKey", "hasAnthropicKey", "fixtureMode"]) {
+    for (const key of [
+      "hasFmpKey",
+      "hasFinnhubKey",
+      "hasFredKey",
+      "hasAnthropicKey",
+      "fixtureMode",
+      "resumeOnStart",
+    ]) {
       expect(typeof body.capabilities[key as keyof typeof body.capabilities]).toBe("boolean");
     }
     expect(Object.keys(body.capabilities).sort()).toEqual([
@@ -226,6 +234,7 @@ describe("GET /api/settings", () => {
       "hasFinnhubKey",
       "hasFmpKey",
       "hasFredKey",
+      "resumeOnStart",
     ]);
     expect(body.sources).toEqual({ analysisModel: "default", analysisEffort: "default" });
     expect(body.revision).toBe(0);

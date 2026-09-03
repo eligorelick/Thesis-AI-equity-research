@@ -3,19 +3,22 @@
  *
  * Settings resolve database → environment → default, so a row saved from the
  * Settings page outranks `.env` until someone deletes it. These tests pin the
- * refusal without `--yes`, the exact preview text, the delete, and the
- * bookkeeping row the reset must not touch. One test runs the real npm script
- * so the `@/` alias and the `react-server` condition in package.json stay
- * wired; everything else calls the module directly.
+ * refusal without `--yes`, the exact preview text, the delete, and the two
+ * bookkeeping rows the reset must not touch. One test spawns the argv that
+ * package.json declares for `settings:reset` so the `@/` alias and the
+ * `react-server` condition stay wired; everything else calls the module
+ * directly.
  */
 
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { WRITABLE_SETTINGS_REVISION_KEY } from "@/settings/settings";
 
 import {
   PRESERVED_SETTING_KEYS,
@@ -115,20 +118,25 @@ describe("runSettingsReset", () => {
 
     const preview = runSettingsReset({ dbFile, confirmed: false });
     expect(preview.deleted).toBe(0);
+    // The revision counter is never offered for deletion: it is the monotonic
+    // sequence behind the settings compare-and-swap, not a setting.
     expect(preview.rows.map((row) => row.key)).toEqual([
-      "__writableSettingsRevision",
       "analysisEffort",
       "analysisModel",
     ]);
+    expect(preview.preserved).toEqual(["__writableSettingsRevision"]);
     expect(storedSettings()).toHaveLength(3);
 
     const applied = runSettingsReset({ dbFile, confirmed: true });
-    expect(applied.deleted).toBe(3);
-    expect(storedSettings()).toEqual([]);
+    expect(applied.deleted).toBe(2);
+    expect(storedSettings()).toEqual([["__writableSettingsRevision", "7"]]);
   });
 
   it("keeps the cache-maintenance stamp, which is bookkeeping and not a setting", () => {
-    expect(PRESERVED_SETTING_KEYS).toEqual(["cacheMaintenanceLastRunAt"]);
+    expect([...PRESERVED_SETTING_KEYS].sort()).toEqual([
+      "__writableSettingsRevision",
+      "cacheMaintenanceLastRunAt",
+    ]);
     seedSettings([
       ["analysisModel", "claude-sonnet-5"],
       ["cacheMaintenanceLastRunAt", "2026-09-01T00:00:00.000Z"],
@@ -141,6 +149,34 @@ describe("runSettingsReset", () => {
     expect(storedSettings()).toEqual([
       ["cacheMaintenanceLastRunAt", "2026-09-01T00:00:00.000Z"],
     ]);
+  });
+
+  it("keeps the writable-settings revision so a reset cannot replay an etag", () => {
+    expect(PRESERVED_SETTING_KEYS).toContain(WRITABLE_SETTINGS_REVISION_KEY);
+    seedSettings([
+      ["analysisModel", "claude-sonnet-5"],
+      ["analysisEffort", "max"],
+      [WRITABLE_SETTINGS_REVISION_KEY, "12"],
+    ]);
+
+    const summary = runSettingsReset({ dbFile, confirmed: true });
+
+    expect(summary.deleted).toBe(2);
+    expect(summary.preserved).toEqual([WRITABLE_SETTINGS_REVISION_KEY]);
+    // Survives at its old value: the next write advances 12 -> 13, so no etag
+    // a stale tab still holds can ever match again.
+    expect(storedSettings()).toEqual([[WRITABLE_SETTINGS_REVISION_KEY, "12"]]);
+  });
+
+  it("reports a database that exists but cannot be opened instead of \"nothing to reset\"", () => {
+    // A directory in the database's place is present-but-unopenable on every
+    // platform. Reporting databaseExists:false here would exit 0 while every
+    // stored setting survived.
+    mkdirSync(dbFile);
+
+    expect(() => runSettingsReset({ dbFile, confirmed: true })).toThrow(
+      /cannot open the database at /,
+    );
   });
 
   it("never creates a database and tolerates one without the settings table", () => {
@@ -193,27 +229,49 @@ describe("runSettingsResetCli", () => {
     expect(capture(["--yes", "--db", dbFile]).out).toContain("no database file yet");
   });
 
-  it("runs through the real npm script, alias and react-server condition included", () => {
+  it("runs the declared settings:reset argv, alias and react-server condition included", () => {
     seedSettings([["analysisModel", "claude-opus-4-8"]]);
-    const npmCli = process.env.npm_execpath;
-    expect(npmCli !== undefined && path.isAbsolute(npmCli) && existsSync(npmCli)).toBe(true);
 
-    const preview = spawnSync(
-      process.execPath,
-      [npmCli!, "run", "--silent", "settings:reset", "--", "--db", dbFile],
-      { cwd: ROOT, encoding: "utf8", timeout: 60_000 },
-    );
+    // Spawn the script exactly as package.json declares it, but without the
+    // package manager. `npm run` fires npm's update-notifier — a live
+    // pacote.manifest("npm@*") request to registry.npmjs.org from a child
+    // process that tests/setup/noLiveNetwork.ts cannot reach, since that guard
+    // only replaces globalThis.fetch inside the Vitest process. Reading the
+    // argv here pins the same alias and condition wiring without any network
+    // capability, and without depending on npm_execpath, which is unset under
+    // node_modules/.bin/vitest and under IDE runners.
+    const manifest = JSON.parse(
+      readFileSync(path.join(ROOT, "package.json"), "utf8"),
+    ) as { scripts: Record<string, string> };
+    const [runner, ...scriptArgv] = manifest.scripts["settings:reset"].split(/\s+/);
+
+    expect(runner).toBe("node");
+    expect(scriptArgv).toContain("--conditions=react-server");
+    expect(scriptArgv).toContain("scripts/settings-reset.ts");
+
+    function run(extra: readonly string[]): SpawnSyncReturns<string> {
+      return spawnSync(process.execPath, [...scriptArgv, ...extra], {
+        cwd: ROOT,
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+    }
+
+    const preview = run(["--db", dbFile]);
     expect(preview.status, preview.stderr).toBe(0);
     expect(preview.stdout).toContain("would delete 1 stored setting row:");
+    expect(preview.stdout).toContain("analysisModel = claude-opus-4-8");
     expect(storedSettings()).toHaveLength(1);
 
-    const applied = spawnSync(
-      process.execPath,
-      [npmCli!, "run", "--silent", "settings:reset", "--", "--yes", "--db", dbFile],
-      { cwd: ROOT, encoding: "utf8", timeout: 60_000 },
-    );
+    const applied = run(["--yes", "--db", dbFile]);
     expect(applied.status, applied.stderr).toBe(0);
     expect(applied.stdout).toContain("deleted 1 stored setting row:");
     expect(storedSettings()).toEqual([]);
+
+    // The same argv reports a real failure with a non-zero exit (F5).
+    mkdirSync(path.join(directory, "locked.db"));
+    const unopenable = run(["--yes", "--db", path.join(directory, "locked.db")]);
+    expect(unopenable.status).toBe(1);
+    expect(unopenable.stderr).toContain("cannot open the database at ");
   }, 90_000);
 });

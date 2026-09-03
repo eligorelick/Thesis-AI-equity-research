@@ -37,6 +37,16 @@
  *      that file; a header-free request is rejected with a message naming the
  *      header options. The token is never logged and never reaches the browser.
  *
+ * What this is NOT: local access control. Fetch Metadata is trusted here
+ * because a cross-site *page* cannot forge it — the browser sets it, and
+ * script cannot override it. A local process is under no such constraint:
+ * `curl -X POST -H "sec-fetch-site: same-origin"` satisfies rule 4 and reaches
+ * a mutating route with no token at all, by design. The boundary being defended
+ * is the browser's, so the token is the credential for clients that send no
+ * browser headers, not a gate on local processes — which in any case already
+ * have the database file and `.env`. Anything that must actually authenticate
+ * a caller needs a different mechanism.
+ *
  * `THESIS_ALLOWED_HOST` (optional): set to the exact `host:port` you browse
  * Thesis under when serving it on a non-loopback interface, e.g.
  * "192.168.1.50:3000". Read at call time so it takes effect without a reload.
@@ -186,7 +196,10 @@ export function assertSameOrigin(request: Request): NextResponse | null {
     return null;
   }
 
-  // Rule 4: browser-sent Fetch Metadata that is not cross-site is sufficient.
+  // Rule 4: browser-sent Fetch Metadata that is not cross-site is sufficient,
+  // and is consulted before the token. A cross-site page cannot forge this
+  // header, which is all this guard claims; a local process can, and one that
+  // does is accepted here without a token (see the header note above).
   if (secFetchSite !== undefined) return null;
 
   const presented = request.headers.get(REQUEST_TOKEN_HEADER);

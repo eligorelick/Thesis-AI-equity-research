@@ -1635,7 +1635,34 @@ function computeIncome(v: FieldValues, notes: NoteSink, ctx: string): void {
     `operatingExpenses ${ctx}`,
   );
   v.ebitda ??= add(v.operatingIncome ?? null, v.depreciationAndAmortization ?? null);
-  v.ebit ??= add(v.incomeBeforeTax ?? null, v.interestExpense ?? null) ?? v.operatingIncome ?? null;
+  // EBIT follows operating income, and only operating income.
+  //
+  // It used to be `incomeBeforeTax + interestExpense` with operating income as
+  // a fallback, which quietly undid every rule the operating-income derivation
+  // enforces: the non-operating items it subtracts, the guard that refuses to
+  // derive one for a bank (where interest IS an operating cost, so the sum is
+  // not EBIT), and the withholding when the filer's non-operating aggregate
+  // already contains the interest being added back. Whenever both operands
+  // existed the raw sum won, so a figure that had just been refused or
+  // corrected was published anyway under a different name — and EBIT is the one
+  // valuation actually reads.
+  //
+  // Preferring operating income is right in every branch: filed, it is the
+  // filer's own number; derived, it carries the adjustments; absent, it is
+  // absent on purpose. A gap is the correct outcome, not a fallback.
+  if (v.ebit === null || v.ebit === undefined) {
+    const strictSum = add(v.incomeBeforeTax ?? null, v.interestExpense ?? null);
+    v.ebit = v.operatingIncome ?? null;
+    if (v.ebit === null && strictSum !== null) {
+      const text =
+        `ebit WITHHELD: pre-tax income plus interest expense is available, but that sum is EBIT only where operating ` +
+        `income could be derived, and here it could not — a bank-style filer, where interest is an operating cost, or ` +
+        `a non-operating aggregate that already contains the interest being added back. Publishing the sum would ` +
+        `restate under a second name the figure the operating-income derivation refused.`;
+      notes.add(`income ${ctx}: ${text}`);
+      notes.withhold("ebit", ctx, text);
+    }
+  }
 }
 
 function computeBalance(v: FieldValues, notes: NoteSink, ctx: string, cc: ComputeContext): void {

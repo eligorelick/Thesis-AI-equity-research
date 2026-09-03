@@ -130,6 +130,16 @@ worse of median and current under a dated improving/declining margin regime
 effective rate to the company's own historical median. Cash flows are
 discounted on the **mid-year convention**.
 
+EBIT itself is the issuer's operating income: the filed line where the filer
+reports one, otherwise a derivation from pre-tax income that adds back interest
+expense and removes the non-operating results the filing discloses. It is never
+pre-tax income plus interest on its own. That sum reintroduces every
+non-operating item the derivation removed, and where the derivation is refused
+outright — a bank, where interest is an operating cost, or a non-operating
+aggregate that already contains the interest being added back — EBIT is
+withheld and named in the missing-data manifest rather than published under a
+second name.
+
 Terminal growth is **min(2.5%, risk-free rate)** — nothing grows faster than
 the risk-free rate in perpetuity (Damodaran). Like the terminal-ROIC rule below
 it prints as a HOUSE CONVENTION, in those words, wherever it appears. A Gordon guard requires

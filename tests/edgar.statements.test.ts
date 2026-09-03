@@ -151,7 +151,12 @@ describe("buildStatementsFromCompanyFacts — annual rows", () => {
       ebitda: 142,
       interestExpense: 4,
       incomeBeforeTax: 128,
-      ebit: 132,
+      // EBIT is operating income, not pretax + interest (which would read 132
+      // here). The filer's own operating line is the one figure that carries
+      // the non-operating adjustments; the sum reintroduces the 2 of
+      // non-operating income the filer reported below the operating line, and
+      // leaves EBIT + D&A ≠ EBITDA within the same row.
+      ebit: 130,
       netIncome: 100,
       epsDiluted: 7.5,
       weightedAverageShsOutDil: 15_000,
@@ -1650,6 +1655,11 @@ describe("buildStatementsFromCompanyFacts — derived EBIT subtracts non-operati
     const built = ebit(pretax({ NonoperatingIncomeExpense: annual(900), IncomeLossFromEquityMethodInvestments: annual(300) }));
     // 7,520 + 2,671 - 900 - 300
     expect(built.rows[0]!.operatingIncome).toBe(8_991);
+    // `ebit` carries the SAME adjusted figure. It used to be the unadjusted
+    // 10,191 (7,520 + 2,671), so the 1,200 of non-operating results the
+    // derivation had just removed came straight back in the field valuation
+    // reads.
+    expect(built.rows[0]!.ebit).toBe(8_991);
     expect(built.substitutions[0]!.text).toMatch(
       /non-operating items subtracted from the derivation: NonoperatingIncomeExpense, IncomeLossFromEquityMethodInvestments/,
     );
@@ -1732,12 +1742,21 @@ describe("buildStatementsFromCompanyFacts — derived EBIT subtracts non-operati
       }),
     );
     expect(built.rows[0]!.operatingIncome).toBeNull();
+    // And no figure means no figure: `ebit` used to publish the 1,050 sum the
+    // derivation had just refused, under a second name, and `ebit` is the field
+    // valuation reads. Both are withheld together.
+    expect(built.rows[0]!.ebit).toBeNull();
     expect(built.substitutions).toEqual([]);
     expect(built.withheld).toEqual([
       {
         field: "operatingIncome",
         periods: ["2025-12-31"],
         text: expect.stringMatching(/^operating income WITHHELD rather than derived/),
+      },
+      {
+        field: "ebit",
+        periods: ["2025-12-31"],
+        text: expect.stringMatching(/^ebit WITHHELD: pre-tax income plus interest expense is available/),
       },
     ]);
     expect(built.withheld[0]!.text).toMatch(/overstate EBIT by exactly that interest/);

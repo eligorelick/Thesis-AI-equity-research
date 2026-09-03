@@ -849,6 +849,20 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
     beforeMissing: true,
     after: { route: "general", metrics: [], notes: [], gaps: [], asOf: null },
   },
+  // Added 2026-09-02 (WS5, D-17): the Piotroski result carries the scale it was
+  // scored on, so a 3-of-3 financial variant is never read against the 9-point
+  // scale. DEMO is non-financial, so it is the standard variant and the score
+  // itself is unchanged — only the label is new.
+  {
+    path: "stageB.forensics.piotroski.variant",
+    beforeMissing: true,
+    after: "standard",
+  },
+  {
+    path: "stageB.forensics.piotroski.label",
+    beforeMissing: true,
+    after: "Piotroski F (7 signals)",
+  },
   {
     path: "report.valuation.dcf.assumptions.3.basis",
     before: OLD_BALANCE_BASIS,

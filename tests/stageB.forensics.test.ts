@@ -1230,27 +1230,108 @@ describe("runForensics", () => {
 });
 
 describe("computePiotroski — financial route", () => {
-  it("withholds the current-ratio, gross-margin and both operating-cash-flow signals for a financial company", () => {
+  it("withholds all six signals that presume a non-financial balance sheet", () => {
     // JPMorgan graded 2/6 in the 2026-09-02 keyless sweep with both misses on
     // the OCF tests — a bank's operating cash flow is loan, deposit, trading
     // and reserve flows, not a profitability or accrual read.
+    //
+    // WS5 (D-17) widened this from four signals to six. ΔLEVER and ΔTURN do not
+    // merely fail on a financial balance sheet, they invert: falling long-term
+    // debt over assets scores a bank a "deleveraging" point while its deposits
+    // — the funding that actually matters, and not long-term debt at all —
+    // grow, and asset turnover rises and falls with the rate environment rather
+    // than with operating efficiency. Three signals remain: ROA > 0, ΔROA and
+    // no equity issuance.
     const { current, prior, prior2 } = piotroskiPeriods();
     const r = computePiotroski(current, prior, prior2, { financialsSuppressed: true });
-    expect(r.outOf).toBe(5);
-    expect(r.score).toBe(5);
-    for (const name of ["cfoPositive", "accrualQuality", "liquidityUp", "marginUp"] as const) {
-      expect(r.signals[name].value).toBeNull();
-      expect(r.signals[name].detail).toMatch(/withheld/);
+    expect(r.outOf).toBe(3);
+    expect(r.score).toBe(3);
+    for (const name of [
+      "cfoPositive",
+      "accrualQuality",
+      "liquidityUp",
+      "marginUp",
+      "leverageDown",
+      "turnoverUp",
+    ] as const) {
+      expect(r.signals[name].value, name).toBeNull();
+      expect(r.signals[name].detail, name).toMatch(/withheld/);
+    }
+    // The three that survive are still scored — nothing is dropped silently.
+    for (const name of ["roaPositive", "roaImproved", "noEquityIssuance"] as const) {
+      expect(r.signals[name].value, name).not.toBeNull();
     }
     expect(r.signals.cfoPositive.detail).toBe(
       "operating cash flow is not a profitability or accrual signal for a financial company (loan, deposit, trading and reserve flows dominate it) — signal withheld",
     );
     expect(r.signals.accrualQuality.detail).toBe(r.signals.cfoPositive.detail);
+    expect(r.signals.leverageDown.detail).toMatch(/debt is an INPUT/);
+    expect(r.signals.turnoverUp.detail).toMatch(/rate environment/);
   });
 
-  it("keeps all nine signals for a non-financial company", () => {
+  it("relabels the score so a 3-point result is never read against the 9-point scale", () => {
+    const { current, prior, prior2 } = piotroskiPeriods();
+    const r = computePiotroski(current, prior, prior2, { financialsSuppressed: true });
+
+    expect(r.variant).toBe("financial");
+    expect(r.label).toContain("financial variant");
+    expect(r.label).toContain("3 of 9 signals");
+    expect(r.notes.join(" ")).toContain("NOT comparable");
+    // Every withheld signal is named in the manifest entry.
+    const gap = r.gaps.find((g) => g.field === "forensics.piotroski");
+    expect(gap?.reason).toContain("leverageDown");
+    expect(gap?.reason).toContain("turnoverUp");
+    expect(gap?.reason).toContain("out of 3");
+  });
+
+  it("keeps all nine signals, and the standard label, for a non-financial company", () => {
     const { current, prior, prior2 } = piotroskiPeriods();
     const r = computePiotroski(current, prior, prior2, { financialsSuppressed: false });
     expect(r.outOf).toBe(9);
+    expect(r.variant).toBe("standard");
+    expect(r.label).toBe("Piotroski F (9 signals)");
+  });
+});
+
+describe("runForensics — withheld batteries reach the manifest, not only the notes", () => {
+  function fullInputs() {
+    const { current, prior, prior2 } = piotroskiPeriods();
+    return {
+      income: [current.income!, prior.income!],
+      balance: [current.balance!, prior.balance!, prior2.balance!],
+      cashFlow: [current.cashFlow!, prior.cashFlow!],
+      marketCap: 500,
+    };
+  }
+
+  it("files a reason for Altman, Beneish and the accrual ratios on a financial route", () => {
+    // A blank Z-score cell with no manifest entry reads as a fetch that failed.
+    // These are deliberate methodological refusals and the report must say so.
+    const report = runForensics(bankRoute, fullInputs());
+
+    const fields = report.gaps.map((g) => g.field);
+    expect(fields).toContain("forensics.altmanZ");
+    expect(fields).toContain("forensics.beneishM");
+    expect(fields).toContain("forensics.accrualsRatio");
+
+    const altman = report.gaps.find((g) => g.field === "forensics.altmanZ");
+    expect(altman?.reason).toMatch(/not defined for financial companies|excluded/i);
+    expect(report.gaps.find((g) => g.field === "forensics.beneishM")?.reason).toContain(
+      "estimation sample",
+    );
+    expect(report.gaps.find((g) => g.field === "forensics.accrualsRatio")?.reason).toContain(
+      "net operating assets",
+    );
+  });
+
+  it("files none of those on a general route, where the batteries actually run", () => {
+    const report = runForensics(generalRoute, fullInputs());
+    const fields = report.gaps.map((g) => g.field);
+
+    expect(fields).not.toContain("forensics.altmanZ");
+    expect(fields).not.toContain("forensics.beneishM");
+    expect(fields).not.toContain("forensics.accrualsRatio");
+    expect(report.altman).not.toBeNull();
+    expect(report.beneish).not.toBeNull();
   });
 });

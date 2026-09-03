@@ -323,9 +323,14 @@ describe("applyKeylessFallbacks", () => {
     expect(rows[0]).toEqual({ date: "2025-09-27", revenue: 1 });
     expect(rows.slice(1).every((row) => row.source === "edgar")).toBe(true);
     expect(out.gaps.filter((g) => g.field === "statements.backfill.incomeAnnual")).toHaveLength(1);
+    // WS4: scoped to the member-replacement gaps `keyless.<member>`, which are
+    // the ones whose expectedness depends on whether the plan is keyless. The
+    // methodology disclosures added since (profile.beta.method,
+    // keyless.sharesFloat.publicFloat) describe how a number was computed and
+    // are structural on any plan.
     expect(
       out.gaps
-        .filter((g) => !g.field.startsWith("statements.backfill."))
+        .filter((g) => /^keyless\.[a-zA-Z]+$/.test(g.field))
         .every((g) => g.expected === undefined || g.expected === false),
     ).toBe(true);
     expect(out.gaps.find((g) => g.field === "keyless.sectorEtf")?.reason).toMatch(/HTTP 402/);
@@ -480,7 +485,9 @@ describe("applyKeylessFallbacks", () => {
     // explains.
     const out = await applyKeylessFallbacks(inputs());
     const note = out.notes.find((n) => /^profile: beta /.test(n));
-    expect(note).toMatch(/^profile: beta -?\d+\.\d{3} from \d+ monthly log returns/);
+    // WS4 (D-15) widened the note: the standard error and the Blume-adjusted
+    // value now sit between the slope and the sample size.
+    expect(note).toMatch(/^profile: beta -?\d+\.\d{3} ± \d+\.\d{3} \(OLS standard error\), Blume-adjusted -?\d+\.\d{3}, from \d+ monthly log returns/);
     expect(note).toMatch(/\(R² \d\.\d{2}\)$/);
   });
 

@@ -398,7 +398,13 @@ export function classifyInstrument(meta: YahooMeta | null): {
 function closePoints(rows: readonly FmpEodBarRow[]): ClosePoint[] {
   return rows.flatMap((row) => {
     const day = isoDay(row.date);
-    return day !== null && isFiniteNumber(row.close) ? [{ date: day, close: row.close }] : [];
+    if (day === null || !isFiniteNumber(row.close)) return [];
+    // Yahoo's chart carries `adjClose` (dividend-adjusted); FMP's EOD endpoint
+    // does not. The beta estimator uses it only when BOTH series have it, so
+    // passing it through unconditionally is safe: a missing one degrades the
+    // whole regression to closing prices with a disclosure, never silently.
+    const adjClose = row["adjClose"];
+    return [{ date: day, close: row.close, adjClose: isFiniteNumber(adjClose) ? adjClose : null }];
   });
 }
 
@@ -825,6 +831,12 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     } else {
       const beta = estimateBeta(closePoints(eodRows), closePoints(spyRows));
       if (beta.gap !== null) gaps.push(beta.gap);
+      // D-15: a point estimate with no uncertainty attached invites a reader to
+      // treat 1.2 ± 0.05 and 1.2 ± 0.40 as the same input to a discount rate,
+      // and the price basis decides whether a dividend payer's returns were
+      // measured at all. Both travel with the number, in the notes and in the
+      // manifest.
+      if (beta.disclosure !== null) gaps.push(beta.disclosure);
       // The regression's fit is what says how much of this stock's movement the
       // benchmark explains; the spec calls for reporting it, and it was
       // computed and then dropped on the floor.
@@ -856,6 +868,14 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         price,
         marketCap,
         beta: beta.beta,
+        // Beside the raw slope, never in place of it: the Blume-adjusted value,
+        // the regression's uncertainty and fit, and which price series the
+        // returns were built from.
+        betaBlume: beta.betaBlume,
+        betaStandardError: beta.standardError,
+        betaRSquared: beta.rSquared,
+        betaMonths: beta.months,
+        betaBasis: beta.basis,
         // The instrument guard (`classifyInstrumentSupport`) decides support
         // from these two flags alone, so hard-coding them false meant a keyless
         // `/company/SPY` produced a company report for a fund: ETF and

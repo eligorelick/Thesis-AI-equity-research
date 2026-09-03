@@ -135,4 +135,26 @@ Only the User-Agent and the 403 branch had tests; the rate, the burst, the
 per-request header and the 429 branch are now pinned too
 (`tests/edgar.client.test.ts`, "EDGAR fair-access limits (WS4)").
 
+## 10. Beta: adjusted returns, uncertainty, and the Blume figure (D-15)
+
+The keyless beta is the OLS slope of monthly log returns on the benchmark's over
+the shared month-ends of the last five years, and it needs at least 24 monthly
+observations or it is a disclosed gap rather than a number. Three changes:
+
+- Returns are built from the **dividend-adjusted** close when both the symbol
+  and the benchmark carry one (Yahoo's chart `adjclose`). A price-only series
+  understates a dividend payer's return in every ex-dividend month. The two
+  series are never mixed: if either lacks an adjusted close anywhere in the
+  window, the whole regression falls back to closing prices and the manifest
+  entry becomes a `warn` saying so. FMP's EOD endpoint carries no adjusted
+  close, so a keyed run currently takes the price-only path.
+- The **OLS standard error** of the slope is reported beside R², in the profile
+  note and on the profile row (`betaStandardError`, `betaRSquared`,
+  `betaMonths`, `betaBasis`).
+- The **Blume mean-reversion adjustment** (2/3 × raw + 1/3) is reported beside
+  the raw slope as `betaBlume`, never in place of it.
+
+The methodology entry is `profile.beta.method`; the failure entry stays
+`profile.beta`.
+
 <!-- Sections continue as later WS4 units land. -->

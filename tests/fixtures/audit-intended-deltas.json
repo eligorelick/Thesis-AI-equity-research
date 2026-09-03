@@ -1,0 +1,4065 @@
+{
+  "againstBaseline": {
+    "auditedBaseCommit": "524d09e81b00b08fe6af386011d34759a5e02fc0",
+    "projectionSha256": "68222fc50a0b264723163fd76b7555dbff8fbf1e3269e82d4e36f4d3673d0376"
+  },
+  "generatedAt": "2026-09-03",
+  "keyedArrays": [
+    "report.appendix.missingData",
+    "stageB.gaps"
+  ],
+  "manifestIdentity": {
+    "report.appendix.missingData": {
+      "added": [
+        "edgar.cik(DEMO)",
+        "edgar.companyFacts(DEMO)",
+        "fixture.reserved(DEMO)",
+        "macro.BAMLH0A0HYM2",
+        "macro.CPIAUCSL",
+        "macro.CPILFESL",
+        "macro.DFII10",
+        "macro.DGS10",
+        "macro.DGS2",
+        "macro.EFFR",
+        "macro.NASDAQCOM",
+        "macro.PAYEMS",
+        "macro.T10Y2Y",
+        "macro.T10Y3M",
+        "macro.T10YIE",
+        "macro.UNRATE",
+        "macro.VIXCLS",
+        "valuation.dcf.terminalRoic.waccBasis",
+        "valuation.multiples.ownHistory",
+        "valuation.multiples.peers"
+      ],
+      "removed": [
+        "edgar.companyFacts(0)",
+        "fred.BAMLH0A0HYM2",
+        "fred.CPIAUCSL",
+        "fred.CPILFESL",
+        "fred.DFII10",
+        "fred.DGS10",
+        "fred.DGS2",
+        "fred.EFFR",
+        "fred.NASDAQCOM",
+        "fred.PAYEMS",
+        "fred.T10Y2Y",
+        "fred.T10Y3M",
+        "fred.T10YIE",
+        "fred.UNRATE",
+        "fred.VIXCLS"
+      ],
+      "changed": [
+        "edgar.auditorChange8Ks(DEMO)",
+        "edgar.item1a(DEMO)",
+        "edgar.latestTenK(DEMO)",
+        "edgar.latestTenQ(DEMO)",
+        "edgar.mdna(DEMO)",
+        "edgar.nonReliance8Ks(DEMO)",
+        "edgar.tenQMdna(DEMO)",
+        "fmp.historicalMarketCap(DEMO)",
+        "fmp.historicalPriceEodFull(SPY)",
+        "fmp.historicalPriceEodFull(XLK)",
+        "fmp.institutionalHolderAnalytics(DEMO,2026Q1)",
+        "fmp.keyMetricsTtm(DEMO)",
+        "fmp.pressReleases(DEMO)",
+        "fmp.ratiosTtm(DEMO)",
+        "fmp.secFilingsSearch(DEMO)",
+        "fmp.stockNews(DEMO)",
+        "fmp.symbolPositionsSummary(DEMO,2026Q1)",
+        "fmp.transcript(DEMO,2025Q4)",
+        "insiderSentiment.DEMO",
+        "shortInterest.DEMO",
+        "shortInterest.trend.DEMO",
+        "technicals.relativeStrength.SPY",
+        "validation.xbrlCrossCheck"
+      ]
+    },
+    "stageB.gaps": {
+      "added": [
+        "edgar.cik(DEMO)",
+        "edgar.companyFacts(DEMO)",
+        "fixture.reserved(DEMO)",
+        "macro.BAMLH0A0HYM2",
+        "macro.CPIAUCSL",
+        "macro.CPILFESL",
+        "macro.DFII10",
+        "macro.DGS10",
+        "macro.DGS2",
+        "macro.EFFR",
+        "macro.NASDAQCOM",
+        "macro.PAYEMS",
+        "macro.T10Y2Y",
+        "macro.T10Y3M",
+        "macro.T10YIE",
+        "macro.UNRATE",
+        "macro.VIXCLS",
+        "valuation.dcf.terminalRoic.waccBasis",
+        "valuation.multiples.ownHistory",
+        "valuation.multiples.peers"
+      ],
+      "removed": [
+        "edgar.companyFacts(0)",
+        "fred.BAMLH0A0HYM2",
+        "fred.CPIAUCSL",
+        "fred.CPILFESL",
+        "fred.DFII10",
+        "fred.DGS10",
+        "fred.DGS2",
+        "fred.EFFR",
+        "fred.NASDAQCOM",
+        "fred.PAYEMS",
+        "fred.T10Y2Y",
+        "fred.T10Y3M",
+        "fred.T10YIE",
+        "fred.UNRATE",
+        "fred.VIXCLS"
+      ],
+      "changed": [
+        "edgar.auditorChange8Ks(DEMO)",
+        "edgar.item1a(DEMO)",
+        "edgar.latestTenK(DEMO)",
+        "edgar.latestTenQ(DEMO)",
+        "edgar.mdna(DEMO)",
+        "edgar.nonReliance8Ks(DEMO)",
+        "edgar.tenQMdna(DEMO)",
+        "fmp.historicalMarketCap(DEMO)",
+        "fmp.historicalPriceEodFull(SPY)",
+        "fmp.historicalPriceEodFull(XLK)",
+        "fmp.institutionalHolderAnalytics(DEMO,2026Q1)",
+        "fmp.keyMetricsTtm(DEMO)",
+        "fmp.pressReleases(DEMO)",
+        "fmp.ratiosTtm(DEMO)",
+        "fmp.secFilingsSearch(DEMO)",
+        "fmp.stockNews(DEMO)",
+        "fmp.symbolPositionsSummary(DEMO,2026Q1)",
+        "fmp.transcript(DEMO,2025Q4)",
+        "insiderSentiment.DEMO",
+        "shortInterest.DEMO",
+        "shortInterest.trend.DEMO",
+        "technicals.relativeStrength.SPY"
+      ]
+    }
+  },
+  "groups": [
+    {
+      "name": "manifest-and-gap-entries",
+      "decisions": [
+        "D-11",
+        "D-12",
+        "D-16",
+        "D-17",
+        "D-18",
+        "D-19"
+      ],
+      "reason": "The missing-data manifest and the Stage B gap list were re-indexed and rewritten: DEMO became a reserved fixture symbol that short-circuits every provider (D-11), statement history gained an EDGAR source (D-12), the FRED series entries were renamed to macro, and the routing and valuation work added entries of their own (D-16 through D-19). Both arrays are compared by position, so every following leaf is listed here with the audited value at that position and the current one. The entry-by-entry view, which is what a reviewer should read, is manifestIdentity above.",
+      "deltas": [
+        {
+          "path": "report.appendix.missingData.0.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/historical-market-capitalization?from=2021-07-06&limit=5000&symbol=DEMO&to=2026-07-06",
+            "fixture:fixtures/fmp/historicalMarketCap/DEMO_2021-07-06_2026-07-06.json",
+            "fixture:fixtures/fmp/historicalMarketCap/DEMO.json",
+            "fixture:fixtures/fmp/historicalMarketCap/default.json"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.0.field",
+          "before": "edgar.item1a(DEMO)",
+          "after": "fmp.historicalMarketCap(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.0.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "report.appendix.missingData.0.severity",
+          "before": "critical",
+          "after": "warn"
+        },
+        {
+          "path": "report.appendix.missingData.1.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/historical-price-eod/full?from=2021-07-06&symbol=SPY&to=2026-07-06",
+            "fixture:fixtures/fmp/historicalPriceEodFull/SPY_2021-07-06_2026-07-06.json",
+            "fixture:fixtures/fmp/historicalPriceEodFull/SPY.json",
+            "fixture:fixtures/fmp/historicalPriceEodFull/default.json"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.1.field",
+          "before": "edgar.mdna(DEMO)",
+          "after": "fmp.historicalPriceEodFull(SPY)"
+        },
+        {
+          "path": "report.appendix.missingData.1.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "report.appendix.missingData.1.severity",
+          "before": "critical",
+          "after": "warn"
+        },
+        {
+          "path": "report.appendix.missingData.2.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/historical-price-eod/full?from=2021-07-06&symbol=XLK&to=2026-07-06",
+            "fixture:fixtures/fmp/historicalPriceEodFull/XLK_2021-07-06_2026-07-06.json",
+            "fixture:fixtures/fmp/historicalPriceEodFull/XLK.json",
+            "fixture:fixtures/fmp/historicalPriceEodFull/default.json"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.2.field",
+          "before": "edgar.auditorChange8Ks(DEMO)",
+          "after": "fmp.historicalPriceEodFull(XLK)"
+        },
+        {
+          "path": "report.appendix.missingData.2.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "report.appendix.missingData.3.attemptedSources.0",
+          "before": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000000000.json",
+          "after": "/stable/institutional-ownership/extract-analytics/holder?limit=50&page=0&quarter=1&symbol=DEMO&year=2026"
+        },
+        {
+          "path": "report.appendix.missingData.3.attemptedSources.1",
+          "beforeMissing": true,
+          "after": "fixture:fixtures/fmp/institutionalHolderAnalytics/DEMO_2026_Q1.json"
+        },
+        {
+          "path": "report.appendix.missingData.3.attemptedSources.2",
+          "beforeMissing": true,
+          "after": "fixture:fixtures/fmp/institutionalHolderAnalytics/DEMO.json"
+        },
+        {
+          "path": "report.appendix.missingData.3.attemptedSources.3",
+          "beforeMissing": true,
+          "after": "fixture:fixtures/fmp/institutionalHolderAnalytics/default.json"
+        },
+        {
+          "path": "report.appendix.missingData.3.field",
+          "before": "edgar.companyFacts(0)",
+          "after": "fmp.institutionalHolderAnalytics(DEMO,2026Q1)"
+        },
+        {
+          "path": "report.appendix.missingData.3.reason",
+          "before": "companyfacts HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "report.appendix.missingData.4.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/key-metrics-ttm?symbol=DEMO",
+            "fixture:fixtures/fmp/keyMetricsTtm/DEMO.json",
+            "fixture:fixtures/fmp/keyMetricsTtm/default.json"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.4.field",
+          "before": "edgar.latestTenK(DEMO)",
+          "after": "fmp.keyMetricsTtm(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.4.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "report.appendix.missingData.5.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/news/press-releases?from=2026-06-06&limit=50&page=0&symbols=DEMO&to=2026-07-06",
+            "fixture:fixtures/fmp/pressReleases/DEMO.json",
+            "fixture:fixtures/fmp/pressReleases/default.json"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.5.field",
+          "before": "edgar.latestTenQ(DEMO)",
+          "after": "fmp.pressReleases(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.5.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "report.appendix.missingData.6.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/ratios-ttm?symbol=DEMO",
+            "fixture:fixtures/fmp/ratiosTtm/DEMO.json",
+            "fixture:fixtures/fmp/ratiosTtm/default.json"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.6.field",
+          "before": "edgar.nonReliance8Ks(DEMO)",
+          "after": "fmp.ratiosTtm(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.6.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "report.appendix.missingData.7.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/sec-filings-search/symbol?from=2025-07-06&limit=100&page=0&symbol=DEMO&to=2026-07-06",
+            "fixture:fixtures/fmp/secFilingsSearch/DEMO_2025-07-06_2026-07-06.json",
+            "fixture:fixtures/fmp/secFilingsSearch/DEMO.json",
+            "fixture:fixtures/fmp/secFilingsSearch/default.json"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.7.field",
+          "before": "edgar.tenQMdna(DEMO)",
+          "after": "fmp.secFilingsSearch(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.7.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "report.appendix.missingData.8.attemptedSources.0",
+          "before": "/stable/historical-market-capitalization?from=2021-07-06&limit=5000&symbol=DEMO&to=2026-07-06",
+          "after": "/stable/news/stock?from=2026-06-06&limit=50&page=0&symbols=DEMO&to=2026-07-06"
+        },
+        {
+          "path": "report.appendix.missingData.8.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\historicalMarketCap\\DEMO_2021-07-06_2026-07-06.json",
+          "after": "fixture:fixtures/fmp/stockNews/DEMO.json"
+        },
+        {
+          "path": "report.appendix.missingData.8.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\historicalMarketCap\\DEMO.json",
+          "after": "fixture:fixtures/fmp/stockNews/default.json"
+        },
+        {
+          "path": "report.appendix.missingData.8.attemptedSources.3",
+          "before": "fixture:fixtures\\fmp\\historicalMarketCap\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.8.field",
+          "before": "fmp.historicalMarketCap(DEMO)",
+          "after": "fmp.stockNews(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.9.attemptedSources.0",
+          "before": "/stable/historical-price-eod/full?from=2021-07-06&symbol=SPY&to=2026-07-06",
+          "after": "/stable/institutional-ownership/symbol-positions-summary?quarter=1&symbol=DEMO&year=2026"
+        },
+        {
+          "path": "report.appendix.missingData.9.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\historicalPriceEodFull\\SPY_2021-07-06_2026-07-06.json",
+          "after": "fixture:fixtures/fmp/symbolPositionsSummary/DEMO_2026_Q1.json"
+        },
+        {
+          "path": "report.appendix.missingData.9.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\historicalPriceEodFull\\SPY.json",
+          "after": "fixture:fixtures/fmp/symbolPositionsSummary/DEMO.json"
+        },
+        {
+          "path": "report.appendix.missingData.9.attemptedSources.3",
+          "before": "fixture:fixtures\\fmp\\historicalPriceEodFull\\default.json",
+          "after": "fixture:fixtures/fmp/symbolPositionsSummary/default.json"
+        },
+        {
+          "path": "report.appendix.missingData.9.field",
+          "before": "fmp.historicalPriceEodFull(SPY)",
+          "after": "fmp.symbolPositionsSummary(DEMO,2026Q1)"
+        },
+        {
+          "path": "report.appendix.missingData.10.attemptedSources.0",
+          "before": "/stable/historical-price-eod/full?from=2021-07-06&symbol=XLK&to=2026-07-06",
+          "after": "/stable/earning-call-transcript?quarter=4&symbol=DEMO&year=2025"
+        },
+        {
+          "path": "report.appendix.missingData.10.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\historicalPriceEodFull\\XLK_2021-07-06_2026-07-06.json",
+          "after": "fixture:fixtures/fmp/transcript/DEMO_2025_Q4.json"
+        },
+        {
+          "path": "report.appendix.missingData.10.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\historicalPriceEodFull\\XLK.json",
+          "after": "fixture:fixtures/fmp/transcript/DEMO.json"
+        },
+        {
+          "path": "report.appendix.missingData.10.attemptedSources.3",
+          "before": "fixture:fixtures\\fmp\\historicalPriceEodFull\\default.json",
+          "after": "fixture:fixtures/fmp/transcript/default.json"
+        },
+        {
+          "path": "report.appendix.missingData.10.field",
+          "before": "fmp.historicalPriceEodFull(XLK)",
+          "after": "fmp.transcript(DEMO,2025Q4)"
+        },
+        {
+          "path": "report.appendix.missingData.11.attemptedSources",
+          "before": [
+            "/stable/institutional-ownership/extract-analytics/holder?limit=50&page=0&quarter=1&symbol=DEMO&year=2026",
+            "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\DEMO_2026_Q1.json",
+            "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\DEMO.json",
+            "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\default.json"
+          ],
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.11.field",
+          "before": "fmp.institutionalHolderAnalytics(DEMO,2026Q1)",
+          "after": "technicals.relativeStrength.SPY"
+        },
+        {
+          "path": "report.appendix.missingData.11.reason",
+          "before": "no API key + no fixture",
+          "after": "no valid SPY closes supplied for relative-strength alignment"
+        },
+        {
+          "path": "report.appendix.missingData.12.attemptedSources",
+          "before": [
+            "/stable/key-metrics-ttm?symbol=DEMO",
+            "fixture:fixtures\\fmp\\keyMetricsTtm\\DEMO.json",
+            "fixture:fixtures\\fmp\\keyMetricsTtm\\default.json"
+          ],
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.12.field",
+          "before": "fmp.keyMetricsTtm(DEMO)",
+          "after": "validation.xbrlCrossCheck"
+        },
+        {
+          "path": "report.appendix.missingData.12.reason",
+          "before": "no API key + no fixture",
+          "after": "FMP↔XBRL cross-check skipped — companyfacts unavailable (DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent)"
+        },
+        {
+          "path": "report.appendix.missingData.13.attemptedSources.0",
+          "before": "/stable/news/press-releases?from=2026-06-06&limit=50&page=0&symbols=DEMO&to=2026-07-06",
+          "after": "[FIXTURE] /stable/earnings?limit=40&symbol=DEMO"
+        },
+        {
+          "path": "report.appendix.missingData.13.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\pressReleases\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.13.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\pressReleases\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.13.field",
+          "before": "fmp.pressReleases(DEMO)",
+          "after": "earningsCalendarNext(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.13.reason",
+          "before": "no API key + no fixture",
+          "after": "no future-dated earnings row in /stable/earnings response"
+        },
+        {
+          "path": "report.appendix.missingData.13.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "report.appendix.missingData.14.attemptedSources.0",
+          "before": "/stable/ratios-ttm?symbol=DEMO",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "report.appendix.missingData.14.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\ratiosTtm\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.14.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\ratiosTtm\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.14.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.14.field",
+          "before": "fmp.ratiosTtm(DEMO)",
+          "after": "edgar.auditorChange8Ks(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.14.reason",
+          "before": "no API key + no fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.14.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "report.appendix.missingData.15.attemptedSources.0",
+          "before": "/stable/sec-filings-search/symbol?from=2025-07-06&limit=100&page=0&symbol=DEMO&to=2026-07-06",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "report.appendix.missingData.15.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\secFilingsSearch\\DEMO_2025-07-06_2026-07-06.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.15.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\secFilingsSearch\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.15.attemptedSources.3",
+          "before": "fixture:fixtures\\fmp\\secFilingsSearch\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.15.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.15.field",
+          "before": "fmp.secFilingsSearch(DEMO)",
+          "after": "edgar.cik(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.15.reason",
+          "before": "no API key + no fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.15.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "report.appendix.missingData.16.attemptedSources.0",
+          "before": "/stable/news/stock?from=2026-06-06&limit=50&page=0&symbols=DEMO&to=2026-07-06",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "report.appendix.missingData.16.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\stockNews\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.16.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\stockNews\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.16.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.16.field",
+          "before": "fmp.stockNews(DEMO)",
+          "after": "edgar.companyFacts(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.16.reason",
+          "before": "no API key + no fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.16.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "report.appendix.missingData.17.attemptedSources.0",
+          "before": "/stable/institutional-ownership/symbol-positions-summary?quarter=1&symbol=DEMO&year=2026",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "report.appendix.missingData.17.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\symbolPositionsSummary\\DEMO_2026_Q1.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.17.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\symbolPositionsSummary\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.17.attemptedSources.3",
+          "before": "fixture:fixtures\\fmp\\symbolPositionsSummary\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.17.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.17.field",
+          "before": "fmp.symbolPositionsSummary(DEMO,2026Q1)",
+          "after": "edgar.item1a(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.17.reason",
+          "before": "no API key + no fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.17.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "report.appendix.missingData.18.attemptedSources.0",
+          "before": "/stable/earning-call-transcript?quarter=4&symbol=DEMO&year=2025",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "report.appendix.missingData.18.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\transcript\\DEMO_2025_Q4.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.18.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\transcript\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.18.attemptedSources.3",
+          "before": "fixture:fixtures\\fmp\\transcript\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.18.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.18.field",
+          "before": "fmp.transcript(DEMO,2025Q4)",
+          "after": "edgar.latestTenK(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.18.reason",
+          "before": "no API key + no fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.18.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "report.appendix.missingData.19.attemptedSources.0",
+          "before": "finnhub",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "report.appendix.missingData.19.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.19.field",
+          "before": "insiderSentiment.DEMO",
+          "after": "edgar.latestTenQ(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.19.reason",
+          "before": "Finnhub key missing",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.19.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "report.appendix.missingData.20.attemptedSources.0",
+          "before": "finra",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "report.appendix.missingData.20.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.20.field",
+          "before": "shortInterest.DEMO",
+          "after": "edgar.mdna(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.20.reason",
+          "before": "latest FINRA short interest unavailable because trend fetch failed: short interest unavailable (FINRA access failed): HTTP 503 on GET /partitions/group/otcMarket/name/consolidatedShortInterest",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.20.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "report.appendix.missingData.21.attemptedSources.0",
+          "before": "finra",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "report.appendix.missingData.21.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.21.field",
+          "before": "shortInterest.trend.DEMO",
+          "after": "edgar.nonReliance8Ks(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.21.reason",
+          "before": "short interest unavailable (FINRA access failed): HTTP 503 on GET /partitions/group/otcMarket/name/consolidatedShortInterest",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.21.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "report.appendix.missingData.22.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "fixtures/edgar"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.22.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.22.field",
+          "before": "technicals.relativeStrength.SPY",
+          "after": "edgar.tenQMdna(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.22.reason",
+          "before": "no SPY benchmark history supplied",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.22.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "report.appendix.missingData.23.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "fixture:fixtures/fmp/**/DEMO.json"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.23.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.23.field",
+          "before": "validation.xbrlCrossCheck",
+          "after": "fixture.reserved(DEMO)"
+        },
+        {
+          "path": "report.appendix.missingData.23.reason",
+          "before": "FMP↔XBRL cross-check skipped — companyfacts unavailable (companyfacts HTTP 404)",
+          "after": "DEMO is a reserved fixture symbol: it is served entirely from the synthetic contract fixtures in fixtures/fmp and no request was made to fmp, edgar, yahoo, fred, finnhub, finra, whatever API keys are configured. Every figure in this report is invented demonstration data for a fictional issuer, and the reserved strings cannot resolve to a real ticker."
+        },
+        {
+          "path": "report.appendix.missingData.23.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "report.appendix.missingData.24.attemptedSources",
+          "before": [
+            "[FIXTURE] /stable/earnings?limit=40&symbol=DEMO"
+          ],
+          "afterMissing": true
+        },
+        {
+          "path": "report.appendix.missingData.24.field",
+          "before": "earningsCalendarNext(DEMO)",
+          "after": "forensics.piotroski"
+        },
+        {
+          "path": "report.appendix.missingData.24.reason",
+          "before": "no future-dated earnings row in /stable/earnings response",
+          "after": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7"
+        },
+        {
+          "path": "report.appendix.missingData.25.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "finnhub"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.25.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.25.field",
+          "before": "forensics.piotroski",
+          "after": "insiderSentiment.DEMO"
+        },
+        {
+          "path": "report.appendix.missingData.25.reason",
+          "before": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.26.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.26.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.26.field",
+          "before": "fred.BAMLH0A0HYM2",
+          "after": "macro.BAMLH0A0HYM2"
+        },
+        {
+          "path": "report.appendix.missingData.26.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.27.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.27.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.27.field",
+          "before": "fred.CPIAUCSL",
+          "after": "macro.CPIAUCSL"
+        },
+        {
+          "path": "report.appendix.missingData.27.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.28.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.28.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.28.field",
+          "before": "fred.CPILFESL",
+          "after": "macro.CPILFESL"
+        },
+        {
+          "path": "report.appendix.missingData.28.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.29.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.29.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.29.field",
+          "before": "fred.DFII10",
+          "after": "macro.DFII10"
+        },
+        {
+          "path": "report.appendix.missingData.29.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.30.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.30.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.30.field",
+          "before": "fred.DGS10",
+          "after": "macro.DGS10"
+        },
+        {
+          "path": "report.appendix.missingData.30.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.31.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.31.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.31.field",
+          "before": "fred.DGS2",
+          "after": "macro.DGS2"
+        },
+        {
+          "path": "report.appendix.missingData.31.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.32.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.32.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.32.field",
+          "before": "fred.EFFR",
+          "after": "macro.EFFR"
+        },
+        {
+          "path": "report.appendix.missingData.32.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.33.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.33.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.33.field",
+          "before": "fred.NASDAQCOM",
+          "after": "macro.NASDAQCOM"
+        },
+        {
+          "path": "report.appendix.missingData.33.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.34.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.34.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.34.field",
+          "before": "fred.PAYEMS",
+          "after": "macro.PAYEMS"
+        },
+        {
+          "path": "report.appendix.missingData.34.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.35.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.35.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.35.field",
+          "before": "fred.T10Y2Y",
+          "after": "macro.T10Y2Y"
+        },
+        {
+          "path": "report.appendix.missingData.35.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.36.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.36.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.36.field",
+          "before": "fred.T10Y3M",
+          "after": "macro.T10Y3M"
+        },
+        {
+          "path": "report.appendix.missingData.36.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.37.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.37.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.37.field",
+          "before": "fred.T10YIE",
+          "after": "macro.T10YIE"
+        },
+        {
+          "path": "report.appendix.missingData.37.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.38.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.38.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.38.field",
+          "before": "fred.UNRATE",
+          "after": "macro.UNRATE"
+        },
+        {
+          "path": "report.appendix.missingData.38.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.39.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.39.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.39.field",
+          "before": "fred.VIXCLS",
+          "after": "macro.VIXCLS"
+        },
+        {
+          "path": "report.appendix.missingData.39.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.41.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "finra"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.41.field",
+          "before": "technicals.drawdown.3y",
+          "after": "shortInterest.DEMO"
+        },
+        {
+          "path": "report.appendix.missingData.41.reason",
+          "before": "history does not span the full 3-year window — drawdown computed over available rows only",
+          "after": "latest FINRA short interest unavailable because trend fetch failed: DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.42.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "finra"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.42.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.42.field",
+          "before": "technicals.drawdown.5y",
+          "after": "shortInterest.trend.DEMO"
+        },
+        {
+          "path": "report.appendix.missingData.42.reason",
+          "before": "history does not span the full 5-year window — drawdown computed over available rows only",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.43.field",
+          "before": "technicals.relativeStrength.sector",
+          "after": "technicals.drawdown.3y"
+        },
+        {
+          "path": "report.appendix.missingData.43.reason",
+          "before": "no XLK history supplied",
+          "after": "history does not span the full 3-year window — drawdown computed over available rows only"
+        },
+        {
+          "path": "report.appendix.missingData.44",
+          "beforeMissing": true,
+          "after": {
+            "field": "technicals.drawdown.5y",
+            "reason": "history does not span the full 5-year window — drawdown computed over available rows only",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.appendix.missingData.45",
+          "beforeMissing": true,
+          "after": {
+            "field": "technicals.relativeStrength.sector",
+            "reason": "no XLK history supplied",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.appendix.missingData.46",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.dcf.terminalRoic.waccBasis",
+            "reason": "no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.appendix.missingData.47",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.ownHistory",
+            "reason": "insufficient history (need ≥8 quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.appendix.missingData.48",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.peers",
+            "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.meta.asOfMap.edgar\\.cik",
+          "before": "2026-07-06",
+          "afterMissing": true
+        },
+        {
+          "path": "report.meta.dataCompleteness.criticalCount",
+          "before": 2,
+          "after": 0
+        },
+        {
+          "path": "report.meta.dataCompleteness.state",
+          "before": "blocked",
+          "after": "degraded"
+        },
+        {
+          "path": "report.meta.dataCompleteness.warningCount",
+          "before": 22,
+          "after": 13
+        },
+        {
+          "path": "stageB.gaps.0.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/historical-market-capitalization?from=2021-07-06&limit=5000&symbol=DEMO&to=2026-07-06",
+            "fixture:fixtures/fmp/historicalMarketCap/DEMO_2021-07-06_2026-07-06.json",
+            "fixture:fixtures/fmp/historicalMarketCap/DEMO.json",
+            "fixture:fixtures/fmp/historicalMarketCap/default.json"
+          ]
+        },
+        {
+          "path": "stageB.gaps.0.field",
+          "before": "edgar.item1a(DEMO)",
+          "after": "fmp.historicalMarketCap(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.0.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "stageB.gaps.0.severity",
+          "before": "critical",
+          "after": "warn"
+        },
+        {
+          "path": "stageB.gaps.1.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/historical-price-eod/full?from=2021-07-06&symbol=SPY&to=2026-07-06",
+            "fixture:fixtures/fmp/historicalPriceEodFull/SPY_2021-07-06_2026-07-06.json",
+            "fixture:fixtures/fmp/historicalPriceEodFull/SPY.json",
+            "fixture:fixtures/fmp/historicalPriceEodFull/default.json"
+          ]
+        },
+        {
+          "path": "stageB.gaps.1.field",
+          "before": "edgar.mdna(DEMO)",
+          "after": "fmp.historicalPriceEodFull(SPY)"
+        },
+        {
+          "path": "stageB.gaps.1.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "stageB.gaps.1.severity",
+          "before": "critical",
+          "after": "warn"
+        },
+        {
+          "path": "stageB.gaps.2.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/historical-price-eod/full?from=2021-07-06&symbol=XLK&to=2026-07-06",
+            "fixture:fixtures/fmp/historicalPriceEodFull/XLK_2021-07-06_2026-07-06.json",
+            "fixture:fixtures/fmp/historicalPriceEodFull/XLK.json",
+            "fixture:fixtures/fmp/historicalPriceEodFull/default.json"
+          ]
+        },
+        {
+          "path": "stageB.gaps.2.field",
+          "before": "edgar.auditorChange8Ks(DEMO)",
+          "after": "fmp.historicalPriceEodFull(XLK)"
+        },
+        {
+          "path": "stageB.gaps.2.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "stageB.gaps.3.attemptedSources.0",
+          "before": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000000000.json",
+          "after": "/stable/institutional-ownership/extract-analytics/holder?limit=50&page=0&quarter=1&symbol=DEMO&year=2026"
+        },
+        {
+          "path": "stageB.gaps.3.attemptedSources.1",
+          "beforeMissing": true,
+          "after": "fixture:fixtures/fmp/institutionalHolderAnalytics/DEMO_2026_Q1.json"
+        },
+        {
+          "path": "stageB.gaps.3.attemptedSources.2",
+          "beforeMissing": true,
+          "after": "fixture:fixtures/fmp/institutionalHolderAnalytics/DEMO.json"
+        },
+        {
+          "path": "stageB.gaps.3.attemptedSources.3",
+          "beforeMissing": true,
+          "after": "fixture:fixtures/fmp/institutionalHolderAnalytics/default.json"
+        },
+        {
+          "path": "stageB.gaps.3.field",
+          "before": "edgar.companyFacts(0)",
+          "after": "fmp.institutionalHolderAnalytics(DEMO,2026Q1)"
+        },
+        {
+          "path": "stageB.gaps.3.reason",
+          "before": "companyfacts HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "stageB.gaps.4.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/key-metrics-ttm?symbol=DEMO",
+            "fixture:fixtures/fmp/keyMetricsTtm/DEMO.json",
+            "fixture:fixtures/fmp/keyMetricsTtm/default.json"
+          ]
+        },
+        {
+          "path": "stageB.gaps.4.field",
+          "before": "edgar.latestTenK(DEMO)",
+          "after": "fmp.keyMetricsTtm(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.4.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "stageB.gaps.5.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/news/press-releases?from=2026-06-06&limit=50&page=0&symbols=DEMO&to=2026-07-06",
+            "fixture:fixtures/fmp/pressReleases/DEMO.json",
+            "fixture:fixtures/fmp/pressReleases/default.json"
+          ]
+        },
+        {
+          "path": "stageB.gaps.5.field",
+          "before": "edgar.latestTenQ(DEMO)",
+          "after": "fmp.pressReleases(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.5.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "stageB.gaps.6.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/ratios-ttm?symbol=DEMO",
+            "fixture:fixtures/fmp/ratiosTtm/DEMO.json",
+            "fixture:fixtures/fmp/ratiosTtm/default.json"
+          ]
+        },
+        {
+          "path": "stageB.gaps.6.field",
+          "before": "edgar.nonReliance8Ks(DEMO)",
+          "after": "fmp.ratiosTtm(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.6.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "stageB.gaps.7.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "/stable/sec-filings-search/symbol?from=2025-07-06&limit=100&page=0&symbol=DEMO&to=2026-07-06",
+            "fixture:fixtures/fmp/secFilingsSearch/DEMO_2025-07-06_2026-07-06.json",
+            "fixture:fixtures/fmp/secFilingsSearch/DEMO.json",
+            "fixture:fixtures/fmp/secFilingsSearch/default.json"
+          ]
+        },
+        {
+          "path": "stageB.gaps.7.field",
+          "before": "edgar.tenQMdna(DEMO)",
+          "after": "fmp.secFilingsSearch(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.7.reason",
+          "before": "submissions unavailable: submissions HTTP 404",
+          "after": "no API key + no fixture"
+        },
+        {
+          "path": "stageB.gaps.8.attemptedSources.0",
+          "before": "/stable/historical-market-capitalization?from=2021-07-06&limit=5000&symbol=DEMO&to=2026-07-06",
+          "after": "/stable/news/stock?from=2026-06-06&limit=50&page=0&symbols=DEMO&to=2026-07-06"
+        },
+        {
+          "path": "stageB.gaps.8.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\historicalMarketCap\\DEMO_2021-07-06_2026-07-06.json",
+          "after": "fixture:fixtures/fmp/stockNews/DEMO.json"
+        },
+        {
+          "path": "stageB.gaps.8.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\historicalMarketCap\\DEMO.json",
+          "after": "fixture:fixtures/fmp/stockNews/default.json"
+        },
+        {
+          "path": "stageB.gaps.8.attemptedSources.3",
+          "before": "fixture:fixtures\\fmp\\historicalMarketCap\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.8.field",
+          "before": "fmp.historicalMarketCap(DEMO)",
+          "after": "fmp.stockNews(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.9.attemptedSources.0",
+          "before": "/stable/historical-price-eod/full?from=2021-07-06&symbol=SPY&to=2026-07-06",
+          "after": "/stable/institutional-ownership/symbol-positions-summary?quarter=1&symbol=DEMO&year=2026"
+        },
+        {
+          "path": "stageB.gaps.9.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\historicalPriceEodFull\\SPY_2021-07-06_2026-07-06.json",
+          "after": "fixture:fixtures/fmp/symbolPositionsSummary/DEMO_2026_Q1.json"
+        },
+        {
+          "path": "stageB.gaps.9.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\historicalPriceEodFull\\SPY.json",
+          "after": "fixture:fixtures/fmp/symbolPositionsSummary/DEMO.json"
+        },
+        {
+          "path": "stageB.gaps.9.attemptedSources.3",
+          "before": "fixture:fixtures\\fmp\\historicalPriceEodFull\\default.json",
+          "after": "fixture:fixtures/fmp/symbolPositionsSummary/default.json"
+        },
+        {
+          "path": "stageB.gaps.9.field",
+          "before": "fmp.historicalPriceEodFull(SPY)",
+          "after": "fmp.symbolPositionsSummary(DEMO,2026Q1)"
+        },
+        {
+          "path": "stageB.gaps.10.attemptedSources.0",
+          "before": "/stable/historical-price-eod/full?from=2021-07-06&symbol=XLK&to=2026-07-06",
+          "after": "/stable/earning-call-transcript?quarter=4&symbol=DEMO&year=2025"
+        },
+        {
+          "path": "stageB.gaps.10.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\historicalPriceEodFull\\XLK_2021-07-06_2026-07-06.json",
+          "after": "fixture:fixtures/fmp/transcript/DEMO_2025_Q4.json"
+        },
+        {
+          "path": "stageB.gaps.10.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\historicalPriceEodFull\\XLK.json",
+          "after": "fixture:fixtures/fmp/transcript/DEMO.json"
+        },
+        {
+          "path": "stageB.gaps.10.attemptedSources.3",
+          "before": "fixture:fixtures\\fmp\\historicalPriceEodFull\\default.json",
+          "after": "fixture:fixtures/fmp/transcript/default.json"
+        },
+        {
+          "path": "stageB.gaps.10.field",
+          "before": "fmp.historicalPriceEodFull(XLK)",
+          "after": "fmp.transcript(DEMO,2025Q4)"
+        },
+        {
+          "path": "stageB.gaps.11.attemptedSources",
+          "before": [
+            "/stable/institutional-ownership/extract-analytics/holder?limit=50&page=0&quarter=1&symbol=DEMO&year=2026",
+            "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\DEMO_2026_Q1.json",
+            "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\DEMO.json",
+            "fixture:fixtures\\fmp\\institutionalHolderAnalytics\\default.json"
+          ],
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.11.field",
+          "before": "fmp.institutionalHolderAnalytics(DEMO,2026Q1)",
+          "after": "technicals.relativeStrength.SPY"
+        },
+        {
+          "path": "stageB.gaps.11.reason",
+          "before": "no API key + no fixture",
+          "after": "no valid SPY closes supplied for relative-strength alignment"
+        },
+        {
+          "path": "stageB.gaps.12.attemptedSources.0",
+          "before": "/stable/key-metrics-ttm?symbol=DEMO",
+          "after": "[FIXTURE] /stable/earnings?limit=40&symbol=DEMO"
+        },
+        {
+          "path": "stageB.gaps.12.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\keyMetricsTtm\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.12.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\keyMetricsTtm\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.12.field",
+          "before": "fmp.keyMetricsTtm(DEMO)",
+          "after": "earningsCalendarNext(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.12.reason",
+          "before": "no API key + no fixture",
+          "after": "no future-dated earnings row in /stable/earnings response"
+        },
+        {
+          "path": "stageB.gaps.12.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "stageB.gaps.13.attemptedSources.0",
+          "before": "/stable/news/press-releases?from=2026-06-06&limit=50&page=0&symbols=DEMO&to=2026-07-06",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "stageB.gaps.13.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\pressReleases\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.13.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\pressReleases\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.13.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.13.field",
+          "before": "fmp.pressReleases(DEMO)",
+          "after": "edgar.auditorChange8Ks(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.13.reason",
+          "before": "no API key + no fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.13.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "stageB.gaps.14.attemptedSources.0",
+          "before": "/stable/ratios-ttm?symbol=DEMO",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "stageB.gaps.14.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\ratiosTtm\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.14.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\ratiosTtm\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.14.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.14.field",
+          "before": "fmp.ratiosTtm(DEMO)",
+          "after": "edgar.cik(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.14.reason",
+          "before": "no API key + no fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.14.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "stageB.gaps.15.attemptedSources.0",
+          "before": "/stable/sec-filings-search/symbol?from=2025-07-06&limit=100&page=0&symbol=DEMO&to=2026-07-06",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "stageB.gaps.15.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\secFilingsSearch\\DEMO_2025-07-06_2026-07-06.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.15.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\secFilingsSearch\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.15.attemptedSources.3",
+          "before": "fixture:fixtures\\fmp\\secFilingsSearch\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.15.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.15.field",
+          "before": "fmp.secFilingsSearch(DEMO)",
+          "after": "edgar.companyFacts(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.15.reason",
+          "before": "no API key + no fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.15.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "stageB.gaps.16.attemptedSources.0",
+          "before": "/stable/news/stock?from=2026-06-06&limit=50&page=0&symbols=DEMO&to=2026-07-06",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "stageB.gaps.16.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\stockNews\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.16.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\stockNews\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.16.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.16.field",
+          "before": "fmp.stockNews(DEMO)",
+          "after": "edgar.item1a(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.16.reason",
+          "before": "no API key + no fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.16.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "stageB.gaps.17.attemptedSources.0",
+          "before": "/stable/institutional-ownership/symbol-positions-summary?quarter=1&symbol=DEMO&year=2026",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "stageB.gaps.17.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\symbolPositionsSummary\\DEMO_2026_Q1.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.17.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\symbolPositionsSummary\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.17.attemptedSources.3",
+          "before": "fixture:fixtures\\fmp\\symbolPositionsSummary\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.17.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.17.field",
+          "before": "fmp.symbolPositionsSummary(DEMO,2026Q1)",
+          "after": "edgar.latestTenK(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.17.reason",
+          "before": "no API key + no fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.17.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "stageB.gaps.18.attemptedSources.0",
+          "before": "/stable/earning-call-transcript?quarter=4&symbol=DEMO&year=2025",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "stageB.gaps.18.attemptedSources.1",
+          "before": "fixture:fixtures\\fmp\\transcript\\DEMO_2025_Q4.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.18.attemptedSources.2",
+          "before": "fixture:fixtures\\fmp\\transcript\\DEMO.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.18.attemptedSources.3",
+          "before": "fixture:fixtures\\fmp\\transcript\\default.json",
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.18.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.18.field",
+          "before": "fmp.transcript(DEMO,2025Q4)",
+          "after": "edgar.latestTenQ(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.18.reason",
+          "before": "no API key + no fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.18.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "stageB.gaps.19.attemptedSources.0",
+          "before": "finnhub",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "stageB.gaps.19.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.19.field",
+          "before": "insiderSentiment.DEMO",
+          "after": "edgar.mdna(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.19.reason",
+          "before": "Finnhub key missing",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.19.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "stageB.gaps.20.attemptedSources.0",
+          "before": "finra",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "stageB.gaps.20.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.20.field",
+          "before": "shortInterest.DEMO",
+          "after": "edgar.nonReliance8Ks(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.20.reason",
+          "before": "latest FINRA short interest unavailable because trend fetch failed: short interest unavailable (FINRA access failed): HTTP 503 on GET /partitions/group/otcMarket/name/consolidatedShortInterest",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.20.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "stageB.gaps.21.attemptedSources.0",
+          "before": "finra",
+          "after": "fixtures/edgar"
+        },
+        {
+          "path": "stageB.gaps.21.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.21.field",
+          "before": "shortInterest.trend.DEMO",
+          "after": "edgar.tenQMdna(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.21.reason",
+          "before": "short interest unavailable (FINRA access failed): HTTP 503 on GET /partitions/group/otcMarket/name/consolidatedShortInterest",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.21.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "stageB.gaps.22.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "fixture:fixtures/fmp/**/DEMO.json"
+          ]
+        },
+        {
+          "path": "stageB.gaps.22.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.22.field",
+          "before": "technicals.relativeStrength.SPY",
+          "after": "fixture.reserved(DEMO)"
+        },
+        {
+          "path": "stageB.gaps.22.reason",
+          "before": "no SPY benchmark history supplied",
+          "after": "DEMO is a reserved fixture symbol: it is served entirely from the synthetic contract fixtures in fixtures/fmp and no request was made to fmp, edgar, yahoo, fred, finnhub, finra, whatever API keys are configured. Every figure in this report is invented demonstration data for a fictional issuer, and the reserved strings cannot resolve to a real ticker."
+        },
+        {
+          "path": "stageB.gaps.22.severity",
+          "before": "warn",
+          "after": "info"
+        },
+        {
+          "path": "stageB.gaps.23.attemptedSources",
+          "before": [
+            "[FIXTURE] /stable/earnings?limit=40&symbol=DEMO"
+          ],
+          "afterMissing": true
+        },
+        {
+          "path": "stageB.gaps.23.field",
+          "before": "earningsCalendarNext(DEMO)",
+          "after": "forensics.piotroski"
+        },
+        {
+          "path": "stageB.gaps.23.reason",
+          "before": "no future-dated earnings row in /stable/earnings response",
+          "after": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7"
+        },
+        {
+          "path": "stageB.gaps.24.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "finnhub"
+          ]
+        },
+        {
+          "path": "stageB.gaps.24.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.24.field",
+          "before": "forensics.piotroski",
+          "after": "insiderSentiment.DEMO"
+        },
+        {
+          "path": "stageB.gaps.24.reason",
+          "before": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.25.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.25.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.25.field",
+          "before": "fred.BAMLH0A0HYM2",
+          "after": "macro.BAMLH0A0HYM2"
+        },
+        {
+          "path": "stageB.gaps.25.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.26.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.26.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.26.field",
+          "before": "fred.CPIAUCSL",
+          "after": "macro.CPIAUCSL"
+        },
+        {
+          "path": "stageB.gaps.26.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.27.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.27.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.27.field",
+          "before": "fred.CPILFESL",
+          "after": "macro.CPILFESL"
+        },
+        {
+          "path": "stageB.gaps.27.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.28.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.28.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.28.field",
+          "before": "fred.DFII10",
+          "after": "macro.DFII10"
+        },
+        {
+          "path": "stageB.gaps.28.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.29.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.29.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.29.field",
+          "before": "fred.DGS10",
+          "after": "macro.DGS10"
+        },
+        {
+          "path": "stageB.gaps.29.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.30.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.30.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.30.field",
+          "before": "fred.DGS2",
+          "after": "macro.DGS2"
+        },
+        {
+          "path": "stageB.gaps.30.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.31.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.31.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.31.field",
+          "before": "fred.EFFR",
+          "after": "macro.EFFR"
+        },
+        {
+          "path": "stageB.gaps.31.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.32.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.32.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.32.field",
+          "before": "fred.NASDAQCOM",
+          "after": "macro.NASDAQCOM"
+        },
+        {
+          "path": "stageB.gaps.32.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.33.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.33.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.33.field",
+          "before": "fred.PAYEMS",
+          "after": "macro.PAYEMS"
+        },
+        {
+          "path": "stageB.gaps.33.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.34.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.34.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.34.field",
+          "before": "fred.T10Y2Y",
+          "after": "macro.T10Y2Y"
+        },
+        {
+          "path": "stageB.gaps.34.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.35.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.35.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.35.field",
+          "before": "fred.T10Y3M",
+          "after": "macro.T10Y3M"
+        },
+        {
+          "path": "stageB.gaps.35.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.36.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.36.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.36.field",
+          "before": "fred.T10YIE",
+          "after": "macro.T10YIE"
+        },
+        {
+          "path": "stageB.gaps.36.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.37.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.37.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.37.field",
+          "before": "fred.UNRATE",
+          "after": "macro.UNRATE"
+        },
+        {
+          "path": "stageB.gaps.37.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.38.attemptedSources.0",
+          "before": "fixture",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.38.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.38.field",
+          "before": "fred.VIXCLS",
+          "after": "macro.VIXCLS"
+        },
+        {
+          "path": "stageB.gaps.38.reason",
+          "before": "offline fixture",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.40.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "finra"
+          ]
+        },
+        {
+          "path": "stageB.gaps.40.field",
+          "before": "technicals.drawdown.3y",
+          "after": "shortInterest.DEMO"
+        },
+        {
+          "path": "stageB.gaps.40.reason",
+          "before": "history does not span the full 3-year window — drawdown computed over available rows only",
+          "after": "latest FINRA short interest unavailable because trend fetch failed: DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.41.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "finra"
+          ]
+        },
+        {
+          "path": "stageB.gaps.41.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.41.field",
+          "before": "technicals.drawdown.5y",
+          "after": "shortInterest.trend.DEMO"
+        },
+        {
+          "path": "stageB.gaps.41.reason",
+          "before": "history does not span the full 5-year window — drawdown computed over available rows only",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.42.field",
+          "before": "technicals.relativeStrength.sector",
+          "after": "technicals.drawdown.3y"
+        },
+        {
+          "path": "stageB.gaps.42.reason",
+          "before": "no XLK history supplied",
+          "after": "history does not span the full 3-year window — drawdown computed over available rows only"
+        },
+        {
+          "path": "stageB.gaps.43",
+          "beforeMissing": true,
+          "after": {
+            "field": "technicals.drawdown.5y",
+            "reason": "history does not span the full 5-year window — drawdown computed over available rows only",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.gaps.44",
+          "beforeMissing": true,
+          "after": {
+            "field": "technicals.relativeStrength.sector",
+            "reason": "no XLK history supplied",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.gaps.45",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.dcf.terminalRoic.waccBasis",
+            "reason": "no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.gaps.46",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.ownHistory",
+            "reason": "insufficient history (need ≥8 quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.gaps.47",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.peers",
+            "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)",
+            "severity": "info"
+          }
+        }
+      ]
+    },
+    {
+      "name": "valuation-inputs",
+      "decisions": [
+        "D-18",
+        "D-19"
+      ],
+      "reason": "Valuation methodology (D-18, D-19): the near-term growth anchor became the median of four methods with its range shown, the terminal rule is labelled a house convention, WACC inputs are disclosed by source and observation date, free cash flow is reported net of stock-based compensation, the enterprise-value bridge is explicit, and an own-history multiple is a rank among N quarters. Fair value, the score drivers reading those inputs, and the disclaimer text move with them.",
+      "deltas": [
+        {
+          "path": "report.fairValue.perShare.value",
+          "before": 146.23,
+          "after": 152.54
+        },
+        {
+          "path": "report.fairValue.upsidePct",
+          "before": 265.575,
+          "after": 281.34999999999997
+        },
+        {
+          "path": "report.meta.disclaimer",
+          "before": "Informational only — not investment advice.",
+          "after": "Informational only — not investment advice. This report contains A-F letter grades and scenario price targets; both are model outputs derived from the data and assumptions disclosed here, and neither is a recommendation to buy, sell, or hold any security."
+        },
+        {
+          "path": "report.scores.aspects.balanceSheet.drivers.2.value",
+          "before": 1.03,
+          "after": 0.89
+        },
+        {
+          "path": "report.scores.aspects.balanceSheet.score",
+          "before": 78.65,
+          "after": 76.78
+        },
+        {
+          "path": "report.scores.aspects.valuation.drivers.0.value",
+          "before": 265.58,
+          "after": 281.35
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.1.basis",
+          "before": "linear fade from 7.89% (analyst consensus revenue, avg implied growth over next 2 fiscal years (through 2027-12-31)) to terminal 2.5% by year 10",
+          "after": "WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.1.name",
+          "before": "revenue growth (yr1 → yrN)",
+          "after": "WACC (discount rate)"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.1.value",
+          "before": "7.9% → 2.5%",
+          "after": "9.3%"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.2.basis",
+          "before": "held flat at current 20% under improving dated-margin regime (5y median 19%, slope 1pp/year)",
+          "after": "median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.2.name",
+          "before": "EBIT margin (yr1 → yrN)",
+          "after": "near-term growth anchor (median of methods)"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.2.value",
+          "before": "20.0% → 20.0%",
+          "after": "9.1% (range 7.9% – 9.1%)"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.3.name",
+          "before": "sales-to-capital",
+          "after": "revenue growth (yr1 → yrN)"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.3.value",
+          "before": "2.66",
+          "after": "9.1% → 2.5%"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.4.basis",
+          "before": "min(2.5%, risk-free 4%) — house rule: nothing grows faster than rf forever",
+          "after": "held flat at current 20% under improving dated-margin regime (5y median 19%, slope 1pp/year)"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.4.name",
+          "before": "terminal growth",
+          "after": "EBIT margin (yr1 → yrN)"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.4.value",
+          "before": "2.5%",
+          "after": "20.0% → 20.0%"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.5.basis",
+          "before": "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)",
+          "after": "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.5.name",
+          "before": "terminal ROIC",
+          "after": "sales-to-capital"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.5.value",
+          "before": "9.3%",
+          "after": "2.66"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.6",
+          "beforeMissing": true,
+          "after": {
+            "name": "terminal growth",
+            "value": "2.5%",
+            "basis": "min(2.5%, risk-free 4%) — house rule: nothing grows faster than rf forever"
+          }
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.7",
+          "beforeMissing": true,
+          "after": {
+            "name": "terminal ROIC",
+            "value": "9.3%",
+            "basis": "terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, \"Terminal value house convention\"); ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC"
+          }
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.8",
+          "beforeMissing": true,
+          "after": {
+            "name": "free cash flow, SBC treatment",
+            "value": "1.80B → 1.55B",
+            "basis": "Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series. Reported free cash flow as of 2025-12-31: 1800000000 before SBC → 1550000000 after subtracting SBC of 250000000."
+          }
+        },
+        {
+          "path": "report.valuation.dcf.perShare.value",
+          "before": 146.23,
+          "after": 152.54
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.0.perShare",
+          "before": 166.376092292583,
+          "after": 173.8049998521903
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.1.perShare",
+          "before": 167.7149851175111,
+          "after": 175.22246130579066
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.2.perShare",
+          "before": 169.2211734983775,
+          "after": 176.81703551814675
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.3.perShare",
+          "before": 170.9424020912171,
+          "after": 178.63926888721124
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.4.perShare",
+          "before": 172.94649343185347,
+          "after": 180.76096389666722
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.5.perShare",
+          "before": 155.24133879734714,
+          "after": 162.0471351684362
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.6.perShare",
+          "before": 156.0003561762538,
+          "after": 162.8506930463946
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.7.perShare",
+          "before": 156.82318027878264,
+          "after": 163.72180194078325
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.8.perShare",
+          "before": 157.72643914234646,
+          "after": 164.67806565202787
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.9.perShare",
+          "before": 158.73308812865395,
+          "after": 165.74378660357115
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.10.perShare",
+          "before": 145.54397447067558,
+          "after": 151.8102954280996
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.11.perShare",
+          "before": 145.888476635414,
+          "after": 152.17501359680358
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.12.perShare",
+          "before": 146.23297880015247,
+          "after": 152.5397317655075
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.13.perShare",
+          "before": 146.57748096489092,
+          "after": 152.9044499342115
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.14.perShare",
+          "before": 146.92198312962938,
+          "after": 153.26916810291547
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.15.perShare",
+          "before": 137.02303327015306,
+          "after": 142.81822308027702
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.16.perShare",
+          "before": 137.07019569277645,
+          "after": 142.86815307831895
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.17.perShare",
+          "before": 137.07839478363584,
+          "after": 142.87683330651296
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.18.perShare",
+          "before": 137.03897964504117,
+          "after": 142.83510521700046
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.19.perShare",
+          "before": 136.940533723176,
+          "after": 142.7308823121421
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.20.perShare",
+          "before": 129.477139616909,
+          "after": 134.8577470549213
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.21.perShare",
+          "before": 129.31120340693457,
+          "after": 134.68207341098494
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.22.perShare",
+          "before": 129.08313762406544,
+          "after": 134.44062431955413
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.23.perShare",
+          "before": 128.78009840764705,
+          "after": 134.11980221922994
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.24.perShare",
+          "before": 128.38543965803257,
+          "after": 133.70198418742842
+        },
+        {
+          "path": "report.valuation.dcf.upsidePct",
+          "before": 265.575,
+          "after": 281.34999999999997
+        },
+        {
+          "path": "report.valuation.multiples.1.current",
+          "before": 2.392857142857143,
+          "after": 2.357142857142857
+        },
+        {
+          "path": "report.valuation.multiples.2.current",
+          "before": 0.536,
+          "after": 0.528
+        },
+        {
+          "path": "report.valuation.reverseDcf.impliedValue",
+          "before": -17.24609375,
+          "after": -17.5
+        },
+        {
+          "path": "stageB.capital.dilution",
+          "beforeMissing": true,
+          "after": {
+            "basicShares": 200000000,
+            "dilutedShares": 205000000,
+            "overhangPct": 2.5,
+            "asOf": "2025-12-31",
+            "note": "Dilution from outstanding awards: diluted 205000000 vs basic 200000000 weighted-average shares as of 2025-12-31 — a 2.5% overhang. Options, RSUs and convertibles that are antidilutive in a loss year are excluded from the diluted count by the filer, so a loss-making issuer's overhang understates the award pool."
+          }
+        },
+        {
+          "path": "stageB.capital.fcf.basis",
+          "beforeMissing": true,
+          "after": "Free cash flow = operating cash flow + capital expenditure (FMP capex negative), MINUS stock-based compensation (house default: SBC is a cash-equivalent operating expense settled in shares, not a genuine add-back — Damodaran, \"Stock Based Compensation: The Elephant in the Room\"). Both the before- and after-SBC figures are reported; years with no disclosed SBC are unadjusted and say so."
+        },
+        {
+          "path": "stageB.capital.fcf.latestConversion",
+          "before": 1.0285714285714285,
+          "after": 0.8857142857142857
+        },
+        {
+          "path": "stageB.capital.fcf.latestFcf",
+          "before": 1800000000,
+          "after": 1550000000
+        },
+        {
+          "path": "stageB.capital.fcf.latestFcfBeforeSbc",
+          "beforeMissing": true,
+          "after": 1800000000
+        },
+        {
+          "path": "stageB.capital.fcf.latestSbc",
+          "beforeMissing": true,
+          "after": 250000000
+        },
+        {
+          "path": "stageB.capital.fcf.series.0.fcf",
+          "before": 1550000000,
+          "after": 1330000000
+        },
+        {
+          "path": "stageB.capital.fcf.series.0.fcfBeforeSbc",
+          "beforeMissing": true,
+          "after": 1550000000
+        },
+        {
+          "path": "stageB.capital.fcf.series.0.fcfConversion",
+          "before": 1.0333333333333334,
+          "after": 0.8866666666666667
+        },
+        {
+          "path": "stageB.capital.fcf.series.0.note",
+          "before": {
+            "$auditUndefined": true
+          },
+          "after": "SBC 220000000 subtracted from FCF (house default): 1550000000 → 1330000000"
+        },
+        {
+          "path": "stageB.capital.fcf.series.0.stockBasedCompensation",
+          "beforeMissing": true,
+          "after": 220000000
+        },
+        {
+          "path": "stageB.capital.fcf.series.1.fcf",
+          "before": 1800000000,
+          "after": 1550000000
+        },
+        {
+          "path": "stageB.capital.fcf.series.1.fcfBeforeSbc",
+          "beforeMissing": true,
+          "after": 1800000000
+        },
+        {
+          "path": "stageB.capital.fcf.series.1.fcfConversion",
+          "before": 1.0285714285714285,
+          "after": 0.8857142857142857
+        },
+        {
+          "path": "stageB.capital.fcf.series.1.note",
+          "before": {
+            "$auditUndefined": true
+          },
+          "after": "SBC 250000000 subtracted from FCF (house default): 1800000000 → 1550000000"
+        },
+        {
+          "path": "stageB.capital.fcf.series.1.stockBasedCompensation",
+          "beforeMissing": true,
+          "after": 250000000
+        },
+        {
+          "path": "stageB.capital.notes.1",
+          "beforeMissing": true,
+          "after": "Dilution from outstanding awards: diluted 205000000 vs basic 200000000 weighted-average shares as of 2025-12-31 — a 2.5% overhang. Options, RSUs and convertibles that are antidilutive in a loss year are excluded from the diluted count by the filer, so a loss-making issuer's overhang understates the award pool."
+        },
+        {
+          "path": "stageB.capital.notes.2",
+          "beforeMissing": true,
+          "after": "Free cash flow = operating cash flow + capital expenditure (FMP capex negative), MINUS stock-based compensation (house default: SBC is a cash-equivalent operating expense settled in shares, not a genuine add-back — Damodaran, \"Stock Based Compensation: The Elephant in the Room\"). Both the before- and after-SBC figures are reported; years with no disclosed SBC are unadjusted and say so."
+        },
+        {
+          "path": "stageB.capital.notes.3",
+          "beforeMissing": true,
+          "after": "Latest free cash flow (2025-12-31): 1800000000 before SBC, 1550000000 after subtracting SBC of 250000000."
+        },
+        {
+          "path": "stageB.capital.sbc.note",
+          "before": {
+            "$auditUndefined": true
+          },
+          "after": "SBC % of FCF is measured against FCF BEFORE the SBC deduction"
+        },
+        {
+          "path": "stageB.fairValue.perShare.value",
+          "before": 146.23,
+          "after": 152.54
+        },
+        {
+          "path": "stageB.fairValue.upsidePct",
+          "before": 265.575,
+          "after": 281.34999999999997
+        },
+        {
+          "path": "stageB.growth.revenueLogLinear",
+          "beforeMissing": true,
+          "after": {
+            "growthPct": 9.102622070718525,
+            "slopePerYear": 0.0871187402075796,
+            "rSquared": 0.9994077381522407,
+            "n": 3,
+            "startDate": "2023-12-31",
+            "endDate": "2025-12-31",
+            "note": {
+              "$auditUndefined": true
+            }
+          }
+        },
+        {
+          "path": "stageB.returns.notes.0",
+          "beforeMissing": true,
+          "after": "WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)"
+        },
+        {
+          "path": "stageB.returns.notes.1",
+          "beforeMissing": true,
+          "after": "per-fiscal-year WACC unavailable: no fred:DGS10 observations supplied"
+        },
+        {
+          "path": "stageB.returns.wacc.erpAsOf",
+          "beforeMissing": true,
+          "after": "2026-07-06"
+        },
+        {
+          "path": "stageB.returns.wacc.erpSource",
+          "beforeMissing": true,
+          "after": "vendor"
+        },
+        {
+          "path": "stageB.returns.wacc.riskFreeSeriesId",
+          "beforeMissing": true,
+          "after": "fmp:treasury-rates.year10"
+        },
+        {
+          "path": "stageB.returns.wacc.taxRateBasis",
+          "beforeMissing": true,
+          "after": "FMP ratios effectiveTaxRate (observed effective rate)"
+        },
+        {
+          "path": "stageB.returns.waccHistory",
+          "beforeMissing": true,
+          "after": {
+            "points": [],
+            "missing": [
+              {
+                "date": "2023-12-31",
+                "reason": "no fred:DGS10 observations supplied"
+              },
+              {
+                "date": "2024-12-31",
+                "reason": "no fred:DGS10 observations supplied"
+              },
+              {
+                "date": "2025-12-31",
+                "reason": "no fred:DGS10 observations supplied"
+              }
+            ],
+            "basis": "per-fiscal-year WACC unavailable: no fred:DGS10 observations supplied",
+            "notes": [
+              "per-fiscal-year WACC unavailable: no fred:DGS10 observations supplied"
+            ],
+            "gaps": [
+              {
+                "field": "returns.wacc.history",
+                "reason": "no fred:DGS10 observations supplied — ROIC-vs-WACC history compares every fiscal year to the current WACC",
+                "severity": "info",
+                "attemptedSources": [
+                  "fred:DGS10"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "path": "stageB.returns.waccInputs",
+          "beforeMissing": true,
+          "after": {
+            "waccPct": 9.255946000000002,
+            "riskFree": {
+              "pct": 4,
+              "seriesId": "fmp:treasury-rates.year10",
+              "asOf": "2025-12-31"
+            },
+            "erp": {
+              "pct": 5,
+              "source": "FMP market-risk-premium (US totalEquityRiskPremium)",
+              "asOf": "2026-07-06"
+            },
+            "beta": {
+              "raw": 1.1,
+              "adjusted": 1.0670000000000002,
+              "final": 1.0670000000000002,
+              "method": "Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2]"
+            },
+            "costOfEquityPct": 9.335,
+            "costOfDebt": {
+              "pct": 12,
+              "method": "effective",
+              "syntheticRating": null
+            },
+            "taxRate": {
+              "fraction": 0.2708333,
+              "basis": "FMP ratios effectiveTaxRate (observed effective rate)"
+            },
+            "weights": {
+              "equity": 0.8648648648648649,
+              "debt": 0.13513513513513514,
+              "basis": "market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy"
+            },
+            "summary": "WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)"
+          }
+        },
+        {
+          "path": "stageB.scores.aspects.balanceSheet.drivers.2.value",
+          "before": 1.03,
+          "after": 0.89
+        },
+        {
+          "path": "stageB.scores.aspects.balanceSheet.score",
+          "before": 78.65,
+          "after": 76.78
+        },
+        {
+          "path": "stageB.scores.aspects.valuation.drivers.0.value",
+          "before": 265.58,
+          "after": 281.35
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthAnchor",
+          "beforeMissing": true,
+          "after": {
+            "pointPct": 9.105783594357353,
+            "rangePct": [
+              7.888888888888889,
+              9.108945117996182
+            ],
+            "methods": [
+              {
+                "name": "log-linear revenue regression",
+                "valuePct": 9.102622070718525,
+                "detail": "9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1"
+              },
+              {
+                "name": "3y revenue CAGR",
+                "valuePct": 9.108945117996182,
+                "detail": "9.11%"
+              },
+              {
+                "name": "5y revenue CAGR",
+                "valuePct": 9.108945117996182,
+                "detail": "9.11%"
+              },
+              {
+                "name": "analyst-consensus case",
+                "valuePct": 7.888888888888889,
+                "detail": "7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31)"
+              }
+            ],
+            "unavailable": [],
+            "basis": "median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)"
+          }
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.basis",
+          "before": "linear fade from 7.89% (analyst consensus revenue, avg implied growth over next 2 fiscal years (through 2027-12-31)) to terminal 2.5% by year 10",
+          "after": "linear fade over the explicit 10-year horizon from 9.11% (median of the available growth methods (log-linear revenue regression 9.1%, 3y revenue CAGR 9.11%, 5y revenue CAGR 9.11%, analyst-consensus case 7.89%)) to the terminal rate 2.5% in year 10; median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)"
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.0",
+          "before": 7.888888888888889,
+          "after": 9.105783594357353
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.1",
+          "before": 7.290123456790123,
+          "after": 8.37180763942876
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.2",
+          "before": 6.691358024691358,
+          "after": 7.6378316845001635
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.3",
+          "before": 6.092592592592593,
+          "after": 6.9038557295715695
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.4",
+          "before": 5.493827160493828,
+          "after": 6.169879774642974
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.5",
+          "before": 4.895061728395062,
+          "after": 5.43590381971438
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.6",
+          "before": 4.296296296296296,
+          "after": 4.701927864785785
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.7",
+          "before": 3.697530864197531,
+          "after": 3.96795190985719
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.8",
+          "before": 3.098765432098766,
+          "after": 3.233975954928595
+        },
+        {
+          "path": "stageB.valuation.assumptions.notes.0",
+          "before": "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%",
+          "after": "Near-term growth anchor: median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)"
+        },
+        {
+          "path": "stageB.valuation.assumptions.notes.2",
+          "beforeMissing": true,
+          "after": "terminal ROIC held at WACC: 2 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house convention)"
+        },
+        {
+          "path": "stageB.valuation.assumptions.notes.3",
+          "beforeMissing": true,
+          "after": "ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC"
+        },
+        {
+          "path": "stageB.valuation.assumptions.notes.4",
+          "beforeMissing": true,
+          "after": "Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series. Reported free cash flow as of 2025-12-31: 1800000000 before SBC → 1550000000 after subtracting SBC of 250000000."
+        },
+        {
+          "path": "stageB.valuation.assumptions.sbc",
+          "beforeMissing": true,
+          "after": {
+            "value": {
+              "beforeSbc": 1800000000,
+              "afterSbc": 1550000000,
+              "sbc": 250000000,
+              "asOf": "2025-12-31",
+              "basis": "Free cash flow = operating cash flow + capital expenditure (FMP capex negative), MINUS stock-based compensation (house default: SBC is a cash-equivalent operating expense settled in shares, not a genuine add-back — Damodaran, \"Stock Based Compensation: The Elephant in the Room\"). Both the before- and after-SBC figures are reported; years with no disclosed SBC are unadjusted and say so."
+            },
+            "basis": "Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series. Reported free cash flow as of 2025-12-31: 1800000000 before SBC → 1550000000 after subtracting SBC of 250000000."
+          }
+        },
+        {
+          "path": "stageB.valuation.assumptions.terminal.roicTermPct.basis",
+          "before": "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)",
+          "after": "terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, \"Terminal value house convention\"); ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC"
+        },
+        {
+          "path": "stageB.valuation.assumptions.wacc",
+          "beforeMissing": true,
+          "after": {
+            "value": 9.255946000000002,
+            "basis": "WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)"
+          }
+        },
+        {
+          "path": "stageB.valuation.dcf.enterpriseValue",
+          "before": 28677760654.031258,
+          "after": 29870645011.92904
+        },
+        {
+          "path": "stageB.valuation.dcf.equityValue",
+          "before": 29977760654.031258,
+          "after": 31270645011.92904
+        },
+        {
+          "path": "stageB.valuation.dcf.perShare",
+          "before": 146.23297880015247,
+          "after": 152.5397317655075
+        },
+        {
+          "path": "stageB.valuation.dcf.pvExplicit",
+          "before": 14200057180.89785,
+          "after": 14543363972.145136
+        },
+        {
+          "path": "stageB.valuation.dcf.pvTerminal",
+          "before": 14477703473.133406,
+          "after": 15327281039.783903
+        },
+        {
+          "path": "stageB.valuation.dcf.terminalShare",
+          "before": 0.5048407945024906,
+          "after": 0.5131218637449192
+        },
+        {
+          "path": "stageB.valuation.dcf.terminalValue",
+          "before": 33568192262.428688,
+          "after": 35538033898.713974
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.ebit",
+          "before": 2697222222.2222223,
+          "after": 2727644589.8589344
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.fcff",
+          "before": 1595946759.2592597,
+          "after": 1560935684.5040107
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.growthPct",
+          "before": 7.888888888888889,
+          "after": 9.105783594357353
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.nopat",
+          "before": 1966724537.0370374,
+          "after": 1988907513.4388065
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.pv",
+          "before": 1526848189.0941052,
+          "after": 1493352963.9068303
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.reinvestment",
+          "before": 370777777.7777776,
+          "after": 427971828.934796
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.revenue",
+          "before": 13486111111.11111,
+          "after": 13638222949.29467
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.ebit",
+          "before": 2893853052.1262,
+          "after": 2955997748.0092096
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.fcff",
+          "before": 1741252142.392903,
+          "after": 1726945549.1430979
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.growthPct",
+          "before": 7.290123456790123,
+          "after": 8.37180763942876
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.nopat",
+          "before": 2110918102.6123817,
+          "after": 2156249486.4656157
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.pv",
+          "before": 1524733847.0201824,
+          "after": 1512206225.9867628
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.reinvestment",
+          "before": 369665960.2194786,
+          "after": 429303937.3225178
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.revenue",
+          "before": 14469265260.631,
+          "after": 14779988740.046047
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.ebit",
+          "before": 3087491120.5524225,
+          "after": 3181771880.599768
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.fcff",
+          "before": 1888999203.554957,
+          "after": 1897383020.3386025
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.growthPct",
+          "before": 6.691358024691358,
+          "after": 7.6378316845001635
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.nopat",
+          "before": 2253038772.1962547,
+          "after": 2321838389.608853
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.pv",
+          "before": 1513976278.1400638,
+          "after": 1520695656.1614122
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.reinvestment",
+          "before": 364039568.6412978,
+          "after": 424455369.2702502
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.revenue",
+          "before": 15437455602.762112,
+          "after": 15908859402.99884
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.ebit",
+          "before": 3275599375.860153,
+          "after": 3401436820.8804526
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.fcff",
+          "before": 2037588409.2147698,
+          "after": 2070124881.4448662
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.growthPct",
+          "before": 6.092592592592593,
+          "after": 6.9038557295715695
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.nopat",
+          "before": 2391231929.193303,
+          "after": 2483094969.1725526
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.pv",
+          "before": 1494715972.3478506,
+          "after": 1518583788.0981958
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.reinvestment",
+          "before": 353643519.9785333,
+          "after": 412970087.72768646
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.revenue",
+          "before": 16377996879.300764,
+          "after": 17007184104.402262
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.ebit",
+          "before": 3455555144.040124,
+          "after": 3611301383.3392143
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.fcff",
+          "before": 2185260718.3870907,
+          "after": 2242773016.519078
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.growthPct",
+          "before": 5.493827160493828,
+          "after": 6.169879774642974
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.nopat",
+          "before": 2523577562.565436,
+          "after": 2637318393.9415503
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.pv",
+          "before": 1467237408.5221174,
+          "after": 1505852569.8890462
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.reinvestment",
+          "before": 338316844.1783454,
+          "after": 394545377.42247254
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.revenue",
+          "before": 17277775720.20062,
+          "after": 18056506916.69607
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.ebit",
+          "before": 3624706701.3996186,
+          "after": 3807608253.1775494
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.fcff",
+          "before": 2330126548.909354,
+          "after": 2412698436.7882514
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.growthPct",
+          "before": 4.895061728395062,
+          "after": 5.43590381971438
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.nopat",
+          "before": 2648131476.7452044,
+          "after": 2781755352.0843205
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.pv",
+          "before": 1431962215.2504165,
+          "after": 1482706164.5607312
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.reinvestment",
+          "before": 318004927.8358502,
+          "after": 369056915.29606915
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.revenue",
+          "before": 18123533506.998093,
+          "after": 19038041265.887745
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.ebit",
+          "before": 3780434841.163454,
+          "after": 3986639246.6155877
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.fcff",
+          "before": 2470201344.469651,
+          "after": 2577098620.742019
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.growthPct",
+          "before": 4.296296296296296,
+          "after": 4.701927864785785
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.nopat",
+          "before": 2762970247.2256613,
+          "after": 2913676888.405532
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.pv",
+          "before": 1389438480.1567645,
+          "after": 1449566044.012765
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.reinvestment",
+          "before": 292768902.75601006,
+          "after": 336578267.66351265
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.revenue",
+          "before": 18902174205.81727,
+          "after": 19933196233.077938
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.ebit",
+          "before": 3920217586.216349,
+          "after": 4144827174.7407875
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.fcff",
+          "before": 2603447020.008648,
+          "after": 2733066943.142533
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.growthPct",
+          "before": 3.697530864197531,
+          "after": 3.96795190985719
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.nopat",
+          "before": 2866238580.7080913,
+          "after": 3030460248.0179086
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.pv",
+          "before": 1340326582.9243398,
+          "after": 1407058506.9150107
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.reinvestment",
+          "before": 262791560.69944328,
+          "after": 297393304.8753758
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.revenue",
+          "before": 19601087931.081745,
+          "after": 20724135873.703938
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.ebit",
+          "before": 4041695933.6410785,
+          "after": 4278869888.9452515
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.fcff",
+          "before": 2727818246.380814,
+          "after": 2877672202.449499
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.growthPct",
+          "before": 3.098765432098766,
+          "after": 3.233975954928595
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.nopat",
+          "before": 2956197539.5393047,
+          "after": 3129672505.1538916
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.pv",
+          "before": 1285382062.9140253,
+          "after": 1355995120.5995789
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.reinvestment",
+          "before": 228379293.1584908,
+          "after": 252000302.70439225
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.revenue",
+          "before": 20208479668.20539,
+          "after": 21394349444.726257
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.ebit",
+          "before": 4142738331.982105,
+          "after": 4385841636.168883
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.fcff",
+          "before": 2841312241.349679,
+          "after": 3008045531.928512
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.nopat",
+          "before": 3031271950.2308083,
+          "after": 3209152416.708939
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.pv",
+          "before": 1225436144.5279837,
+          "after": 1297346932.014801
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.reinvestment",
+          "before": 189959708.88112947,
+          "after": 201106884.78042683
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.revenue",
+          "before": 20713691659.910522,
+          "after": 21929208180.844414
+        },
+        {
+          "path": "stageB.valuation.gaps.2",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.dcf.terminalRoic.waccBasis",
+            "reason": "no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.valuation.multiples.enterpriseValue",
+          "beforeMissing": true,
+          "after": {
+            "value": 6600000000,
+            "excludingLeases": 6600000000,
+            "includingLeases": 6700000000,
+            "leaseLiability": 100000000,
+            "includeLeases": false,
+            "basis": "Enterprise value EXCLUDES lease liabilities (house default; set THESIS_EV_INCLUDE_LEASES=1 to include them). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments, less lease liabilities of 100000000 (already inside totalDebt under FMP's definition). EV/EBITDA uses this same EV; EBITDA is AFTER operating-lease cost (US GAAP ASC 842 keeps it in operating expenses), so excluding the lease liability from EV keeps numerator and denominator on the same basis. EV excluding leases 6600000000; EV including leases 6700000000."
+          }
+        },
+        {
+          "path": "stageB.valuation.multiples.multiples.1.basis",
+          "before": "EV (mcap + totalDebt + preferred + minority - cash&STI, latest quarterly balance sheet 2025-12-31) / (operatingIncome + D&A), latest annual FY 2025-12-31 — TTM suppressed-computed — vendor ebitda field not trusted",
+          "after": "EV / (operatingIncome + D&A), latest annual FY 2025-12-31 — TTM suppressed-computed — vendor ebitda field not trusted. Enterprise value EXCLUDES lease liabilities (house default; set THESIS_EV_INCLUDE_LEASES=1 to include them). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments, less lease liabilities of 100000000 (already inside totalDebt under FMP's definition). EV/EBITDA uses this same EV; EBITDA is AFTER operating-lease cost (US GAAP ASC 842 keeps it in operating expenses), so excluding the lease liability from EV keeps numerator and denominator on the same basis. EV excluding leases 6600000000; EV including leases 6700000000. Balance basis: latest quarterly balance sheet 2025-12-31."
+        },
+        {
+          "path": "stageB.valuation.multiples.multiples.1.current",
+          "before": 2.392857142857143,
+          "after": 2.357142857142857
+        },
+        {
+          "path": "stageB.valuation.multiples.multiples.2.basis",
+          "before": "EV / revenue (latest annual FY 2025-12-31 — TTM suppressed)",
+          "after": "EV / revenue (latest annual FY 2025-12-31 — TTM suppressed). Enterprise value EXCLUDES lease liabilities (house default; set THESIS_EV_INCLUDE_LEASES=1 to include them). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments, less lease liabilities of 100000000 (already inside totalDebt under FMP's definition). EV/EBITDA uses this same EV; EBITDA is AFTER operating-lease cost (US GAAP ASC 842 keeps it in operating expenses), so excluding the lease liability from EV keeps numerator and denominator on the same basis. EV excluding leases 6600000000; EV including leases 6700000000."
+        },
+        {
+          "path": "stageB.valuation.multiples.multiples.2.current",
+          "before": 0.536,
+          "after": 0.528
+        },
+        {
+          "path": "stageB.valuation.multiples.notes.3",
+          "beforeMissing": true,
+          "after": "cash-flow-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)"
+        },
+        {
+          "path": "stageB.valuation.notes.0",
+          "before": "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%",
+          "after": "Near-term growth anchor: median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)"
+        },
+        {
+          "path": "stageB.valuation.notes.3",
+          "beforeMissing": true,
+          "after": "ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC"
+        },
+        {
+          "path": "stageB.valuation.notes.4",
+          "beforeMissing": true,
+          "after": "Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series. Reported free cash flow as of 2025-12-31: 1800000000 before SBC → 1550000000 after subtracting SBC of 250000000."
+        },
+        {
+          "path": "stageB.valuation.notes.5",
+          "beforeMissing": true,
+          "after": "DCF equity bridge: EV − net debt − minority interest − preferred equity. Net debt including leases -1300000000; excluding leases -1400000000; EXCLUDING lease liabilities of 100000000 (house default excludes them; THESIS_EV_INCLUDE_LEASES=1 includes them)."
+        },
+        {
+          "path": "stageB.valuation.notes.6",
+          "beforeMissing": true,
+          "after": "NET_DEBT_V1: net debt -1300000000 as of 2025-12-31; totalDebt 1200000000, cashAndShortTermInvestments 2500000000"
+        },
+        {
+          "path": "stageB.valuation.reverseDcf.impliedRevenueGrowthPct",
+          "before": -17.24609375,
+          "after": -17.5
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.0.0",
+          "before": 166.376092292583,
+          "after": 173.8049998521903
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.0.1",
+          "before": 167.7149851175111,
+          "after": 175.22246130579066
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.0.2",
+          "before": 169.2211734983775,
+          "after": 176.81703551814675
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.0.3",
+          "before": 170.9424020912171,
+          "after": 178.63926888721124
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.0.4",
+          "before": 172.94649343185347,
+          "after": 180.76096389666722
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.1.0",
+          "before": 155.24133879734714,
+          "after": 162.0471351684362
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.1.1",
+          "before": 156.0003561762538,
+          "after": 162.8506930463946
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.1.2",
+          "before": 156.82318027878264,
+          "after": 163.72180194078325
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.1.3",
+          "before": 157.72643914234646,
+          "after": 164.67806565202787
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.1.4",
+          "before": 158.73308812865395,
+          "after": 165.74378660357115
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.2.0",
+          "before": 145.54397447067558,
+          "after": 151.8102954280996
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.2.1",
+          "before": 145.888476635414,
+          "after": 152.17501359680358
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.2.2",
+          "before": 146.23297880015247,
+          "after": 152.5397317655075
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.2.3",
+          "before": 146.57748096489092,
+          "after": 152.9044499342115
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.2.4",
+          "before": 146.92198312962938,
+          "after": 153.26916810291547
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.3.0",
+          "before": 137.02303327015306,
+          "after": 142.81822308027702
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.3.1",
+          "before": 137.07019569277645,
+          "after": 142.86815307831895
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.3.2",
+          "before": 137.07839478363584,
+          "after": 142.87683330651296
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.3.3",
+          "before": 137.03897964504117,
+          "after": 142.83510521700046
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.3.4",
+          "before": 136.940533723176,
+          "after": 142.7308823121421
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.4.0",
+          "before": 129.477139616909,
+          "after": 134.8577470549213
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.4.1",
+          "before": 129.31120340693457,
+          "after": 134.68207341098494
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.4.2",
+          "before": 129.08313762406544,
+          "after": 134.44062431955413
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.4.3",
+          "before": 128.78009840764705,
+          "after": 134.11980221922994
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.4.4",
+          "before": 128.38543965803257,
+          "after": 133.70198418742842
+        }
+      ]
+    },
+    {
+      "name": "sector-routing-and-forensics",
+      "decisions": [
+        "D-16",
+        "D-17"
+      ],
+      "reason": "Sector routing now reads XBRL tag evidence alongside the SIC code and the industry label, financial routes withhold the batteries whose assumptions they break, and Piotroski reports a financial variant scored over its own denominator (D-16, D-17).",
+      "deltas": [
+        {
+          "path": "stageB.financialMetrics",
+          "beforeMissing": true,
+          "after": {
+            "route": "general",
+            "metrics": [],
+            "notes": [],
+            "gaps": [],
+            "asOf": null
+          }
+        },
+        {
+          "path": "stageB.forensics.piotroski.label",
+          "beforeMissing": true,
+          "after": "Piotroski F (7 signals)"
+        },
+        {
+          "path": "stageB.forensics.piotroski.variant",
+          "beforeMissing": true,
+          "after": "standard"
+        },
+        {
+          "path": "stageB.route.reitSubmap",
+          "beforeMissing": true,
+          "after": null
+        }
+      ]
+    },
+    {
+      "name": "pre-remediation-drift",
+      "decisions": [
+        "pre-remediation"
+      ],
+      "reason": "Drift recorded against the audited commit before this remediation began: the relative-strength note was rewritten, the invested-capital basis string names the quarter balance it reads, the benchmark series returns null when no aligned closes are supplied, and floating-point summation order moved the volume averages in their last decimal place.",
+      "deltas": [
+        {
+          "path": "report.scores.aspects.fundamentals.drivers.0.value",
+          "before": 9.11,
+          "after": 8.7
+        },
+        {
+          "path": "report.scores.aspects.fundamentals.drivers.2.value",
+          "before": 19,
+          "after": 17.8
+        },
+        {
+          "path": "report.scores.aspects.fundamentals.score",
+          "before": 67.9,
+          "after": 67.13
+        },
+        {
+          "path": "report.scores.aspects.leadership.drivers.0.value",
+          "before": 27.2,
+          "after": 30.81
+        },
+        {
+          "path": "report.scores.aspects.leadership.note",
+          "before": "Capital-stewardship proxy (buyback discipline, capital deployment above cost, dilution). Qualitative leadership assessed in the analyst grade.",
+          "after": "Capital-stewardship proxy (buyback discipline, capital deployment above cost where the route scores it, dilution). Qualitative leadership assessed in the analyst grade."
+        },
+        {
+          "path": "report.scores.aspects.moat.drivers.0.value",
+          "before": 36.46,
+          "after": 40.06
+        },
+        {
+          "path": "report.scores.aspects.moat.drivers.1.value",
+          "before": 1.58,
+          "after": 1.86
+        },
+        {
+          "path": "report.scores.aspects.moat.note",
+          "before": "Quantitative moat proxy: level and durability of ROIC plus gross-margin (pricing-power) level. Gross margin is dropped where the route suppresses it (banks, pre-revenue).",
+          "after": "Quantitative moat proxy: level and durability of ROIC plus gross-margin (pricing-power) level; financial routes score return on TANGIBLE COMMON EQUITY instead, since invested capital is undefined for a deposit-funded balance sheet. Gross margin is dropped where the route suppresses it (banks, pre-revenue)."
+        },
+        {
+          "path": "report.scores.aspects.moat.score",
+          "before": 86.65,
+          "after": 87.25
+        },
+        {
+          "path": "report.scores.aspects.quality.drivers.0.value",
+          "before": 27.2,
+          "after": 30.81
+        },
+        {
+          "path": "report.scores.aspects.quality.note",
+          "before": "Value creation (ROIC−WACC) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
+          "after": "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, plus Altman, accruals and Beneish where the route computes them — all three are withheld for financial classifications, whose balance sheets those models were not estimated on)."
+        },
+        {
+          "path": "report.scores.aspects.valuation.drivers.1.value",
+          "before": -26.36,
+          "after": -26.2
+        },
+        {
+          "path": "report.scores.composite.score",
+          "before": 77.59,
+          "after": 77.25
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.3.basis",
+          "before": "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, as of 2025-12-31)",
+          "after": "linear fade over the explicit 10-year horizon from 9.11% (median of the available growth methods (log-linear revenue regression 9.1%, 3y revenue CAGR 9.11%, 5y revenue CAGR 9.11%, analyst-consensus case 7.89%)) to the terminal rate 2.5% in year 10; median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)"
+        },
+        {
+          "path": "stageB.forensics.notes.0",
+          "beforeMissing": true,
+          "after": "House heuristic: no SIC code available — manufacturer status inferred from sector/industry strings (non-manufacturer → Z″)."
+        },
+        {
+          "path": "stageB.forensics.notes.1",
+          "beforeMissing": true,
+          "after": "X5 (sales/TA) is dropped by the Z″ model to remove industry asset-turnover effects."
+        },
+        {
+          "path": "stageB.forensics.notes.2",
+          "beforeMissing": true,
+          "after": "TATA uses the cash-flow construction (NI from continuing ops − CFO)/TA_t (Hribar–Collins 2002); balance-sheet construction reported as diagnostic only."
+        },
+        {
+          "path": "stageB.forensics.notes.3",
+          "beforeMissing": true,
+          "after": "Diagnostic balance-sheet TATA uses shortTermDebt as a proxy for current maturities of LTD (broader — includes notes payable)."
+        },
+        {
+          "path": "stageB.forensics.notes.4",
+          "beforeMissing": true,
+          "after": "The model detects overstatement, not understatement — a very negative M does not prove conservative accounting."
+        },
+        {
+          "path": "stageB.forensics.notes.5",
+          "beforeMissing": true,
+          "after": "ΔLEVER: prior-year average TA proxied by end-of-year TA (no t−2 balance sheet) — annotated proxy."
+        },
+        {
+          "path": "stageB.forensics.notes.6",
+          "beforeMissing": true,
+          "after": "House-rule bands: |ratio| < 10% unremarkable, 10–20% elevated, > 20% red flag (heuristic — Sloan 1996 is a decile-ranking result with no canonical bright line)."
+        },
+        {
+          "path": "stageB.growth.notes.0",
+          "beforeMissing": true,
+          "after": "Revenue 3y CAGR is computed over 2.0 years (2023-12-31 → 2025-12-31) — the full 3-year history is unavailable; read it as that span, not as the labelled horizon."
+        },
+        {
+          "path": "stageB.growth.notes.1",
+          "beforeMissing": true,
+          "after": "Revenue 5y CAGR is computed over 2.0 years (2023-12-31 → 2025-12-31) — the full 5-year history is unavailable; read it as that span, not as the labelled horizon."
+        },
+        {
+          "path": "stageB.growth.notes.2",
+          "beforeMissing": true,
+          "after": "Revenue 10y CAGR is computed over 2.0 years (2023-12-31 → 2025-12-31) — the full 10-year history is unavailable; read it as that span, not as the labelled horizon."
+        },
+        {
+          "path": "stageB.growth.notes.3",
+          "beforeMissing": true,
+          "after": "Diluted EPS 3y CAGR is computed over 2.0 years (2023-12-31 → 2025-12-31) — the full 3-year history is unavailable; read it as that span, not as the labelled horizon."
+        },
+        {
+          "path": "stageB.growth.notes.4",
+          "beforeMissing": true,
+          "after": "Diluted EPS 5y CAGR is computed over 2.0 years (2023-12-31 → 2025-12-31) — the full 5-year history is unavailable; read it as that span, not as the labelled horizon."
+        },
+        {
+          "path": "stageB.growth.notes.5",
+          "beforeMissing": true,
+          "after": "Diluted EPS 10y CAGR is computed over 2.0 years (2023-12-31 → 2025-12-31) — the full 10-year history is unavailable; read it as that span, not as the labelled horizon."
+        },
+        {
+          "path": "stageB.growth.notes.6",
+          "beforeMissing": true,
+          "after": "Free cash flow 3y CAGR is computed over 1.0 years (2024-12-31 → 2025-12-31) — the full 3-year history is unavailable; read it as that span, not as the labelled horizon."
+        },
+        {
+          "path": "stageB.growth.notes.7",
+          "beforeMissing": true,
+          "after": "Free cash flow 5y CAGR is computed over 1.0 years (2024-12-31 → 2025-12-31) — the full 5-year history is unavailable; read it as that span, not as the labelled horizon."
+        },
+        {
+          "path": "stageB.growth.notes.8",
+          "beforeMissing": true,
+          "after": "Free cash flow 10y CAGR is computed over 1.0 years (2024-12-31 → 2025-12-31) — the full 10-year history is unavailable; read it as that span, not as the labelled horizon."
+        },
+        {
+          "path": "stageB.notes.0",
+          "before": "insufficient historical coverage: only 3 quarterly statement(s) available (< 8), but verified ipoDate 2015-01-02 is older than 24 months — treated as incomplete data coverage, NOT a recent-IPO overlay (audit 2026-07-11 finding #4). Long-window CAGRs/technicals degrade via their own insufficiency flags.",
+          "after": "TTM net income unavailable — unprofitable overlay evaluated on the latest annual net income (as of 2025-12-31)."
+        },
+        {
+          "path": "stageB.notes.1",
+          "beforeMissing": true,
+          "after": "TTM operating cash flow unavailable — unprofitable overlay evaluated on the latest annual OCF (as of 2025-12-31)."
+        },
+        {
+          "path": "stageB.notes.2",
+          "beforeMissing": true,
+          "after": "TTM revenue unavailable — latest annual revenue selected as the pre-revenue fallback observation."
+        },
+        {
+          "path": "stageB.notes.3",
+          "beforeMissing": true,
+          "after": "insufficient historical coverage: only 3 quarterly statement(s) available (< 8), but verified ipoDate 2015-01-02 is older than 24 months — treated as incomplete data coverage, NOT a recent-IPO overlay (audit 2026-07-11 finding #4). Long-window CAGRs/technicals degrade via their own insufficiency flags."
+        },
+        {
+          "path": "stageB.returns.roic.latestRoicPct",
+          "before": 36.458333333333336,
+          "after": 40.06410256410257
+        },
+        {
+          "path": "stageB.returns.roic.series.1.investedCapitalAvg",
+          "before": 4800000000,
+          "after": 4400000000
+        },
+        {
+          "path": "stageB.returns.roic.series.1.roicPct",
+          "before": 33.30792682926829,
+          "after": 36.33592017738359
+        },
+        {
+          "path": "stageB.returns.roic.series.2.investedCapitalAvg",
+          "before": 5000000000,
+          "after": 4550000000
+        },
+        {
+          "path": "stageB.returns.roic.series.2.roicPct",
+          "before": 36.458333333333336,
+          "after": 40.06410256410257
+        },
+        {
+          "path": "stageB.returns.roicVsWacc.note",
+          "before": "spread = ROIC 36.4583% − WACC 9.2559% (positive = returns above cost of capital)",
+          "after": "spread = ROIC 40.0641% − WACC 9.2559% (positive = returns above cost of capital)"
+        },
+        {
+          "path": "stageB.returns.roicVsWacc.spreadPctPts",
+          "before": 27.202387333333334,
+          "after": 30.808156564102568
+        },
+        {
+          "path": "stageB.returns.rote",
+          "beforeMissing": true,
+          "after": {
+            "series": [
+              {
+                "date": "2024-12-31",
+                "rotePct": 40.54054054054054,
+                "tangibleCommonEquity": 3700000000,
+                "tangibleCommonEquityAvg": 3700000000
+              },
+              {
+                "date": "2025-12-31",
+                "rotePct": 42.68292682926829,
+                "tangibleCommonEquity": 4500000000,
+                "tangibleCommonEquityAvg": 4100000000
+              }
+            ],
+            "latestRotePct": 42.68292682926829,
+            "latestTangibleCommonEquity": 4500000000,
+            "asOf": "2025-12-31",
+            "notes": [
+              "ROTE = net income / average tangible common equity (equity − goodwill − other intangibles − preferred)."
+            ],
+            "gaps": []
+          }
+        },
+        {
+          "path": "stageB.route.asOf.cashflowTtm",
+          "before": "2025-12-31",
+          "after": null
+        },
+        {
+          "path": "stageB.route.asOf.incomeTtm",
+          "before": "2025-12-31",
+          "after": null
+        },
+        {
+          "path": "stageB.route.notes.0",
+          "before": "insufficient historical coverage: only 3 quarterly statement(s) available (< 8), but verified ipoDate 2015-01-02 is older than 24 months — treated as incomplete data coverage, NOT a recent-IPO overlay (audit 2026-07-11 finding #4). Long-window CAGRs/technicals degrade via their own insufficiency flags.",
+          "after": "TTM net income unavailable — unprofitable overlay evaluated on the latest annual net income (as of 2025-12-31)."
+        },
+        {
+          "path": "stageB.route.notes.1",
+          "beforeMissing": true,
+          "after": "TTM operating cash flow unavailable — unprofitable overlay evaluated on the latest annual OCF (as of 2025-12-31)."
+        },
+        {
+          "path": "stageB.route.notes.2",
+          "beforeMissing": true,
+          "after": "TTM revenue unavailable — latest annual revenue selected as the pre-revenue fallback observation."
+        },
+        {
+          "path": "stageB.route.notes.3",
+          "beforeMissing": true,
+          "after": "insufficient historical coverage: only 3 quarterly statement(s) available (< 8), but verified ipoDate 2015-01-02 is older than 24 months — treated as incomplete data coverage, NOT a recent-IPO overlay (audit 2026-07-11 finding #4). Long-window CAGRs/technicals degrade via their own insufficiency flags."
+        },
+        {
+          "path": "stageB.scores.aspects.fundamentals.drivers.0.value",
+          "before": 9.11,
+          "after": 8.7
+        },
+        {
+          "path": "stageB.scores.aspects.fundamentals.drivers.2.value",
+          "before": 19,
+          "after": 17.8
+        },
+        {
+          "path": "stageB.scores.aspects.fundamentals.score",
+          "before": 67.9,
+          "after": 67.13
+        },
+        {
+          "path": "stageB.scores.aspects.leadership.drivers.0.value",
+          "before": 27.2,
+          "after": 30.81
+        },
+        {
+          "path": "stageB.scores.aspects.leadership.note",
+          "before": "Capital-stewardship proxy (buyback discipline, capital deployment above cost, dilution). Qualitative leadership assessed in the analyst grade.",
+          "after": "Capital-stewardship proxy (buyback discipline, capital deployment above cost where the route scores it, dilution). Qualitative leadership assessed in the analyst grade."
+        },
+        {
+          "path": "stageB.scores.aspects.moat.drivers.0.value",
+          "before": 36.46,
+          "after": 40.06
+        },
+        {
+          "path": "stageB.scores.aspects.moat.drivers.1.value",
+          "before": 1.58,
+          "after": 1.86
+        },
+        {
+          "path": "stageB.scores.aspects.moat.note",
+          "before": "Quantitative moat proxy: level and durability of ROIC plus gross-margin (pricing-power) level. Gross margin is dropped where the route suppresses it (banks, pre-revenue).",
+          "after": "Quantitative moat proxy: level and durability of ROIC plus gross-margin (pricing-power) level; financial routes score return on TANGIBLE COMMON EQUITY instead, since invested capital is undefined for a deposit-funded balance sheet. Gross margin is dropped where the route suppresses it (banks, pre-revenue)."
+        },
+        {
+          "path": "stageB.scores.aspects.moat.score",
+          "before": 86.65,
+          "after": 87.25
+        },
+        {
+          "path": "stageB.scores.aspects.quality.drivers.0.value",
+          "before": 27.2,
+          "after": 30.81
+        },
+        {
+          "path": "stageB.scores.aspects.quality.note",
+          "before": "Value creation (ROIC−WACC) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
+          "after": "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, plus Altman, accruals and Beneish where the route computes them — all three are withheld for financial classifications, whose balance sheets those models were not estimated on)."
+        },
+        {
+          "path": "stageB.scores.aspects.valuation.drivers.1.value",
+          "before": -26.36,
+          "after": -26.2
+        },
+        {
+          "path": "stageB.scores.composite.score",
+          "before": 77.59,
+          "after": 77.25
+        },
+        {
+          "path": "stageB.technicals.gaps.1.reason",
+          "before": "no SPY benchmark history supplied",
+          "after": "no valid SPY closes supplied for relative-strength alignment"
+        },
+        {
+          "path": "stageB.technicals.notes.1",
+          "before": "Relative strength uses split-adjusted close-to-close price returns; dividends unavailable in the EOD feed, so figures approximate total return.",
+          "after": "Relative strength uses split-adjusted close-to-close price return; dividends excluded."
+        },
+        {
+          "path": "stageB.technicals.range52w.insufficientHistory",
+          "beforeMissing": true,
+          "after": false
+        },
+        {
+          "path": "stageB.technicals.relativeStrength.benchmark.asOf",
+          "before": "2025-12-31",
+          "after": null
+        },
+        {
+          "path": "stageB.technicals.relativeStrength.benchmark.gaps.0.reason",
+          "before": "no SPY benchmark history supplied",
+          "after": "no valid SPY closes supplied for relative-strength alignment"
+        },
+        {
+          "path": "stageB.technicals.relativeStrength.benchmark.notes.0",
+          "before": "Relative strength uses split-adjusted close-to-close price returns; dividends unavailable in the EOD feed, so figures approximate total return.",
+          "after": "Relative strength uses split-adjusted close-to-close price return; dividends excluded."
+        },
+        {
+          "path": "stageB.technicals.relativeStrength.benchmark.points.0.endDate",
+          "beforeMissing": true,
+          "after": null
+        },
+        {
+          "path": "stageB.technicals.relativeStrength.benchmark.points.0.startDate",
+          "beforeMissing": true,
+          "after": null
+        },
+        {
+          "path": "stageB.technicals.relativeStrength.benchmark.points.0.symbolReturnPct",
+          "before": 6.496272630457933,
+          "after": null
+        },
+        {
+          "path": "stageB.technicals.relativeStrength.benchmark.points.1.endDate",
+          "beforeMissing": true,
+          "after": null
+        },
+        {
+          "path": "stageB.technicals.relativeStrength.benchmark.points.1.startDate",
+          "beforeMissing": true,
+          "after": null
+        },
+        {
+          "path": "stageB.technicals.relativeStrength.benchmark.points.1.symbolReturnPct",
+          "before": 13.830392714854867,
+          "after": null
+        },
+        {
+          "path": "stageB.technicals.relativeStrength.benchmark.points.2.endDate",
+          "beforeMissing": true,
+          "after": null
+        },
+        {
+          "path": "stageB.technicals.relativeStrength.benchmark.points.2.startDate",
+          "beforeMissing": true,
+          "after": null
+        },
+        {
+          "path": "stageB.technicals.relativeStrength.benchmark.points.2.symbolReturnPct",
+          "before": 31.492439184746868,
+          "after": null
+        },
+        {
+          "path": "stageB.technicals.volumeTrend.avg20d",
+          "before": 1237500,
+          "after": 1237500.0000000002
+        },
+        {
+          "path": "stageB.technicals.volumeTrend.avg90d",
+          "before": 1223611.111111111,
+          "after": 1223611.1111111108
+        },
+        {
+          "path": "stageB.technicals.volumeTrend.ratio",
+          "before": 1.011350737797957,
+          "after": 1.0113507377979574
+        },
+        {
+          "path": "stageB.valuation.assumptions.notes.1",
+          "beforeMissing": true,
+          "after": "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%"
+        },
+        {
+          "path": "stageB.valuation.assumptions.salesToCapital.basis",
+          "before": "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, as of 2025-12-31)",
+          "after": "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)"
+        },
+        {
+          "path": "stageB.valuation.gaps.0",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.peers",
+            "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.valuation.gaps.1",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.ownHistory",
+            "reason": "insufficient history (need ≥8 quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.valuation.multiples.gaps.0.field",
+          "before": "valuation.multiples.ownHistory",
+          "after": "valuation.multiples.peers"
+        },
+        {
+          "path": "stageB.valuation.multiples.gaps.0.reason",
+          "before": "insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)",
+          "after": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)"
+        },
+        {
+          "path": "stageB.valuation.multiples.gaps.1",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.ownHistory",
+            "reason": "insufficient history (need ≥8 quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.valuation.multiples.notes.0",
+          "before": "income-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
+          "after": "Enterprise value EXCLUDES lease liabilities (house default; set THESIS_EV_INCLUDE_LEASES=1 to include them). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments, less lease liabilities of 100000000 (already inside totalDebt under FMP's definition). EV/EBITDA uses this same EV; EBITDA is AFTER operating-lease cost (US GAAP ASC 842 keeps it in operating expenses), so excluding the lease liability from EV keeps numerator and denominator on the same basis. EV excluding leases 6600000000; EV including leases 6700000000."
+        },
+        {
+          "path": "stageB.valuation.multiples.notes.1",
+          "before": "cash-flow-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
+          "after": "Peer multiples are not supplied by the pipeline in this version — the peer median/IQR columns are unavailable for every multiple. This is a missing input, NOT a finding that the company has no peers."
+        },
+        {
+          "path": "stageB.valuation.multiples.notes.2",
+          "beforeMissing": true,
+          "after": "income-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)"
+        },
+        {
+          "path": "stageB.valuation.notes.1",
+          "before": "NET_DEBT_V1: net debt -1300000000 as of 2025-12-31; totalDebt 1200000000, cashAndShortTermInvestments 2500000000",
+          "after": "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%"
+        },
+        {
+          "path": "stageB.valuation.notes.2",
+          "beforeMissing": true,
+          "after": "terminal ROIC held at WACC: 2 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house convention)"
+        }
+      ]
+    }
+  ]
+}

@@ -831,6 +831,16 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
     after:
       "insufficient historical coverage: only 3 quarterly statement(s) available (< 8), but verified ipoDate 2015-01-02 is older than 24 months — treated as incomplete data coverage, NOT a recent-IPO overlay (audit 2026-07-11 finding #4). Long-window CAGRs/technicals degrade via their own insufficiency flags.",
   },
+  // Added 2026-09-02 (WS5, D-16): the route result now carries the REIT
+  // equity-vs-mortgage sub-map, because SIC 6798 covers both types and the two
+  // maps disagree about which metrics mean anything. DEMO is a Technology
+  // issuer on the general route, so the decision is null and no routing note
+  // moves; only the new leaf appears.
+  {
+    path: "stageB.route.reitSubmap",
+    beforeMissing: true,
+    after: null,
+  },
   {
     path: "report.valuation.dcf.assumptions.3.basis",
     before: OLD_BALANCE_BASIS,

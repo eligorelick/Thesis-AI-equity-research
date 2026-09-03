@@ -32,6 +32,8 @@ import {
   type RoutingIncomeRow,
   type RoutingCashflowRow,
 } from "@/pipeline/stageB/sectorRouting";
+// WS5: XBRL routing evidence (D-16).
+import { deriveRoutingEvidence } from "@/pipeline/stageB/routingEvidence";
 import {
   computeGrowth,
   type GrowthResult,
@@ -922,6 +924,9 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
 
   const todayIso = bundle.builtAt.slice(0, 10);
 
+  // WS5: routing evidence from EDGAR companyfacts, read-only (D-16).
+  const routingEvidence = deriveRoutingEvidence(bundle.edgar?.companyFacts ?? null);
+
   // --- Route FIRST -----------------------------------------------------------
   const inc0 = incomeAnnual[0];
   const cf0 = cashflowAnnual[0];
@@ -972,7 +977,10 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
       cashflowAnnual: routingCashflowAnnual,
       availableQuarters: incomeQuarterly.length,
     },
-    { today: todayIso },
+    // WS5: XBRL routing evidence (D-16). Read-only from the bundle's EDGAR
+    // companyfacts; an absent or failed payload routes on industry/SIC alone
+    // and says so in the routing note and the manifest.
+    { today: todayIso, evidence: routingEvidence },
   );
 
   const policy = metricPolicy(route);
@@ -981,7 +989,13 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     suppressed.push({ key, reason });
   };
 
-  const degradation = degradationPlan(route.base, route.overlays, incomeQuarterly.length);
+  // WS5: the REIT sub-map drives the withholding disclosures in the plan.
+  const degradation = degradationPlan(
+    route.base,
+    route.overlays,
+    incomeQuarterly.length,
+    route.reitSubmap ?? null,
+  );
 
   // --- Growth ----------------------------------------------------------------
   const growth = computeGrowth(

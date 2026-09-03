@@ -10,7 +10,10 @@
  * cashAndShortTermInvestments, weightedAverageShsOutDil}.
  *
  * Routing evidence and rules: the sector-routing methodology §1 (industry-prefix
- * matching FIRST, case-insensitive, trimmed; SIC fallback; overlays compose),
+ * matching FIRST, case-insensitive, trimmed; SIC fallback; XBRL tag evidence
+ * from EDGAR companyfacts confirms, contradicts or — when neither industry nor
+ * SIC decides — supplies the base route, and alone decides the equity-vs-
+ * mortgage REIT sub-map (WS5, D-16); overlays compose),
  * the application contract §6 (route table incl. hard suppressions) and §13.7 (unprofitable /
  * pre-revenue house rules).
  *
@@ -28,8 +31,10 @@ import type {
   SectorOverlay,
   SectorRoute,
 } from "@/types/core";
+import { sectorIndustryForSic } from "@/edgar/sic";
 import { deriveFcf } from "@/pipeline/stageB/financialValues";
 import { isFinancialForensicsSuppressed } from "@/pipeline/stageB/forensics";
+import { describeSignals, type RoutingEvidence } from "@/pipeline/stageB/routingEvidence";
 
 /**
  * The signals `isFinancialForensicsSuppressed` nulls out in the forensic layer.
@@ -117,10 +122,29 @@ export interface RoutingStatements {
 export interface RouteOptions {
   /** ISO date used for IPO-recency math — passed in for determinism. */
   today: string;
+  /**
+   * XBRL routing evidence read from EDGAR companyfacts (WS5, D-16). Optional:
+   * without it the route rests on industry/SIC alone and, for a REIT, the
+   * sub-map is `undetermined` unless the vendor industry names one.
+   */
+  evidence?: RoutingEvidence | null;
 }
+
+/**
+ * Equity-vs-mortgage REIT sub-map. SIC 6798 covers both; only XBRL evidence
+ * or an explicit vendor industry string separates them. `undetermined`
+ * withholds both the FFO-based and the book-value-based metrics with a reason.
+ */
+export type ReitSubmap = "equity" | "mortgage" | "undetermined";
 
 /** routeCompany result: a CompanyRoute plus provenance, notes and gap entries. */
 export interface CompanyRouteResult extends CompanyRoute {
+  /**
+   * REIT sub-map when the base is `reit` or `reit-mortgage`; null otherwise
+   * (WS5, D-16). `routeCompany` always sets it; the field is optional only so a
+   * hand-built route fixture predating it still satisfies the type.
+   */
+  reitSubmap?: ReitSubmap | null;
   /** House-rule annotations and routing rationale (rendered in the appendix). */
   notes: string[];
   /** ManifestEntry-compatible gap descriptions for anything not evaluable. */
@@ -274,8 +298,8 @@ export function routeCompany(
       base = "reit";
       baseMatched = true;
       notes.push(
-        `base route 'reit' from SIC ${sicRaw} (6798) — mortgage-REIT submap cannot be determined ` +
-          "from SIC alone; routed to the equity-REIT map.",
+        `base route 'reit' from SIC ${sicRaw} (6798) — the equity-vs-mortgage sub-map cannot be determined ` +
+          "from SIC alone; XBRL evidence (or an explicit vendor industry) decides it below.",
       );
     } else if (sectorLc === "financial services" || sectorLc === "financial") {
       base = "general";
@@ -284,6 +308,205 @@ export function routeCompany(
         "sector 'Financial Services' without a bank/insurance/REIT industry — routed to the general " +
           "map (FIN-OTHER treatment: book-value-tilted, NOT the bank map; the sector-routing methodology §1.3).",
       );
+    }
+  }
+
+  // ---- XBRL routing evidence (WS5, D-16): confirms, contradicts, or decides.
+  const evidence = opts.evidence ?? null;
+  const sicNum = parseSic(sicRaw);
+  const sicIsFinancial = sicNum !== null && sicNum >= 6000 && sicNum <= 6799;
+  const sectorIsFinancial = sectorLc === "financial services" || sectorLc === "financial";
+  const evidenceSuggests = evidence?.suggests ?? null;
+  const evidenceSignalsFor = (cls: NonNullable<typeof evidenceSuggests>): string =>
+    describeSignals(
+      cls === "bank"
+        ? (evidence?.bank ?? [])
+        : cls === "insurer"
+          ? (evidence?.insurer ?? [])
+          : cls === "reit"
+            ? (evidence?.equityReit ?? [])
+            : (evidence?.mortgageReit ?? []),
+    );
+  const evidenceAsOf =
+    evidence?.asOf !== null && evidence?.asOf !== undefined ? ` as of ${evidence.asOf}` : "";
+  // A company is a financial candidate when anything — the industry string, the
+  // SIC, the sector, or the tags themselves — points at a financial map.
+  // Evidence is only consulted (and its absence only disclosed) for those, so
+  // an ordinary industrial with no companyfacts carries no extra note or gap.
+  const financialCandidate =
+    (baseMatched && base !== "general") || sicIsFinancial || sectorIsFinancial || evidenceSuggests !== null;
+
+  if (!baseMatched && evidenceSuggests !== null && evidence !== null) {
+    base = evidenceSuggests;
+    baseMatched = true;
+    notes.push(
+      `base route '${base}' from XBRL evidence (${evidence.source}${evidenceAsOf}): ` +
+        `${evidence.basis ?? evidenceSignalsFor(evidenceSuggests)} — industry string ` +
+        `${industryRaw === null ? "missing" : `'${industryRaw}'`} and SIC ${sicRaw ?? "missing"} gave no match.`,
+    );
+  } else if (financialCandidate && evidence !== null && !evidence.available) {
+    notes.push(
+      `routing evidence: ${evidence.unavailableReason ?? "EDGAR companyfacts unavailable"} — the route rests on ` +
+        `industry ${industryRaw === null ? "(missing)" : `'${industryRaw}'`} and SIC ${sicRaw ?? "(missing)"} alone; ` +
+        "no XBRL tags were checked.",
+    );
+    gaps.push({
+      field: "route.evidence",
+      reason:
+        `${evidence.unavailableReason ?? "EDGAR companyfacts unavailable"} — routing could not be confirmed against ` +
+        "XBRL tags (deposits/loans/NII, premiums/reserves, investment property, MBS/loans held for investment)",
+      severity: "info",
+      attemptedSources: [evidence.source],
+    });
+  } else if (financialCandidate && evidence === null) {
+    notes.push(
+      "routing evidence: no XBRL evidence supplied to routing — the route rests on industry " +
+        `${industryRaw === null ? "(missing)" : `'${industryRaw}'`} and SIC ${sicRaw ?? "(missing)"} alone.`,
+    );
+    gaps.push({
+      field: "route.evidence",
+      reason:
+        "no XBRL routing evidence supplied — routing could not be confirmed against companyfacts tags",
+      severity: "info",
+      attemptedSources: ["edgar:companyfacts us-gaap"],
+    });
+  } else if (baseMatched && base !== "general" && evidence !== null && evidence.available) {
+    const isReitBase = base === "reit" || base === "reit-mortgage";
+    const evidenceIsReit = evidenceSuggests === "reit" || evidenceSuggests === "reit-mortgage";
+    if (evidenceSuggests === null) {
+      notes.push(
+        `routing evidence (${evidence.source}${evidenceAsOf}): no bank, insurer or REIT tags found in companyfacts — ` +
+          `the '${base}' route rests on industry ${industryRaw === null ? "(missing)" : `'${industryRaw}'`} and ` +
+          `SIC ${sicRaw ?? "(missing)"}.`,
+      );
+    } else if (evidenceSuggests === base || (isReitBase && evidenceIsReit)) {
+      notes.push(
+        `routing evidence (${evidence.source}${evidenceAsOf}) consistent with the '${base}' route: ` +
+          `${evidence.basis ?? evidenceSignalsFor(evidenceSuggests)}.`,
+      );
+    } else {
+      notes.push(
+        `routing evidence (${evidence.source}${evidenceAsOf}) CONFLICTS with the '${base}' route from industry ` +
+          `${industryRaw === null ? "(missing)" : `'${industryRaw}'`} / SIC ${sicRaw ?? "(missing)"}: ` +
+          `${evidence.basis ?? evidenceSignalsFor(evidenceSuggests)} — route kept on the vendor/SEC classification; review.`,
+      );
+      gaps.push({
+        field: "route.evidence.conflict",
+        reason:
+          `XBRL tags suggest '${evidenceSuggests}' (${evidenceSignalsFor(evidenceSuggests)}) while industry/SIC routed ` +
+          `to '${base}' — route kept on industry/SIC; metrics for the '${base}' map may not fit`,
+        severity: "warn",
+        attemptedSources: [evidence.source, "fmp:/stable/profile", "edgar:submissions.sic"],
+      });
+    }
+  } else if (baseMatched && base === "general" && evidenceSuggests !== null && evidence !== null) {
+    // Industry or sector deliberately routed a FIN-OTHER issuer to the general
+    // map; the tags say otherwise. The classification is kept (the sector-routing
+    // methodology §1.3 sends fee-based financials there on purpose) and the
+    // disagreement is disclosed rather than silently overridden.
+    notes.push(
+      `routing evidence (${evidence.source}${evidenceAsOf}) suggests '${evidenceSuggests}' ` +
+        `(${evidence.basis ?? evidenceSignalsFor(evidenceSuggests)}) but industry ` +
+        `${industryRaw === null ? "(missing)" : `'${industryRaw}'`} routed to the general map — route kept; review.`,
+    );
+    gaps.push({
+      field: "route.evidence.conflict",
+      reason: `XBRL tags suggest '${evidenceSuggests}' while industry/sector routed to 'general' — route kept on industry/sector`,
+      severity: "warn",
+      attemptedSources: [evidence.source, "fmp:/stable/profile"],
+    });
+  }
+
+  // ---- REIT sub-map (WS5, D-16): SIC 6798 alone never decides mortgage vs equity.
+  let reitSubmap: ReitSubmap | null = null;
+  if (base === "reit" || base === "reit-mortgage") {
+    const industryIsReit = industryLc !== null && industryLc.startsWith("reit");
+    const industryExplicitMortgage = industryIsReit && (industryLc as string).includes("mortgage");
+    // A keyless profile derives its industry from the SIC map, so a string that
+    // equals the SIC label carries no information beyond the SIC itself.
+    const sicLabel = sectorIndustryForSic(sicRaw).industry;
+    const industrySicDerived =
+      industryIsReit && sicLabel !== null && sicLabel.toLowerCase() === industryLc;
+    const industryExplicitEquity = industryIsReit && !industryExplicitMortgage && !industrySicDerived;
+    const evidenceSubmap = evidence?.available === true ? evidence.reitSubmap : null;
+    const evidenceState =
+      evidence === null
+        ? "no XBRL evidence supplied"
+        : !evidence.available
+          ? (evidence.unavailableReason ?? "EDGAR companyfacts unavailable")
+          : "companyfacts carry neither investment-property nor MBS / loans-held-for-investment tags";
+
+    if (industryExplicitMortgage) {
+      reitSubmap = "mortgage";
+      if (evidenceSubmap === "equity") {
+        notes.push(
+          `REIT sub-map: vendor industry '${industryRaw}' names a mortgage REIT, but XBRL evidence shows investment ` +
+            `property (${describeSignals(evidence?.equityReit ?? [])}) — vendor sub-map kept; review.`,
+        );
+        gaps.push({
+          field: "route.reitSubmap.conflict",
+          reason:
+            `industry '${industryRaw}' routes to the mortgage sub-map while companyfacts tag ` +
+            "RealEstateInvestmentPropertyNet — book-value metrics may not fit a hybrid REIT",
+          severity: "warn",
+          attemptedSources: [evidence?.source ?? "edgar:companyfacts us-gaap", "fmp:/stable/profile"],
+        });
+      } else if (evidenceSubmap === "mortgage") {
+        notes.push(
+          `REIT sub-map 'mortgage' from vendor industry '${industryRaw}', confirmed by XBRL evidence: ` +
+            `${describeSignals(evidence?.mortgageReit ?? [])}.`,
+        );
+      }
+    } else if (evidenceSubmap === "mortgage") {
+      base = "reit-mortgage";
+      reitSubmap = "mortgage";
+      notes.push(
+        `REIT sub-map 'mortgage' from XBRL evidence (${evidence?.source}${evidenceAsOf}): ` +
+          `${describeSignals(evidence?.mortgageReit ?? [])} without RealEstateInvestmentPropertyNet — ` +
+          "routed to the book-value submap.",
+      );
+      notes.push(
+        "mortgage REIT routed to the book-value submap (P/B, dividend yield, spread, leverage) — " +
+          "FFO/NOI largely irrelevant (the sector-routing methodology §4).",
+      );
+    } else if (evidenceSubmap === "equity") {
+      base = "reit";
+      reitSubmap = "equity";
+      notes.push(
+        `REIT sub-map 'equity' from XBRL evidence (${evidence?.source}${evidenceAsOf}): ` +
+          `${describeSignals(evidence?.equityReit ?? [])} — routed to the FFO/AFFO map.`,
+      );
+    } else if (industryExplicitEquity) {
+      base = "reit";
+      reitSubmap = "equity";
+      notes.push(
+        `REIT sub-map 'equity' from vendor industry '${industryRaw}' (names an equity sub-type); ` +
+          `XBRL evidence: ${evidenceState}.`,
+      );
+    } else {
+      base = "reit";
+      reitSubmap = "undetermined";
+      notes.push(
+        `REIT sub-map UNDETERMINED: ${
+          industryRaw === null
+            ? `SIC ${sicRaw ?? "(missing)"} alone`
+            : `industry '${industryRaw}'${industrySicDerived ? ` (the SIC ${sicRaw} label, no vendor sub-type)` : ""}`
+        } cannot separate a mortgage REIT from an equity REIT, and ${evidenceState} — FFO/AFFO-based and ` +
+          "book-value-based metrics are both withheld with this reason.",
+      );
+      gaps.push({
+        field: "route.reitSubmap",
+        reason:
+          `REIT sub-map undetermined: SIC 6798 / industry '${industryRaw ?? "(missing)"}' cover both equity and ` +
+          `mortgage REITs and ${evidenceState} — FFO/AFFO, P/FFO, book value per share, net interest spread and ` +
+          "leverage withheld",
+        severity: "warn",
+        attemptedSources: [
+          evidence?.source ?? "edgar:companyfacts us-gaap",
+          "fmp:/stable/profile",
+          "edgar:submissions.sic",
+        ],
+      });
     }
   }
 
@@ -495,6 +718,7 @@ export function routeCompany(
     base,
     overlays,
     evidence: { sector: sectorRaw, industry: industryRaw, sic: sicRaw },
+    reitSubmap,
     notes,
     gaps,
     asOf: {
@@ -667,6 +891,13 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
       "inventoryTurnover",
       "debtToEquity",
       "fcfDcf",
+      // The FCFF reverse DCF is the same model read backwards, so it inherits
+      // the reason its forward twin is suppressed (WS5, V-10). `valueCompany`
+      // structurally never builds one on this route; the id makes the refusal a
+      // stated policy the report and the manifest can name, rather than an
+      // absence the reader has to infer. Display/disclosure id — no scoring
+      // signal carries it, because the financial branch scores no reverse DCF.
+      "reverseDcf",
       "fcfYield",
       "altmanZ",
       "beneishM",
@@ -688,7 +919,7 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
     // grossMargin: FMP's revenue−costOfRevenue is meaningless on a premium/claims
     // income statement (insurers are judged on combined/loss/expense ratios), same
     // rationale as the bank route — do not let it drive the moat score.
-    suppress: ["evEbitda", "evToSales", "fcfDcf", "currentRatio", "quickRatio", "grossMargin", "altmanZ", "beneishM", "accrualsRatio"],
+    suppress: ["evEbitda", "evToSales", "fcfDcf", "reverseDcf", "currentRatio", "quickRatio", "grossMargin", "altmanZ", "beneishM", "accrualsRatio"],
     lead: [
       "combinedRatio",
       "lossRatio",
@@ -716,7 +947,7 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
   // grossMargin is meaningless on a net-interest-spread income statement (same as
   // the bank/insurer routes) — suppress so it cannot drive the moat score.
   "reit-mortgage": {
-    suppress: ["evEbitda", "currentRatio", "fcfDcf", "ffoApprox", "affoApprox", "pFfo", "grossMargin", "altmanZ", "beneishM", "accrualsRatio"],
+    suppress: ["evEbitda", "currentRatio", "fcfDcf", "reverseDcf", "ffoApprox", "affoApprox", "pFfo", "grossMargin", "altmanZ", "beneishM", "accrualsRatio"],
     lead: ["priceToBook", "bookValuePerShare", "dividendYield", "netInterestSpread", "leverageAssetsToEquity"],
   },
 };
@@ -743,16 +974,44 @@ const OVERLAY_POLICIES: Readonly<Record<SectorOverlay, { suppress: readonly stri
 };
 
 /**
+ * Metrics withheld when a REIT's equity-vs-mortgage sub-map is undetermined
+ * (WS5, D-16). SIC 6798 covers both types, and the two maps disagree about
+ * which figures mean anything: FFO/AFFO and P/FFO are the equity-REIT metrics,
+ * while book value per share, the net interest spread and assets/equity
+ * leverage are the mortgage-REIT ones. Publishing either set without knowing
+ * which type the issuer is would assert a business model on no evidence, so
+ * BOTH are withheld with the reason on `route.reitSubmap`.
+ */
+export const REIT_SUBMAP_UNDETERMINED_SUPPRESSED = [
+  "ffoApprox",
+  "affoApprox",
+  "pFfo",
+  "affoPayoutRatio",
+  "impliedCapRate",
+  "bookValuePerShare",
+  "netInterestSpread",
+  "leverageAssetsToEquity",
+] as const;
+
+/**
  * Metric display policy for a route (or a full CompanyRoute with overlays).
  * The UI and report builder consult this — e.g. a bank report can NEVER
  * display EV/EBITDA (hard product rule; suppress wins over lead).
+ *
+ * A `CompanyRouteResult` additionally carries `reitSubmap`; when it is
+ * "undetermined" both REIT metric families are withheld (WS5, D-16).
  */
-export function metricPolicy(route: SectorRoute | CompanyRoute): MetricPolicy {
+export function metricPolicy(
+  route: SectorRoute | CompanyRoute | (CompanyRoute & { reitSubmap?: ReitSubmap | null }),
+): MetricPolicy {
   const base: SectorRoute = typeof route === "string" ? route : route.base;
   const overlays: readonly SectorOverlay[] = typeof route === "string" ? [] : route.overlays;
 
   const suppress = new Set<string>(BASE_POLICIES[base].suppress);
   const lead: string[] = [...BASE_POLICIES[base].lead];
+  if (typeof route !== "string" && "reitSubmap" in route && route.reitSubmap === "undetermined") {
+    for (const metric of REIT_SUBMAP_UNDETERMINED_SUPPRESSED) suppress.add(metric);
+  }
   // The forensic batteries are suppressed by CLASSIFICATION, not by base route
   // alone: `isFinancialForensicsSuppressed` also fires on sector "Financial
   // Services" and on SIC 6000-6799. Those companies can still route to
@@ -829,6 +1088,7 @@ export function degradationPlan(
   route: SectorRoute,
   overlays: readonly SectorOverlay[],
   availableQuarters: number | null,
+  reitSubmap?: ReitSubmap | null,
 ): DegradationPlan {
   const items: DegradationItem[] = [];
   const notes: string[] = [];
@@ -881,8 +1141,9 @@ export function degradationPlan(
         target: "leadership.cet1Ratio",
         action: "annotate",
         disclosure:
-          "CET1 is unavailable from FMP and EDGAR XBRL — displayed as reported by the company (filing " +
-          "extraction) with a source link, and flagged.",
+          "CET1 is displayed as reported by the company when it tags one; otherwise the tangible " +
+          "leverage proxy (tangible common equity / tangible assets) is shown UNDER ITS OWN NAME, " +
+          "never as CET1, and the difference from a risk-weighted ratio is stated.",
       },
     );
   } else if (route === "insurer") {
@@ -931,6 +1192,46 @@ export function degradationPlan(
       disclosure:
         "FFO/NOI largely irrelevant for mortgage REITs — book-value submap leads: P/B, dividend yield, " +
         "net interest spread, leverage.",
+    });
+  }
+
+  // ---- financial-route model withholdings shared by bank / insurer / mREIT
+  // (WS5, V-10). The FCFF DCF item above names the forward model; these two name
+  // the other FCFF-derived outputs, which are withheld for the same reason and
+  // were previously absent from the plan even though nothing computed them.
+  if (route === "bank" || route === "insurer" || route === "reit-mortgage") {
+    items.push(
+      {
+        target: "valuation.reverseDcf",
+        action: "suppress",
+        disclosure:
+          "Reverse DCF is not shown on this route: it inverts the same FCFF model the forward DCF uses, so " +
+          "the growth or margin it would solve for is derived from a free-cash-flow definition that has no " +
+          "meaning where debt is raw material. The excess-return model's reverse solve (the starting ROE that " +
+          "reproduces the market cap) is shown instead.",
+      },
+      {
+        target: "returns.roicVsWacc",
+        action: "suppress",
+        disclosure:
+          "ROIC − WACC is not shown on this route: invested capital (debt + equity − cash) is undefined when " +
+          "deposits, policy reserves or repo fund the balance sheet and cash is an earning asset, and no WACC " +
+          "cost of debt is inferred. Return on tangible common equity against the cost of equity is the " +
+          "value-creation read instead.",
+      },
+    );
+  }
+
+  // ---- REIT sub-map undetermined (WS5, D-16)
+  if (route === "reit" && reitSubmap === "undetermined") {
+    items.push({
+      target: "valuation.reit",
+      action: "suppress",
+      disclosure:
+        "REIT sub-map undetermined (SIC 6798 covers both equity and mortgage REITs and no XBRL evidence " +
+        "separated them): FFO, AFFO and P/FFO are withheld because they presume an equity REIT, and book " +
+        "value per share, the net interest spread and assets/equity leverage are withheld because they " +
+        "presume a mortgage REIT. Neither family is published on an unproven business model.",
     });
   }
 

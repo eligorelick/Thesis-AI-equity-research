@@ -11,6 +11,7 @@ import {
   type EdgarTransportResponse,
 } from "@/providers/edgar";
 import { createFmpClient } from "@/providers/fmp";
+import { makeLimiter } from "@/providers/http";
 import type { FetchResult } from "@/types/core";
 
 const NOW = new Date("2026-07-06T00:00:00.000Z");
@@ -68,14 +69,49 @@ function returnedFetchResults(bundle: DataBundle): Map<string, FetchResult<unkno
   return results;
 }
 
+/**
+ * WS4 (D-11): the placeholder ticker is EXMP, not DEMO. DEMO and DBNK are
+ * reserved fixture symbols whose runs query no provider at all, so they can no
+ * longer exercise the producer registry — which is about how provider results,
+ * successful and failed, are indexed. The keyed FMP client below serves one
+ * profile carrying a CIK (so `edgar.cik` still resolves through the profile
+ * fallback, as it used to through the DEMO fixture) and refuses the rest.
+ */
 async function buildDeterministicBundle(): Promise<DataBundle> {
   const unavailableJson: ConfigFetch = () =>
     Promise.resolve(jsonResponse({ error: "not available in producer-registry test" }, 404));
+  const fmpImpl: typeof fetch = ((input: string | URL | Request) => {
+    const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const endpoint = new URL(raw).pathname.replace(/^.*\/stable\//, "");
+    // Three endpoints answer, so the manifest has successful producers on both
+    // sides of the macro block the ordering assertion probes; the rest are
+    // deterministic 401 gaps.
+    if (endpoint === "profile") {
+      return Promise.resolve(jsonResponse([{ symbol: "EXMP", cik: "0000000123", sector: "Technology" }]));
+    }
+    if (endpoint === "treasury-rates") {
+      return Promise.resolve(jsonResponse([{ date: "2026-07-06", month1: 5, year10: 4.2 }]));
+    }
+    if (endpoint === "market-risk-premium") {
+      return Promise.resolve(jsonResponse([{ country: "United States", totalEquityRiskPremium: 5.5 }]));
+    }
+    return Promise.resolve(jsonResponse({ "Error Message": "not available in producer-registry test" }, 401));
+  }) as unknown as typeof fetch;
 
-  return buildDataBundle("DEMO", {
+  return buildDataBundle("EXMP", {
     now: () => NOW,
     eodYears: 0,
-    fmp: createFmpClient({ apiKey: "" }),
+    // The registry is about how PROVIDER results are indexed; the keyless
+    // substitution layer adds `keyless.*` disclosures that belong to no
+    // producer, and on a keyed plan it would run for the benchmark series.
+    keyless: false,
+    fmp: createFmpClient({
+      apiKey: "PRODUCER-REGISTRY-KEY",
+      fetchImpl: fmpImpl,
+      limiter: makeLimiter(1_000_000, 1_000_000),
+      now: () => NOW,
+      timeoutMs: 1_000,
+    }),
     edgar: createEdgarClient({ transport: unavailableEdgar() }),
     fredFetch: (seriesId) =>
       Promise.resolve({

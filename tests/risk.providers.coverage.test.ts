@@ -1072,7 +1072,7 @@ describe("data-bundle provider boundaries", () => {
         sicDescription: "Prepackaged Software",
         fiscalYearEnd: "1231",
         stateOfIncorporation: "CA",
-        tickers: ["DEMO"],
+        tickers: ["EXMP"],
         exchanges: ["TEST"],
         filings: {
           files: [],
@@ -1092,7 +1092,7 @@ describe("data-bundle provider boundaries", () => {
             return Promise.resolve(
               response(
                 JSON.stringify({
-                  "0": { cik_str: 0, ticker: "DEMO", title: "Thesis Example Systems" },
+                  "0": { cik_str: 0, ticker: "EXMP", title: "Thesis Example Systems" },
                 }),
               ),
             );
@@ -1114,7 +1114,9 @@ describe("data-bundle provider boundaries", () => {
         },
       };
 
-      const bundle = await buildDataBundle("DEMO", {
+      // WS4 (D-11): DEMO is a reserved fixture symbol whose run queries no
+      // provider, so this EDGAR-boundary case uses an ordinary ticker.
+      const bundle = await buildDataBundle("EXMP", {
         now: () => new Date("2026-08-08T12:00:00.000Z"),
         eodYears: 1,
         fmp: createFmpClient({ apiKey: "" }),

@@ -1,3 +1,8 @@
+/**
+ * WS4 (D-11): the placeholder ticker here is EXMP, not DEMO. DEMO and DBNK are
+ * reserved fixture symbols that short-circuit every provider, so they cannot
+ * stand in for an ordinary ticker in a test about provider behaviour.
+ */
 import { describe, expect, it } from "vitest";
 
 import { buildDataBundle } from "@/pipeline/dataBundle";
@@ -45,17 +50,17 @@ function makeRecordingFmp(): {
     const date = period === "annual" ? "2025-12-31" : "2026-03-31";
 
     if (endpoint === "income-statement") {
-      return Promise.resolve(jsonResponse([{ symbol: "DEMO", date, revenue: 100 }]));
+      return Promise.resolve(jsonResponse([{ symbol: "EXMP", date, revenue: 100 }]));
     }
     if (endpoint === "balance-sheet-statement") {
-      return Promise.resolve(jsonResponse([{ symbol: "DEMO", date, totalStockholdersEquity: 100 }]));
+      return Promise.resolve(jsonResponse([{ symbol: "EXMP", date, totalStockholdersEquity: 100 }]));
     }
     if (endpoint === "cash-flow-statement") {
-      return Promise.resolve(jsonResponse([{ symbol: "DEMO", date, operatingCashFlow: 25 }]));
+      return Promise.resolve(jsonResponse([{ symbol: "EXMP", date, operatingCashFlow: 25 }]));
     }
     if (endpoint === "enterprise-values") {
       return Promise.resolve(
-        jsonResponse([{ symbol: "DEMO", date, marketCapitalization: 400, enterpriseValue: 450 }]),
+        jsonResponse([{ symbol: "EXMP", date, marketCapitalization: 400, enterpriseValue: 450 }]),
       );
     }
     return Promise.resolve(jsonResponse({ "Error Message": "not available in depth test" }, 401));
@@ -104,7 +109,7 @@ function noNetworkConfigs(): {
 }
 
 async function buildWith(client: FmpClient) {
-  return buildDataBundle("DEMO", {
+  return buildDataBundle("EXMP", {
     now: () => NOW,
     eodYears: 0,
     fmp: client,
@@ -162,38 +167,38 @@ describe("buildDataBundle canonical quarterly history depth", () => {
     expect(bundle.sourceManifest).toMatchObject({
       "statements.incomeAnnual": {
         provider: "fmp",
-        endpoint: "/stable/income-statement?limit=10&period=annual&symbol=DEMO",
+        endpoint: "/stable/income-statement?limit=10&period=annual&symbol=EXMP",
         asOf: "2025-12-31",
       },
       "statements.incomeQuarterly": {
         provider: "fmp",
-        endpoint: "/stable/income-statement?limit=24&period=quarter&symbol=DEMO",
+        endpoint: "/stable/income-statement?limit=24&period=quarter&symbol=EXMP",
         asOf: "2026-03-31",
       },
       "statements.balanceAnnual": {
         provider: "fmp",
-        endpoint: "/stable/balance-sheet-statement?limit=10&period=annual&symbol=DEMO",
+        endpoint: "/stable/balance-sheet-statement?limit=10&period=annual&symbol=EXMP",
         asOf: "2025-12-31",
       },
       "statements.balanceQuarterly": {
         provider: "fmp",
-        endpoint: "/stable/balance-sheet-statement?limit=24&period=quarter&symbol=DEMO",
+        endpoint: "/stable/balance-sheet-statement?limit=24&period=quarter&symbol=EXMP",
         asOf: "2026-03-31",
       },
       "statements.cashflowAnnual": {
         provider: "fmp",
-        endpoint: "/stable/cash-flow-statement?limit=10&period=annual&symbol=DEMO",
+        endpoint: "/stable/cash-flow-statement?limit=10&period=annual&symbol=EXMP",
         asOf: "2025-12-31",
       },
       "statements.cashflowQuarterly": {
         provider: "fmp",
-        endpoint: "/stable/cash-flow-statement?limit=24&period=quarter&symbol=DEMO",
+        endpoint: "/stable/cash-flow-statement?limit=24&period=quarter&symbol=EXMP",
         asOf: "2026-03-31",
       },
     });
     expect(bundle.sourceManifest.enterpriseValues).toMatchObject({
       provider: "fmp",
-      endpoint: "/stable/enterprise-values?limit=24&period=quarter&symbol=DEMO",
+      endpoint: "/stable/enterprise-values?limit=24&period=quarter&symbol=EXMP",
       asOf: "2026-03-31",
     });
     expect(bundle.gaps.some((gap) => /incomeStatement|balanceSheet|cashFlow|enterpriseValues/.test(gap.field))).toBe(false);
@@ -217,16 +222,16 @@ describe("buildDataBundle canonical quarterly history depth", () => {
 
     expect(endpointCalls(calls, "enterprise-values")).toHaveLength(1);
     expect(successfulEndpoint).toBe(
-      "/stable/enterprise-values?limit=24&period=quarter&symbol=DEMO",
+      "/stable/enterprise-values?limit=24&period=quarter&symbol=EXMP",
     );
     expect(bundle.enterpriseValues.ok).toBe(false);
     if (bundle.enterpriseValues.ok) throw new Error("expected enterprise-values gap");
-    expect(bundle.enterpriseValues.gap.field).toBe("fmp.enterpriseValues(DEMO,quarter)");
+    expect(bundle.enterpriseValues.gap.field).toBe("fmp.enterpriseValues(EXMP,quarter)");
     expect(bundle.gaps).toContainEqual(
-      expect.objectContaining({ field: "fmp.enterpriseValues(DEMO,quarter)" }),
+      expect.objectContaining({ field: "fmp.enterpriseValues(EXMP,quarter)" }),
     );
     expect(bundle.sourceManifest.enterpriseValues).toBeUndefined();
-    expect(bundle.gaps.some((gap) => gap.field === "fmp.enterpriseValues(DEMO,annual)")).toBe(false);
-    expect(bundle.gaps.some((gap) => gap.field === "fmp.enterpriseValues(DEMO)")).toBe(false);
+    expect(bundle.gaps.some((gap) => gap.field === "fmp.enterpriseValues(EXMP,annual)")).toBe(false);
+    expect(bundle.gaps.some((gap) => gap.field === "fmp.enterpriseValues(EXMP)")).toBe(false);
   });
 });

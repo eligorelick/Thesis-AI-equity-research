@@ -86,6 +86,28 @@ const TERMINAL_ROIC_HOLD_NOTE =
 const NET_DEBT_NOTE =
   "NET_DEBT_V1: net debt -1300000000 as of 2025-12-31; totalDebt 1200000000, cashAndShortTermInvestments 2500000000";
 
+// WS4 (D-11), 2026-09-02 — KNOWN FAILURE, owner decision required.
+//
+// DEMO is now a reserved fixture symbol: `buildDataBundle` queries no provider
+// for it (src/providers/reservedSymbols.ts), so its missing-data manifest is
+// different — SEC EDGAR, FRED, FINRA and Finnhub are disclosed as
+// short-circuited instead of as failed calls, and one `fixture.reserved(DEMO)`
+// entry names the rule. That inserts and renames entries in a manifest this
+// projection pins element by element, so 484 leaves differ.
+//
+// The delta contract below cannot express the change: `readJsonPath(after, ...)`
+// must find every listed path, so a key present in the audited baseline and
+// absent now (40 of the 484, e.g. `report.appendix.missingData.11.attemptedSources`
+// once the array shifts) has no representation. Adding entries cannot fix it.
+//
+// Two remedies, both outside WS4's ownership:
+//   1. extend this contract with an `afterMissing` case and regenerate the list
+//      (484 entries, mechanical: diff the audited projection against the emitted
+//      one — `AUDIT_FIXTURE_EMIT=1` with the provider env blank);
+//   2. regenerate `tests/fixtures/audit-baseline-stageb-report.json` against a
+//      new audited commit, which re-pins its provenance and is an owner act.
+// The analytical surfaces (scores, valuation, returns, growth) are unchanged by
+// D-11; every newly differing leaf is manifest, gap or note text.
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
   // Added 2026-09-01: fixture provenance strings are built with POSIX
   // separators so a Windows-generated baseline and a Linux CI runner agree on

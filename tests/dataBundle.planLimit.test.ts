@@ -1,4 +1,9 @@
 /**
+ * WS4 (D-11): the placeholder ticker here is EXMP, not DEMO. DEMO and DBNK are
+ * reserved fixture symbols that short-circuit every provider, so they cannot
+ * stand in for an ordinary ticker in a test about provider behaviour.
+ */
+/**
  * Bundle-level behaviour of the FMP subscription `limit` cap: statement
  * history is served within the cap, and the truncation is disclosed as a
  * manifest entry that names the member and the depth actually served.
@@ -38,7 +43,7 @@ function fmpEndpoint(url: URL): string {
 
 function statementRows(count: number, period: string, field: string): Record<string, unknown>[] {
   return Array.from({ length: count }, (_, i) => ({
-    symbol: "DEMO",
+    symbol: "EXMP",
     date: period === "annual" ? `${2025 - i}-12-31` : QUARTER_ENDS[i] ?? `${2024 - i}-03-31`,
     reportedCurrency: "USD",
     [field]: 100 + i,
@@ -108,7 +113,7 @@ afterEach(() => {
 describe("buildDataBundle under an FMP subscription limit cap", () => {
   it("serves every statement feed within the cap and discloses the truncated depth", async () => {
     const { client, calls } = makeCappedFmp();
-    const bundle = await buildDataBundle("DEMO", {
+    const bundle = await buildDataBundle("EXMP", {
       now: () => NOW,
       eodYears: 0,
       fmp: client,

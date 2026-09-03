@@ -430,8 +430,13 @@ function computedSections(
   // --- Capital -------------------------------------------------------------
   const cap = computed.capital;
   const capFigures: PayloadFigureInput[] = [
-    { label: "latest FCF", value: cap.fcf.latestFcf, unit: "currency", currency: reportingCurrency, source: "computed.capital.fcf", asOf: cap.asOf },
-    { label: "FCF conversion (latest)", value: cap.fcf.latestConversion, unit: "x", source: "computed.capital.fcf.conversion", asOf: cap.asOf },
+    // WS6 review (SHOULD-FIX 4): every free-cash-flow figure names its
+    // definition. The house default subtracts SBC; the vendor convention does
+    // not, and P/FCF and the graded conversion are both built on that one.
+    { label: "latest FCF (after SBC, house default)", value: cap.fcf.latestFcf, unit: "currency", currency: reportingCurrency, source: "computed.capital.fcf", asOf: cap.asOf },
+    { label: "latest FCF (before SBC, vendor convention)", value: cap.fcf.latestFcfBeforeSbc, unit: "currency", currency: reportingCurrency, source: "computed.capital.fcf.beforeSbc", asOf: cap.asOf },
+    { label: "FCF conversion (latest, after SBC)", value: cap.fcf.latestConversion, unit: "x", source: "computed.capital.fcf.conversion", asOf: cap.asOf },
+    { label: "FCF conversion (latest, before SBC — the graded ratio)", value: cap.fcf.latestConversionBeforeSbc, unit: "x", source: "computed.capital.fcf.conversionBeforeSbc", asOf: cap.asOf },
     { label: "capex/revenue (latest)", value: cap.capexIntensity.latestPct, unit: "%", source: "computed.capital.capexIntensity", asOf: cap.asOf },
     { label: "capex/revenue slope", value: cap.capexIntensity.slopePctPtsPerYear, unit: "pp/yr", source: "computed.capital.capexIntensity", asOf: cap.asOf },
     { label: "capex/D&A (latest)", value: cap.maintenanceVsGrowthCapex.capexToDALatest, unit: "x", source: "computed.capital.maintenanceVsGrowthCapex", asOf: cap.asOf },

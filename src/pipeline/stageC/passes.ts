@@ -2002,7 +2002,11 @@ export const MULTIPLE_LABELS: Record<MultipleKey, string> = {
   peTtm: "P/E (TTM)",
   evToEbitda: "EV/EBITDA",
   evToSales: "EV/Sales",
-  priceToFcf: "P/FCF",
+  // WS6 review (SHOULD-FIX 4): "free cash flow" means two things in this report
+  // — the vendor convention (OCF + capex) that this multiple and its own-history
+  // distribution are built on, and the house default that subtracts SBC. The
+  // label says which one the reader is looking at.
+  priceToFcf: "P/FCF (before SBC)",
   priceToBook: "P/B",
   priceToTbv: "P/TBV",
   priceToFfo: "P/FFO",

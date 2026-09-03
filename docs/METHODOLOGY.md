@@ -157,6 +157,19 @@ silently compared with an adjusted one. SBC as a percentage of FCF is measured
 against the **before** figure: dividing SBC by an FCF it has already been
 subtracted from would count it twice.
 
+Every surface that prints a free-cash-flow figure names which one it is. The
+payload and the data-only report label the rows "after SBC, house default" and
+"before SBC, vendor convention", and both series are shown. Two conversion
+ratios are published the same way, and the **before**-SBC one is the ratio the
+balance-sheet grade scores, under a driver named `fcfConversionBeforeSbc`: that
+is the definition the conversion band was calibrated on, and grading the
+after-SBC ratio against it would charge the same expense twice, because SBC as a
+percentage of free cash flow is already one of the five scored metrics. The
+aspect note states the definition. Price to free cash flow uses the **before**
+figure — the same basis as the own-history distribution it is ranked in — and is
+labelled "P/FCF (before SBC)" wherever it renders, with the basis string saying
+that the capital block's house-default figure is a different number.
+
 The FCFF discounted-cash-flow model projects revenue, EBIT margin and
 reinvestment. SBC is already an operating expense inside that EBIT, so it is
 never added back there either. The DCF and the free-cash-flow metric are

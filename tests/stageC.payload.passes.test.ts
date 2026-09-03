@@ -521,14 +521,14 @@ describe("payload determinism + provenance", () => {
       // conversion names the definition it is graded on, and the multiples
       // table publishes N beside each rank. Every one of those is extra stated
       // basis in the prompt, so promptBytes/financeHash/provenanceHash move.
-      fingerprint: "1.3.0:0f7acda5",
-      promptBytes: 88_988,
-      provenanceCount: 306,
-      provenanceHash: "67b88217",
-      provenanceIdsHash: "1e316594",
+      fingerprint: "1.3.0:d7afeb75",
+      promptBytes: 89_756,
+      provenanceCount: 308,
+      provenanceHash: "52326402",
+      provenanceIdsHash: "5c7fb3b4",
       citationCount: 11,
       citationHash: "7ebe5276",
-      computedFigureLabelHash: "2162c1ed",
+      computedFigureLabelHash: "b64caad7",
       projectionPathPeriodHash: "45ce96a4",
       // Changed 2026-08-31: the projections fcf series now states that its
       // HISTORICAL points are the reported levered figure while the PROJECTED
@@ -536,7 +536,7 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "42da4c17",
+      financeHash: "b00062b6",
     });
   });
 

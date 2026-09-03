@@ -873,6 +873,20 @@ describe("computeCapital — core ratios", () => {
     expect(res.notes.some((n) => n.includes("80 before SBC, 70 after subtracting SBC of 10"))).toBe(true);
   });
 
+  // WS6 review (SHOULD-FIX 2): the grading band was calibrated on the BEFORE-SBC
+  // conversion, so both ratios are published and the graded one is named. Grading
+  // the after-SBC ratio on that band charged the same expense twice, because SBC
+  // as a percentage of free cash flow is already a scored metric.
+  it("publishes the before-SBC conversion beside the after-SBC one, and says which is graded", () => {
+    expect(res.fcf.latestConversion).toBeCloseTo(0.7, 12); // (80 - 10) / 100
+    expect(res.fcf.latestConversionBeforeSbc).toBeCloseTo(0.8, 12); // 80 / 100
+    const latest = res.fcf.series[res.fcf.series.length - 1];
+    expect(latest.fcfConversion).toBeCloseTo(0.7, 12);
+    expect(latest.fcfConversionBeforeSbc).toBeCloseTo(0.8, 12);
+    expect(res.fcf.basis).toContain("TWO conversion ratios are published and never conflated");
+    expect(res.fcf.basis).toContain("would charge the same expense twice");
+  });
+
   it("leaves FCF unadjusted, and says so, when SBC is not disclosed", () => {
     const cf = capCashflow.map((r) => ({ ...r, stockBasedCompensation: null }));
     const res2 = computeCapital(capIncome, cf, capBalance, capMcapHistory, { price: 20 });

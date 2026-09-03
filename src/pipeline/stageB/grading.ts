@@ -698,13 +698,22 @@ export function computeScores(inputs: ScoringInputs): Scoring {
         [
           { name: "netDebtToEbitda", raw: capital.netDebtToEbitda.value, unit: "x", weight: 0.3, band: NET_DEBT_EBITDA_BAND, suppressedBy: "netDebtToEbitda" },
           { name: "interestCoverage", raw: capital.interestCoverage.value, unit: "x", weight: 0.2, band: COVERAGE_BAND },
-          { name: "fcfConversion", raw: capital.fcf.latestConversion, unit: "frac", weight: 0.2, band: FCF_CONVERSION_BAND },
+          // WS6 review (SHOULD-FIX 2): graded on the BEFORE-SBC ratio, the
+          // definition FCF_CONVERSION_BAND was calibrated on. Grading the
+          // after-SBC ratio on the same band silently moved the metric onto a
+          // new definition AND charged stock-based compensation twice, since
+          // sbcPctOfFcf below already scores it. The driver name states which
+          // ratio it is; both ratios are reported.
+          { name: "fcfConversionBeforeSbc", raw: capital.fcf.latestConversionBeforeSbc, unit: "frac", weight: 0.2, band: FCF_CONVERSION_BAND },
           { name: "sbcPctOfFcf", raw: capital.sbc.pctOfFcf, unit: "%", weight: 0.15, band: SBC_FCF_BAND },
           { name: "shareCountTrend", raw: capital.shareCount.annualizedPct, unit: "%", weight: 0.15, band: SHARE_TREND_BAND },
         ],
         weights.balanceSheet,
         inputs.asOf,
-        "Financial strength: leverage, coverage, FCF conversion, dilution, and buyback cadence.",
+        "Financial strength: leverage, coverage, FCF conversion, dilution, and buyback cadence. " +
+          "FCF conversion is graded as free cash flow BEFORE stock-based compensation over net income — the definition " +
+          "this band was calibrated on; the house-default after-SBC free cash flow is reported beside it, and the SBC " +
+          "charge itself is scored exactly once, by SBC as a percentage of free cash flow.",
         policy,
       );
 

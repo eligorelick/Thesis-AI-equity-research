@@ -2316,7 +2316,11 @@ export function multiplesFramework(
     peTtm: `price / epsDiluted (${incomeBasisLabel}); fallback marketCap / netIncome (${incomeBasisLabel})`,
     evToEbitda: `EV / (operatingIncome + D&A), ${incomeBasisLabel}-computed — vendor ebitda field not trusted. ${evBridgeBasis} Balance basis: ${balanceBasisLabel}.`,
     evToSales: `EV / revenue (${incomeBasisLabel}). ${evBridgeBasis}`,
-    priceToFcf: `marketCap / (operatingCashFlow + capitalExpenditure) (${cashFlowBasisLabel}; FMP capex negative)`,
+    priceToFcf:
+      `marketCap / (operatingCashFlow + capitalExpenditure) (${cashFlowBasisLabel}; FMP capex negative) — free cash flow BEFORE ` +
+      "stock-based compensation, the vendor convention, which is also the basis of the own-history distribution this multiple is " +
+      "ranked in. The capital block's house-default free cash flow subtracts SBC and is a DIFFERENT figure; the two are never mixed (WS6 review, SHOULD-FIX 4)",
+
     priceToBook: `marketCap / totalStockholdersEquity (${balanceBasisLabel})`,
     priceToTbv: `marketCap / (equity - goodwill - intangibleAssets) (${balanceBasisLabel})`,
     priceToFfo: "marketCap / FFO (approx., caller-provided)",

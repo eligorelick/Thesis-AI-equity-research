@@ -36,6 +36,7 @@ import type {
 import type { SourcedClaim } from "@/report/schema";
 import {
   collectPersonNames,
+  consistencyManifestEntries,
   emptyConsistencyChecks,
   isCredibilityPath,
   isDeltaRecord,
@@ -341,6 +342,25 @@ describe("checked vs coverage", () => {
     expect(checkEntry?.path).toBe("commentary[0]");
     // The coverage entry for the same claim stays a separate row.
     expect(verify.log.filter((entry) => entry.check === undefined).length).toBeGreaterThan(0);
+  });
+
+  it("discloses failing families in the missing-data manifest, and nothing when none fail", () => {
+    // The verification log is long; the manifest is where a reader looks for
+    // "what is wrong with this report", so a failure has to appear in both.
+    const checks = emptyConsistencyChecks();
+    expect(consistencyManifestEntries(checks)).toEqual([]);
+
+    checks.direction = { checked: 4, passed: 3, failed: 1, rate: 0.75 };
+    checks.namedIndividual = { checked: 2, passed: 0, failed: 2, rate: 0 };
+    const entries = consistencyManifestEntries(checks);
+    expect(entries.map((entry) => entry.field)).toEqual([
+      "verify.check.direction",
+      "verify.check.namedIndividual",
+    ]);
+    expect(entries.every((entry) => entry.severity === "warn")).toBe(true);
+    expect(entries[0].reason).toContain("1 of 4 checked");
+    expect(entries[0].reason).toContain("verification log");
+    expect(entries[1].reason).toContain("2 of 2 checked");
   });
 });
 

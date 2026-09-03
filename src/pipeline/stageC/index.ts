@@ -97,8 +97,21 @@ import {
 } from "@/pipeline/stageC/passes";
 // WS7 (D-20)
 import { getConfig } from "@/config/env";
+import type { ManifestEntry } from "@/types/core";
 import type { JudgeProtocolDraft } from "@/pipeline/stageC/judgeProtocol";
-import { emptyConsistencyChecks } from "@/pipeline/stageC/consistency";
+import {
+  consistencyManifestEntries,
+  emptyConsistencyChecks,
+} from "@/pipeline/stageC/consistency";
+
+/** WS7 (D-20): append check disclosures, keyed by field so re-stamping is safe. */
+function mergeCheckDisclosures(
+  existing: readonly ManifestEntry[],
+  additions: readonly ManifestEntry[],
+): ManifestEntry[] {
+  const present = new Set(existing.map((entry) => entry.field));
+  return [...existing, ...additions.filter((entry) => !present.has(entry.field))];
+}
 import {
   invokePassSettlementHook,
   type PassSettlementHook,
@@ -590,6 +603,14 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
         provenanceCoverage: verify.coverage,
         consistencyChecks: verify.checks, // WS7 (D-20)
         verificationLog: verify.log,
+        // WS7 (D-20): the checks run AFTER assembly (they verify the assembled
+        // object), so their manifest disclosure has to be merged here rather
+        // than inside assembleReport. Deduped by field so a re-stamp cannot
+        // double-list a family.
+        missingData: mergeCheckDisclosures(
+          verify.verifiedReport.appendix.missingData,
+          consistencyManifestEntries(verify.checks),
+        ),
       },
     });
 

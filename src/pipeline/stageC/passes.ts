@@ -118,6 +118,7 @@ import {
 } from "@/pipeline/stageC/judgeProtocol";
 import {
   collectPersonNames,
+  consistencyManifestEntries,
   runConsistencyChecks,
 } from "@/pipeline/stageC/consistency";
 import { annotateSharedModelFamily, sharedModelFamilyOf } from "@/report/execution";
@@ -2485,6 +2486,7 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
     ...degradationDisclosures(args.computed.degradation),
     ...(args.judgeProtocol?.disclosures ?? []),
     ...(judgeProtocol === undefined ? [] : judgeProtocolManifestEntries(judgeProtocol)),
+    ...(args.verify.checks === undefined ? [] : consistencyManifestEntries(args.verify.checks)),
   ]);
 
   const meta: ReportMeta = {

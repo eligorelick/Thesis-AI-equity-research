@@ -672,3 +672,35 @@ export function emptyConsistencyChecks(): ConsistencyChecks {
   const zero: CheckRate = { checked: 0, passed: 0, failed: 0, rate: null };
   return { direction: zero, period: zero, unit: zero, namedIndividual: { ...zero } };
 }
+
+const CHECK_MANIFEST_TEXT: Record<keyof ConsistencyChecks, string> = {
+  direction: "sentence(s) whose direction word contradicts the sign of the change they cite",
+  period: "sentence(s) naming a period the figure they cite is not registered for",
+  unit: "sentence(s) writing a cited figure in a unit the registry does not record it in",
+  namedIndividual:
+    "claim(s) about a named individual, or in the executive-credibility section, resting on a source outside filings and transcripts",
+};
+
+/**
+ * Manifest disclosure for the deterministic checks. A failure that lives only in
+ * the verification log is easy to miss; the missing-data manifest is where a
+ * reader already looks for "what is wrong with this report", so each failing
+ * family gets one entry naming the count and pointing at the detailed rows.
+ * Families with nothing to report add nothing — the manifest is not a scoreboard.
+ */
+export function consistencyManifestEntries(
+  checks: ConsistencyChecks,
+): { field: string; reason: string; severity: "warn"; attemptedSources: string[] }[] {
+  return (Object.keys(CHECK_MANIFEST_TEXT) as (keyof ConsistencyChecks)[]).flatMap((family) => {
+    const rate = checks[family];
+    if (rate.failed === 0) return [];
+    return [
+      {
+        field: `verify.check.${family}`,
+        reason: `${rate.failed} of ${rate.checked} checked ${CHECK_MANIFEST_TEXT[family]}. Each one is listed in the verification log with the sentence, the cited figure and the reason.`,
+        severity: "warn" as const,
+        attemptedSources: ["deterministic-verify"],
+      },
+    ];
+  });
+}

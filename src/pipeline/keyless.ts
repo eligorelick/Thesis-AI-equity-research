@@ -32,6 +32,7 @@ import {
   BALANCE_SHEET_SHARES_TAG,
   buildStatementsFromCompanyFacts,
   coverShareCountsByPeriod,
+  describeChangePct,
   RESTATEMENT_THRESHOLD_PCT,
   type BuiltStatements,
   type SharesBasis,
@@ -43,6 +44,7 @@ import {
   SUCCESSOR_FORM,
   predecessorManifestEntry,
   predecessorUnresolvedEntry,
+  usGaapConceptCount,
   type PredecessorFacts,
 } from "@/edgar/successor";
 import { estimateBeta, type ClosePoint } from "@/pipeline/stageB/betaEstimate";
@@ -642,11 +644,103 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   const factsFetchedAt = inputs.edgar.companyFacts.ok
     ? inputs.edgar.companyFacts.value.fetchedAt
     : fetchedAt;
+  /** The companyfacts payload's own as-of, for rows appended into a vendor envelope (N9). */
+  const factsAsOf = inputs.edgar.companyFacts.ok ? inputs.edgar.companyFacts.value.asOf : inputs.today;
   const factsReason = inputs.edgar.companyFacts.ok ? null : inputs.edgar.companyFacts.gap.reason;
   const emptyStatementsContext = describeEmptyStatements(
     inputs.edgar.companyFacts.ok ? inputs.edgar.companyFacts.value.data : null,
     registrant,
   );
+
+  /**
+   * Everything an EDGAR-built statement has to disclose about ITS OWN ROWS:
+   * the stand-ins that served a concept, the figures withheld because the filed
+   * tags made a derivation unsound, and the material lines a later filing
+   * restated. Split out of `statementFor` because it is needed by all THREE
+   * paths that put EDGAR rows into a member — a full substitution, a
+   * plan-limit backfill and a predecessor's pre-reorganization history — and
+   * the latter two used to append rows while discarding this entirely. On the
+   * entry-tier plan this project runs, years six to ten of every statement come
+   * from EDGAR, so a derived EBIT or a maturity-schedule debt figure could sit
+   * in a report with no manifest entry and no note at all.
+   *
+   * `scope` limits the disclosure to the periods actually appended (null = all
+   * of them) and namespaces the manifest fields so a backfill entry and a
+   * predecessor entry for the same concept cannot collide.
+   */
+  const discloseStatementRows = <TRow extends FmpRawRow>(
+    member: keyof KeylessMembers,
+    result: StatementRowsResult<TRow>,
+    scope: { periods: ReadonlySet<string>; key: string; description: string } | null,
+  ): void => {
+    const inScope = (periods: readonly string[]): string[] =>
+      scope === null ? [...periods] : periods.filter((p) => scope.periods.has(p));
+    const field = (leaf: string): string =>
+      scope === null ? `keyless.${member}.${leaf}` : `keyless.${member}.${scope.key}.${leaf}`;
+    const where = scope === null ? "" : ` — ${scope.description}`;
+
+    // A concept served by a stand-in tag (cash interest paid for interest
+    // expense, pretax income + interest for EBIT) feeds the WACC and the DCF;
+    // the report has to say so, not only the progress log.
+    for (const sub of result.substitutions) {
+      const periods = inScope(sub.periods);
+      if (periods.length === 0) continue;
+      gaps.push({
+        field: field(sub.field),
+        reason: `${sub.text} (periods: ${periods.join(", ")})${where}`,
+        severity: "info",
+        attemptedSources: ["edgar:companyfacts"],
+        expected: true,
+      });
+      if (scope !== null) notes.push(`${member}: ${sub.field} ${sub.text} (${periods.join(", ")})${where}`);
+    }
+    // A figure the builder refused to publish is a hole in the report, and a
+    // hole a reader cannot see is worse than a disclosed one.
+    for (const held of result.withheld) {
+      const periods = inScope(held.periods);
+      if (periods.length === 0) continue;
+      gaps.push({
+        field: field(`withheld.${held.field}`),
+        reason: `${held.text} (periods: ${periods.join(", ")})${where}`,
+        severity: "warn",
+        attemptedSources: ["edgar:companyfacts"],
+      });
+      notes.push(`${member}: ${held.field} withheld — ${held.text} (${periods.join(", ")})${where}`);
+    }
+    // A later filing that moved a material line by more than the threshold is
+    // the single most decision-relevant thing companyfacts can tell a reader
+    // about a period, and it was computed and then dropped: the row carried a
+    // `restatement` flag no manifest ever read.
+    const restatements = result.restatements.filter((r) => scope === null || scope.periods.has(r.date));
+    if (restatements.length > 0) {
+      const listed = restatements
+        .slice(0, MAX_LISTED_RESTATEMENTS)
+        .map(
+          (r) =>
+            `${r.date} ${r.field} ${r.original} → ${r.restated} (${describeChangePct(r.changePct, 1)}, ` +
+            `first ${r.originalFiling.form} ${r.originalFiling.accn} filed ${r.originalFiling.filed}, ` +
+            `restated in ${r.restatedFiling.form} ${r.restatedFiling.accn} filed ${r.restatedFiling.filed})`,
+        );
+      const extra = restatements.length - listed.length;
+      gaps.push({
+        field: field("restatements"),
+        reason:
+          `${restatements.length} material line(s) restated or re-presented by more than ${RESTATEMENT_THRESHOLD_PCT}% in a later filing; ` +
+          `this statement carries the LAST-FILED value and keeps the superseded one as \`original\`: ` +
+          listed.join("; ") +
+          (extra > 0 ? `; and ${extra} more` : "") +
+          where +
+          ". A comparative re-presented for discontinued operations or a change of reportable segments moves the same " +
+          "way as a correction and companyfacts cannot tell the two apart, so read this as a CHANGE between filings, " +
+          "not necessarily as an error the filer admitted.",
+        severity: "warn",
+        attemptedSources: ["edgar:companyfacts"],
+      });
+      notes.push(
+        `${member}: ${restatements.length} restated or re-presented material line(s)${where} — last-filed values shown, first-reported values kept as \`original\``,
+      );
+    }
+  };
 
   const statementFor = <TRow extends FmpRawRow>(
     member: keyof KeylessMembers,
@@ -664,46 +758,7 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       return null;
     }
     for (const note of result.notes) notes.push(`${member}: ${note}`);
-    // A concept served by a stand-in tag (cash interest paid for interest
-    // expense, pretax income + interest for EBIT) feeds the WACC and the DCF;
-    // the report has to say so, not only the progress log.
-    for (const sub of result.substitutions) {
-      gaps.push({
-        field: `keyless.${member}.${sub.field}`,
-        reason: `${sub.text} (periods: ${sub.periods.join(", ")})`,
-        severity: "info",
-        attemptedSources: ["edgar:companyfacts"],
-        expected: true,
-      });
-    }
-    // A later filing that moved a material line by more than the threshold is
-    // the single most decision-relevant thing companyfacts can tell a reader
-    // about a period, and it was computed and then dropped: the row carried a
-    // `restatement` flag no manifest ever read.
-    if (result.restatements.length > 0) {
-      const listed = result.restatements
-        .slice(0, MAX_LISTED_RESTATEMENTS)
-        .map(
-          (r) =>
-            `${r.date} ${r.field} ${r.original} → ${r.restated} (${r.changePct >= 0 ? "+" : ""}${r.changePct.toFixed(1)}%, ` +
-            `first ${r.originalFiling.form} ${r.originalFiling.accn} filed ${r.originalFiling.filed}, ` +
-            `restated in ${r.restatedFiling.form} ${r.restatedFiling.accn} filed ${r.restatedFiling.filed})`,
-        );
-      const extra = result.restatements.length - listed.length;
-      gaps.push({
-        field: `keyless.${member}.restatements`,
-        reason:
-          `${result.restatements.length} material line(s) restated by more than ${RESTATEMENT_THRESHOLD_PCT}% in a later filing; ` +
-          `this statement carries the LAST-FILED value and keeps the superseded one as \`original\`: ` +
-          listed.join("; ") +
-          (extra > 0 ? `; and ${extra} more` : ""),
-        severity: "warn",
-        attemptedSources: ["edgar:companyfacts"],
-      });
-      notes.push(
-        `${member}: ${result.restatements.length} restated material line(s) — last-filed values shown, first-reported values kept as \`original\``,
-      );
-    }
+    discloseStatementRows(member, result, null);
     if (result.rows.length === 0) {
       const why = result.gaps[0]?.reason ?? "no period resolved from the filed facts";
       failKeyless(member, `EDGAR companyfacts produced no ${member} rows: ${why}${emptyStatementsContext}`, ["edgar:companyfacts", endpoint], true);
@@ -754,7 +809,20 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     });
     if (older.length === 0) return;
     const olderDates = older.map((row) => isoDay(row["date"]) as string).sort();
-    const filled = older.map((row) => ({ ...row, source: "edgar", sourceEndpoint: endpoint }) as TRow);
+    // N9: the merged payload keeps the VENDOR's envelope (its `asOf` is still
+    // the newest datum, because only OLDER periods were appended), so each
+    // backfilled row carries the fetch that actually produced it rather than
+    // inheriting a fetched-at it was never part of.
+    const filled = older.map(
+      (row) =>
+        ({
+          ...row,
+          source: "edgar",
+          sourceEndpoint: endpoint,
+          sourceFetchedAt: factsFetchedAt,
+          sourceAsOf: factsAsOf,
+        }) as TRow,
+    );
     const planLimit = isPlanLimited(current.value.data) ? current.value.data.planLimit : null;
     members[member] = {
       ok: true,
@@ -775,11 +843,21 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
           ? ""
           : ` (its subscription caps 'limit' at ${planLimit.applied}, so ${planLimit.applied} of ${planLimit.requested} requested periods arrived)`) +
         `; SEC EDGAR companyfacts supplied ${filled.length} older period(s), ${olderDates[0]} to ${olderDates[olderDates.length - 1]}, each row carrying source "edgar" (${endpoint}). ` +
-        "No period mixes the two sources: the vendor's rows are untouched and only periods it did not serve were added.",
+        "No period mixes the two sources: the vendor's rows are untouched and only periods it did not serve were added. " +
+        `The payload's own fetched-at (${current.value.fetchedAt}) and as-of (${current.value.asOf}) describe the VENDOR's fetch; ` +
+        `the appended rows carry their own \`sourceFetchedAt\` ${factsFetchedAt} and \`sourceAsOf\` ${factsAsOf}.`,
       severity: "info",
       attemptedSources: [current.value.endpoint, endpoint],
       // Structural on a plan whose limit is capped; an incident otherwise.
       expected: planLimit !== null || inputs.fmpKeyless,
+    });
+    // A stand-in, a withheld figure or a restatement inside a BACKFILLED year is
+    // exactly as decision-relevant as one in this year's, and used to be
+    // discarded with the rest of `result`.
+    discloseStatementRows(member, result, {
+      periods: new Set(olderDates),
+      key: "backfill",
+      description: `in the ${filled.length} period(s) backfilled from EDGAR (${olderDates[0]} … ${olderDates[olderDates.length - 1]})`,
     });
     replaced.push(member);
   };
@@ -800,10 +878,25 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   // successor's own filings, and the swap is disclosed once in the manifest.
   const predecessor = inputs.edgar.predecessor ?? null;
   const filedSuccessorForm = registrant?.forms.some((form) => form.trim() === SUCCESSOR_FORM) === true;
-  if (predecessor === null && filedSuccessorForm && inputs.edgarConfirmedIssuer && built !== null) {
-    // The registrant announced itself a successor and the second hop found
-    // nothing. Saying so is the difference between "this company is four
-    // months old" and "we could not reach the other ninety years".
+  // `resolvePredecessor` returns null in TWO situations that look identical
+  // from here: the registrant is not a successor at all, and it IS a successor
+  // that already carries its own us-gaap history — in which case the second hop
+  // was never attempted and nothing was lost. Warning on the second case told a
+  // reader that every multi-year figure measures only the successor's own
+  // filing history while that history was in fact present and complete.
+  const successorCarriesOwnHistory =
+    inputs.edgar.companyFacts.ok && usGaapConceptCount(inputs.edgar.companyFacts.value.data) > 0;
+  if (
+    predecessor === null &&
+    filedSuccessorForm &&
+    inputs.edgarConfirmedIssuer &&
+    built !== null &&
+    !successorCarriesOwnHistory
+  ) {
+    // The registrant announced itself a successor, filed no us-gaap facts of
+    // its own, and the second hop found nothing. Saying so is the difference
+    // between "this company is four months old" and "we could not reach the
+    // other ninety years".
     gaps.push(
       predecessorUnresolvedEntry(
         cik10,
@@ -847,6 +940,9 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
             ...row,
             source: "edgar",
             sourceEndpoint: endpoint,
+            // N9: appended into another payload's envelope, so each row names
+            // the fetch that actually produced it.
+            sourceFetchedAt: predecessor.fetchedAt,
             predecessor: true,
             predecessorCik: predecessor.cik10,
           }) as TRow,
@@ -878,6 +974,14 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       notes.push(
         `${member}: ${tagged.length} pre-reorganization period(s) from the predecessor registrant (CIK ${predecessor.cik10}), each row tagged \`predecessor\``,
       );
+      // The predecessor's rows carry stand-ins, withheld figures and
+      // restatements of their own, and appending them while discarding that was
+      // the same silent hole as the backfill path.
+      discloseStatementRows(member, result, {
+        periods: new Set(dates),
+        key: "predecessor",
+        description: `in the ${tagged.length} pre-reorganization period(s) filed by the predecessor registrant, CIK ${predecessor.cik10} (${dates[0]} … ${dates[dates.length - 1]})`,
+      });
     };
     fillFromPredecessor("incomeAnnual", predecessorBuilt.incomeAnnual, STATEMENT_ENDPOINTS.incomeAnnual);
     fillFromPredecessor("incomeQuarterly", predecessorBuilt.incomeQuarterly, STATEMENT_ENDPOINTS.incomeQuarterly);

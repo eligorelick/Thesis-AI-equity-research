@@ -1294,7 +1294,7 @@ describe("buildStatementsFromCompanyFacts — income-statement fallbacks", () =>
     );
     expect(built.incomeAnnual.rows[0]).toMatchObject({ operatingIncome: 10_191, interestExpense: 2_671, incomeBeforeTax: 7_520 });
     expect(built.incomeAnnual.substitutions).toEqual([
-      { field: "operatingIncome", periods: ["2025-12-31"], text: expect.stringMatching(/^EBIT derived as pretax income \+ interest expense/) },
+      { field: "operatingIncome", periods: ["2025-12-31"], text: expect.stringMatching(/^EBIT derived as pretax income \(IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest\) \+ interest expense \(InterestExpense\)/) },
     ]);
   });
 
@@ -1588,6 +1588,88 @@ describe("buildStatementsFromCompanyFacts — derived EBIT subtracts non-operati
     );
   });
 
+  it("does NOT subtract equity-method income under the pretax tag that already excludes it", () => {
+    // `...MinorityInterestAndIncomeLossFromEquityMethodInvestments` names what
+    // the element EXCLUDES: subtracting equity-method income from it removes
+    // money the base never held. 5,000 + 200 = 5,200, not 4,900.
+    const built = ebit(
+      facts({
+        Revenues: annual(64_000),
+        NetIncomeLoss: annual(6_200),
+        Assets: [{ end: "2025-12-31", val: 210_000, ...K }],
+        IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments:
+          annual(5_000),
+        InterestExpense: annual(200),
+        IncomeLossFromEquityMethodInvestments: annual(300),
+      }),
+    );
+    expect(built.rows[0]!.operatingIncome).toBe(5_200);
+    const text = built.substitutions[0]!.text;
+    // The derivation names the pretax element that served.
+    expect(text).toMatch(
+      /^EBIT derived as pretax income \(IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments\)/,
+    );
+    expect(text).toMatch(
+      /NOT subtracted because the pretax element that served is measured before them: IncomeLossFromEquityMethodInvestments/,
+    );
+  });
+
+  it("still subtracts equity-method income under the pretax tag that includes it", () => {
+    const built = ebit(pretax({ IncomeLossFromEquityMethodInvestments: annual(300) }));
+    expect(built.rows[0]!.operatingIncome).toBe(9_891); // 7,520 + 2,671 − 300
+    expect(built.substitutions[0]!.text).toMatch(
+      /non-operating items subtracted from the derivation: IncomeLossFromEquityMethodInvestments/,
+    );
+  });
+
+  it("warns that the non-operating aggregate may already hold the interest added back", () => {
+    const built = ebit(pretax({ NonoperatingIncomeExpense: annual(900) }));
+    expect(built.substitutions[0]!.text).toMatch(/caveat — the NonoperatingIncomeExpense aggregate subtracted here/);
+    expect(built.substitutions[0]!.text).toMatch(/may ALREADY contain the interest expense added back/);
+  });
+
+  it("WITHHOLDS the derived EBIT when the interest tag is a taxonomy child of the aggregate", () => {
+    // InterestExpenseNonoperating sits inside NonoperatingIncomeExpense, so
+    // "pretax + interest − aggregate" adds back interest the aggregate already
+    // removed: a true EBIT of 1,000 with interest 100 and an aggregate of −50
+    // would publish 1,100. No figure is published at all instead.
+    const built = ebit(
+      facts({
+        Revenues: annual(64_000),
+        NetIncomeLoss: annual(6_200),
+        Assets: [{ end: "2025-12-31", val: 210_000, ...K }],
+        IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest: annual(950),
+        InterestExpenseNonoperating: annual(100),
+        NonoperatingIncomeExpense: annual(-50),
+      }),
+    );
+    expect(built.rows[0]!.operatingIncome).toBeNull();
+    expect(built.substitutions).toEqual([]);
+    expect(built.withheld).toEqual([
+      {
+        field: "operatingIncome",
+        periods: ["2025-12-31"],
+        text: expect.stringMatching(/^operating income WITHHELD rather than derived/),
+      },
+    ]);
+    expect(built.withheld[0]!.text).toMatch(/overstate EBIT by exactly that interest/);
+    expect(built.notes.some((n) => /operating income WITHHELD rather than derived/.test(n))).toBe(true);
+  });
+
+  it("still derives when that interest tag serves and no aggregate was filed", () => {
+    const built = ebit(
+      facts({
+        Revenues: annual(64_000),
+        NetIncomeLoss: annual(6_200),
+        Assets: [{ end: "2025-12-31", val: 210_000, ...K }],
+        IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest: annual(950),
+        InterestExpenseNonoperating: annual(100),
+      }),
+    );
+    expect(built.rows[0]!.operatingIncome).toBe(1_050);
+    expect(built.withheld).toEqual([]);
+  });
+
   it("never derives an EBIT for a bank-style filer", () => {
     const bank = facts({
       RevenuesNetOfInterestExpense: annual(180_000),
@@ -1714,7 +1796,7 @@ describe("buildStatementsFromCompanyFacts — duplicate periods and restatements
       },
     ]);
     expect(row.restatement).toEqual(built.incomeAnnual.restatements);
-    expect(built.incomeAnnual.notes.some((n) => /revenue restated from 182447 .* to 190000 .*\+4\.14%/.test(n))).toBe(true);
+    expect(built.incomeAnnual.notes.some((n) => /revenue restated or re-presented from 182447 .* to 190000 .*\+4\.14%/.test(n))).toBe(true);
   });
 
   it("keeps the original value but raises no flag for a move within one percent", () => {

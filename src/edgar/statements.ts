@@ -43,6 +43,8 @@ import { discoverStockSplits, type SplitEvent, type SplitNote, type StockSplits 
 import {
   BALANCE_SHEET_SHARES_TAG,
   COMBINED_CURRENT_DEBT_TAG,
+  EBIT_AGGREGATE_MAY_HOLD_INTEREST,
+  EBIT_INTEREST_INSIDE_AGGREGATE,
   EBIT_NON_OPERATING_ADJUSTMENTS,
   INCOME_BEFORE_TAX_TAGS,
   MATURITIES_NEXT_YEAR_TAG,
@@ -92,6 +94,12 @@ export interface StatementRowsResult<TRow> {
    * is the statement-level flag the forensics module and the manifest read.
    */
   restatements: Restatement[];
+  /**
+   * Fields left null on purpose, with the reason: the operands were present but
+   * the filed tags make the derivation unsound (a double-counted interest
+   * add-back, a negative derived quarter). Never a zero — see invariant 1.
+   */
+  withheld: Withholding[];
 }
 
 /** A filing's identity, as carried on `original` values and restatement flags. */
@@ -110,17 +118,34 @@ export interface OriginalValue extends FilingRef {
   value: number;
 }
 
-/** One material line that a later filing restated by more than the threshold. */
+/**
+ * One material line whose last-filed value differs from the first-filed one by
+ * more than the threshold. "Restatement" is the common case but not the only
+ * one: a comparative RE-PRESENTED for discontinued operations or a change of
+ * reportable segments moves identically, and companyfacts carries nothing that
+ * separates the two — the disclosures say so.
+ */
 export interface Restatement {
   /** Row date (fiscal period end). */
   date: string;
   field: string;
   original: number;
   restated: number;
-  /** Signed change as a percentage of the original value. */
-  changePct: number;
+  /**
+   * Signed change as a percentage of the original value, or `null` when the
+   * original was zero and no percentage is defined. Never Infinity: it rendered
+   * as "Infinity%" in manifest reasons and serialised to an accidental `null`.
+   */
+  changePct: number | null;
   originalFiling: FilingRef;
   restatedFiling: FilingRef;
+}
+
+/** A signed percentage, or the reason there is none. */
+export function describeChangePct(changePct: number | null, decimals = 2): string {
+  return changePct === null
+    ? "from zero — no percentage is defined against an original of 0"
+    : `${changePct > 0 ? "+" : ""}${changePct.toFixed(decimals)}%`;
 }
 
 /** A material line moving by more than this share of its prior value is a restatement flag. */
@@ -140,6 +165,18 @@ const MATERIAL_FIELDS: Record<StatementName, readonly string[]> = {
  * date it served, newest first.
  */
 export interface Substitution {
+  field: string;
+  text: string;
+  periods: string[];
+}
+
+/**
+ * A field whose operands were all present but whose derivation the filed tags
+ * make unsound, so no figure is published for the period. Same shape as
+ * `Substitution`, and the keyless layer files it in the manifest the same way —
+ * as a `warn`, because a withheld figure is a hole a reader has to see.
+ */
+export interface Withholding {
   field: string;
   text: string;
   periods: string[];
@@ -289,8 +326,33 @@ export type ChainSpec =
       parts: { label: string; spec: ChainSpec }[];
       unit: "money";
       disclose?: string;
-      minusAny?: { label: string; tags: readonly string[]; componentOf?: string }[];
-      discloseAdjusted?: (ctx: { subtracted: string[]; unavailable: string[]; alreadyInside: string[] }) => string;
+      minusAny?: {
+        label: string;
+        tags: readonly string[];
+        componentOf?: string;
+        /**
+         * Base tags whose own definition EXCLUDES this item: beside one of
+         * them the adjustment would subtract money the base never held, so it
+         * is skipped and named in the disclosure.
+         */
+        notWhenBaseTag?: readonly string[];
+      }[];
+      /**
+       * Tag pairs that make the whole derivation unsound: when `partTag` served
+       * a part AND `adjustmentTag` resolved as an adjustment, the taxonomy puts
+       * the first inside the second and the sum would double-count it. The
+       * figure is withheld with `disclose` as the reason.
+       */
+      withholdWhen?: readonly { partTag: string; adjustmentTag: string; disclose: string }[];
+      discloseAdjusted?: (ctx: {
+        subtracted: string[];
+        unavailable: string[];
+        alreadyInside: string[];
+        /** Skipped because the base tag that served excludes them by definition. */
+        notInBase: string[];
+        /** Each part's label with the tag(s) that actually served it. */
+        parts: { label: string; tags: string[] }[];
+      }) => string;
     }
   | { kind: "diff"; plus: string; minus: string; unit: "money"; disclose?: string }
   | { kind: "chain"; steps: ChainSpec[]; unit: UnitKind };
@@ -406,7 +468,9 @@ const INCOME_CHAINS: Record<string, ChainSpec> = {
           label: a.label,
           tags: a.tags,
           ...(a.componentOf === undefined ? {} : { componentOf: a.componentOf }),
+          ...(a.notWhenBaseTag === undefined ? {} : { notWhenBaseTag: a.notWhenBaseTag }),
         })),
+        withholdWhen: [EBIT_INTEREST_INSIDE_AGGREGATE],
         discloseAdjusted: describeDerivedEbit,
       },
     ],
@@ -432,9 +496,17 @@ const INCOME_CHAINS: Record<string, ChainSpec> = {
  * could not remove. An adjustment the filer did not tag is an error band on the
  * figure, so it is named rather than passed over in silence.
  */
-function describeDerivedEbit(ctx: { subtracted: string[]; unavailable: string[]; alreadyInside: string[] }): string {
-  const head =
-    "EBIT derived as pretax income + interest expense: the filer reports no OperatingIncomeLoss line";
+function describeDerivedEbit(ctx: {
+  subtracted: string[];
+  unavailable: string[];
+  alreadyInside: string[];
+  notInBase: string[];
+  parts: { label: string; tags: string[] }[];
+}): string {
+  // WHICH pretax element served decides whether the equity-method subtraction
+  // is right, so the derivation names it rather than saying "pretax income".
+  const named = ctx.parts.map((p) => `${p.label} (${p.tags.join(" + ")})`).join(" + ");
+  const head = `EBIT derived as ${named}: the filer reports no OperatingIncomeLoss line`;
   const parts: string[] = [];
   if (ctx.subtracted.length > 0) {
     parts.push(`non-operating items subtracted from the derivation: ${ctx.subtracted.join(", ")}`);
@@ -443,6 +515,14 @@ function describeDerivedEbit(ctx: { subtracted: string[]; unavailable: string[];
     parts.push(
       `not subtracted separately because the aggregate already contains them: ${ctx.alreadyInside.join(", ")}`,
     );
+  }
+  if (ctx.notInBase.length > 0) {
+    parts.push(
+      `NOT subtracted because the pretax element that served is measured before them: ${ctx.notInBase.join(", ")}`,
+    );
+  }
+  if (ctx.subtracted.includes("NonoperatingIncomeExpense")) {
+    parts.push(EBIT_AGGREGATE_MAY_HOLD_INTEREST);
   }
   if (ctx.unavailable.length > 0) {
     parts.push(
@@ -979,27 +1059,38 @@ type TagResolver = (tag: string, kind: UnitKind) => Resolved | null;
 interface NoteSink {
   readonly notes: string[];
   readonly substitutions: Substitution[];
+  readonly withheld: Withholding[];
   add(note: string): void;
   /** Record that `field` at row `period` was served by a stand-in described by `text`. */
   substitute(field: string, period: string, text: string): void;
+  /** Record that `field` at row `period` was left null on purpose, for the reason `text`. */
+  withhold(field: string, period: string, text: string): void;
 }
 
 function createNoteSink(): NoteSink {
   const seen = new Set<string>();
   const notes: string[] = [];
   const substitutions: Substitution[] = [];
+  const withheld: Withholding[] = [];
+  const record = (into: { field: string; text: string; periods: string[] }[], field: string, period: string, text: string): void => {
+    const existing = into.find((s) => s.field === field && s.text === text);
+    if (existing === undefined) into.push({ field, text, periods: [period] });
+    else if (!existing.periods.includes(period)) existing.periods.push(period);
+  };
   return {
     notes,
     substitutions,
+    withheld,
     add(note: string): void {
       if (seen.has(note)) return;
       seen.add(note);
       notes.push(note);
     },
     substitute(field: string, period: string, text: string): void {
-      const existing = substitutions.find((s) => s.field === field && s.text === text);
-      if (existing === undefined) substitutions.push({ field, text, periods: [period] });
-      else if (!existing.periods.includes(period)) existing.periods.push(period);
+      record(substitutions, field, period, text);
+    },
+    withhold(field: string, period: string, text: string): void {
+      record(withheld, field, period, text);
     },
   };
 }
@@ -1090,26 +1181,48 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
     }
     case "sumAll": {
       const present: Resolved[] = [];
+      const partTags: { label: string; tags: string[] }[] = [];
       for (const part of spec.parts) {
         const r = resolveSpec(part.spec, resolve, notes, `${label} (${part.label})`);
         if (r === null || (present.length > 0 && present[0]!.unit !== r.unit)) return null;
         present.push(r);
+        partTags.push({ label: part.label, tags: r.tags });
       }
+      const servedByPart = new Set(present.flatMap((r) => r.tags));
       let total = present.reduce((s, r) => s + r.value, 0);
       // Optional subtrahends: each one the filer tagged for this period is
-      // removed, one whose parent aggregate also resolved is skipped (the
-      // taxonomy already counts it inside that aggregate), and everything that
-      // could not be resolved is named as the error band on the result.
+      // removed; one whose parent aggregate also resolved is skipped (the
+      // taxonomy already counts it inside that aggregate); one the SERVING BASE
+      // TAG excludes by definition is skipped (subtracting it would remove
+      // money the base never held); and everything that could not be resolved is
+      // named as the error band on the result.
       const subtracted: string[] = [];
       const unavailable: string[] = [];
       const alreadyInside: string[] = [];
+      const notInBase: string[] = [];
       if (spec.minusAny !== undefined) {
         const resolvedByLabel = new Map<string, Resolved>();
         for (const adjustment of spec.minusAny) {
-          const hit = adjustment.tags
-            .map((tag) => resolve(tag, spec.unit))
-            .find((r): r is Resolved => r !== null && r.unit === present[0]!.unit);
-          if (hit !== undefined) resolvedByLabel.set(adjustment.label, hit);
+          // Resolve LAZILY: a TagResolver has note side effects (a derived
+          // quarter that cannot be built adds a "not derived" note), so
+          // resolving every synonym of an adjustment and then discarding all
+          // but the first hit put notes on the row about tags nothing used.
+          for (const tag of adjustment.tags) {
+            const r = resolve(tag, spec.unit);
+            if (r !== null && r.unit === present[0]!.unit) {
+              resolvedByLabel.set(adjustment.label, r);
+              break;
+            }
+          }
+        }
+        // A pair the taxonomy nests makes the whole derivation double-count, so
+        // the figure is withheld rather than published wrong.
+        for (const rule of spec.withholdWhen ?? []) {
+          const inside = [...resolvedByLabel.values()].some((r) => r.tags.includes(rule.adjustmentTag));
+          if (!servedByPart.has(rule.partTag) || !inside) continue;
+          notes.add(`${label}: ${rule.disclose}`);
+          if (at !== undefined) notes.withhold(at.field, at.period, rule.disclose);
+          return null;
         }
         for (const adjustment of spec.minusAny) {
           const hit = resolvedByLabel.get(adjustment.label);
@@ -1121,6 +1234,10 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
             alreadyInside.push(adjustment.label);
             continue;
           }
+          if (adjustment.notWhenBaseTag?.some((tag) => servedByPart.has(tag)) === true) {
+            notInBase.push(adjustment.label);
+            continue;
+          }
           total -= hit.value;
           subtracted.push(adjustment.label);
           present.push(hit);
@@ -1128,7 +1245,7 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
       }
       const combined = combine(tidy(total, MONEY_DECIMALS), present);
       if (spec.discloseAdjusted !== undefined) {
-        const text = spec.discloseAdjusted({ subtracted, unavailable, alreadyInside });
+        const text = spec.discloseAdjusted({ subtracted, unavailable, alreadyInside, notInBase, parts: partTags });
         notes.add(`${label}: ${text}`);
         if (at !== undefined) notes.substitute(at.field, at.period, text);
         return combined;
@@ -1812,14 +1929,18 @@ function buildStatementRows<TRow>(
       if (prior === undefined) continue;
       original[field] = prior;
       if (!material.has(field)) continue;
-      const changePct = prior.value === 0 ? Number.POSITIVE_INFINITY : ((resolved.value - prior.value) / Math.abs(prior.value)) * 100;
-      if (!(Math.abs(changePct) > RESTATEMENT_THRESHOLD_PCT)) continue;
+      // A change against an original of zero is not a percentage. It used to be
+      // Infinity, which rendered "Infinity%" in a manifest reason and
+      // serialised to `null` in the row by accident; `null` is now the
+      // deliberate sentinel and every reader tests for it.
+      const changePct = prior.value === 0 ? null : ((resolved.value - prior.value) / Math.abs(prior.value)) * 100;
+      if (changePct !== null && !(Math.abs(changePct) > RESTATEMENT_THRESHOLD_PCT)) continue;
       rowFlags.push({
         date: slot.date,
         field,
         original: prior.value,
         restated: resolved.value,
-        changePct: Number.isFinite(changePct) ? tidy(changePct, 4) : changePct,
+        changePct: changePct === null ? null : tidy(changePct, 4),
         originalFiling: { accn: prior.accn, filed: prior.filed, form: prior.form },
         restatedFiling: filingRef(resolved.point),
       });
@@ -1830,9 +1951,7 @@ function buildStatementRows<TRow>(
       restatements.push(...rowFlags);
       for (const flag of rowFlags) {
         notes.add(
-          `${def.statement} ${ctxLabel}: ${flag.field} restated from ${flag.original} (${flag.originalFiling.form} ${flag.originalFiling.filed}) to ${flag.restated} (${flag.restatedFiling.form} ${flag.restatedFiling.filed}), ${
-            Number.isFinite(flag.changePct) ? `${flag.changePct > 0 ? "+" : ""}${flag.changePct.toFixed(2)}%` : "from zero"
-          } — the row carries the last-filed value and the superseded one as \`original\``,
+          `${def.statement} ${ctxLabel}: ${flag.field} restated or re-presented from ${flag.original} (${flag.originalFiling.form} ${flag.originalFiling.filed}) to ${flag.restated} (${flag.restatedFiling.form} ${flag.restatedFiling.filed}), ${describeChangePct(flag.changePct)} — the row carries the last-filed value and the superseded one as \`original\`; a comparative RE-PRESENTED for discontinued operations or a change of reportable segments moves the same way and companyfacts cannot tell it from a correction`,
         );
       }
     }
@@ -1852,7 +1971,7 @@ function buildStatementRows<TRow>(
 
   const gaps: ManifestEntry[] = [];
   if (rows.length === 0) gaps.push(noRowsGap(def, scope, opts, slots.length));
-  return { rows, notes: notes.notes, gaps, substitutions: notes.substitutions, restatements };
+  return { rows, notes: notes.notes, gaps, substitutions: notes.substitutions, restatements, withheld: notes.withheld };
 }
 
 function noRowsGap(def: StatementDef, scope: Scope, opts: StatementBuildOptions, candidates: number): ManifestEntry {

@@ -382,6 +382,54 @@ describe("applyKeylessFallbacks", () => {
     expect(entry?.reason).toMatch(/caps 'limit' at 1, so 1 of 10 requested periods arrived/);
     expect(entry?.reason).toMatch(/supplied 1 older period\(s\), 2024-09-28 to 2024-09-28/);
     expect(entry?.reason).toMatch(/No period mixes the two sources/);
+    // N9: the merged payload keeps the vendor's envelope, so the appended row
+    // names the fetch that actually produced it and the entry says which is which.
+    expect(rows[1]).toMatchObject({ sourceFetchedAt: NOW.toISOString(), sourceAsOf: "2025-09-27" });
+    expect(entry?.reason).toMatch(/describe the VENDOR's fetch/);
+    expect(entry?.reason).toMatch(/appended rows carry their own `sourceFetchedAt`/);
+  });
+
+  it("discloses a stand-in and a withheld figure that served only a BACKFILLED period", async () => {
+    // SHOULD-FIX 4: on an entry-tier plan years six to ten come from EDGAR, and
+    // a derived EBIT or a cash-interest stand-in in one of them used to reach
+    // the report with no manifest entry and no note at all.
+    const f = appleFacts();
+    const usGaap = f.facts["us-gaap"] as Record<string, { units: Record<string, unknown[]> }>;
+    const fy24 = { start: "2023-10-01", end: "2024-09-28", form: "10-K", fp: "FY", fy: 2024, filed: "2024-11-01", accn: "b-1" };
+    // FY2024 has no OperatingIncomeLoss and no income-statement interest tag,
+    // so its EBIT is derived through the cash-interest stand-in.
+    usGaap["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"]!.units["USD"]!.push({
+      ...fy24,
+      val: 120,
+    });
+    usGaap["InterestPaidNet"] = { units: { USD: [{ ...fy24, val: 6 }] } };
+    const fmp = allGaps();
+    fmp.incomeAnnual = okRows([{ date: "2025-09-27", revenue: 1 }]);
+    const out = await applyKeylessFallbacks(
+      inputs({
+        fmp,
+        fmpKeyless: false,
+        edgar: {
+          ...inputs().edgar,
+          companyFacts: { ok: true, value: { data: f, asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+        },
+      }),
+    );
+    const sub = out.gaps.find((g) => g.field === "keyless.incomeAnnual.backfill.operatingIncome")!;
+    expect(sub.severity).toBe("info");
+    expect(sub.reason).toMatch(/^EBIT derived as pretax income/);
+    expect(sub.reason).toMatch(/periods: 2024-09-28/);
+    expect(sub.reason).toMatch(/in the 1 period\(s\) backfilled from EDGAR \(2024-09-28 … 2024-09-28\)/);
+    const interest = out.gaps.find((g) => g.field === "keyless.incomeAnnual.backfill.interestExpense")!;
+    expect(interest.reason).toMatch(/cash interest paid net of capitalized interest/);
+    // A stand-in that served only periods the VENDOR supplied is not claimed for
+    // the backfill: nothing outside 2024-09-28 is disclosed under this key.
+    expect(
+      out.gaps
+        .filter((g) => g.field.startsWith("keyless.incomeAnnual.backfill."))
+        .every((g) => /periods: 2024-09-28\)/.test(g.reason)),
+    ).toBe(true);
+    expect(out.notes.some((n) => n.startsWith("incomeAnnual: operatingIncome EBIT derived as pretax income"))).toBe(true);
   });
 
   it("rebuilds every statement member from companyfacts under THESIS_STATEMENT_SOURCE=edgar", async () => {
@@ -1074,7 +1122,7 @@ describe("applyKeylessFallbacks — restatements and multi-class share counts", 
     const out = await applyKeylessFallbacks(withFacts(f));
     const entry = out.gaps.find((g) => g.field === "keyless.incomeAnnual.restatements")!;
     expect(entry.severity).toBe("warn");
-    expect(entry.reason).toMatch(/1 material line\(s\) restated by more than 1%/);
+    expect(entry.reason).toMatch(/1 material line\(s\) restated or re-presented by more than 1%/);
     expect(entry.reason).toMatch(/2024-09-28 revenue 380 → 400 \(\+5\.3%/);
     expect(entry.reason).toMatch(/first 10-K .* filed 2024-11-01/);
     expect(entry.reason).toMatch(/restated in 10-K 0000320193-25-000010 filed 2025-10-31/);
@@ -1083,7 +1131,7 @@ describe("applyKeylessFallbacks — restatements and multi-class share counts", 
       ? out.members.incomeAnnual.value.data.rows.find((r) => r["date"] === "2024-09-28")!
       : null;
     expect(row!["revenue"]).toBe(400);
-    expect(out.notes.some((n) => n.startsWith("incomeAnnual: 1 restated material line"))).toBe(true);
+    expect(out.notes.some((n) => n.startsWith("incomeAnnual: 1 restated or re-presented material line"))).toBe(true);
   });
 
   it("adds no restatement entry when every period was filed once", async () => {

@@ -363,8 +363,10 @@ describe("applyKeylessFallbacks — a successor registrant's pre-reorganization 
     const rows = out.members.incomeAnnual.ok ? out.members.incomeAnnual.value.data.rows : [];
     expect(rows.map((row) => row["date"])).toEqual(["2026-12-31"]);
     expect(rows.every((row) => row["predecessor"] === undefined)).toBe(true);
-    // The absence is disclosed rather than silent — asserted below.
-    expect(out.gaps.find((g) => g.field === "edgar.predecessor")?.severity).toBe("warn");
+    // This successor carries its OWN us-gaap history (FY2026), so no hop was
+    // ever attempted and nothing was lost: there is nothing to warn about. The
+    // warn for the case where history IS missing is asserted below.
+    expect(out.gaps.some((g) => g.field === "edgar.predecessor")).toBe(false);
   });
 
   it("does not reach for a predecessor when EDGAR has not confirmed the issuer", async () => {
@@ -372,16 +374,80 @@ describe("applyKeylessFallbacks — a successor registrant's pre-reorganization 
     expect(out.gaps.some((g) => g.field === "edgar.predecessor")).toBe(false);
   });
 
-  it("warns when the registrant is a successor and no predecessor was resolved", async () => {
+  it("warns when the registrant is a successor with NO history of its own and no predecessor was resolved", async () => {
     // "This company is four months old" and "we could not reach the other
     // ninety years" look identical in the numbers; only the manifest separates
-    // them.
+    // them. RETARGETED: the fixture successor used to keep its own us-gaap
+    // facts, so the old test asserted the warning in the one case where nothing
+    // was missing. The registrant here files an 8-K12B and no us-gaap concept
+    // at all — the case `resolvePredecessor` actually hops for.
     const base = inputs();
-    const out = await applyKeylessFallbacks(inputs({ edgar: { ...base.edgar, predecessor: null } }));
+    const empty: CompanyFacts = { cik: 2115436, entityName: "EXAMPLE SUCCESSOR HOLDINGS CORP", facts: {} };
+    const out = await applyKeylessFallbacks(
+      inputs({
+        edgar: {
+          ...base.edgar,
+          predecessor: null,
+          companyFacts: {
+            ok: true,
+            value: { data: empty, asOf: "2026-09-01", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() },
+          },
+        },
+      }),
+    );
     const entry = out.gaps.find((g) => g.field === "edgar.predecessor")!;
     expect(entry.severity).toBe("warn");
     expect(entry.reason).toMatch(/successor issuer \(Form 8-K12B\)/);
     expect(entry.reason).toMatch(/only the successor's own filing history/);
+  });
+
+  it("files no warning for a successor that carries its own us-gaap history", async () => {
+    // The other null case: the reorganized entity carried the XBRL forward, so
+    // the second hop was never attempted and the multi-year figures are whole.
+    const base = inputs();
+    const out = await applyKeylessFallbacks(inputs({ edgar: { ...base.edgar, predecessor: null } }));
+    expect(out.gaps.some((g) => g.field === "edgar.predecessor")).toBe(false);
+    expect(out.members.incomeAnnual.ok && out.members.incomeAnnual.value.data.rows.length).toBeGreaterThan(0);
+  });
+
+  it("discloses a stand-in that served only a PREDECESSOR period", async () => {
+    // SHOULD-FIX 4: the predecessor path appended rows and discarded the
+    // substitutions, notes and restatements built with them.
+    const base = inputs();
+    const predecessor = base.edgar.predecessor!;
+    const facts = annualFacts(34088, "EXAMPLE PREDECESSOR CORP", [2024, 2025]);
+    const usGaap = facts.facts["us-gaap"] as Record<string, { units: Record<string, unknown[]> }>;
+    // No OperatingIncomeLoss and no income-statement interest tag: EBIT is
+    // derived, and the interest term comes from the cash-flow supplement.
+    for (const [tag, val] of [
+      ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", 300],
+      ["InterestPaidNet", 20],
+    ] as const) {
+      usGaap[tag] = {
+        units: {
+          USD: [2024, 2025].map((y) => ({
+            start: `${y}-01-01`,
+            end: `${y}-12-31`,
+            val,
+            accn: `0000034088-${String(y + 1).slice(2)}-000001`,
+            fy: y,
+            fp: "FY",
+            form: "10-K",
+            filed: `${y + 1}-02-15`,
+          })),
+        },
+      };
+    }
+    const out = await applyKeylessFallbacks(
+      inputs({ edgar: { ...base.edgar, predecessor: { ...predecessor, facts } } }),
+    );
+    const sub = out.gaps.find((g) => g.field === "keyless.incomeAnnual.predecessor.operatingIncome")!;
+    expect(sub.severity).toBe("info");
+    expect(sub.reason).toMatch(/^EBIT derived as pretax income/);
+    expect(sub.reason).toMatch(/periods: 2025-12-31, 2024-12-31/);
+    expect(sub.reason).toMatch(/pre-reorganization period\(s\) filed by the predecessor registrant, CIK 0000034088/);
+    const interest = out.gaps.find((g) => g.field === "keyless.incomeAnnual.predecessor.interestExpense")!;
+    expect(interest.reason).toMatch(/cash interest paid net of capitalized interest/);
   });
 
   it("files no successor warning for an ordinary registrant", async () => {

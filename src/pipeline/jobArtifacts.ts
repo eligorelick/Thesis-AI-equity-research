@@ -821,6 +821,33 @@ export function passCostMatchesTelemetry(
   return matchingCost(row, telemetry);
 }
 
+/**
+ * Separator between a pass attempt id and the sequence number of one provider
+ * request inside it (DECISIONS D-10). A pass attempt id is a UUID, which can
+ * never contain this character, so the prefix test below is unambiguous.
+ */
+export const REQUEST_ATTEMPT_SEPARATOR = "#r";
+
+/**
+ * Whether a `cost_log` row belongs to one pass attempt.
+ *
+ * In request-reservation mode (the default) a pass writes NO cost row of its
+ * own: each provider request settles under `<passAttemptId>#rN` while the pass
+ * artifact is stored under the bare attempt id with `billable: false`. Pairing
+ * on exact attempt-id equality therefore declared every paid pass an orphaned
+ * cost row, which discarded its artifacts and made a resume re-run — and
+ * re-bill — the whole pass. Pairing is pass-scoped instead: the attempt's own
+ * settlement, plus every request settled beneath it.
+ */
+export function costRowBelongsToAttempt(
+  costAttemptId: string | null,
+  attemptId: string,
+): boolean {
+  if (costAttemptId === null) return false;
+  return costAttemptId === attemptId ||
+    costAttemptId.startsWith(`${attemptId}${REQUEST_ATTEMPT_SEPARATOR}`);
+}
+
 export function serializeLegacyAnalystProjection<T>(data: T, telemetry: PassTelemetry): string {
   return JSON.stringify({
     data,
@@ -1093,17 +1120,25 @@ export function readGenerationResumeArtifacts(
     try {
       for (const row of passRows) parsed.push(parsePassArtifactRow(row));
       for (const artifact of parsed) {
-        const costs = passLedger.filter((cost) => cost.attemptId === artifact.attemptId);
+        const costs = passLedger.filter(
+          (cost) => costRowBelongsToAttempt(cost.attemptId, artifact.attemptId),
+        );
+        // Only the attempt's OWN row is the pass settlement; the `#rN` rows
+        // beside it are the individual provider requests, which an unbillable
+        // pass artifact is expected to have (D-10).
+        const settlement = costs.filter((cost) => cost.attemptId === artifact.attemptId);
         if (artifact.cost.billable) {
-          if (costs.length !== 1 || !matchingCost(costs[0]!, artifact.telemetry)) {
+          if (settlement.length !== 1 || !matchingCost(settlement[0]!, artifact.telemetry)) {
             throw new Error("jobArtifacts: billable artifact has no exact cost pair");
           }
-        } else if (costs.length !== 0) {
+        } else if (settlement.length !== 0) {
           throw new Error("jobArtifacts: unbillable artifact unexpectedly has a cost row");
         }
       }
       for (const cost of passLedger) {
-        if (!parsed.some((artifact) => artifact.attemptId === cost.attemptId)) {
+        if (
+          !parsed.some((artifact) => costRowBelongsToAttempt(cost.attemptId, artifact.attemptId))
+        ) {
           throw new Error("jobArtifacts: cost row exists without its artifact");
         }
       }

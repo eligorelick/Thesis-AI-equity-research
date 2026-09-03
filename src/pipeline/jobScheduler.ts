@@ -24,6 +24,7 @@ import {
   reports,
 } from "@/db/schema";
 import {
+  REQUEST_ATTEMPT_SEPARATOR,
   persistPassSettlementInTransaction,
   preparePassSettlement,
   serializeLegacyAnalystProjection,
@@ -374,13 +375,15 @@ function pruneExpiredPaidLeases(db: ThesisDb, nowIso: string): number {
  * Attempt id for one provider REQUEST inside a pass attempt (DECISIONS D-10).
  * The pass keeps its own id for the durable artifact; each request gets a
  * suffixed id so its reservation and its cost row are addressable on their
- * own, and the billed-attempt unique index still holds.
+ * own, and the billed-attempt unique index still holds. The resume reader
+ * pairs these rows back to their pass artifact with the same separator
+ * (`costRowBelongsToAttempt`).
  */
 export function requestAttemptId(passAttemptId: string, sequence: number): string {
   if (!Number.isSafeInteger(sequence) || sequence < 1) {
     throw new Error("jobScheduler: request sequence must be a positive integer");
   }
-  return `${passAttemptId}#r${sequence}`;
+  return `${passAttemptId}${REQUEST_ATTEMPT_SEPARATOR}${sequence}`;
 }
 
 /**

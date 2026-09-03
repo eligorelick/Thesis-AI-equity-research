@@ -163,6 +163,33 @@ describe("direction check", () => {
     }
   });
 
+  it("ignores an evaluative word whose sign depends on whether the metric is good or bad", () => {
+    // 2026-09 review: "improved"/"deteriorated" and their family sat in the
+    // vocabulary with fixed signs, so every correct sentence about a
+    // LOWER-IS-BETTER metric (leverage, churn, DSO, net debt, a cost ratio) was
+    // filed as a direction mismatch. They are excluded for exactly the reason
+    // the module docstring already gave for "widened"/"narrowed".
+    const leverageFell = numeric({
+      id: "computed.leverage.net-debt-to-ebitda-change",
+      origin: "computed.leverage",
+      value: -0.4,
+      unit: "percentage-points",
+    });
+    const leverageRose = numeric({ ...leverageFell, value: 0.4 });
+    for (const [sentence, record] of [
+      ["Net leverage improved 0.4 points after the debt paydown.", leverageFell],
+      ["Net leverage improvement of 0.4 points followed the paydown.", leverageFell],
+      ["Days sales outstanding deteriorated 0.4 points on the quarter.", leverageRose],
+      ["Cost coverage weakened 0.4 points on the quarter.", leverageRose],
+      ["The cost ratio worsened 0.4 points on the quarter.", leverageRose],
+      ["Coverage strengthened 0.4 points on the quarter.", leverageFell],
+    ] as const) {
+      const result = run(refs(claim(sentence, record.id)), [record]);
+      expect(result.checks.direction.checked).toBe(0);
+      expect(result.findings).toEqual([]);
+    }
+  });
+
   it("does not attach a direction word to a number that is not the cited figure", () => {
     const decline2 = numeric({ value: -3.2 });
     const result = run(
@@ -227,6 +254,21 @@ describe("period check", () => {
     const timeless = numeric({ period: null });
     const result = run(refs(claim("Growth was 6.4% in FY2025.", timeless.id)), [timeless]);
     expect(result.checks.period.checked).toBe(0);
+  });
+
+  it("does not read the number after a bare quarter as a two-digit year", () => {
+    // 2026-09 review: the optional century let "Q1" swallow the number that
+    // followed it, so "Q1 15% growth" claimed the sentence named the period
+    // "Q1 15". The phrase starts at the Q, so the value-span guard could not
+    // help; the pattern now requires the century.
+    const dated = numeric({ value: 15, period: "2025-12-31" });
+    const result = run(refs(claim("Q1 15% growth was reported.", dated.id)), [dated]);
+    expect(result.checks.period.checked).toBe(0);
+    expect(result.findings.some((f) => f.check === "period")).toBe(false);
+
+    // A quarter that really does name a year is still checked, and still passes.
+    const full = run(refs(claim("Q1 2025 growth was 15%.", dated.id)), [dated]);
+    expect(full.checks.period).toEqual({ checked: 1, passed: 1, failed: 0, rate: 1 });
   });
 
   it("does not mistake a four-digit VALUE for a year", () => {
@@ -295,6 +337,30 @@ describe("unit check", () => {
       [money],
     );
     expect(result.checks.unit).toEqual({ checked: 1, passed: 1, failed: 0, rate: 1 });
+  });
+
+  it("keeps only the best-scale match when a percentage coincides with a scaled value", () => {
+    // 2026-09 review: the speculative display scales tried for a large-magnitude
+    // record made "5.0%" locate a $5.0e9 record (5.0 × 1e9), so a correctly
+    // written sentence failed the unit check on a figure it never cited. A
+    // reading whose scale the sentence actually WROTE wins over a speculative
+    // one, and only the winners are judged.
+    const revenue = numeric({
+      id: "payload.statements.income-statement-annual.2025-09-27.revenue",
+      kind: "provider",
+      origin: "fmp:income-statement(annual)",
+      formulaVersion: null,
+      value: 5_000_000_000,
+      unit: "currency",
+      currency: "USD",
+      period: "2025-09-27",
+    });
+    const result = run(
+      refs(claim("Revenue of $5.0 billion came with a 5.0% operating margin.", revenue.id)),
+      [revenue],
+    );
+    expect(result.checks.unit).toEqual({ checked: 1, passed: 1, failed: 0, rate: 1 });
+    expect(result.findings).toEqual([]);
   });
 
   it("does not invent a rule for dimensionless readings", () => {
@@ -450,6 +516,24 @@ describe("claims that name a person", () => {
       expect(result.checks.namedIndividual.passed).toBe(1);
       expect(result.findings).toEqual([]);
     }
+  });
+
+  it("restricts EVERY claim naming a person, not just the credibility section", () => {
+    // 2026-09 review: the filing-or-transcript test ran on the credibility path
+    // only, so an ordinary person-naming claim could cite anything in the
+    // citation registry — a news item, a press release — while the prompt, the
+    // module docstring, the README notes and the reader-facing table all said
+    // "filings/transcripts only". Now they all say the same thing.
+    const result = run(
+      refs(claim("Tim Cook reiterated the margin target.", news.id)),
+      [],
+      { citationRegistry: [news, transcript], personNames: ["Tim Cook"] },
+    );
+    expect(result.checks.namedIndividual).toEqual({ checked: 1, passed: 0, failed: 1, rate: 0 });
+    expect(result.findings[0].reason).toBe("named-individual-unsourced");
+    expect(result.findings[0].note).toContain("Tim Cook");
+    expect(result.findings[0].note).toContain("neither a registry figure nor a filing or transcript");
+    expect(result.rejectedClaimPaths.has("fundamentals.commentary[0]")).toBe(true);
   });
 
   it("restricts the executive-credibility section to filings, transcripts and registry figures", () => {

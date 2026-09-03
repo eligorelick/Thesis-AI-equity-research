@@ -225,6 +225,20 @@ function locatesRecord(parsed: ParsedNumber, record: NumericProvenanceRecord): b
       parsed.unitToken === "basis point" || parsed.unitToken === "basis points") {
     candidates.push({ value: parsed.magnitude / 100, scale: 1 / 100 });
   }
+  // A LARGE-MAGNITUDE record (money, share counts) is registered in units and
+  // written in billions, so a writer who names the wrong unit — "revenue was
+  // 416.2%" for a $416.2bn figure — leaves no scale word to read the scale
+  // from. Try the display scales for those records only. Doing it for every
+  // record would be unsafe: a 6.4-percent record would then be "located" by an
+  // unrelated "$6.4 billion" elsewhere in the sentence and fail its own unit
+  // check.
+  const scalable = record.unit === "currency" || record.unit === "currency-per-share" ||
+    record.unit === "shares";
+  if (scalable && parsed.scaleWord === null) {
+    for (const scale of [1e3, 1e6, 1e9, 1e12]) {
+      candidates.push({ value: parsed.magnitude * scale, scale });
+    }
+  }
   return candidates.some(({ value, scale }) => {
     const tolerance = Math.max(
       0.5 * 10 ** -parsed.decimals * Math.abs(scale),
@@ -371,14 +385,21 @@ const PERIOD_PATTERNS: readonly RegExp[] = [
  * record's ISO period end, and guessing would fail correct sentences (Apple's
  * Q3 FY2025 ends in June). Skipped means "not checked", and `checked` says so.
  */
-export function findPeriodPhrases(sentence: string, numbers: readonly ParsedNumber[]): string[] {
+export function findPeriodPhrases(
+  sentence: string,
+  numbers: readonly ParsedNumber[],
+  located: readonly ParsedNumber[] = [],
+): string[] {
   const phrases: string[] = [];
   const seen = new Set<string>();
-  // A four-digit number that is really a VALUE (it carried a currency prefix, a
-  // scale word or a unit) is not a year.
-  const valueSpans = numbers
-    .filter((n) => n.hadCurrencyPrefix || n.scaleWord !== null || n.unitToken !== null)
-    .map((n) => [n.start, n.end] as const);
+  // A four-digit number that is really a VALUE is not a year. Two ways to tell:
+  // it carried a currency prefix, a scale word or a unit token, or it IS the
+  // cited figure's value (a record whose value happens to be 2025 reads as
+  // "2025 units", not as a fiscal year).
+  const valueSpans = [
+    ...numbers.filter((n) => n.hadCurrencyPrefix || n.scaleWord !== null || n.unitToken !== null),
+    ...located,
+  ].map((n) => [n.start, n.end] as const);
   for (const pattern of PERIOD_PATTERNS) {
     pattern.lastIndex = 0;
     for (const match of sentence.matchAll(pattern)) {
@@ -400,14 +421,18 @@ export function findPeriodPhrases(sentence: string, numbers: readonly ParsedNumb
  * ------------------------------------------------------------------------ */
 
 const HONORIFIC = String.raw`(?:Mr|Mrs|Ms|Miss|Dr|Sir|Prof)\.?`;
-const ROLE_WORDS = String.raw`(?:CEO|CFO|COO|CTO|CIO|CMO|CAO|chief\s+(?:executive|financial|operating|technology|information|marketing|accounting)\s+officer|chairman|chairwoman|chairperson|chair|president|founder|co-founder|director|treasurer|controller|general\s+counsel)`;
+// Case-VARIANT rather than case-INSENSITIVE: the `i` flag would also relax the
+// capital-letter requirement in NAME_TOKEN, so "The CEO reiterated guidance"
+// matched "CEO reiterated guidance" as a person. Roles are spelled both ways;
+// names must still start with a capital.
+const ROLE_WORDS = String.raw`(?:CEO|CFO|COO|CTO|CIO|CMO|CAO|[Cc]hief\s+[A-Za-z]+\s+[Oo]fficer|[Cc]hair(?:man|woman|person)?|[Pp]resident|[Ff]ounder|[Cc]o-?[Ff]ounder|[Dd]irector|[Tt]reasurer|[Cc]ontroller|[Gg]eneral\s+[Cc]ounsel)`;
 const NAME_TOKEN = String.raw`[A-Z][a-zÀ-ɏ'’\-]{1,}`;
 const NAME_PAIR = String.raw`${NAME_TOKEN}(?:\s+${NAME_TOKEN}){0,2}`;
 
 const PERSON_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`\b${HONORIFIC}\s+${NAME_TOKEN}`, "g"),
-  new RegExp(String.raw`\b${ROLE_WORDS}\s+${NAME_PAIR}`, "gi"),
-  new RegExp(String.raw`\b${NAME_PAIR},\s+(?:the\s+)?${ROLE_WORDS}\b`, "gi"),
+  new RegExp(String.raw`\b${ROLE_WORDS}\s+${NAME_PAIR}`, "g"),
+  new RegExp(String.raw`\b${NAME_PAIR},\s+(?:the\s+)?${ROLE_WORDS}\b`, "g"),
 ];
 
 /**
@@ -558,7 +583,7 @@ export function runConsistencyChecks(input: ConsistencyInput): ConsistencyResult
 
     /* ---- period ---------------------------------------------------------- */
     if (record.period !== null) {
-      const phrases = findPeriodPhrases(sentence, numbers);
+      const phrases = findPeriodPhrases(sentence, numbers, located);
       if (phrases.length > 0) {
         if (phrases.some((phrase) => periodsAgree(phrase, record.period))) {
           period.pass();
@@ -599,13 +624,20 @@ export function runConsistencyChecks(input: ConsistencyInput): ConsistencyResult
     /* ---- direction ------------------------------------------------------- */
     if (isDeltaRecord(record) && record.value !== 0) {
       const hits = findDirectionWords(sentence);
-      const attached = hits.filter((hit) =>
-        located.some((parsed) => {
-          if (hit.end > parsed.start) return false;
-          if (parsed.start - hit.end > DIRECTION_WINDOW_CHARS) return false;
-          return !DELTA_BREAKERS.test(sentence.slice(hit.end, parsed.start));
-        }),
-      );
+      // The NEAREST qualifying direction word owns the figure. "Operating income
+      // rose 12.0% while revenue slipped 3.2%" cites the 3.2% decline, and the
+      // word attached to it is "slipped", not the "rose" that belongs to the
+      // other figure earlier in the sentence.
+      const attached = located.flatMap((parsed) => {
+        let nearest: DirectionHit | null = null;
+        for (const hit of hits) {
+          if (hit.end > parsed.start) continue;
+          if (parsed.start - hit.end > DIRECTION_WINDOW_CHARS) continue;
+          if (DELTA_BREAKERS.test(sentence.slice(hit.end, parsed.start))) continue;
+          if (nearest === null || hit.end > nearest.end) nearest = hit;
+        }
+        return nearest === null ? [] : [nearest];
+      });
       if (attached.length > 0) {
         const expected = record.value > 0 ? 1 : -1;
         const wrong = attached.filter((hit) => hit.polarity !== expected);

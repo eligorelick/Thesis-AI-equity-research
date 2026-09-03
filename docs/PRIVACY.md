@@ -45,11 +45,18 @@ Each key is sent only to the provider it belongs to, in a header wherever the
 provider supports one, so keys stay out of logged URLs and out of the
 `api_cache` rows.
 
-The `X-Thesis-Token` that non-browser clients use for mutating routes is a
-local access token, not a credential for anything remote. It is minted fresh at
-every server start into the data directory (see below), restricted to its owner
-where the operating system enforces file modes, never logged, and never sent to
-the browser or to any provider.
+The `X-Thesis-Token` that non-browser clients use for mutating routes is not a
+credential for anything remote, and not a lock on the API either. It is a marker
+for clients that send no browser headers: `src/app/api/sameOrigin.ts` accepts a
+mutating request as soon as it carries browser Fetch Metadata or a matching
+`Origin`, so the token is asked for only when both are absent. That makes it a
+cross-site-request-forgery guard for the browser — a page on another site cannot
+forge those headers — and not local access control: any process on this machine
+can set them by hand, and one with access to your account already has the
+database and `.env`. The token is minted fresh at every server start into the
+data directory (see below), restricted to its owner where the operating system
+enforces file modes, never logged, and never sent to the browser or to any
+provider.
 
 ## Where local data is kept
 

@@ -138,6 +138,7 @@ CREATE TABLE IF NOT EXISTS "job_llm_leases" (
   "pass" TEXT NOT NULL,
   "leaseOwner" TEXT NOT NULL,
   "reservedCostUsd" REAL NOT NULL,
+  "model" TEXT NOT NULL DEFAULT '',
   "acquiredAt" TEXT NOT NULL,
   "leaseExpiresAt" TEXT NOT NULL
 );
@@ -154,6 +155,9 @@ CREATE INDEX IF NOT EXISTS "idx_jobs_queue_claim" ON "jobs" ("status", "notBefor
 CREATE INDEX IF NOT EXISTS "idx_jobs_lease_expiry" ON "jobs" ("status", "leaseExpiresAt");
 CREATE INDEX IF NOT EXISTS "idx_cost_log_jobId" ON "cost_log" ("jobId");
 CREATE INDEX IF NOT EXISTS "idx_cost_log_createdAt" ON "cost_log" ("createdAt");
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_cost_log_presumed_attempt_pass"
+  ON "cost_log" ("jobId", "runGeneration", "presumedAttemptId", "step")
+  WHERE "presumedAttemptId" IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_cost_log_billed_attempt_pass"
   ON "cost_log" ("jobId", "runGeneration", "attemptId", "step")
   WHERE "attemptId" IS NOT NULL;
@@ -243,6 +247,9 @@ export function bootstrapSchema(sqlite: Database.Database): void {
     ensureColumn(sqlite, "jobs", "maxCostUsd", "REAL");
     ensureColumn(sqlite, "cost_log", "runGeneration", "INTEGER NOT NULL DEFAULT 0");
     ensureColumn(sqlite, "cost_log", "attemptId", "TEXT");
+    ensureColumn(sqlite, "cost_log", "settlementKind", "TEXT NOT NULL DEFAULT 'actual'");
+    ensureColumn(sqlite, "cost_log", "presumedAttemptId", "TEXT");
+    ensureColumn(sqlite, "cost_log", "reconciledAt", "TEXT");
 
     sqlite.exec(`
       UPDATE "jobs" SET "runGeneration" = 0 WHERE "runGeneration" IS NULL;
@@ -332,6 +339,10 @@ export function bootstrapSchema(sqlite: Database.Database): void {
     }
 
     sqlite.exec(DURABLE_JOB_TABLE_DDL);
+    // After the durable tables exist: a column added to one of them later
+    // still needs its guard, and the table may have been created by an older
+    // release without it.
+    ensureColumn(sqlite, "job_llm_leases", "model", "TEXT NOT NULL DEFAULT ''");
     sqlite.exec(INDEX_DDL);
   }).immediate();
 }

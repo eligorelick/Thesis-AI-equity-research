@@ -15,6 +15,15 @@ import "server-only";
 
 import { z } from "zod";
 
+import {
+  ANTHROPIC_REQUEST_TIMEOUT_MS,
+  DEFAULT_STREAM_IDLE_SECONDS,
+  JOB_HEARTBEAT_MS,
+  MIN_JOB_LEASE_SECONDS,
+  MIN_PAID_PASS_LEASE_SECONDS,
+  PAID_LEASE_RENEWAL_DIVISOR,
+} from "@/pipeline/leaseTiming";
+
 if (typeof window !== "undefined") {
   throw new Error(
     "@/config/env is server-only: it holds API keys and must never be imported from client components.",
@@ -98,6 +107,12 @@ const envSchema = z.object({
   FINNHUB_API_KEY: optionalSecret,
   FRED_API_KEY: optionalSecret,
   ANTHROPIC_API_KEY: optionalSecret,
+  /**
+   * Optional Admin API key. Only used by `npm run costs:reconcile`, which
+   * reconciles presumed spend downward against the Usage & Cost API. Never
+   * read on a report path.
+   */
+  ANTHROPIC_ADMIN_KEY: optionalSecret,
   /** "auto" = best available, resolved via the Models API (the application contract §5). */
   ANALYSIS_MODEL: z
     .string()
@@ -115,12 +130,60 @@ const envSchema = z.object({
     0,
     MAX_ROLLING_WINDOW_MINUTES,
   ),
-  // Strictly greater than the provider's 600-second hard request timeout.
-  THESIS_PAID_PASS_LEASE_SECONDS: positiveIntegerEnv(900, 600, MAX_NODE_TIMER_SECONDS),
-  THESIS_JOB_LEASE_SECONDS: positiveIntegerEnv(900, 0, MAX_NODE_TIMER_SECONDS),
+  // Must outlive the provider's hard request timeout plus the margin an
+  // aborted stream needs to settle (see src/pipeline/leaseTiming.ts).
+  THESIS_PAID_PASS_LEASE_SECONDS: positiveIntegerEnv(
+    900,
+    MIN_PAID_PASS_LEASE_SECONDS - 1,
+    MAX_NODE_TIMER_SECONDS,
+  ),
+  // Must cover at least two job-claim heartbeats, and must never be shorter
+  // than the paid-pass lease it parents.
+  THESIS_JOB_LEASE_SECONDS: positiveIntegerEnv(
+    900,
+    MIN_JOB_LEASE_SECONDS - 1,
+    MAX_NODE_TIMER_SECONDS,
+  ),
+  /** Gap with no stream event that aborts a stalled paid request. */
+  THESIS_STREAM_IDLE_SECONDS: positiveIntegerEnv(DEFAULT_STREAM_IDLE_SECONDS, 0, 3_600),
   // VERIFY_MODEL was removed (SPEC §12): verification is deterministic
   // numeric-source tracing and never calls a model. A leftover env var is
   // simply ignored.
+}).superRefine((parsed, ctx) => {
+  // Lease invariants (DECISIONS D-08). A process that starts with these
+  // violated would either lose a healthy job to reconciliation mid-run or
+  // keep billing after its claim was handed to someone else, so startup
+  // fails fast instead.
+  const paidMs = parsed.THESIS_PAID_PASS_LEASE_SECONDS * 1_000;
+  const jobMs = parsed.THESIS_JOB_LEASE_SECONDS * 1_000;
+  if (jobMs < 2 * JOB_HEARTBEAT_MS) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["THESIS_JOB_LEASE_SECONDS"],
+      message: `must be at least ${MIN_JOB_LEASE_SECONDS} seconds: two job-claim heartbeats of ${JOB_HEARTBEAT_MS / 1_000}s`,
+    });
+  }
+  if (paidMs < 2 * (paidMs / PAID_LEASE_RENEWAL_DIVISOR)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["THESIS_PAID_PASS_LEASE_SECONDS"],
+      message: "must be at least twice the paid-pass renewal interval",
+    });
+  }
+  if (paidMs <= ANTHROPIC_REQUEST_TIMEOUT_MS) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["THESIS_PAID_PASS_LEASE_SECONDS"],
+      message: `must exceed the ${ANTHROPIC_REQUEST_TIMEOUT_MS / 1_000}s provider request timeout`,
+    });
+  }
+  if (jobMs < paidMs) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["THESIS_JOB_LEASE_SECONDS"],
+      message: `must be at least THESIS_PAID_PASS_LEASE_SECONDS (${parsed.THESIS_PAID_PASS_LEASE_SECONDS}s): a paid-pass lease must never outlive its parent job claim`,
+    });
+  }
 });
 
 export interface ThesisConfig {
@@ -128,6 +191,7 @@ export interface ThesisConfig {
   finnhubApiKey: string | undefined;
   fredApiKey: string | undefined;
   anthropicApiKey: string | undefined;
+  anthropicAdminKey: string | undefined;
   /** Model id or "auto" (default). */
   analysisModel: string;
   // Capability flags — provider clients and pages branch on these instead of
@@ -145,6 +209,7 @@ export interface ThesisConfig {
   rollingCostWindowMs: number;
   paidPassLeaseTtlMs: number;
   jobLeaseTtlMs: number;
+  streamIdleTimeoutMs: number;
 }
 
 /**
@@ -160,6 +225,7 @@ export function parseEnv(
     finnhubApiKey: parsed.FINNHUB_API_KEY,
     fredApiKey: parsed.FRED_API_KEY,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY,
+    anthropicAdminKey: parsed.ANTHROPIC_ADMIN_KEY,
     analysisModel: parsed.ANALYSIS_MODEL,
     hasFmpKey: parsed.FMP_API_KEY !== undefined,
     hasFinnhubKey: parsed.FINNHUB_API_KEY !== undefined,
@@ -173,6 +239,7 @@ export function parseEnv(
     rollingCostWindowMs: parsed.THESIS_ROLLING_COST_WINDOW_MINUTES * 60_000,
     paidPassLeaseTtlMs: parsed.THESIS_PAID_PASS_LEASE_SECONDS * 1_000,
     jobLeaseTtlMs: parsed.THESIS_JOB_LEASE_SECONDS * 1_000,
+    streamIdleTimeoutMs: parsed.THESIS_STREAM_IDLE_SECONDS * 1_000,
   };
   return Object.freeze(config);
 }

@@ -374,7 +374,8 @@ describe("risk runtime behavior coverage", () => {
       "idx_reports_symbol_createdAt",
     );
     expect(getTableConfig(apiCache).indexes).toHaveLength(2);
-    expect(getTableConfig(costLog).indexes).toHaveLength(3);
+    // jobId, createdAt, the billed-attempt unique index, and the presumed-attempt unique index (D-07).
+    expect(getTableConfig(costLog).indexes).toHaveLength(4);
   });
 
   it("uses test and on-disk singleton database authority without leaking handles", () => {

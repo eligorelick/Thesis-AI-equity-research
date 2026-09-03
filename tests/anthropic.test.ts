@@ -24,7 +24,6 @@ import {
   PREFERENCE_ORDER,
   PRICING,
   SERVER_SIDE_FALLBACK_BETA,
-  STREAMING_THRESHOLD_TOKENS,
   WEB_SEARCH_TOOL_TYPE,
   WEB_SEARCH_USD_PER_SEARCH,
   MAX_PAUSE_RESUMPTIONS,
@@ -44,6 +43,7 @@ import {
   resumeIfPaused,
   runPass,
   runPassStreaming,
+  streamIdleTimeoutMs,
   requestInputTokenUpperBound,
   supportsEffort,
   thinkingConfigFor,
@@ -710,7 +710,7 @@ describe("interpretPassMessage", () => {
     if (result.ok) return;
     expect(result.error.kind).toBe("max_tokens");
     expect(result.error.maxTokens).toBe(baseOpts.maxTokens);
-    expect(result.error.message).toMatch(/higher maxTokens/i);
+    expect(result.error.message).toMatch(/higher effort/i);
     // failed attempts still carry billed usage/cost for the cost log
     expect(result.error.costUsd).toBeGreaterThan(0);
   });
@@ -744,6 +744,36 @@ describe("interpretPassMessage", () => {
  * pause_turn resumption (the Anthropic API contract §2: long search turns can
  * pause mid-turn — resend the assistant's content UNCHANGED to resume).
  * ------------------------------------------------------------------------ */
+
+/**
+ * A client whose initial request STREAMS (every paid pass streams now) and
+ * whose pause resumption uses create(). `streamFinal` is what finalMessage()
+ * resolves with; `createResponses` answers each resumption in order.
+ */
+function fakeStreamingResumeClient(
+  streamFinal: BetaMessage,
+  createResponses: BetaMessage[],
+): { client: Anthropic; calls: Record<string, unknown>[] } {
+  const calls: Record<string, unknown>[] = [];
+  let i = 0;
+  const client = {
+    beta: {
+      messages: {
+        stream: (params: Record<string, unknown>) => {
+          calls.push(params);
+          return makeFakeStream({ events: [{ type: "message_start", message: streamFinal }], final: streamFinal });
+        },
+        create: async (params: Record<string, unknown>) => {
+          calls.push(params);
+          const msg = createResponses[Math.min(i, createResponses.length - 1)];
+          i++;
+          return msg;
+        },
+      },
+    },
+  } as unknown as Anthropic;
+  return { client, calls };
+}
 
 function fakeCreateClient(responses: BetaMessage[]): { client: Anthropic; calls: Record<string, unknown>[] } {
   const calls: Record<string, unknown>[] = [];
@@ -807,9 +837,9 @@ describe("runPass resumes a paused turn end-to-end", () => {
       content: [{ type: "text", text: '{"ok":true}', citations: null }],
     });
     const pausedMsg = syntheticMessage({ stop_reason: "pause_turn" });
-    // create() is called twice by runPass's own flow: once for the initial
-    // request (returns paused), once via resumeIfPaused (returns final).
-    const { client } = fakeCreateClient([pausedMsg, finalMsg]);
+    // The initial request streams and pauses; resumeIfPaused then calls
+    // create() once and returns the final message.
+    const { client } = fakeStreamingResumeClient(pausedMsg, [finalMsg]);
     _resetAnthropicForTests(client);
     const result = await runPass(baseOpts);
     expect(result.ok).toBe(true);
@@ -835,7 +865,7 @@ describe("runPass resumes a paused turn end-to-end", () => {
       content: [{ type: "text", text: '{"ok":true}', citations: null }],
       usage: finalUsage,
     });
-    const { client } = fakeCreateClient([pausedMsg, finalMsg]);
+    const { client } = fakeStreamingResumeClient(pausedMsg, [finalMsg]);
     _resetAnthropicForTests(client);
 
     const result = await runPass(baseOpts);
@@ -870,7 +900,7 @@ describe("runPass without a key", () => {
 
   it("gaps on the streaming path too, with firstToken resolving immediately", async () => {
     _resetAnthropicForTests(null);
-    const handle = runPassStreaming({ ...baseOpts, maxTokens: STREAMING_THRESHOLD_TOKENS + 1 });
+    const handle = runPassStreaming({ ...baseOpts, maxTokens: 16_001 });
     await expect(handle.firstToken).resolves.toBe("end");
     const result = await handle.result;
     expect(result.ok).toBe(false);
@@ -991,7 +1021,7 @@ function messageDeltaEvent(usage: Record<string, unknown>) {
 
 const streamingOpts = {
   ...baseOpts,
-  maxTokens: STREAMING_THRESHOLD_TOKENS + 1,
+  maxTokens: 16_001,
   field: "llm.bull",
 };
 
@@ -1211,12 +1241,12 @@ describe("runPassStreaming transport retry", () => {
   });
 });
 
-describe("runPass non-streaming transport failures", () => {
-  it("resolves a typed transport failure instead of rejecting when create() exhausts SDK retries", async () => {
+describe("runPass transport failures at stream construction", () => {
+  it("resolves a typed transport failure instead of rejecting when the SDK gives up", async () => {
     const client = {
       beta: {
         messages: {
-          create: async () => {
+          stream: () => {
             throw new InternalServerError(
               529,
               { type: "error", error: { type: "overloaded_error", message: "Overloaded" } } as never,
@@ -1228,6 +1258,7 @@ describe("runPass non-streaming transport failures", () => {
       },
     } as unknown as Anthropic;
     _resetAnthropicForTests(client);
+    const delays = instantSleep();
 
     const result = await runPass({ ...baseOpts, field: "llm.judge" });
 
@@ -1235,13 +1266,14 @@ describe("runPass non-streaming transport failures", () => {
     if (result.ok) return;
     expect(result.error.kind).toBe("transport");
     expect(result.gap.field).toBe("llm.judge");
+    expect(delays).toEqual(PASS_TRANSPORT_RETRY_DELAYS_MS);
   });
 
   it("still rethrows non-SDK errors (programming bugs must stay loud)", async () => {
     const client = {
       beta: {
         messages: {
-          create: async () => {
+          stream: () => {
             throw new TypeError("undefined is not a function");
           },
         },
@@ -1250,5 +1282,91 @@ describe("runPass non-streaming transport failures", () => {
     _resetAnthropicForTests(client);
 
     await expect(runPass(baseOpts)).rejects.toThrow(TypeError);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Stream idle guard (DECISIONS D-09). Every paid pass streams, so a provider
+ * that accepts a request and then goes silent would hold a durable lease and
+ * its reservation until the 10-minute transport timeout, and the run would
+ * record nothing for generation Anthropic may already have billed.
+ * ------------------------------------------------------------------------ */
+
+describe("stream idle timeout", () => {
+  const idleOpts = { ...streamingOpts, model: "claude-sonnet-5", effort: "low" as const };
+
+  afterEach(() => {
+    delete process.env.THESIS_STREAM_IDLE_SECONDS;
+  });
+
+  it("reads the idle limit from THESIS_STREAM_IDLE_SECONDS and falls back to the default", () => {
+    delete process.env.THESIS_STREAM_IDLE_SECONDS;
+    expect(streamIdleTimeoutMs()).toBe(120_000);
+    process.env.THESIS_STREAM_IDLE_SECONDS = "30";
+    expect(streamIdleTimeoutMs()).toBe(30_000);
+    process.env.THESIS_STREAM_IDLE_SECONDS = "0";
+    expect(streamIdleTimeoutMs()).toBe(0);
+    process.env.THESIS_STREAM_IDLE_SECONDS = "not-a-number";
+    expect(streamIdleTimeoutMs()).toBe(120_000);
+  });
+
+  it("abandons a silent stream and settles reported usage plus the presumed remainder", async () => {
+    process.env.THESIS_STREAM_IDLE_SECONDS = "1";
+    const aborts: number[] = [];
+    const stalled = makeFakeStream({
+      events: [
+        messageStartEvent({ input_tokens: 10_000, cache_creation_input_tokens: 0, output_tokens: 1 }, "claude-sonnet-5"),
+        messageDeltaEvent({ output_tokens: 2_000 }),
+      ],
+      // No terminal event: the provider accepted the request and went quiet.
+    }) as Record<string, unknown>;
+    stalled.abort = (): void => {
+      aborts.push(1);
+    };
+    _resetAnthropicForTests({
+      beta: { messages: { stream: () => stalled, create: async () => { throw new Error("must stream"); } } },
+    } as unknown as Anthropic);
+
+    const result = await runPass(idleOpts);
+
+    expect(aborts).toHaveLength(1);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe("transport");
+    expect(result.error.message).toMatch(/stream idle timeout/);
+    expect(result.error.message).toMatch(/presumed .* remaining output tokens/);
+    // Reported: 10K input at $2/MTok plus 2K output at $10/MTok = $0.04.
+    // Presumed remainder: the request's max_tokens (16,001 at effort low)
+    // less the 2,000 reported, at $10/MTok = $0.14001.
+    expect(result.error.costUsd).toBeCloseTo(0.02 + 0.02 + 0.14001, 6);
+    expect(result.error.usage).toMatchObject({ input_tokens: 10_000, output_tokens: 2_000 });
+    expect(result.error.model).toBe("claude-sonnet-5");
+  }, 15_000);
+
+  it("does not fire while the stream keeps producing events", async () => {
+    process.env.THESIS_STREAM_IDLE_SECONDS = "1";
+    const final = syntheticMessage({
+      model: "claude-sonnet-5",
+      usage: syntheticUsage({ input_tokens: 1_000, output_tokens: 10 }),
+    });
+    const { client } = fakeStreamingClient([{ events: [messageStartEvent({}, "claude-sonnet-5")], final }]);
+    _resetAnthropicForTests(client);
+
+    const result = await runPass(idleOpts);
+    expect(result.ok).toBe(true);
+  }, 15_000);
+
+  it("keeps streaming even for a small max_tokens request", async () => {
+    const final = syntheticMessage({
+      model: "claude-sonnet-5",
+      usage: syntheticUsage({ input_tokens: 100, output_tokens: 5 }),
+    });
+    const { client, streamCalls } = fakeStreamingClient([{ events: [messageStartEvent({}, "claude-sonnet-5")], final }]);
+    _resetAnthropicForTests(client);
+
+    const result = await runPass({ ...idleOpts, maxTokens: 500 });
+    expect(result.ok).toBe(true);
+    expect(streamCalls).toHaveLength(1);
+    expect(streamCalls[0]).toMatchObject({ max_tokens: 500 });
   });
 });

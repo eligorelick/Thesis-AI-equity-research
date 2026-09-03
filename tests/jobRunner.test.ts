@@ -40,6 +40,7 @@ const configMocks = vi.hoisted(() => ({
     finnhubApiKey: undefined,
     fredApiKey: undefined,
     anthropicApiKey: undefined,
+    anthropicAdminKey: undefined,
     analysisModel: "auto",
     hasFmpKey: false,
     hasFinnhubKey: false,
@@ -53,6 +54,7 @@ const configMocks = vi.hoisted(() => ({
     rollingCostWindowMs: 86_400_000,
     paidPassLeaseTtlMs: 900_000,
     jobLeaseTtlMs: 900_000,
+    streamIdleTimeoutMs: 120_000,
   })),
 }));
 

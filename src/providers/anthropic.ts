@@ -45,6 +45,10 @@ import type {
   BetaWebSearchTool20260318,
   MessageCreateParamsNonStreaming,
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
+import {
+  ANTHROPIC_REQUEST_TIMEOUT_MS as REQUEST_TIMEOUT_MS,
+  DEFAULT_STREAM_IDLE_SECONDS,
+} from "@/pipeline/leaseTiming";
 import { modelSupportsEffort } from "@/report/execution";
 import {
   MODEL_REGISTRY,
@@ -114,14 +118,39 @@ export const WEB_SEARCH_TOOL_TYPE = "web_search_20260318" as const;
  */
 export const WEB_SEARCH_TOOL_TYPE_BASIC = "web_search_20250305" as const;
 
-/** Above this `maxTokens`, requests stream (SDK HTTP-timeout guidance). */
-export const STREAMING_THRESHOLD_TOKENS = 16_000;
+/**
+ * Gap with no stream event after which a paid request is abandoned, from
+ * THESIS_STREAM_IDLE_SECONDS. Every paid pass streams, so a provider that
+ * accepts a request and then goes quiet would otherwise hold a durable lease
+ * (and its reservation) until the 10-minute transport timeout with nothing to
+ * show for it. Zero disables the idle guard.
+ */
+export function streamIdleTimeoutMs(): number {
+  const raw = process.env.THESIS_STREAM_IDLE_SECONDS?.trim();
+  if (raw === undefined || raw.length === 0) return DEFAULT_STREAM_IDLE_SECONDS * 1_000;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return DEFAULT_STREAM_IDLE_SECONDS * 1_000;
+  return parsed * 1_000;
+}
+
+/** A stream that accepted the request and then produced nothing for too long. */
+export class StreamIdleTimeoutError extends Error {
+  constructor(readonly idleMs: number) {
+    super(`stream produced no event for ${Math.round(idleMs / 1_000)}s`);
+    this.name = "StreamIdleTimeoutError";
+  }
+}
 
 /** "auto" model resolution is cached for one hour. */
 export const MODEL_RESOLUTION_TTL_MS = 60 * 60 * 1000;
 
-/** Hard timeout for one provider HTTP request. Durable paid leases default to 15 minutes. */
-export const ANTHROPIC_REQUEST_TIMEOUT_MS = 600_000;
+/**
+ * Hard timeout for one provider HTTP request. Durable paid leases default to
+ * 15 minutes and the config refuses to start unless the lease outlives this
+ * (src/pipeline/leaseTiming.ts, DECISIONS D-08), so the value lives there and
+ * is re-exported here for the provider call sites.
+ */
+export { ANTHROPIC_REQUEST_TIMEOUT_MS } from "@/pipeline/leaseTiming";
 
 /* ------------------------------------------------------------------------ *
  * Pricing — every figure comes from the model registry (config/models.json,
@@ -438,7 +467,7 @@ export function getClient(): Anthropic | null {
       ? new Anthropic({
           apiKey: key,
           maxRetries: CLIENT_MAX_RETRIES,
-          timeout: ANTHROPIC_REQUEST_TIMEOUT_MS,
+          timeout: REQUEST_TIMEOUT_MS,
         })
       : null;
   }
@@ -977,7 +1006,7 @@ function interpretPassMessages(
       ),
       error: {
         kind: "max_tokens",
-        message: `Response hit max_tokens=${opts.maxTokens} before completing. Retry with a higher maxTokens (streaming engages automatically above ${STREAMING_THRESHOLD_TOKENS}).`,
+        message: `Response hit max_tokens=${effectiveMaxTokens(opts)} before completing. Retry at a higher effort, which raises max_tokens to the model's registry ceiling.`,
         maxTokens: opts.maxTokens,
         usage,
         costUsd,
@@ -1117,7 +1146,7 @@ async function resumeIfPausedWithUsage(
     try {
       msg = await client.beta.messages.create(current, {
         signal,
-        timeout: ANTHROPIC_REQUEST_TIMEOUT_MS,
+        timeout: REQUEST_TIMEOUT_MS,
       });
     } catch (err) {
       throw new ResumptionFailedError(err, billableMessages);
@@ -1241,6 +1270,51 @@ function billedMessageFromSnapshot(
   } as unknown as BetaMessage;
 }
 
+/**
+ * Settle a stream that went silent (DECISIONS D-09): what the provider
+ * reported before it stalled, PLUS the worst case for the rest of the
+ * response, priced at the model's output rate for the tokens the request
+ * could still emit.
+ *
+ * Anthropic bills for generation, and a stalled stream gives no way to know
+ * how much of it happened. Recording only the last reported usage would
+ * understate the charge exactly when nothing else can correct it, so the
+ * remainder is presumed spent and named as presumed. The whole figure stays
+ * inside the pass reservation, which already bounds the full output ceiling.
+ */
+function deadStreamResult(
+  opts: RunPassOptions,
+  snapshot: StreamedUsageSnapshot,
+  idleMs: number,
+  priorBilled: readonly BetaMessage[],
+  attempts: number,
+): RunPassResult {
+  const reported = billedMessageFromSnapshot(snapshot, opts);
+  const billedMessages = reported ? [...priorBilled, reported] : [...priorBilled];
+  const reportedOutputTokens = reported?.usage.output_tokens ?? 0;
+  const remainingOutputTokens = Math.max(0, effectiveMaxTokens(opts) - reportedOutputTokens);
+  const pricing = registryEntryFor(opts.model).pricing;
+  const remainderUsd = (remainingOutputTokens / 1_000_000) * pricing.outputPerMTok;
+  const reportedUsd = billedMessages.reduce((sum, m) => sum + costForMessage(m, opts), 0);
+  const usage = billedMessages.length > 0 ? aggregateUsage(billedMessages) : undefined;
+  const detail =
+    `${new StreamIdleTimeoutError(idleMs).message}; settled ${billedMessages.length > 0 ? "reported usage" : "no reported usage"} ` +
+    `plus a presumed ${remainingOutputTokens.toLocaleString("en-US")} remaining output tokens at $${pricing.outputPerMTok}/MTok`;
+  return {
+    ok: false,
+    gap: gapEntry(opts, `LLM pass abandoned after ${attempts} attempt${attempts === 1 ? "" : "s"}: ${detail}`),
+    error: {
+      kind: "transport",
+      message: `stream idle timeout after ${attempts} attempt${attempts === 1 ? "" : "s"}: ${detail}`,
+      usage,
+      costUsd: reportedUsd + remainderUsd,
+      fallbackUsed: billedMessages.some(detectFallbackUsed),
+      model: billedMessages[billedMessages.length - 1]?.model || opts.model,
+      webSearches: billedMessages.reduce((sum, m) => sum + webSearchCount(m), 0),
+    },
+  };
+}
+
 /** Typed `ok:false` transport result carrying the billed usage of all attempts. */
 function transportFailureResult(
   opts: RunPassOptions,
@@ -1308,15 +1382,43 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
 
   const result = (async (): Promise<RunPassResult> => {
     const billedFailedAttempts: BetaMessage[] = [];
+    const idleMs = streamIdleTimeoutMs();
     for (let attempt = 1; attempt <= PASS_TRANSPORT_MAX_ATTEMPTS; attempt++) {
-      const stream = client.beta.messages.stream(params, {
-        signal: opts.signal,
-        timeout: ANTHROPIC_REQUEST_TIMEOUT_MS,
-      });
-      const snapshot = trackStreamedUsage(stream);
-      stream.once("streamEvent", () => signalFirst("streamEvent"));
+      // Opening the stream is inside the guarded block: a client that fails
+      // at construction is a transport failure like any other, not a
+      // rejection the runner would have to treat as a crash.
+      type MessageStreamHandle = ReturnType<Anthropic["beta"]["messages"]["stream"]>;
+      let stream: MessageStreamHandle | undefined;
+      let snapshot: StreamedUsageSnapshot = { model: null, usage: null };
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      const clearIdle = (): void => {
+        if (idleTimer !== undefined) clearTimeout(idleTimer);
+        idleTimer = undefined;
+      };
       try {
-        const message = await stream.finalMessage();
+        stream = client.beta.messages.stream(params, {
+          signal: opts.signal,
+          timeout: REQUEST_TIMEOUT_MS,
+        });
+        snapshot = trackStreamedUsage(stream);
+        stream.once("streamEvent", () => signalFirst("streamEvent"));
+        // Idle guard: every stream event restarts the clock, and silence past
+        // the limit abandons the attempt rather than holding the durable lease
+        // until the transport timeout.
+        let tripIdle: (() => void) | undefined;
+        const idleGuard = new Promise<never>((_resolve, reject) => {
+          tripIdle = (): void => reject(new StreamIdleTimeoutError(idleMs));
+        });
+        idleGuard.catch(() => {}); // raced below; never an unhandled rejection
+        const resetIdle = (): void => {
+          if (idleMs <= 0) return;
+          clearIdle();
+          idleTimer = setTimeout(() => tripIdle?.(), idleMs);
+          idleTimer.unref?.();
+        };
+        stream.on("streamEvent", resetIdle);
+        resetIdle();
+        const message = await Promise.race([stream.finalMessage(), idleGuard]);
         const { final, billableMessages } = await resumeIfPausedWithUsage(
           client,
           params,
@@ -1326,6 +1428,16 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
         signalFirst("end"); // only reachable pre-signal if the stream emitted no events
         return interpretPassMessages(final, opts, [...billedFailedAttempts, ...billableMessages]);
       } catch (err) {
+        if (err instanceof StreamIdleTimeoutError) {
+          // Stop the request so it cannot keep generating (and billing) after
+          // we have given up on reading it.
+          (stream as { abort?: () => void } | undefined)?.abort?.();
+          console.error(
+            `[anthropic] ${opts.field ?? "llm.pass"}: ${err.message}; abandoning the attempt and settling reported usage plus the presumed remainder`,
+          );
+          signalFirst("error");
+          return deadStreamResult(opts, snapshot, idleMs, billedFailedAttempts, attempt);
+        }
         // A failed resumption still billed the attempt's completed messages
         // (incl. the streamed first message); otherwise fall back to the
         // last streamed usage snapshot.
@@ -1350,6 +1462,9 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
           await transportRetrySleepWithSignal(delay, opts.signal);
           continue;
         }
+        // A programming error is not a provider failure: keep it loud rather
+        // than filing it as spend-bearing transport noise.
+        if (!(cause instanceof APIError) && !isRetryableTransportError(cause)) throw cause;
         if (!(cause instanceof APIUserAbortError)) {
           console.error(
             `[anthropic] ${opts.field ?? "llm.pass"}: terminal transport failure after ${attempt} attempt(s): ${errorMessageOf(cause)}`,
@@ -1357,6 +1472,8 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
         }
         signalFirst(cause instanceof APIUserAbortError ? "abort" : "error");
         return transportFailureResult(opts, cause, billedFailedAttempts, attempt);
+      } finally {
+        clearIdle();
       }
     }
     throw new Error("unreachable: transport retry loop exited without returning");
@@ -1366,50 +1483,19 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
 }
 
 /**
- * Run one LLM pass. Non-streaming below STREAMING_THRESHOLD_TOKENS; streams
- * with `finalMessage()` above it (SDK HTTP-timeout guidance). A `pause_turn`
- * (long web-search turn) is auto-resumed via {@link resumeIfPaused} before
- * interpretation. Returns `{message, usage, costUsd, fallbackUsed, model}`
- * wrapped in Sourced<T>, or a gap + typed error (no key / refusal / max_tokens
- * / paused / transport). SDK-level failures resolve as typed "transport"
- * results (the non-streaming request is atomic, so the SDK's own
- * CLIENT_MAX_RETRIES already cover its transient failures — no pass-level
- * retry loop here); only programming errors reject.
+ * Run one LLM pass. ALWAYS streams (DECISIONS D-09): a paid request can run
+ * for many minutes at high effort, a non-streaming request has no signal
+ * between "sent" and "answered", and only a stream lets the idle guard
+ * abandon a provider that has gone silent while its durable lease and
+ * reservation are held. Streaming also gives the usage snapshot that keeps a
+ * failed attempt from being recorded as free.
+ *
+ * A `pause_turn` (long web-search turn) is auto-resumed via
+ * {@link resumeIfPaused} before interpretation. Returns
+ * `{message, usage, costUsd, fallbackUsed, model}` wrapped in Sourced<T>, or a
+ * gap + typed error (no key / refusal / max_tokens / paused / transport).
+ * Only programming errors reject.
  */
 export async function runPass(opts: RunPassOptions): Promise<RunPassResult> {
-  if (opts.maxTokens > STREAMING_THRESHOLD_TOKENS) {
-    return runPassStreaming(opts).result;
-  }
-
-  const { params } = buildPassParams(opts);
-  const client = getClient();
-  if (!client) return noKeyResult(opts);
-  try {
-    const message = await client.beta.messages.create(params, {
-      signal: opts.signal,
-      timeout: ANTHROPIC_REQUEST_TIMEOUT_MS,
-    });
-    const { final, billableMessages } = await resumeIfPausedWithUsage(
-      client,
-      params,
-      message,
-      opts.signal,
-    );
-    return interpretPassMessages(final, opts, billableMessages);
-  } catch (err) {
-    if (err instanceof ResumptionFailedError) {
-      console.error(
-        `[anthropic] ${opts.field ?? "llm.pass"}: pause-resumption transport failure: ${err.message}`,
-      );
-      return transportFailureResult(opts, err.cause, err.billableMessages, 1);
-    }
-    if (err instanceof APIError) {
-      // Covers connection/abort subclasses too; nothing streamed → no usage.
-      console.error(
-        `[anthropic] ${opts.field ?? "llm.pass"}: transport failure: ${errorMessageOf(err)}`,
-      );
-      return transportFailureResult(opts, err, [], 1);
-    }
-    throw err;
-  }
+  return runPassStreaming(opts).result;
 }

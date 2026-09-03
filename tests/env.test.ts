@@ -147,14 +147,43 @@ describe("parseEnv", () => {
     ["THESIS_PAID_PASS_LEASE_SECONDS", 1_000, 2_147_483],
     ["THESIS_JOB_LEASE_SECONDS", 1_000, 2_147_483],
   ] as const)("rejects %s beyond its executable millisecond range", (key, scale, maximumInput) => {
-    expect(parseEnv({ [key]: String(maximumInput) })).toMatchObject({
+    // The job lease must cover the paid-pass lease, so the paid case is set
+    // together with a job lease at least as long rather than on its own.
+    const companion = key === "THESIS_PAID_PASS_LEASE_SECONDS"
+      ? { THESIS_JOB_LEASE_SECONDS: String(2_147_483) }
+      : {};
+    expect(parseEnv({ ...companion, [key]: String(maximumInput) })).toMatchObject({
       [key === "THESIS_ROLLING_COST_WINDOW_MINUTES"
         ? "rollingCostWindowMs"
         : key === "THESIS_PAID_PASS_LEASE_SECONDS"
           ? "paidPassLeaseTtlMs"
           : "jobLeaseTtlMs"]: maximumInput * scale,
     });
-    expect(() => parseEnv({ [key]: String(maximumInput + 1) })).toThrow(/safe|overflow|range|maximum/i);
+    expect(() => parseEnv({ ...companion, [key]: String(maximumInput + 1) })).toThrow(/safe|overflow|range|maximum/i);
+  });
+
+  // DECISIONS D-08. A process that starts with these violated either loses a
+  // healthy job to reconciliation between heartbeats or keeps billing after
+  // its claim was handed to another process, so startup fails fast.
+  it("enforces the lease invariants at startup", () => {
+    expect(parseEnv({}).jobLeaseTtlMs).toBe(900_000);
+    expect(parseEnv({}).streamIdleTimeoutMs).toBe(120_000);
+
+    // Shorter than two job-claim heartbeats.
+    expect(() => parseEnv({ THESIS_JOB_LEASE_SECONDS: "599" })).toThrow(/greater than 599|heartbeat/i);
+    // Shorter than the provider request timeout plus its settlement margin.
+    expect(() => parseEnv({ THESIS_PAID_PASS_LEASE_SECONDS: "659" })).toThrow();
+    expect(() => parseEnv({ THESIS_PAID_PASS_LEASE_SECONDS: "600" })).toThrow();
+    // A paid lease that would outlive its parent job claim.
+    expect(() => parseEnv({
+      THESIS_JOB_LEASE_SECONDS: "700",
+      THESIS_PAID_PASS_LEASE_SECONDS: "800",
+    })).toThrow(/job claim|THESIS_PAID_PASS_LEASE_SECONDS/i);
+    // Equal is allowed: the claim outlasts every renewal of the pass it parents.
+    expect(parseEnv({
+      THESIS_JOB_LEASE_SECONDS: "800",
+      THESIS_PAID_PASS_LEASE_SECONDS: "800",
+    })).toMatchObject({ jobLeaseTtlMs: 800_000, paidPassLeaseTtlMs: 800_000 });
   });
 
   it.each([

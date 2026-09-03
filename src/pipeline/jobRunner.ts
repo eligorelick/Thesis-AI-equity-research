@@ -886,6 +886,8 @@ function createSettlementCheckpoint<T>(
   maximumNextPassUsd: number,
   signal: AbortSignal,
   controller: AbortController,
+  /** Model the reservation was priced for; recorded on the durable lease. */
+  reservationModel = "",
 ): SettlementCheckpoint<T> {
   const attemptId = randomUUID();
   let called = false;
@@ -911,6 +913,8 @@ function createSettlementCheckpoint<T>(
         maximumNextPassUsd,
         undefined,
         state.schedulerLimits,
+        undefined,
+        reservationModel,
       );
       if (acquired.acquired) {
         lease = acquired.lease;
@@ -1891,7 +1895,7 @@ export function isJobLiveInProcess(jobId: string): boolean {
 }
 
 /** Legacy test export; durable renewal cadence is derived from the lease TTL. */
-export const JOB_HEARTBEAT_MS = 5 * 60 * 1000;
+export { JOB_HEARTBEAT_MS } from "@/pipeline/leaseTiming";
 
 /**
  * Compatibility seam for older callers. It now reconciles only exact missing

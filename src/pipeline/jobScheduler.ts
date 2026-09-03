@@ -106,6 +106,8 @@ export interface PaidPassLease {
   leaseOwner: string;
   jobLeaseOwner: string;
   reservedCostUsd: number;
+  /** Model the reservation was priced for; "" on leases written before the column existed. */
+  model: string;
   acquiredAt: string;
   leaseExpiresAt: string;
 }
@@ -283,12 +285,82 @@ function finalizeTerminalPaidLeasesInTransaction(
   return true;
 }
 
+/**
+ * Convert an expired, unsettled paid-pass lease into PRESUMED spend
+ * (DECISIONS D-07).
+ *
+ * The lease exists because a provider call was authorized. If the process
+ * holding it dies, nothing ever reports what that call billed — but Anthropic
+ * may well have billed it, up to the reserved maximum. Deleting the row (the
+ * behavior before this change) silently returned that money to every cap, so
+ * a crash loop could spend without limit. Instead the whole reservation is
+ * written to `cost_log` as a `presumed` row, which every admission path
+ * already counts, and only evidence moves it down: a late settlement for the
+ * same attempt ({@link reconcilePresumedCostFromSettlement}) or the Usage &
+ * Cost API ({@link reconcilePresumedCostsAgainstReportedTotals}).
+ *
+ * The row carries `presumedAttemptId` rather than `attemptId` so the billed
+ * attempt slot stays free: a settlement that arrives after expiry can still be
+ * recorded in full, and it deletes the presumed row in the same transaction.
+ */
+function presumeExpiredPaidLeasesInTransaction(db: ThesisDb, nowIso: string): number {
+  const expired = db.select()
+    .from(jobLlmLeases)
+    .where(lte(jobLlmLeases.leaseExpiresAt, nowIso))
+    .all();
+  if (expired.length === 0) return 0;
+  for (const lease of expired) {
+    const alreadySettled = db.select({ id: costLog.id })
+      .from(costLog)
+      .where(and(
+        eq(costLog.jobId, lease.jobId),
+        eq(costLog.runGeneration, lease.runGeneration),
+        eq(costLog.attemptId, lease.attemptId),
+        eq(costLog.step, lease.pass),
+      ))
+      .get();
+    if (alreadySettled !== undefined) continue;
+    const alreadyPresumed = db.select({ id: costLog.id })
+      .from(costLog)
+      .where(and(
+        eq(costLog.jobId, lease.jobId),
+        eq(costLog.runGeneration, lease.runGeneration),
+        eq(costLog.presumedAttemptId, lease.attemptId),
+        eq(costLog.step, lease.pass),
+      ))
+      .get();
+    if (alreadyPresumed !== undefined) continue;
+    const reservedMicro = BigInt(reservationMicroUsd(lease.reservedCostUsd));
+    if (reservedMicro === 0n) continue;
+    db.insert(costLog).values({
+      jobId: lease.jobId,
+      runGeneration: lease.runGeneration,
+      attemptId: null,
+      presumedAttemptId: lease.attemptId,
+      settlementKind: "presumed",
+      step: lease.pass,
+      model: lease.model.length > 0 ? lease.model : "unknown",
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      webSearches: 0,
+      costUsd: Number(reservedMicro) / MICRO_USD,
+      fallbackUsed: false,
+      reconciledAt: null,
+      createdAt: nowIso,
+    }).run();
+  }
+  return expired.length;
+}
+
 function pruneExpiredPaidLeases(db: ThesisDb, nowIso: string): number {
   const expired = db.select({ jobId: jobLlmLeases.jobId })
     .from(jobLlmLeases)
     .where(lte(jobLlmLeases.leaseExpiresAt, nowIso))
     .all();
   if (expired.length === 0) return 0;
+  presumeExpiredPaidLeasesInTransaction(db, nowIso);
   const deleted = db.delete(jobLlmLeases)
     .where(lte(jobLlmLeases.leaseExpiresAt, nowIso))
     .run().changes;
@@ -296,6 +368,142 @@ function pruneExpiredPaidLeases(db: ThesisDb, nowIso: string): number {
     finalizeTerminalPaidLeasesInTransaction(db, jobId, nowIso);
   }
   return deleted;
+}
+
+export interface PresumedCostRow {
+  id: number;
+  jobId: string;
+  runGeneration: number;
+  attemptId: string;
+  pass: string;
+  model: string;
+  costUsd: number;
+  createdAt: string;
+}
+
+/** Every unreconciled presumed-spend row, oldest first. */
+export function listPresumedCosts(db: ThesisDb = getDb()): PresumedCostRow[] {
+  return db.select()
+    .from(costLog)
+    .where(and(eq(costLog.settlementKind, "presumed"), isNull(costLog.reconciledAt)))
+    .all()
+    .filter((row) => row.presumedAttemptId !== null)
+    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
+    .map((row) => ({
+      id: row.id,
+      jobId: row.jobId,
+      runGeneration: row.runGeneration,
+      attemptId: row.presumedAttemptId as string,
+      pass: row.step,
+      model: row.model,
+      costUsd: row.costUsd,
+      createdAt: row.createdAt,
+    }));
+}
+
+/**
+ * Drop the presumed row for an attempt whose real settlement just landed.
+ * Called inside the settlement transaction, so the exact cost replaces the
+ * presumed maximum atomically and no window counts both.
+ */
+export function reconcilePresumedCostFromSettlement(
+  db: Pick<ThesisDb, "delete">,
+  identity: { jobId: string; runGeneration: number; attemptId: string; pass: string },
+): number {
+  return db.delete(costLog)
+    .where(and(
+      eq(costLog.jobId, identity.jobId),
+      eq(costLog.runGeneration, identity.runGeneration),
+      eq(costLog.presumedAttemptId, identity.attemptId),
+      eq(costLog.step, identity.pass),
+    ))
+    .run().changes;
+}
+
+export interface ReportedCostBucket {
+  /** Inclusive ISO start of the reporting bucket. */
+  startTime: string;
+  /** Exclusive ISO end of the reporting bucket. */
+  endTime: string;
+  /** Total USD Anthropic reports for the bucket. */
+  reportedUsd: number;
+}
+
+export interface PresumedReconciliation {
+  id: number;
+  jobId: string;
+  attemptId: string;
+  pass: string;
+  fromUsd: number;
+  toUsd: number;
+}
+
+/**
+ * Reconcile presumed rows downward against Anthropic's reported totals
+ * (Usage & Cost API). The API reports totals per time bucket, not per
+ * request, so the only sound inference is an upper bound: within a bucket,
+ * presumed spend cannot exceed what Anthropic says the whole bucket cost,
+ * minus the actual settlements already recorded there. The remainder is split
+ * across that bucket's presumed rows in proportion to their reserved amounts,
+ * and a row is only ever lowered, never raised.
+ *
+ * Pure over its inputs so it can be exercised offline; the fetch that
+ * produces `buckets` lives in the reconcile script.
+ */
+export function reconcilePresumedCostsAgainstReportedTotals(
+  buckets: readonly ReportedCostBucket[],
+  now: Date = new Date(),
+  db: ThesisDb = getDb(),
+): PresumedReconciliation[] {
+  const nowIso = now.toISOString();
+  return db.transaction((tx): PresumedReconciliation[] => {
+    const applied: PresumedReconciliation[] = [];
+    for (const bucket of buckets) {
+      if (!(bucket.startTime < bucket.endTime) || !Number.isFinite(bucket.reportedUsd)) {
+        throw new Error("jobScheduler: invalid reported cost bucket");
+      }
+      const inBucket = tx.select().from(costLog)
+        .where(and(
+          gte(costLog.createdAt, bucket.startTime),
+          lt(costLog.createdAt, bucket.endTime),
+        ))
+        .all();
+      const presumed = inBucket.filter(
+        (row) => row.settlementKind === "presumed" && row.reconciledAt === null && row.presumedAttemptId !== null,
+      );
+      if (presumed.length === 0) continue;
+      const actualMicro = inBucket
+        .filter((row) => row.settlementKind !== "presumed")
+        .reduce((total, row) => total + settledMicroUsd(row.costUsd), 0n);
+      const reportedMicro = settledMicroUsd(Math.max(0, bucket.reportedUsd));
+      const remainingMicro = reportedMicro > actualMicro ? reportedMicro - actualMicro : 0n;
+      const presumedTotalMicro = presumed.reduce(
+        (total, row) => total + settledMicroUsd(row.costUsd),
+        0n,
+      );
+      if (presumedTotalMicro <= remainingMicro) continue;
+      for (const row of presumed) {
+        const share = presumedTotalMicro === 0n
+          ? 0n
+          : (settledMicroUsd(row.costUsd) * remainingMicro) / presumedTotalMicro;
+        const nextUsd = Number(share) / MICRO_USD;
+        if (nextUsd >= row.costUsd) continue;
+        tx.update(costLog)
+          .set({ costUsd: nextUsd, reconciledAt: nowIso })
+          .where(eq(costLog.id, row.id))
+          .run();
+        applied.push({
+          id: row.id,
+          jobId: row.jobId,
+          attemptId: row.presumedAttemptId as string,
+          pass: row.step,
+          fromUsd: row.costUsd,
+          toUsd: nextUsd,
+        });
+      }
+    }
+    return applied;
+  }, { behavior: "immediate" });
 }
 
 function reconcileExpiredJobClaimsInTransaction(db: ThesisDb, nowIso: string): number {
@@ -921,6 +1129,11 @@ export function acquirePaidPassLease(
   now: Date | undefined,
   limits: SchedulerLimits,
   db: ThesisDb = getDb(),
+  /**
+   * Model this reservation is priced for. Recorded on the lease so a crash
+   * that leaves it to expire can name the model in its presumed-spend row.
+   */
+  model = "",
 ): PaidPassAcquireResult {
   assertLimits(limits);
   if (attemptId.trim().length === 0) throw new Error("jobScheduler: attemptId is required");
@@ -1013,6 +1226,7 @@ export function acquirePaidPassLease(
       pass,
       leaseOwner,
       reservedCostUsd: reserveMicro / MICRO_USD,
+      model,
       acquiredAt: nowIso,
       leaseExpiresAt,
     }).run();
@@ -1027,6 +1241,7 @@ export function acquirePaidPassLease(
         leaseOwner,
         jobLeaseOwner: claim.leaseOwner,
         reservedCostUsd: reserveMicro / MICRO_USD,
+        model,
         acquiredAt: nowIso,
         leaseExpiresAt,
       },
@@ -1299,19 +1514,37 @@ export function settlePaidPassLease<T>(
     }
 
     const exact = tx.select().from(jobLlmLeases).where(exactLeaseWhere(lease)).get();
-    if (exact === undefined) {
+    // The lease may already have expired into a PRESUMED cost row (D-07). That
+    // row is a placeholder for exactly this attempt, so the real settlement is
+    // still welcome: persisting it replaces the presumed maximum with measured
+    // usage in the same transaction (see persistPassSettlementInTransaction),
+    // which is the downward reconciliation the reservation policy calls for.
+    // Without this branch the only report of what the call actually cost would
+    // be thrown away and the maximum would stand.
+    const presumed = tx.select({ id: costLog.id, costUsd: costLog.costUsd })
+      .from(costLog)
+      .where(and(
+        eq(costLog.jobId, lease.jobId),
+        eq(costLog.runGeneration, lease.runGeneration),
+        eq(costLog.presumedAttemptId, lease.attemptId),
+        eq(costLog.step, lease.pass),
+      ))
+      .get();
+    if (exact === undefined && presumed === undefined) {
       throw new Error("jobScheduler: stale paid-pass lease has no settlement authority");
     }
-    if (exact.leaseExpiresAt <= authorityAt) {
+    if (exact !== undefined && exact.leaseExpiresAt <= authorityAt && presumed === undefined) {
       throw new Error("jobScheduler: expired paid-pass lease has no settlement authority");
     }
     const persisted = persistPassSettlementInTransaction(tx, settlementInput, prepared, {
       jobLeaseOwner: lease.jobLeaseOwner,
       authorityAt,
     });
-    const deleted = tx.delete(jobLlmLeases).where(exactLeaseWhere(lease)).run();
-    if (deleted.changes !== 1) {
-      throw new Error("jobScheduler: exact paid-pass lease disappeared during settlement");
+    if (exact !== undefined) {
+      const deleted = tx.delete(jobLlmLeases).where(exactLeaseWhere(lease)).run();
+      if (deleted.changes !== 1) {
+        throw new Error("jobScheduler: exact paid-pass lease disappeared during settlement");
+      }
     }
     let currentRevision: number | null = null;
     let currentSteps: StepProgress[] | null = null;
@@ -1412,9 +1645,11 @@ export function settlePaidPassLease<T>(
       currentSteps,
       currentTotalCostUsd,
       projectionError,
+      // A settlement against a presumed row is bounded by the presumed amount,
+      // which IS the reservation that was taken for this attempt.
       overReservation:
         settledMicroUsd(prepared.telemetry.costUsd) >
-        BigInt(reservationMicroUsd(exact.reservedCostUsd)),
+        BigInt(reservationMicroUsd(exact?.reservedCostUsd ?? presumed?.costUsd ?? 0)),
     };
   }, { behavior: "immediate" });
   if (result.inserted) requestPump(schedulerPumpState());

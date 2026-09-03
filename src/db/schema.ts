@@ -204,6 +204,12 @@ export const jobLlmLeases = sqliteTable(
     pass: text("pass").notNull(),
     leaseOwner: text("leaseOwner").notNull(),
     reservedCostUsd: real("reservedCostUsd").notNull(),
+    /**
+     * Model this reservation was priced for. Recorded so a lease that expires
+     * without settling can name the model in its presumed-spend cost row.
+     * Empty on rows written before the column existed.
+     */
+    model: text("model").notNull().default(""),
     acquiredAt: text("acquiredAt").notNull(),
     leaseExpiresAt: text("leaseExpiresAt").notNull(),
   },
@@ -239,11 +245,29 @@ export const costLog = sqliteTable(
     costUsd: real("costUsd").notNull().default(0),
     /** 1 when a server-side refusal fallback model handled the request (SPEC §5). */
     fallbackUsed: integer("fallbackUsed", { mode: "boolean" }).notNull().default(false),
+    /**
+     * "actual": settled from a provider `usage` block.
+     * "presumed": a paid-pass lease expired without settling, so the whole
+     * reservation is counted as spent until something reconciles it downward
+     * (DECISIONS D-07). Rows written before the column existed read "actual".
+     */
+    settlementKind: text("settlementKind").notNull().default("actual"),
+    /**
+     * For a presumed row, the paid attempt it stands for. Kept out of
+     * `attemptId` so the billed-attempt unique index stays reserved for real
+     * settlements and a late settlement can still be recorded.
+     */
+    presumedAttemptId: text("presumedAttemptId"),
+    /** When a presumed row was reconciled against reported usage. */
+    reconciledAt: text("reconciledAt"),
     createdAt: text("createdAt").notNull(),
   },
   (t) => [
     index("idx_cost_log_jobId").on(t.jobId),
     index("idx_cost_log_createdAt").on(t.createdAt),
+    uniqueIndex("idx_cost_log_presumed_attempt_pass")
+      .on(t.jobId, t.runGeneration, t.presumedAttemptId, t.step)
+      .where(sql`${t.presumedAttemptId} IS NOT NULL`),
     uniqueIndex("idx_cost_log_billed_attempt_pass")
       .on(t.jobId, t.runGeneration, t.attemptId, t.step)
       .where(sql`${t.attemptId} IS NOT NULL`),

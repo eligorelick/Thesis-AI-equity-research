@@ -551,6 +551,7 @@ describe("durable job claims", () => {
       leaseOwner: "ancestor:paid-owner",
       jobLeaseOwner: "ancestor:job-owner",
       reservedCostUsd: 0.5,
+      model: "claude-sonnet-5",
       acquiredAt: NOW.toISOString(),
       leaseExpiresAt: new Date(NOW.getTime() + 60_000).toISOString(),
     };
@@ -1462,7 +1463,7 @@ describe("paid-pass leases and exact spend gates", () => {
     }
   });
 
-  it("reclaims an expired permit with a fresh identity and denies the stale owner renew/release/settle authority", async () => {
+  it("reclaims an expired permit with a fresh identity, denies the stale owner renew/release, and reconciles its late settlement", async () => {
     const {
       acquirePaidPassLease,
       claimNextQueuedJob,
@@ -1484,13 +1485,31 @@ describe("paid-pass leases and exact spend gates", () => {
     expect(freshResult.lease.leaseOwner).not.toBe(old.leaseOwner);
     expect(renewPaidPassLease(old, later, LIMITS, first.db)).toBe(false);
     expect(releaseUnbilledPaidPassLease(old, first.db)).toBe(false);
-    expect(() => settlePaidPassLease(old, {
+
+    // Reclaiming the expired permit turned its reservation into presumed
+    // spend (DECISIONS D-07), so the old owner can no longer extend or
+    // release it — but its late settlement is still the only measurement of
+    // what that call actually cost, and it replaces the presumed maximum
+    // rather than being discarded.
+    expect(second.db.select().from(costLog).all()).toEqual([
+      expect.objectContaining({
+        presumedAttemptId: "old",
+        settlementKind: "presumed",
+        attemptId: null,
+        costUsd: 0.5,
+      }),
+    ]);
+    expect(settlePaidPassLease(old, {
       settlement: analystSettlement(),
       payloadFingerprint: "1.3.0:test",
       settledAt: later.toISOString(),
-    }, first.db, later)).toThrow(/lease|stale|authority/i);
-    expect(second.db.select().from(jobPassArtifacts).all()).toEqual([]);
-    expect(second.db.select().from(costLog).all()).toEqual([]);
+    }, first.db, later)).toMatchObject({ inserted: true });
+    expect(second.db.select().from(jobPassArtifacts).all()).toEqual([
+      expect.objectContaining({ attemptId: "old" }),
+    ]);
+    expect(second.db.select().from(costLog).all()).toEqual([
+      expect.objectContaining({ attemptId: "old", settlementKind: "actual", costUsd: 0.1 }),
+    ]);
     expect(second.db.select().from(jobLlmLeases).all()).toEqual([
       expect.objectContaining({ permitId: freshResult.lease.permitId }),
     ]);

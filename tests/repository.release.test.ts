@@ -30,6 +30,7 @@ const REQUIRED_RELEASE_FILES = [
   "config/models.json",
   "scripts/check-dependency-shape.mjs",
   "scripts/models-refresh.mjs",
+  "scripts/reconcile-presumed-costs.mjs",
   "scripts/run-security-audit.mjs",
   "tests/dependencyShape.test.ts",
   "tests/report.correctedCli.test.ts",

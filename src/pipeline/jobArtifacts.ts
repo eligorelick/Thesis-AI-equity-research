@@ -919,10 +919,28 @@ export function persistPassSettlementInTransaction<T>(
         webSearches: prepared.telemetry.webSearches,
         costUsd: prepared.telemetry.costUsd,
         fallbackUsed: prepared.telemetry.fallbackUsed,
+        settlementKind: "actual",
+        presumedAttemptId: null,
+        reconciledAt: null,
         createdAt: input.settledAt ?? new Date().toISOString(),
       })
       .run();
   }
+
+  // A settlement is evidence, so it supersedes any presumed maximum written
+  // for this attempt when its lease expired (DECISIONS D-07). Deleting inside
+  // the same transaction means no admission window ever counts both, and an
+  // unbillable settlement still clears the presumption it replaces.
+  tx.delete(costLog)
+    .where(
+      and(
+        eq(costLog.jobId, input.jobId),
+        eq(costLog.runGeneration, input.runGeneration),
+        eq(costLog.presumedAttemptId, input.attemptId),
+        eq(costLog.step, input.pass),
+      ),
+    )
+    .run();
 
   let currentGeneration = false;
   if (

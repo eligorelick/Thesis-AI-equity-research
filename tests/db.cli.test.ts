@@ -57,11 +57,25 @@ function resolveNpmExecPath(configured: string | undefined): string {
   return configured;
 }
 
+/**
+ * npm runs its update-notifier on every command, `run` included, and that is a
+ * live request to the registry from a child process the suite's fetch guard
+ * cannot reach. These tests exist to prove the real npm script works, so the
+ * npm invocation stays and the notifier is switched off in the child instead,
+ * along with the audit and funding chatter that would also reach out.
+ */
+const OFFLINE_NPM_ENV = {
+  npm_config_update_notifier: "false",
+  NO_UPDATE_NOTIFIER: "1",
+  npm_config_audit: "false",
+  npm_config_fund: "false",
+} as const;
+
 function providerFreeEnvironment(
   dbPath: string,
   source: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...source, THESIS_DB_PATH: dbPath };
+  const env: NodeJS.ProcessEnv = { ...source, ...OFFLINE_NPM_ENV, THESIS_DB_PATH: dbPath };
   const providerKeys = new Set(PROVIDER_ENV_KEYS);
   for (const key of Object.keys(env)) {
     if (providerKeys.has(key.toUpperCase() as (typeof PROVIDER_ENV_KEYS)[number])) {
@@ -146,6 +160,7 @@ describe("database CLI", () => {
           NODE_ENV: "test",
           THESIS_DB_PATH: "safe.db",
           SAFE_SETTING: "retained",
+          ...OFFLINE_NPM_ENV,
         },
         stdio: "pipe",
         timeout: 12_000,

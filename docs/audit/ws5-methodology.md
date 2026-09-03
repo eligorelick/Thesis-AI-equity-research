@@ -285,12 +285,22 @@ reads materially flattering (64% where the real combined figure is 92%).
 | --- | --- |
 | Book value per share | (total equity − preferred) / shares |
 | Leverage | total assets / total equity |
-| Net interest spread | interest income / average total assets − interest expense / interest-bearing funding (repurchase agreements) |
+| Net interest spread | interest income / average earning assets − interest expense / average interest-bearing liabilities — **withheld**, see below |
+| Net interest spread (repo-funded) | interest income / average total assets − **total** interest expense / **average** repurchase agreements — the labeled stand-in |
 
 Total assets is a fair yield denominator here — unlike at a bank — because a
-mortgage REIT's assets are interest-earning securities and loans. The spread is
-withheld when either leg or its balance is missing; a one-legged figure would
-misstate it.
+mortgage REIT's assets are interest-earning securities and loans. The funding
+leg is a different matter: companyfacts exposes only the repurchase-agreement
+balance, while the interest-expense numerator covers every borrowing the REIT
+runs. Dividing one by the other overstates the cost of funds and can flip the
+sign of the spread — interest income 3.9bn on average assets 75bn against
+interest expense 3.0bn over 50bn of repo prints −0.8% for a company reporting a
+positive spread. So the named metric is **withheld** and the repo-funded
+computation is published under its own name and marked a proxy, exactly as NIM
+gives way to net interest income over average total assets. Both legs are
+averaged over the current and prior period ends, so the two halves use the same
+denominator convention. Either figure is withheld when a leg or its balance is
+missing; a one-legged figure would misstate it.
 
 ## 4. FFO and AFFO (NAREIT)
 

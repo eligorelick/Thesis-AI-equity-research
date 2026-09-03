@@ -808,6 +808,7 @@ function mortgageReitMetrics(
   const end = bal0?.date ?? inc0?.date ?? null;
   const flow = end === null ? null : { end, durationHint: "FY" as const };
   const instant = end === null ? null : { end };
+  const priorInstant = bal1 === undefined ? null : { end: bal1.date };
   const noFacts = factsReason ?? "EDGAR companyfacts unavailable — XBRL line items could not be read";
 
   // --- book value per share (common)
@@ -881,10 +882,41 @@ function mortgageReitMetrics(
           ? { value: inc0.interestExpense, tag: "interestExpense", end: inc0.date, sourcePath: "statements:income.interestExpense" }
           : null));
   const repo = instant === null ? null : resolveTag(facts, REPO_FUNDING_TAGS, instant);
+  const repoPrior = priorInstant === null ? null : resolveTag(facts, REPO_FUNDING_TAGS, priorInstant);
 
   const avgAssets = average(assets, isNum(bal1?.totalAssets) ? bal1.totalAssets : null);
   const assetDenom = pos(avgAssets.value);
-  const fundingDenom = repo === null ? null : pos(repo.value);
+  // The funding leg is averaged the same way the asset leg is. Dividing a
+  // full-year interest expense by a period-END balance while the other leg used
+  // an average made the two halves of the spread incomparable even before the
+  // numerator problem below.
+  const avgRepo = repo === null ? { value: null, basis: "" } : average(repo.value, repoPrior?.value ?? null);
+  const fundingDenom = pos(avgRepo.value);
+
+  // The NAMED metric is interest expense over average INTEREST-BEARING
+  // LIABILITIES. companyfacts exposes only the repurchase-agreement balance,
+  // while the interest-expense numerator covers every borrowing the REIT runs,
+  // so the two do not match and the quotient overstates the cost of funds —
+  // enough to flip the sign of the spread for a REIT with non-repo debt
+  // (interest income 3.9bn on average assets 75bn against interest expense
+  // 3.0bn over 50bn of repo printed -0.8% for a company reporting a positive
+  // spread). The named figure is therefore WITHHELD and the repo-funded
+  // computation is published under its own name, exactly as NIM is withheld in
+  // favour of net interest income over average total assets.
+  out.push(
+    withheld(
+      "netInterestSpread",
+      "net interest spread",
+      "%",
+      "the definition divides interest expense by average INTEREST-BEARING LIABILITIES; companyfacts exposes only the repurchase-agreement balance while the interest-expense numerator covers every borrowing the REIT runs, so that quotient overstates the cost of funds and can flip the sign of the spread — the named metric is withheld and the repo-funded computation is published under its own name instead",
+      "interest income / average earning assets − interest expense / average interest-bearing liabilities",
+      [
+        ...INTEREST_INCOME_OPERATING_TAGS.slice(0, 1).map(tagPath),
+        ...INTEREST_EXPENSE_TAGS.slice(0, 1).map(tagPath),
+        ...REPO_FUNDING_TAGS.map(tagPath),
+      ],
+    ),
+  );
 
   if (
     intIncome !== null &&
@@ -897,17 +929,27 @@ function mortgageReitMetrics(
     const costPct = (Math.abs(intExpense.value) / fundingDenom) * 100;
     out.push(
       metric({
-        key: "netInterestSpread",
-        label: "net interest spread",
+        key: "netInterestSpreadRepoFunded",
+        label: "net interest spread (repo-funded)",
         unit: "%",
         value: yieldPct - costPct,
         basis:
           `asset yield (interest income ${intIncome.value} / average total assets ${assetDenom}, ${avgAssets.basis}) ` +
-          `${yieldPct.toFixed(2)}% − funding cost (interest expense ${Math.abs(intExpense.value)} / repurchase ` +
-          `agreements ${fundingDenom}) ${costPct.toFixed(2)}%. A mortgage REIT's assets are interest-earning ` +
-          "securities and loans, so total assets is a fair yield denominator here — unlike at a bank.",
-        sources: [intIncome.sourcePath, intExpense.sourcePath, repo.sourcePath, "statements:balance.totalAssets"],
+          `${yieldPct.toFixed(2)}% − funding cost (TOTAL interest expense ${Math.abs(intExpense.value)} / average ` +
+          `repurchase agreements ${fundingDenom}, ${avgRepo.basis}) ${costPct.toFixed(2)}%. NOT the net interest ` +
+          "spread: interest on any borrowing other than repo sits in the numerator with no matching balance in the " +
+          "denominator, so the funding cost sits at or ABOVE a true cost of funds and this spread at or BELOW a true " +
+          "net interest spread. A mortgage REIT's assets are interest-earning securities and loans, so total assets " +
+          "is a fair yield denominator here — unlike at a bank.",
+        sources: [
+          intIncome.sourcePath,
+          intExpense.sourcePath,
+          repo.sourcePath,
+          ...(repoPrior !== null ? [repoPrior.sourcePath] : []),
+          "statements:balance.totalAssets",
+        ],
         asOf: end,
+        proxy: true,
       }),
     );
   } else {
@@ -915,16 +957,16 @@ function mortgageReitMetrics(
     if (intIncome === null) missing.push("interest income");
     if (intExpense === null) missing.push("interest expense");
     if (assetDenom === null) missing.push("average total assets");
-    if (fundingDenom === null) missing.push("interest-bearing funding (repurchase agreements)");
+    if (fundingDenom === null) missing.push("repurchase-agreement funding balance");
     out.push(
       withheld(
-        "netInterestSpread",
-        "net interest spread",
+        "netInterestSpreadRepoFunded",
+        "net interest spread (repo-funded)",
         "%",
         facts === null && (intIncome === null || intExpense === null)
           ? noFacts
           : `${missing.join(", ")} unavailable — the spread needs both legs over their own average balances, and a one-legged figure would misstate it`,
-        "interest income / average assets − interest expense / interest-bearing funding",
+        "interest income / average total assets − total interest expense / average repurchase agreements",
         [
           ...INTEREST_INCOME_OPERATING_TAGS.slice(0, 1).map(tagPath),
           ...INTEREST_EXPENSE_TAGS.slice(0, 1).map(tagPath),

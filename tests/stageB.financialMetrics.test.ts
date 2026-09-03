@@ -422,7 +422,7 @@ describe("mortgage-REIT route metrics", () => {
     };
   }
 
-  it("computes book value per share, leverage and the net interest spread over their own denominators", () => {
+  it("computes book value per share, leverage and the repo-funded spread over their own denominators", () => {
     const r = computeFinancialMetrics("reit-mortgage", mreitInputs());
 
     // (10,000 − 1,000) / 900 = 10.0
@@ -431,12 +431,59 @@ describe("mortgage-REIT route metrics", () => {
     expect(find(r.metrics, "leverageAssetsToEquity").value).toBeCloseTo(8, 9);
 
     // yield 3,000/78,000 = 3.846...%; cost 1,800/60,000 = 3.0%; spread 0.846...pp
-    const spread = find(r.metrics, "netInterestSpread");
+    const spread = find(r.metrics, "netInterestSpreadRepoFunded");
     expect(spread.value).toBeCloseTo((3_000 / 78_000) * 100 - 3, 9);
     expect(spread.basis).toContain("unlike at a bank");
   });
 
-  it("withholds the spread when a funding balance is missing rather than reporting one leg", () => {
+  it("withholds the NAMED spread because the funding denominator is repo alone", () => {
+    // The numerator is TOTAL interest expense (every borrowing) while the only
+    // interest-bearing-liability balance companyfacts exposes is repo, so the
+    // quotient overstates the cost of funds and can flip the sign of the spread
+    // (interest income 3.9bn on average assets 75bn against interest expense
+    // 3.0bn over 50bn of repo printed −0.8% for a REIT reporting a positive
+    // spread). The named metric is withheld; the stand-in carries its own name
+    // and is marked a proxy, the way NIM gives way to net interest income over
+    // average total assets.
+    const r = computeFinancialMetrics("reit-mortgage", mreitInputs());
+
+    const named = find(r.metrics, "netInterestSpread");
+    expect(named.value).toBeNull();
+    expect(named.withheldReason).toContain("average INTEREST-BEARING LIABILITIES");
+    expect(named.proxy).toBe(false);
+
+    const standIn = find(r.metrics, "netInterestSpreadRepoFunded");
+    expect(standIn.proxy).toBe(true);
+    expect(standIn.label).toContain("repo-funded");
+    expect(standIn.basis).toContain("NOT the net interest spread");
+    expect(standIn.basis).toContain("at or BELOW a true");
+  });
+
+  it("averages the repo balance with the prior period end, as the asset leg is averaged", () => {
+    // Both legs must use the same denominator convention: a full-year interest
+    // expense over a period-END balance is not comparable to interest income
+    // over an AVERAGE balance.
+    const r = computeFinancialMetrics(
+      "reit-mortgage",
+      mreitInputs({
+        companyFacts: okFacts({
+          InterestAndDividendIncomeOperating: [{ ...FY, val: 3_000 }],
+          InterestExpense: [{ ...FY, val: 1_800 }],
+          SecuritiesSoldUnderAgreementsToRepurchase: [
+            { end: "2025-12-31", val: 60_000 },
+            { end: "2024-12-31", val: 50_000 },
+          ],
+        }),
+      }),
+    );
+    const spread = find(r.metrics, "netInterestSpreadRepoFunded");
+
+    // average repo (60,000 + 50,000)/2 = 55,000; cost 1,800/55,000 = 3.2727...%
+    expect(spread.value).toBeCloseTo((3_000 / 78_000) * 100 - (1_800 / 55_000) * 100, 9);
+    expect(spread.basis).toContain("average of the current and prior period-end balances");
+  });
+
+  it("withholds the stand-in too when a funding balance is missing rather than reporting one leg", () => {
     const r = computeFinancialMetrics(
       "reit-mortgage",
       mreitInputs({
@@ -446,10 +493,10 @@ describe("mortgage-REIT route metrics", () => {
         }),
       }),
     );
-    const spread = find(r.metrics, "netInterestSpread");
+    const spread = find(r.metrics, "netInterestSpreadRepoFunded");
 
     expect(spread.value).toBeNull();
-    expect(spread.withheldReason).toContain("repurchase agreements");
+    expect(spread.withheldReason).toContain("repurchase-agreement funding balance");
     // The balance-sheet metrics are unaffected.
     expect(find(r.metrics, "bookValuePerShare").value).toBeCloseTo(10, 9);
   });

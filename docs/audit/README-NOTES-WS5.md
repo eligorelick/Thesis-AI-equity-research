@@ -165,7 +165,7 @@ the manifest as `financialMetrics.<key>`.
 | --- | --- |
 | Bank | NIM, net interest income / average total assets (labeled stand-in), efficiency ratio, CET1 as reported **or** tangible common equity / tangible assets (labeled stand-in), NPL ratio, provisions / loans, cost of deposits |
 | Insurer | loss ratio, expense ratio (both `OtherUnderwritingExpense` **and** `DeferredPolicyAcquisitionCostAmortizationExpense` required; commission and fee INCOME is not an expense), combined ratio, prior-year reserve development |
-| Mortgage REIT | book value per share, leverage (assets / equity), net interest spread |
+| Mortgage REIT | book value per share, leverage (assets / equity), net interest spread — withheld, because the interest-expense numerator covers every borrowing while the only funding balance on file is repo — with a repo-funded stand-in published under its own name and marked a proxy |
 
 Two rules the README should state, because they are what make the figures
 trustworthy:

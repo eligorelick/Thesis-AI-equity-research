@@ -1033,6 +1033,21 @@ function createSettlementCheckpoint<T>(
     for (;;) {
       signal.throwIfAborted();
       const sequence = requestSequence + 1;
+      // The pass lease's one-request headroom exists only until a real request
+      // reserves for itself. Release it BEFORE that request asks for
+      // admission, not after: while both are live the pass's own lease
+      // occupies a paid slot (and job/rolling headroom) that its own first
+      // request then has to fit beside. At THESIS_MAX_ACTIVE_LLM_CALLS=1 that
+      // refused every first request with "capacity" — a transient reason, so
+      // the loop below retried forever and no provider request was ever sent —
+      // and at the default of 2 it serialised bull and bear, which costs bear
+      // a full cache write instead of the read runBullThenBear starts it early
+      // to get. Nothing is at risk in the window: no request has been sent, so
+      // there is nothing yet to bill.
+      if (sequence === 1 && lease !== null && lease.reservedCostUsd > 0) {
+        const resized = resizePaidPassLease(lease, 0, undefined, undefined);
+        if (resized !== null) lease = resized;
+      }
       const acquired = acquirePaidPassLease(
         state.claim,
         pass,
@@ -1046,12 +1061,6 @@ function createSettlementCheckpoint<T>(
       if (acquired.acquired) {
         requestSequence = sequence;
         requestLeases.set(acquired.lease.permitId, acquired.lease);
-        // The pass lease's one-request headroom exists only until a real
-        // request reserves for itself; release it so the two do not stack.
-        if (sequence === 1 && lease !== null && lease.reservedCostUsd > 0) {
-          const resized = resizePaidPassLease(lease, 0, undefined, undefined);
-          if (resized !== null) lease = resized;
-        }
         return { id: acquired.lease.permitId, maximumUsd: acquired.lease.reservedCostUsd };
       }
       if (

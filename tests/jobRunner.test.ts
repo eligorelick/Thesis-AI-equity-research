@@ -603,6 +603,25 @@ async function launchTestAnalystSide(
   await hooks?.beforeProviderLaunch?.(side);
 }
 
+/**
+ * A request admission that never resolves is the failure under test: a
+ * `capacity` refusal is transient, so the runner's reserve loop retries
+ * forever. Fail with the reason rather than the harness timeout.
+ */
+async function admittedWithin<T>(pending: Promise<T>, reason: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(reason)), 2_000);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 function testTelemetry<T>(pass: PassResultLike<T>, billable = true): TestTelemetry {
   return {
     model: pass.model,
@@ -2004,6 +2023,134 @@ describe("runJob - durable paid-pass settlements", () => {
       expect.objectContaining({ jobId, pass: "bull" }),
     ]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  /**
+   * A pass lease and its OWN first request lease must never occupy a paid slot
+   * at the same time (DECISIONS D-10). The pass lease reserves one request
+   * maximum only to cover a pass that settles without ever reaching the
+   * provider; it is released the moment the first request asks for admission.
+   */
+  it("admits a pass's own first request with THESIS_MAX_ACTIVE_LLM_CALLS=1", async () => {
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 1,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 900_000,
+      jobLeaseTtlMs: 900_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "single-slot-admission", new Date(), limits)!;
+    const base = mockPasses();
+    let liveDuringRequest: Array<{ pass: string; attemptId: string; reservedCostUsd: number }> = [];
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (deps, lifecycle, settlements) => {
+        await launchTestAnalystSide(lifecycle, "bull");
+        const admission = deps.admissionFor?.("bull");
+        expect(admission, "request admission must be threaded in request mode").toBeDefined();
+        // Refused, this never resolves: `capacity` is transient, so the
+        // runner's reserve loop would retry forever and no request is sent.
+        const permit = await admittedWithin(
+          admission!.reserve({ maximumUsd: 0.5 }),
+          "the pass's own first request was never admitted",
+        );
+        liveDuringRequest = handle.db
+          .select()
+          .from(jobLlmLeases)
+          .all()
+          .filter((row) => row.reservedCostUsd > 0)
+          .map((row) => ({
+            pass: row.pass,
+            attemptId: row.attemptId,
+            reservedCostUsd: row.reservedCostUsd,
+          }));
+        await admission!.release(permit);
+        await settlements?.bull?.(testSuccessSettlement(testAnalystPass("bull")));
+        lifecycle?.onPassFinish?.("bull");
+        await launchTestAnalystSide(lifecycle, "bear");
+        await settlements?.bear?.(testSuccessSettlement(testAnalystPass("bear")));
+        lifecycle?.onPassFinish?.("bear");
+        return { bull: testAnalystPass("bull"), bear: testAnalystPass("bear") };
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    });
+
+    expect(result.status).toBe("done");
+    // Only the request holds money while it is in flight — never the request
+    // plus the pass lease that exists to hand off to it.
+    expect(liveDuringRequest).toEqual([
+      expect.objectContaining({ pass: "bull", attemptId: expect.stringContaining("#r1") }),
+    ]);
+  });
+
+  it("lets bull and bear hold request leases at the same time at the default of 2", async () => {
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 2,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 900_000,
+      jobLeaseTtlMs: 900_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "two-slot-admission", new Date(), limits)!;
+    const base = mockPasses();
+    let concurrentRequests: string[] = [];
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (deps, lifecycle, settlements) => {
+        // The real ordering: bear launches while bull is still streaming, so
+        // bear reads the prompt cache bull just wrote.
+        await launchTestAnalystSide(lifecycle, "bull");
+        const bullAdmission = deps.admissionFor?.("bull")!;
+        const bullPermit = await admittedWithin(
+          bullAdmission.reserve({ maximumUsd: 0.5 }),
+          "bull's first request was never admitted",
+        );
+        await launchTestAnalystSide(lifecycle, "bear");
+        const bearAdmission = deps.admissionFor?.("bear")!;
+        const bearPermit = await admittedWithin(
+          bearAdmission.reserve({ maximumUsd: 0.5 }),
+          "bear's first request was refused while bull was still streaming",
+        );
+        concurrentRequests = handle.db
+          .select()
+          .from(jobLlmLeases)
+          .all()
+          .filter((row) => row.reservedCostUsd > 0)
+          .map((row) => row.pass)
+          .sort();
+        await bullAdmission.release(bullPermit);
+        await bearAdmission.release(bearPermit);
+        await settlements?.bull?.(testSuccessSettlement(testAnalystPass("bull")));
+        lifecycle?.onPassFinish?.("bull");
+        await settlements?.bear?.(testSuccessSettlement(testAnalystPass("bear")));
+        lifecycle?.onPassFinish?.("bear");
+        return { bull: testAnalystPass("bull"), bear: testAnalystPass("bear") };
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    });
+
+    expect(result.status).toBe("done");
+    expect(concurrentRequests).toEqual(["bear", "bull"]);
   });
 
   it("analyst finish lifecycle stays local until the durable settlement commits", async () => {

@@ -64,11 +64,22 @@ export const INTERNAL_COMMANDS = new Set([
   "test:coverage:risk",
 ]);
 
-/** Parse `.env.example` into sections of documented keys. */
+/**
+ * Parse `.env.example` into sections of documented keys.
+ *
+ * Two rules matter, and both come from how the file is actually written. A
+ * comment block describes the key it sits directly above: a blank line between
+ * them means the block is a note about the section, not about the next key. And
+ * a key with no block of its own shares the one above its neighbour, which is
+ * how the paired keys are written (the two concurrency caps, the two spend
+ * caps, the two lease TTLs, the two database overrides).
+ */
 export function parseEnvExample(text) {
   const sections = [];
   let section = null;
   let comment = [];
+  let adjacent = false;
+  let inherited = [];
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trimEnd();
     const sectionMatch = /^#\s*---+\s*(.+?)\s*-{3,}\s*$/.exec(line);
@@ -76,24 +87,34 @@ export function parseEnvExample(text) {
       section = { title: sectionMatch[1], entries: [] };
       sections.push(section);
       comment = [];
+      adjacent = false;
+      inherited = [];
       continue;
     }
-    if (line.length === 0) continue;
+    if (line.length === 0) {
+      comment = [];
+      adjacent = false;
+      continue;
+    }
     const commentedKey = /^#\s*([A-Z][A-Z0-9_]*)=(.*)$/.exec(line);
     const liveKey = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line);
     if (line.startsWith("#") && commentedKey === null) {
       comment.push(line.replace(/^#\s?/, ""));
+      adjacent = true;
       continue;
     }
     const match = liveKey ?? commentedKey;
     if (match === null) continue;
+    const own = adjacent && comment.length > 0 ? [...comment] : [];
+    if (own.length > 0) inherited = own;
     const entry = {
       key: match[1],
       value: match[2].trim(),
       optIn: liveKey === null,
-      comment: [...comment],
+      comment: own.length > 0 ? own : [...inherited],
     };
     comment = [];
+    adjacent = false;
     if (section === null) {
       section = { title: "Configuration", entries: [] };
       sections.push(section);

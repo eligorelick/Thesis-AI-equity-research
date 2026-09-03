@@ -65,6 +65,35 @@ describe("the generated configuration block", () => {
     ]);
   });
 
+  it("gives a key with no block of its own the one above its neighbour, and ignores a section note", async () => {
+    const { parseEnvExample, summarize } = await load();
+    const [section] = parseEnvExample(
+      "# --- Section ---------------------------------------------------------------\n" +
+        "# Both caps are enforced in SQLite.\n" +
+        "THESIS_FIRST=1\n" +
+        "THESIS_SECOND=2\n" +
+        "\n" +
+        "# A note about the section, not about the key below it.\n" +
+        "\n" +
+        "# What the third key does.\n" +
+        "THESIS_THIRD=3\n",
+    );
+    expect(section.entries.map((entry) => summarize(entry.comment))).toEqual([
+      "Both caps are enforced in SQLite.",
+      "Both caps are enforced in SQLite.",
+      "What the third key does.",
+    ]);
+  });
+
+  it("describes every key in the real .env.example", async () => {
+    const { parseEnvExample, summarize } = await load();
+    const undescribed = parseEnvExample(envExample())
+      .flatMap((section) => section.entries)
+      .filter((entry) => summarize(entry.comment).length === 0)
+      .map((entry) => entry.key);
+    expect(undescribed).toEqual([]);
+  });
+
   it("lists exactly the keys the schema validates, and finds them all documented", async () => {
     const { envSchemaKeys, renderConfigBlock, parseEnvExample, CONFIG_BEGIN } = await load();
     const keys = envSchemaKeys(envSource());

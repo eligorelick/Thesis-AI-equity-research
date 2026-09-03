@@ -1795,12 +1795,21 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
   // recurring capex and straight-line rent), falling back to the netIncome +
   // D&A approximation and saying so. Read-only from EDGAR companyfacts.
   const da = ttmInc?.depreciationAndAmortization ?? null;
+  // The FFO period is the latest FISCAL YEAR, and every input is read at that
+  // same period end. The NAREIT components (real-estate depreciation, gains on
+  // property sales, impairments) resolve as annual XBRL facts at `periodEnd`,
+  // so passing TRAILING net income, D&A or capex as the fallbacks made the
+  // fallback path a hybrid of two periods — a fiscal-year XBRL net income
+  // against trailing depreciation — while the primary path was already all
+  // fiscal year. A hybrid is worse than a stale-but-coherent figure, so the
+  // trailing fallbacks are refused; the REIT block carries the computed as-of
+  // and the note below states the basis.
   const nareitFfo = computeNareitFfo({
     companyFacts: bundle.edgar?.companyFacts ?? null,
     periodEnd: isoDay(ctx.incomeAnnual[0]?.date),
-    netIncome: ttmInc?.netIncome ?? num(ctx.incomeAnnual[0]?.netIncome),
-    depreciationAndAmortization: da ?? num(ctx.incomeAnnual[0]?.depreciationAndAmortization),
-    capitalExpenditure: ttmCf?.capitalExpenditure ?? num(ctx.cashflowAnnual[0]?.capitalExpenditure),
+    netIncome: num(ctx.incomeAnnual[0]?.netIncome),
+    depreciationAndAmortization: num(ctx.incomeAnnual[0]?.depreciationAndAmortization),
+    capitalExpenditure: num(ctx.cashflowAnnual[0]?.capitalExpenditure),
   });
   const ffoApprox = nareitFfo.ffo;
   const affoApprox = nareitFfo.affo;
@@ -1876,7 +1885,10 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
           shares: dilutedShares,
           netDebt: netDebtDerived,
           noiApprox,
-          asOf: ttmInc?.date ?? isoDay(inc0?.date),
+          // The FFO computation's own period end, never the trailing income
+          // date: labelling a fiscal-year FFO with a TTM as-of asserted a
+          // freshness the figure does not have.
+          asOf: nareitFfo.asOf ?? isoDay(inc0?.date),
           // WS5: print the basis FFO/AFFO were actually built on, and withhold
           // the whole block when the equity-vs-mortgage sub-map is unproven.
           ffoBasis: nareitFfo.ffoBasis,
@@ -1911,6 +1923,13 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
   if (route.base === "reit") {
     result.notes.push(...nareitFfo.notes);
     result.gaps.push(...nareitFfo.gaps);
+    result.notes.push(
+      `FFO, AFFO and everything derived from them (P/FFO, P/AFFO, the AFFO payout ratio) are measured on the latest ` +
+        `FISCAL YEAR${nareitFfo.asOf !== null ? ` ending ${nareitFfo.asOf}` : ""}, not on a trailing twelve months: ` +
+        "the NAREIT components resolve as annual XBRL facts, and mixing a fiscal-year net income with trailing " +
+        "depreciation would make the figure a hybrid of two periods. The share price in P/FFO is current, so for a " +
+        "REIT compounding FFO the multiple is measured against a figure up to three quarters old.",
+    );
   }
   // Basis disclosures for the point-in-time anchors chosen above (audit H2/M3).
   if (balanceAnchor.fallback !== null) {

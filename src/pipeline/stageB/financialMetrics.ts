@@ -1025,13 +1025,18 @@ export interface NareitFfoResult {
 
 export interface NareitFfoInputs {
   companyFacts: FetchResult<CompanyFacts> | null | undefined;
-  /** Period end of the income statement FFO is computed for. */
+  /**
+   * Period end of the income statement FFO is computed for. Every XBRL
+   * component resolves at this period end, so the fallbacks below MUST be from
+   * the same period: a fiscal-year net income against trailing depreciation is
+   * a hybrid of two periods, not a figure.
+   */
   periodEnd: string | null;
-  /** Net income fallback when the tag does not resolve (FMP-shaped). */
+  /** Net income fallback when the tag does not resolve — same period as `periodEnd`. */
   netIncome: number | null;
-  /** Total D&A fallback (FMP-shaped). */
+  /** Total D&A fallback — same period as `periodEnd`. */
   depreciationAndAmortization: number | null;
-  /** Capex fallback (FMP-shaped; negative outflow) for the rough AFFO. */
+  /** Capex fallback (negative outflow) for the rough AFFO — same period as `periodEnd`. */
   capitalExpenditure?: number | null;
 }
 

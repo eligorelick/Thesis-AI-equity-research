@@ -339,6 +339,14 @@ rent where the filer tags them. Where it does not, AFFO falls back to
 `FFO − all capital expenditure` and is disclosed as a **conservative floor**,
 since development spending is subtracted too.
 
+FFO is measured on **one** period: the latest fiscal year. Every XBRL component
+resolves at that period end, so the statement fallbacks are read from the same
+fiscal year rather than from a trailing window — a fiscal-year net income against
+trailing depreciation is a hybrid of two periods, not a figure. The REIT
+valuation block carries that period end as its as-of, and the notes say that the
+share price in P/FFO is current while the FFO it divides is up to three quarters
+old.
+
 P/FFO and P/AFFO are computed from these figures. When the REIT sub-map is
 `undetermined` (§1.4) every FFO-based figure is withheld.
 

@@ -150,7 +150,11 @@ assets that typically hold or gain value.
   equity, so the two can disagree and the report says so rather than claiming
   they cannot. It is withheld rather than clamped when `g` approaches the cost of
   equity and the ratio diverges.
-- **Equity REIT** — FFO and AFFO per the NAREIT definition, and P/FFO.
+- **Equity REIT** — FFO and AFFO per the NAREIT definition, and P/FFO. Both are
+  measured on the latest **fiscal year** — every component, including the
+  statement fallbacks, so the figure is never a hybrid of a fiscal-year net
+  income and a trailing depreciation — and the REIT block's as-of is that
+  period end.
 
 ## 6. Route metrics are computed now, not merely listed
 

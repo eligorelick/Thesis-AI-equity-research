@@ -62,6 +62,7 @@ const ALLOWED_MARKDOWN = new Set([
   "docs/audit/README-RECONCILIATION.md",
   "docs/audit/DECISIONS.md",
   "docs/audit/PROGRESS.md",
+  "docs/audit/REMEDIATION-REPORT.md",
   // WS8
   "docs/PRIVACY.md",
   "docs/DATA-RIGHTS.md",

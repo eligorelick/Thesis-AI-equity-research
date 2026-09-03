@@ -108,19 +108,23 @@ See [License and data rights](docs/DATA-RIGHTS.md) for what each allows.
 ## What the numbers mean
 
 [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) documents every convention and
-names its sources. In short: sector routing reads XBRL tag evidence alongside
-the SIC code and the industry label, and evidence that contradicts the declared
-classification is disclosed rather than acted on. Bank, insurer and
-mortgage-REIT routes withhold the FCFF discounted cash flow, the reverse DCF,
-EV/EBITDA, ROIC-minus-WACC, Altman Z, Beneish M and the accrual ratios — every
-estimation sample behind those excluded financial institutions — and value the
-company on excess returns to equity instead. Near-term growth is the median of
-the methods the data supports, with the range shown and every unavailable one
-named. Free cash flow is reported after stock-based compensation with the
-before figure beside it, and an own-history multiple is a rank among N quarters
-rather than a percentile, N printed beside it. Where a rule is this project's
-own choice rather than a standard, the report calls it a house convention in
-the same breath as the number.
+names its sources. Sector routing reads XBRL tag evidence alongside the SIC
+code and industry label, and evidence contradicting the declared classification
+is disclosed rather than acted on. Bank, insurer and mortgage-REIT routes
+withhold the FCFF DCF, the reverse DCF, EV/EBITDA, ROIC-minus-WACC, Altman Z,
+Beneish M and the accrual ratios — every estimation sample behind those
+excluded financial institutions — and value the company on excess returns to
+equity instead. Near-term growth is the median of the methods the data
+supports, range shown and unavailable ones named. Free cash flow is reported
+after stock-based compensation with the before figure beside it; an own-history
+multiple is a rank among N quarters rather than a percentile, N printed beside
+it. Where a rule is this project's own choice rather than a standard, the
+report calls it a house convention in the same breath as the number.
+
+The forensic scores are published models;
+[`docs/RESEARCH.md`](docs/RESEARCH.md) is their evidence base — coefficients
+with their papers, the population each was fitted on, and where each stops
+applying. The source cites it by section.
 
 A report with no Anthropic key still carries every deterministic result and
 says that no analyst pass ran; only the narrative sections are empty.
@@ -181,17 +185,17 @@ passes was schema-rejected once and repaired, so its winning requests were $2.66
 ## Running it safely
 
 Thesis sends nothing to Thesis: no telemetry, no analytics, no update check.
-The only outbound traffic goes to the providers you configure —
-[Privacy and safety](docs/PRIVACY.md) names exactly what each one receives,
-where the local database lives, and how to delete it.
+The only outbound traffic goes to the providers you configure.
+[Privacy and safety](docs/PRIVACY.md) names what each receives, where the local
+database lives, and how to delete it.
 
 The application is single-user and has no authentication; keep it on loopback
 unless you add a security layer of your own. Mutating routes reject a request
 carrying neither browser Fetch Metadata nor a matching `Origin`; browsers send
-those automatically, and scripts must send `X-Thesis-Token` with the contents
-of the `csrf-token` file the server writes at every start and names on stdout.
-That is a browser-CSRF boundary, not local access control: any process on the
-machine can present the same headers. Report security problems through the
+those automatically, and scripts must send `X-Thesis-Token` with the contents of
+the `csrf-token` file the server writes at every start and names on stdout. That
+is a browser-CSRF boundary, not local access control: any process on the machine
+can present the same headers. Report security problems through the
 repository's [private advisory form](https://github.com/eligorelick/Thesis-AI-equity-research/security/advisories/new), not a public issue.
 
 ## Commands

@@ -72,6 +72,10 @@ const ALLOWED_MARKDOWN = new Set([
   // WS5
   "docs/audit/README-NOTES-WS5.md",
   "docs/METHODOLOGY.md", // WS6
+  // The evidence base the forensic code cites by section. `research §N` was
+  // cited from three source files for months with no such document in the
+  // repository; docs.lint now asserts every citation resolves to a heading.
+  "docs/RESEARCH.md",
   "docs/audit/README-NOTES-WS6.md", // WS6
   // WS4: the data-layer handover notes for the README rewrite.
   "docs/audit/README-NOTES-WS4.md",
@@ -356,10 +360,15 @@ describe("public release contract", () => {
     const workflow = await parseWorkflow(workflowSource);
     const full = workflow.jobs?.full;
     const windows = workflow.jobs?.["windows-smoke"];
+    // @v5 as of 2026-09-03. The v4 actions target the Node 20 runtime, which
+    // GitHub deprecated; every run was printing a warning and being forced onto
+    // Node 24 anyway. Pinning the major version here is deliberate — a silent
+    // bump is how a supply chain moves under you — so this line is the record
+    // that the change was made and why.
     const expectedSteps = (nodeVersion: number, commands: readonly string[]) => [
-      { uses: "actions/checkout@v4" },
+      { uses: "actions/checkout@v5" },
       {
-        uses: "actions/setup-node@v4",
+        uses: "actions/setup-node@v5",
         with: { "node-version": nodeVersion, cache: "npm" },
       },
       ...commands.map((run) => ({ run })),

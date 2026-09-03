@@ -4,7 +4,7 @@
  * produce; the rest is checked for the claims the 2026-09-02 audit found stale,
  * so a retired rule cannot quietly reappear. No network.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -82,8 +82,18 @@ describe("the README's generated blocks", () => {
 });
 
 describe("the README's prose", () => {
+  /**
+   * A front door someone will actually read, not a manual.
+   *
+   * Raised from 250 to 260 on 2026-09-03 to make room for the handoff to
+   * `docs/RESEARCH.md`, the forensic models' evidence base. The alternative was
+   * to delete a true statement or compress prose until it read badly, and the
+   * cap exists to keep the README readable — not to hold it at a round number.
+   * It is still a hard cap: the next addition earns its space by removing
+   * something, or moves the number again on the record, as this one did.
+   */
   it("stays short enough to be read", () => {
-    expect(readme().trimEnd().split("\n").length).toBeLessThanOrEqual(250);
+    expect(readme().trimEnd().split("\n").length).toBeLessThanOrEqual(260);
   });
 
   it("links only to files that exist", () => {
@@ -110,8 +120,81 @@ describe("the README's prose", () => {
 
   it("names every document it is meant to hand off to", () => {
     const text = readme();
-    for (const doc of ["docs/METHODOLOGY.md", "docs/PRIVACY.md", "docs/DATA-RIGHTS.md"]) {
+    for (const doc of ["docs/METHODOLOGY.md", "docs/PRIVACY.md", "docs/DATA-RIGHTS.md", "docs/RESEARCH.md"]) {
       expect(text).toContain(doc);
     }
+  });
+});
+
+/**
+ * The forensic code cites its evidence base by section — `research §2.5`, and
+ * eighteen others. For months no such document existed in the repository, so a
+ * reader auditing a coefficient had nowhere to go and the citations could say
+ * anything. This asserts each one lands on a real heading of docs/RESEARCH.md.
+ */
+describe("the research citations in the source", () => {
+  const research = (): string => readFileSync(path.join(ROOT, "docs", "RESEARCH.md"), "utf8");
+
+  /** Every `research §N` / `§N.M` / `§N.M–N.M` cited anywhere under src/. */
+  function citedSections(): string[] {
+    const cited = new Set<string>();
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".ts")) {
+          const text = readFileSync(full, "utf8");
+          for (const match of text.matchAll(/research §([0-9]+(?:\.[0-9]+)?)(?:\s*[–-]\s*([0-9]+(?:\.[0-9]+)?))?/g)) {
+            cited.add(match[1]!);
+            // A range cites its endpoints AND everything between: "§1.1–1.3"
+            // must not pass while §1.2 is missing.
+            if (match[2] !== undefined) {
+              const [from, to] = [Number(match[1]), Number(match[2])];
+              const major = Math.trunc(from);
+              for (let minor = Math.round(from * 10); minor <= Math.round(to * 10); minor++) {
+                cited.add(minor % 10 === 0 ? String(major) : (minor / 10).toFixed(1));
+              }
+            }
+          }
+        }
+      }
+    };
+    walk(path.join(ROOT, "src"));
+    return [...cited].sort();
+  }
+
+  /** Section numbers docs/RESEARCH.md actually defines, from its headings. */
+  function definedSections(): Set<string> {
+    return new Set(
+      [...research().matchAll(/^#{2,3} ([0-9]+(?:\.[0-9]+)?)[.\s]/gm)].map((match) => match[1]!),
+    );
+  }
+
+  it("cites at least the sections the forensic models need", () => {
+    const cited = citedSections();
+    expect(cited.length).toBeGreaterThanOrEqual(15);
+    // The four models and the applicability limits are the load-bearing ones.
+    for (const section of ["1", "2.4", "4.3", "6.3"]) expect(cited).toContain(section);
+  });
+
+  it("resolves every cited section to a heading in docs/RESEARCH.md", () => {
+    const defined = definedSections();
+    for (const section of citedSections()) {
+      expect(defined.has(section), `src cites research §${section}, which docs/RESEARCH.md does not define`).toBe(true);
+    }
+  });
+
+  it("separates published findings from house rules on every model", () => {
+    const text = research();
+    // The distinction is the document's whole point: a reader must be able to
+    // tell a coefficient from the original paper apart from a display band this
+    // project chose. Both labels appear, and the legend explaining them does.
+    expect(text).toContain("**Published");
+    expect(text).toContain("**House rule");
+    expect(text).toContain("**Resolved ambiguity");
+    // The Beneish transcription error is the one a reader is most likely to
+    // "correct" back to the wrong value.
+    expect(text).toContain("4.679");
+    expect(text).toContain("4.697");
   });
 });

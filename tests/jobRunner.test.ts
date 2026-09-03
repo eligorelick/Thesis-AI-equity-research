@@ -92,7 +92,11 @@ vi.mock("@/providers/anthropic", () => ({
   webSearchTool: providerBoundaryMocks.webSearchTool,
 }));
 
-import { resolveModel, type RequestAdmission } from "@/providers/anthropic";
+import {
+  maximumPassCostUsd,
+  resolveModel,
+  type RequestAdmission,
+} from "@/providers/anthropic";
 import {
   bootstrapSchema,
   createDatabase,
@@ -6013,6 +6017,60 @@ describe("runJob — full pipeline with mock passes", () => {
     expect(source.match(/getWritableSettingsAuthority\(/g)).toHaveLength(1);
     expect(source).not.toContain("getAnalysisModelSetting");
     expect(source).not.toContain("getAnalysisEffortSetting");
+  });
+
+  // WS7 (D-20), 2026-09 review — SHOULD-FIX 9.
+  it("reserves BOTH judge orders in pass mode, where nothing admits them separately", async () => {
+    const original = configMocks.getConfig.getMockImplementation()!;
+    configMocks.getConfig.mockImplementation(() => ({
+      ...original(),
+      reservationMode: "pass" as const,
+      judgeOrder: "both" as const,
+    }));
+    const maximumPassCost = vi.mocked(maximumPassCostUsd);
+    maximumPassCost.mockClear();
+    try {
+      const { jobId } = createJob("AAPL");
+      const result = await runJob(jobId, mockPasses().passes, {
+        bundle: fakeBundle("AAPL"),
+        hasAnthropicKey: true,
+        now: NOW,
+      });
+      expect(result.status).toBe("done");
+    } finally {
+      configMocks.getConfig.mockImplementation(original);
+    }
+
+    // `both` issues a MIRRORED second judge request per attempt. In "request"
+    // mode each is admitted and settled on its own, so the pass lease stays one
+    // request maximum; in "pass" mode there is no per-request admission at all,
+    // and the two were sharing one reservation sized for a single order. The
+    // count for the setting now reaches the bound (which applies it to the judge
+    // and to nothing else — pinned in tests/requestAdmission.test.ts).
+    const both = maximumPassCost.mock.calls.filter((call) => call[1] === "synthesize");
+    expect(both.length).toBeGreaterThan(0);
+    expect(both.every((call) => call[3] === 2)).toBe(true);
+
+    // And the default one-order setting still reserves for one order.
+    maximumPassCost.mockClear();
+    const oneOrder = configMocks.getConfig.getMockImplementation()!;
+    configMocks.getConfig.mockImplementation(() => ({
+      ...oneOrder(),
+      reservationMode: "pass" as const,
+    }));
+    try {
+      const { jobId } = createJob("MSFT");
+      await runJob(jobId, mockPasses().passes, {
+        bundle: fakeBundle("MSFT"),
+        hasAnthropicKey: true,
+        now: NOW,
+      });
+    } finally {
+      configMocks.getConfig.mockImplementation(oneOrder);
+    }
+    const single = maximumPassCost.mock.calls.filter((call) => call[1] === "synthesize");
+    expect(single.length).toBeGreaterThan(0);
+    expect(single.every((call) => call[3] === 1)).toBe(true);
   });
 
   // WS7 (D-20), 2026-09 review — BLOCKER 1, on the PRIMARY (verify-succeeded)

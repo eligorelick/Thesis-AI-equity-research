@@ -73,6 +73,7 @@ import {
 // PURE module (no clock, no network, no provider) — the passes module itself
 // stays injected, as the decoupling note above requires.
 import {
+  JUDGE_PASSES_PER_SETTING,
   judgeProtocolManifestEntries,
   restampSharedModelFamily,
 } from "@/pipeline/stageC/judgeProtocol";
@@ -931,7 +932,17 @@ function throwFirstSettlementRejection(outcomes: PromiseSettledResult<unknown>[]
  * request maximum per in-flight call. In "pass" mode it reserves the
  * pre-remediation bound covering every request the pass could make, kept for
  * one release as a fallback.
+ *
+ * WS7 (D-20), 2026-09 review: "every request the pass could make" includes the
+ * MIRRORED judge request under `THESIS_JUDGE_ORDER=both`. In "request" mode both
+ * requests are admitted and settled individually, so the pass lease is still one
+ * request maximum; in "pass" mode there is no per-request admission at all, and
+ * two judge requests were sharing one reservation sized for one order.
  */
+function judgeRequestsPerPass(): 1 | 2 {
+  return JUDGE_PASSES_PER_SETTING[getConfig().judgeOrder];
+}
+
 function passReservationUsd(
   model: string,
   pass: DurablePass,
@@ -941,7 +952,7 @@ function passReservationUsd(
     return maximumPassCostUsd(model, pass, verifyCapability);
   }
   return getConfig().reservationMode === "pass"
-    ? maximumPassCostUsd(model, pass, verifyCapability)
+    ? maximumPassCostUsd(model, pass, verifyCapability, judgeRequestsPerPass())
     : maximumRequestCostUsd(model, pass, verifyCapability);
 }
 

@@ -1883,6 +1883,38 @@ function buildStatementRows<TRow>(
       values[field] = r === null ? null : tidy(r.value, decimalsFor(spec.unit));
       if (r !== null) resolutions.set(field, r);
     }
+    // A quarter derived by SUBTRACTING year-to-date figures can come out
+    // negative when the two operands do not describe the same thing — a
+    // comparative re-presented between the two filings, a perimeter change, a
+    // filer that tagged a cumulative figure as a quarter. Negative revenue for
+    // a quarter is not something any filer reported; it is an artefact of the
+    // subtraction, and publishing it puts a negative number into every growth
+    // rate, margin and multiple that reads the quarter. It becomes a disclosed
+    // gap naming the two periods it came from.
+    const derivedRevenue = resolutions.get("revenue");
+    const revenueValue = values.revenue;
+    if (
+      slot.quarter !== null &&
+      derivedRevenue !== undefined &&
+      derivedRevenue.derivation !== undefined &&
+      revenueValue !== null &&
+      revenueValue !== undefined &&
+      revenueValue < 0
+    ) {
+      const operands = derivedRevenue.derivedFrom ?? [];
+      const text =
+        `revenue WITHHELD for this quarter: the ${DERIVATION_PHRASE[derivedRevenue.derivation]} derivation produced ` +
+        `${revenueValue}, and a negative quarterly revenue is not a figure any filer reported — it is an artefact of ` +
+        `subtracting two periods that do not describe the same thing (a comparative re-presented between the filings, ` +
+        `a change of perimeter, or a cumulative figure tagged as a quarter). The operands were: ${
+          operands.length > 0 ? operands.join(" MINUS ") : "not recorded"
+        }.`;
+      notes.add(`${def.statement} ${ctxLabel}: ${text}`);
+      notes.withhold("revenue", slot.date, text);
+      values.revenue = null;
+      resolutions.delete("revenue");
+    }
+
     for (const [alias, source] of Object.entries(def.aliases)) values[alias] = values[source] ?? null;
 
     const anchorField = def.anchors.find((f) => resolutions.has(f));

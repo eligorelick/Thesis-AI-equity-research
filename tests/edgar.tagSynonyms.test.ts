@@ -1,8 +1,9 @@
 /**
  * The versioned tag-synonym table is the single source of the us-gaap element
  * names every statement chain resolves, so these tests pin the stamp, the
- * interest-expense contract the WACC depends on, and the fact that the
- * statements module reads the table rather than a second copy of the names.
+ * interest-expense contract the WACC depends on, and the fact that every
+ * module resolving companyfacts reads the table rather than a second copy of
+ * the names.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -92,10 +93,20 @@ describe("tag synonyms — derived-EBIT adjustments and the debt-maturity stand-
   });
 });
 
-describe("tag synonyms — the statements module has no second copy of the names", () => {
-  const statements = readFileSync(path.join(process.cwd(), "src", "edgar", "statements.ts"), "utf8");
+describe("tag synonyms — no module keeps a second copy of the names", () => {
+  /**
+   * Every module that resolves companyfacts concepts. `keyless.ts` joins the
+   * scan because it kept its own
+   * `DEI_SHARES_TAG = "EntityCommonStockSharesOutstanding"` literal — exactly
+   * the drift the versioned module exists to prevent, and invisible while the
+   * scan covered `statements.ts` alone.
+   */
+  const SCANNED: readonly string[][] = [
+    ["src", "edgar", "statements.ts"],
+    ["src", "pipeline", "keyless.ts"],
+  ];
 
-  it("declares every us-gaap element name in the synonym module", () => {
+  it.each(SCANNED)("declares every element name of %s/%s/%s in the synonym module", (...parts) => {
     const declared = new Set<string>();
     for (const item of Object.keys(LINE_ITEM_TAGS) as LineItem[]) {
       for (const tag of tagsFor(item)) declared.add(tag);
@@ -103,9 +114,10 @@ describe("tag synonyms — the statements module has no second copy of the names
     }
     for (const adjustment of EBIT_NON_OPERATING_ADJUSTMENTS) for (const tag of adjustment.tags) declared.add(tag);
 
-    // Any bare "PascalCaseTagName" string literal left in statements.ts that
-    // looks like a us-gaap element must come from the table above.
-    const literals = statements.match(/"[A-Z][A-Za-z0-9]{11,}"/g) ?? [];
+    // Any bare "PascalCaseTagName" string literal left in the module that looks
+    // like a us-gaap or dei element must come from the table above.
+    const source = readFileSync(path.join(process.cwd(), ...parts), "utf8");
+    const literals = source.match(/"[A-Z][A-Za-z0-9]{11,}"/g) ?? [];
     const strays = [...new Set(literals.map((l) => l.slice(1, -1)))].filter((name) => !declared.has(name));
     expect(strays).toEqual([]);
   });

@@ -201,6 +201,60 @@ describe("buildStatementsFromCompanyFacts — annual rows", () => {
   });
 });
 
+describe("buildStatementsFromCompanyFacts — a derived quarter is never published with negative revenue", () => {
+  /** appleLike with a YTD-only revenue series whose H1 figure is BELOW its Q1 one. */
+  const shrinkingYtd = (): CompanyFacts =>
+    addTags(appleLike(), {
+      RevenueFromContractWithCustomerExcludingAssessedTax: [
+        { start: "2024-09-29", end: "2025-09-27", val: 400, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" },
+        { start: "2024-09-29", end: "2024-12-28", val: 120, form: "10-Q", fp: "Q1", fy: 2025, filed: "2025-01-31" },
+        // A re-presented year-to-date: 100 at H1 against 120 at Q1, so the
+        // difference is -20. No filer reported a negative quarter of revenue.
+        { start: "2024-09-29", end: "2025-03-29", val: 100, form: "10-Q", fp: "Q2", fy: 2025, filed: "2025-05-02" },
+        { start: "2024-09-29", end: "2025-06-28", val: 300, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+        { start: "2023-10-01", end: "2024-09-28", val: 380, form: "10-K", fp: "FY", fy: 2024, filed: "2024-11-01" },
+      ],
+    });
+
+  it("withholds the figure and names the two periods it came from", () => {
+    const built = buildStatementsFromCompanyFacts(shrinkingYtd(), OPTS);
+    const q2 = built.incomeQuarterly.rows.find((r) => r.date === "2025-03-29")!;
+    // The row survives on its other anchor; only the impossible figure is gone,
+    // and it is null rather than zero.
+    expect(q2.revenue).toBeNull();
+    expect(q2.netIncome).toBe(25);
+    expect(built.incomeQuarterly.withheld).toEqual([
+      {
+        field: "revenue",
+        periods: ["2025-03-29"],
+        text: expect.stringMatching(/^revenue WITHHELD for this quarter: the YTD difference derivation produced -20/),
+      },
+    ]);
+    const [held] = built.incomeQuarterly.withheld;
+    expect(held!.text).toMatch(/2025-03-29 MINUS .*2024-12-28/);
+    expect(built.incomeQuarterly.notes.some((n) => /revenue WITHHELD for this quarter/.test(n))).toBe(true);
+  });
+
+  it("publishes an ordinary positive derived quarter untouched", () => {
+    const built = buildStatementsFromCompanyFacts(shrinkingYtd(), OPTS);
+    const q3 = built.incomeQuarterly.rows.find((r) => r.date === "2025-06-28")!;
+    expect(q3).toMatchObject({ revenue: 200, derivation: "ytd-difference" }); // 300 − 100
+    expect(built.incomeQuarterly.withheld.map((w) => w.periods).flat()).toEqual(["2025-03-29"]);
+  });
+
+  it("leaves a negative ANNUAL revenue alone — it was filed, not derived", () => {
+    // The rule is about the subtraction, not about the sign: a figure a filer
+    // actually reported is never second-guessed here.
+    const built = buildStatementsFromCompanyFacts(
+      addTags(appleLike(), {
+        Revenues: [{ start: "2024-09-29", end: "2025-09-27", val: -5, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      }),
+      OPTS,
+    );
+    expect(built.incomeAnnual.withheld).toEqual([]);
+  });
+});
+
 describe("buildStatementsFromCompanyFacts — quarterly rows", () => {
   it("uses tagged 3-month income facts, derives the missing quarter from YTD and the fourth from FY − YTD", () => {
     const built = buildStatementsFromCompanyFacts(appleLike(), OPTS);

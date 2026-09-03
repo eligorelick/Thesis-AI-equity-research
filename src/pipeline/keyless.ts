@@ -39,6 +39,7 @@ import {
   type StatementRowsResult,
 } from "@/edgar/statements";
 import { conceptFactsSchema, dedupFactPoints, parseFactPoints, type CompanyFacts, type FactPoint } from "@/edgar/xbrl";
+import { tagsFor } from "@/edgar/tagSynonyms";
 import { describeSplitRatio, discoverStockSplits, SPLIT_RATIO_TAG, type SplitEvent } from "@/edgar/splits";
 import {
   SUCCESSOR_FORM,
@@ -195,7 +196,12 @@ function marketCapEndpoint(basis: SharesBasis | null): string {
 }
 const SHARES_FLOAT_ENDPOINT = "companyfacts→shares-float(dei:EntityCommonStockSharesOutstanding + dei:EntityPublicFloat)";
 
-const DEI_SHARES_TAG = "EntityCommonStockSharesOutstanding";
+/**
+ * The dei cover-page element name, from the ONE versioned module that holds
+ * every element name (criterion (b)); this file used to keep a second copy of
+ * the literal, which is exactly the drift the module exists to prevent.
+ */
+const DEI_SHARES_TAG = tagsFor("deiSharesOutstanding")[0] as string;
 
 /**
  * A cover-page share count is dated a few weeks AFTER the fiscal period it

@@ -16,7 +16,7 @@ provider calls below, and each one goes only to the provider it names.
 | Anthropic (`api.anthropic.com`) | The analysis prompt and the serialized ticker context payload; `ANTHROPIC_API_KEY` | `ANTHROPIC_API_KEY` is set |
 | Anthropic's server-side web search | Search queries the model composes, executed by Anthropic on its own servers | The model chooses to search; capped at `MAX_PROVIDER_WEB_SEARCHES` = 8 uses per request (`src/providers/anthropic.ts`) |
 | Financial Modeling Prep (`financialmodelingprep.com`) | The symbol and endpoint parameters; `FMP_API_KEY` in an `apikey` header, never in the URL | `FMP_API_KEY` is set |
-| Yahoo (`query1.finance.yahoo.com`) | The symbol and the requested date range; a Thesis-identifying `User-Agent` (`YAHOO_DEFAULT_USER_AGENT`, mandatory — the endpoint answers 429 without one) | Prices are needed and FMP could not serve them |
+| Yahoo (`query1.finance.yahoo.com`) | The symbol and the requested date range; a Thesis-identifying `User-Agent` (`YAHOO_DEFAULT_USER_AGENT`, mandatory — the endpoint answers 429 without one). It names the product only: **`EDGAR_CONTACT` is never sent to Yahoo**, or to any provider other than SEC | Prices are needed and FMP could not serve them |
 | FRED (`api.stlouisfed.org`, `fred.stlouisfed.org`) | The series id; `FRED_API_KEY` as an `api_key` query parameter. Without a key, the keyless `fredgraph.csv` fallback sends the series id only | Macro series are requested |
 | Finnhub (`finnhub.io`) | The symbol; `FINNHUB_API_KEY` in an `X-Finnhub-Token` header | `FINNHUB_API_KEY` is set |
 | FINRA (`api.finra.org`) | The symbol and date range. Keyless: no credential is configured or sent | Short-interest data is requested |

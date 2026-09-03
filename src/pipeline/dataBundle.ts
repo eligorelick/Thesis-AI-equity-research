@@ -40,9 +40,7 @@ import {
   createDbCachedEdgarTransport,
   createEdgarClient,
   findDocumentByType,
-  hasConfiguredEdgarIdentity,
   padCik,
-  resolveEdgarUserAgent,
   type CikMapping,
   type EdgarClient,
   type EdgarFiling,
@@ -1430,20 +1428,18 @@ export async function buildDataBundle(
   const edgar =
     opts.edgar ??
     createEdgarClient({ transport: createDbCachedEdgarTransport({ signal: opts.signal }) });
-  // Yahoo's chart edge answers 429 to a client that declares nothing. When the
-  // operator has configured a reachable EDGAR contact, reuse it so the same
-  // identity that SEC access is declared under also identifies these requests;
-  // otherwise the client's own honest default applies.
-  const edgarContact = hasConfiguredEdgarIdentity() ? resolveEdgarUserAgent() : null;
+  // Yahoo's chart edge answers 429 to a client that declares nothing, so a
+  // User-Agent is mandatory — but it is the client's own NEUTRAL default
+  // (`YAHOO_DEFAULT_USER_AGENT`), never the EDGAR contact. `EDGAR_CONTACT` is
+  // the operator's real name and email, declared for SEC's fair-access policy
+  // and owed to SEC alone; putting it on Yahoo's requests sent personal data to
+  // a provider that never asked for it and that docs/PRIVACY.md does not say
+  // receives it. The declared identity stays on the SEC channel.
   const yahoo =
     opts.yahoo ??
     createYahooClient({
       cachedFetch: makeYahooCachedFetch(),
       signal: opts.signal,
-      userAgent:
-        edgarContact === null
-          ? undefined
-          : `Mozilla/5.0 Thesis/1.0 equity-analyzer (${edgarContact})`,
     });
   const fredBase: FredConfig =
     opts.fred ?? (cfg.fredApiKey !== undefined ? { apiKey: cfg.fredApiKey } : {});

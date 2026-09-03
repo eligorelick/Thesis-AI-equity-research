@@ -13,7 +13,11 @@
  * (FmpEodBarRow / FmpQuoteRow) so Stage B is source-agnostic. `close` is the
  * split-adjusted close (Yahoo's `close` series) to match FMP's
  * "split-adjusted close only" contract; the dividend-adjusted `adjclose` is
- * carried as `adjClose` and not consumed.
+ * carried as `adjClose` and IS consumed — the keyless beta regression (D-15)
+ * builds monthly total returns from it whenever both the symbol and the
+ * benchmark carry one, and degrades the whole window to `close`, with a
+ * disclosure, when either does not. FMP's EOD endpoint has no adjusted close,
+ * so a keyed run always takes that price-only path.
  *
  * One fetch path only (`chartRaw`): the query actually put on the wire uses
  * epoch bounds and an events selector, while the endpoint recorded for

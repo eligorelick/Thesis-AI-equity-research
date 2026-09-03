@@ -82,6 +82,33 @@ describe("parseFilers / parseIndexHeaders", () => {
   it("returns no filers for a header that carries none", () => {
     expect(parseFilers("ACCESSION NUMBER: 0000000000-26-000001\nFORM TYPE: 10-K")).toEqual([]);
   });
+
+  it("reads only the FILER blocks, never a SUBJECT COMPANY or a REPORTING-OWNER", () => {
+    // On a Schedule 13D or a Form 4 the header carries other parties with a
+    // name/CIK pair of their own. Scanning the whole header would return one of
+    // them as a co-registrant, and `predecessorFromFilers` reads "exactly one
+    // party besides the successor" as the predecessor's identity.
+    const header = [
+      "ACCESSION NUMBER:\t0000000000-26-000001",
+      "CONFORMED SUBMISSION TYPE:\tSC 13D",
+      "",
+      "SUBJECT COMPANY:",
+      "\tCOMPANY DATA:",
+      "\t\tCOMPANY CONFORMED NAME:\t\tTARGET CORP",
+      "\t\tCENTRAL INDEX KEY:\t\t0000027419",
+      "",
+      "FILED BY:",
+      "\tCOMPANY DATA:",
+      "\t\tCOMPANY CONFORMED NAME:\t\tACTIVIST FUND LP",
+      "\t\tCENTRAL INDEX KEY:\t\t0001234567",
+      "",
+      "FILER:",
+      "\tCOMPANY DATA:",
+      "\t\tCOMPANY CONFORMED NAME:\t\tREGISTRANT CORP",
+      "\t\tCENTRAL INDEX KEY:\t\t0000320193",
+    ].join("\n");
+    expect(parseFilers(header)).toEqual([{ cik10: "0000320193", name: "REGISTRANT CORP" }]);
+  });
 });
 
 describe("predecessorFromFilers", () => {

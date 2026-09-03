@@ -1,0 +1,182 @@
+{
+  "snapshotDate": "2026-09-02",
+  "sources": {
+    "modelIds": "GET https://api.anthropic.com/v1/models and https://docs.anthropic.com/en/docs/about-claude/models/overview",
+    "pricing": "https://docs.anthropic.com/en/docs/about-claude/pricing",
+    "effort": "https://docs.anthropic.com/en/docs/build-with-claude/effort",
+    "deprecations": "https://docs.anthropic.com/en/docs/about-claude/model-deprecations"
+  },
+  "webSearchUsdPerThousand": 10,
+  "autoPreference": [
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-sonnet-5",
+    "claude-fable-5-1",
+    "claude-fable-5"
+  ],
+  "models": [
+    {
+      "id": "claude-fable-5-1",
+      "family": "fable",
+      "generation": "5.1",
+      "displayName": "Claude Fable 5.1",
+      "lifecycle": "active",
+      "releasedOn": null,
+      "datedSnapshotIds": [],
+      "contextWindowTokens": 1000000,
+      "maxOutputTokens": 128000,
+      "effort": { "supported": true, "levels": ["low", "medium", "high", "xhigh", "max"] },
+      "sampling": { "temperature": false, "topP": false, "topK": false },
+      "thinking": { "mode": "always-on", "sendParam": false },
+      "serverSideFallback": { "beta": "server-side-fallback-2026-06-01", "model": "claude-opus-4-8" },
+      "webSearchToolType": "web_search_20260318",
+      "pricing": {
+        "inputPerMTok": 10,
+        "outputPerMTok": 50,
+        "cacheWrite5mPerMTok": 12.5,
+        "cacheWrite1hPerMTok": 20,
+        "cacheReadPerMTok": 0.25
+      },
+      "notes": [
+        "Dateless id is the pinned snapshot; dated variants do not exist for this family.",
+        "Cache read is $0.25/MTok (0.025x input), not the 0.1x ratio of older models.",
+        "Server-side refusal fallback and always-on thinking follow the Fable 5 entry; review on the next models:refresh."
+      ]
+    },
+    {
+      "id": "claude-fable-5",
+      "family": "fable",
+      "generation": "5",
+      "displayName": "Claude Fable 5",
+      "lifecycle": "active",
+      "releasedOn": null,
+      "datedSnapshotIds": [],
+      "contextWindowTokens": 1000000,
+      "maxOutputTokens": 128000,
+      "effort": { "supported": true, "levels": ["low", "medium", "high", "xhigh", "max"] },
+      "sampling": { "temperature": false, "topP": false, "topK": false },
+      "thinking": { "mode": "always-on", "sendParam": false },
+      "serverSideFallback": { "beta": "server-side-fallback-2026-06-01", "model": "claude-opus-4-8" },
+      "webSearchToolType": "web_search_20260318",
+      "pricing": {
+        "inputPerMTok": 10,
+        "outputPerMTok": 50,
+        "cacheWrite5mPerMTok": 12.5,
+        "cacheWrite1hPerMTok": 20,
+        "cacheReadPerMTok": 1
+      },
+      "notes": [
+        "Thinking is always on; sending a thinking param is a 400.",
+        "Safety classifiers can decline finance-adjacent tickers; the server-side fallback beta routes those to Opus 4.8."
+      ]
+    },
+    {
+      "id": "claude-opus-5",
+      "family": "opus",
+      "generation": "5",
+      "displayName": "Claude Opus 5",
+      "lifecycle": "active",
+      "releasedOn": "2026-07-24",
+      "datedSnapshotIds": [],
+      "contextWindowTokens": 1000000,
+      "maxOutputTokens": 128000,
+      "effort": { "supported": true, "levels": ["low", "medium", "high", "xhigh", "max"] },
+      "sampling": { "temperature": false, "topP": false, "topK": false },
+      "thinking": { "mode": "adaptive", "sendParam": true },
+      "serverSideFallback": null,
+      "webSearchToolType": "web_search_20260318",
+      "pricing": {
+        "inputPerMTok": 5,
+        "outputPerMTok": 25,
+        "cacheWrite5mPerMTok": 6.25,
+        "cacheWrite1hPerMTok": 10,
+        "cacheReadPerMTok": 0.5
+      },
+      "notes": [
+        "thinking: disabled with effort xhigh or max is a 400; Thesis never disables thinking.",
+        "temperature, top_p and top_k are rejected (400) from 4.7 onward."
+      ]
+    },
+    {
+      "id": "claude-opus-4-8",
+      "family": "opus",
+      "generation": "4.8",
+      "displayName": "Claude Opus 4.8",
+      "lifecycle": "active",
+      "releasedOn": null,
+      "datedSnapshotIds": [],
+      "contextWindowTokens": 1000000,
+      "maxOutputTokens": 128000,
+      "effort": { "supported": true, "levels": ["low", "medium", "high", "xhigh", "max"] },
+      "sampling": { "temperature": false, "topP": false, "topK": false },
+      "thinking": { "mode": "adaptive", "sendParam": true },
+      "serverSideFallback": null,
+      "webSearchToolType": "web_search_20260318",
+      "pricing": {
+        "inputPerMTok": 5,
+        "outputPerMTok": 25,
+        "cacheWrite5mPerMTok": 6.25,
+        "cacheWrite1hPerMTok": 10,
+        "cacheReadPerMTok": 0.5
+      },
+      "notes": [
+        "Omitting the thinking param runs without thinking; the adaptive param is sent explicitly."
+      ]
+    },
+    {
+      "id": "claude-sonnet-5",
+      "family": "sonnet",
+      "generation": "5",
+      "displayName": "Claude Sonnet 5",
+      "lifecycle": "active",
+      "releasedOn": null,
+      "datedSnapshotIds": [],
+      "contextWindowTokens": 1000000,
+      "maxOutputTokens": 128000,
+      "effort": { "supported": true, "levels": ["low", "medium", "high", "xhigh", "max"] },
+      "sampling": { "temperature": false, "topP": false, "topK": false },
+      "thinking": { "mode": "adaptive", "sendParam": false },
+      "serverSideFallback": null,
+      "webSearchToolType": "web_search_20260318",
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 10,
+        "cacheWrite5mPerMTok": 2.5,
+        "cacheWrite1hPerMTok": 4,
+        "cacheReadPerMTok": 0.2
+      },
+      "notes": [
+        "$2/$10 is the permanent price; the scheduled 2026-09-01 increase was cancelled.",
+        "Runs adaptive thinking by default when the param is omitted."
+      ]
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "family": "haiku",
+      "generation": "4.5",
+      "displayName": "Claude Haiku 4.5",
+      "lifecycle": "active",
+      "releasedOn": "2025-10-15",
+      "datedSnapshotIds": ["claude-haiku-4-5-20251001"],
+      "contextWindowTokens": 200000,
+      "maxOutputTokens": 64000,
+      "effort": { "supported": false, "levels": [] },
+      "sampling": { "temperature": true, "topP": true, "topK": true },
+      "thinking": { "mode": "none", "sendParam": false },
+      "serverSideFallback": null,
+      "webSearchToolType": "web_search_20250305",
+      "pricing": {
+        "inputPerMTok": 1,
+        "outputPerMTok": 5,
+        "cacheWrite5mPerMTok": 1.25,
+        "cacheWrite1hPerMTok": 2,
+        "cacheReadPerMTok": 0.1
+      },
+      "notes": [
+        "Rejects output_config.effort with a 400; the analyst passes ignore ANALYSIS_EFFORT on this model.",
+        "Rejects web_search_20260318; the basic web_search_20250305 variant is used.",
+        "The judge pass never runs on Haiku: it is raised to claude-sonnet-5 (model-floor)."
+      ]
+    }
+  ]
+}

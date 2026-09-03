@@ -5,6 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+import { ANALYSIS_MODEL_OPTIONS } from "@/settings/contracts";
 import type {
   EffectiveSettings,
   SettingsPayload,
@@ -69,14 +70,7 @@ function payload(
 ): SettingsPayload {
   return {
     ...state,
-    analysisModelOptions: [
-      "auto",
-      "claude-haiku-4-5",
-      "claude-fable-5",
-      "claude-opus-5",
-      "claude-opus-4-8",
-      "claude-sonnet-5",
-    ],
+    analysisModelOptions: [...ANALYSIS_MODEL_OPTIONS],
     analysisEffortOptions: ["low", "medium", "high", "xhigh", "max"],
     sources: { ...sources },
     revision,
@@ -240,7 +234,7 @@ describe("settings page controller", () => {
   });
 
   it("preserves and visibly offers an unlisted valid dated current model for carry-only effort edits", async () => {
-    const dated = "claude-opus-4-8-20260601" as const;
+    const dated = "claude-haiku-4-5-20251001" as const;
     const current = payload(
       { analysisModel: dated, analysisEffort: "high" },
       4,
@@ -509,7 +503,7 @@ describe("settings page controller", () => {
 
   it("the route-used view renders optimistic desired values and honest saving/recovery states", () => {
     const current = payload(
-      { analysisModel: "claude-opus-4-8-20260601", analysisEffort: "high" },
+      { analysisModel: "claude-haiku-4-5-20251001", analysisEffort: "high" },
       4,
       { analysisModel: "environment", analysisEffort: "default" },
     );
@@ -562,7 +556,7 @@ describe("settings page controller", () => {
       onAnalysisModel: vi.fn(),
       onAnalysisEffort: vi.fn(),
     }));
-    expect(datedHtml).toContain("claude-opus-4-8-20260601");
+    expect(datedHtml).toContain("claude-haiku-4-5-20251001");
     expect(datedHtml).toContain("current; carry-only");
     expect(datedHtml).toContain("recovering");
     expect(datedHtml).not.toContain(">saved<");

@@ -24,6 +24,8 @@ import { Worker } from "node:worker_threads";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ANALYSIS_MODEL_OPTIONS } from "@/settings/contracts";
+
 // @/watchlist/watchlist imports the `server-only` shim (absent under the
 // plain-node runner). Stub it to a no-op so the route's module graph resolves.
 vi.mock("server-only", () => ({}));
@@ -112,14 +114,8 @@ function expectFullSettingsPayload(body: SettingsPayload): void {
     "revision",
     "sources",
   ]);
-  expect(body.analysisModelOptions).toEqual([
-    "auto",
-    "claude-haiku-4-5",
-    "claude-fable-5",
-    "claude-opus-5",
-    "claude-opus-4-8",
-    "claude-sonnet-5",
-  ]);
+  expect(body.analysisModelOptions).toEqual([...ANALYSIS_MODEL_OPTIONS]);
+  expect(body.analysisModelOptions).toContain("claude-fable-5-1");
   expect(body.analysisEffortOptions).toEqual(["low", "medium", "high", "xhigh", "max"]);
   expect(Object.keys(body.capabilities).sort()).toEqual([
     "fixtureMode",
@@ -208,14 +204,7 @@ describe("GET /api/settings", () => {
   it("returns the current model/effort, the option lists, and capability flags", async () => {
     const { response: res, body } = await currentSettings();
     expect(res.status).toBe(200);
-    expect(body.analysisModelOptions).toEqual([
-      "auto",
-      "claude-haiku-4-5",
-      "claude-fable-5",
-      "claude-opus-5",
-      "claude-opus-4-8",
-      "claude-sonnet-5",
-    ]);
+    expect(body.analysisModelOptions).toEqual([...ANALYSIS_MODEL_OPTIONS]);
     expect(typeof body.analysisModel).toBe("string");
     expect(body.analysisEffortOptions).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(body.analysisEffortOptions).toContain(body.analysisEffort);
@@ -590,7 +579,7 @@ describe("POST /api/settings", () => {
   });
 
   it("carries forward the exact current valid dated model without materializing it", async () => {
-    const dated = "claude-opus-4-8-20260601";
+    const dated = "claude-haiku-4-5-20251001";
     vi.stubEnv("ANALYSIS_MODEL", dated);
     const { body: before, etag } = await currentSettings();
     expect(before).toMatchObject({
@@ -610,7 +599,7 @@ describe("POST /api/settings", () => {
   });
 
   it("carries forward an exact valid dated model already persisted in the database", async () => {
-    const dated = "claude-opus-4-8-20260601";
+    const dated = "claude-haiku-4-5-20251001";
     setSetting(SETTING_KEYS.analysisModel, dated);
     const { body: before, etag } = await currentSettings();
     expect(before).toMatchObject({
@@ -638,7 +627,7 @@ describe("POST /api/settings", () => {
   });
 
   it.each([
-    ["new unlisted dated", "claude-opus-4-8-20260601"],
+    ["new unlisted dated", "claude-haiku-4-5-20251001"],
     ["unpriced mystery", "mystery-model"],
     ["malformed dated suffix", "claude-opus-4-8-2026060"],
   ])("rejects a %s model after a fresh CAS comparison", async (_label, analysisModel) => {

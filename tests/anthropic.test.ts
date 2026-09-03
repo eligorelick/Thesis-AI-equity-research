@@ -15,8 +15,6 @@ import {
 } from "@anthropic-ai/sdk";
 import type { BetaMessage, BetaUsage } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import {
-  CACHE_READ_MULTIPLIER,
-  CACHE_WRITE_MULTIPLIER,
   CLIENT_MAX_RETRIES,
   FABLE_FALLBACK_MODEL,
   MAX_PROVIDER_WEB_SEARCHES,
@@ -138,10 +136,18 @@ describe("pickPreferredModel", () => {
     );
   });
 
-  it("matches dated snapshot ids against their alias", () => {
-    expect(pickPreferredModel(["claude-opus-4-8-20260601", "claude-haiku-4-5"])).toBe(
-      "claude-opus-4-8-20260601",
+  // A dated id the registry does not list is not a model that exists, so it
+  // can never be auto-selected — even when its dateless family is preferred.
+  it("ignores dated ids the registry does not list", () => {
+    expect(() => pickPreferredModel(["claude-opus-4-8-20260601", "claude-haiku-4-5"])).toThrow(
+      /supported|registry/i,
     );
+    expect(pickPreferredModel(["claude-opus-4-8-20260601", "claude-sonnet-5"])).toBe("claude-sonnet-5");
+  });
+
+  it("prefers Opus 5 over Fable 5.1 and picks Fable 5.1 ahead of Fable 5", () => {
+    expect(pickPreferredModel(["claude-fable-5-1", "claude-opus-5"])).toBe("claude-opus-5");
+    expect(pickPreferredModel(["claude-fable-5", "claude-fable-5-1"])).toBe("claude-fable-5-1");
   });
 
   it("fails closed when the Models API lists no supported priced model", () => {
@@ -204,28 +210,32 @@ describe("computeCostUsd", () => {
     expect(computeCostUsd(usage, "claude-opus-4-8")).toBeCloseTo(30, 10);
   });
 
-  it("applies the 1.25x cache-write multiplier", () => {
+  it("bills a cache write at the registry 5-minute cache-write price (1.25x input)", () => {
     const usage = {
       input_tokens: 0,
       output_tokens: 0,
       cache_creation_input_tokens: 1_000_000,
       cache_read_input_tokens: 0,
     };
-    const expected = PRICING["claude-opus-4-8"].inputPerMTok * CACHE_WRITE_MULTIPLIER;
+    const expected = PRICING["claude-opus-4-8"]!.cacheWrite5mPerMTok;
     expect(expected).toBeCloseTo(6.25, 10);
     expect(computeCostUsd(usage, "claude-opus-4-8")).toBeCloseTo(expected, 10);
   });
 
-  it("applies the 0.1x cache-read multiplier", () => {
+  // Cache reads are priced per model, not by one flat ratio: every model
+  // reads at 0.1x input except Fable 5.1, which reads at $0.25/MTok (0.025x).
+  it("bills a cache read at the registry per-model cache-read price", () => {
     const usage = {
       input_tokens: 0,
       output_tokens: 0,
       cache_creation_input_tokens: 0,
       cache_read_input_tokens: 1_000_000,
     };
-    const expected = PRICING["claude-opus-4-8"].inputPerMTok * CACHE_READ_MULTIPLIER;
-    expect(expected).toBeCloseTo(0.5, 10);
-    expect(computeCostUsd(usage, "claude-opus-4-8")).toBeCloseTo(expected, 10);
+    expect(PRICING["claude-opus-4-8"]!.cacheReadPerMTok).toBeCloseTo(0.5, 10);
+    expect(computeCostUsd(usage, "claude-opus-4-8")).toBeCloseTo(0.5, 10);
+    expect(PRICING["claude-fable-5-1"]!.cacheReadPerMTok).toBeCloseTo(0.25, 10);
+    expect(computeCostUsd(usage, "claude-fable-5-1")).toBeCloseTo(0.25, 10);
+    expect(computeCostUsd(usage, "claude-fable-5")).toBeCloseTo(1, 10);
   });
 
   it("bills web searches at $10 per 1,000", () => {
@@ -255,9 +265,10 @@ describe("computeCostUsd", () => {
     expect(computeCostUsd(usage, "claude-opus-4-8", 7)).toBeCloseTo(0.89125, 5);
   });
 
-  it("prices fable-5 at $10/$50 and sonnet-5 at $2/$10", () => {
+  it("prices fable-5 and fable-5-1 at $10/$50 and sonnet-5 at $2/$10", () => {
     const usage = { input_tokens: 1_000_000, output_tokens: 1_000_000 };
     expect(computeCostUsd(usage, "claude-fable-5")).toBeCloseTo(60, 10);
+    expect(computeCostUsd(usage, "claude-fable-5-1")).toBeCloseTo(60, 10);
     expect(computeCostUsd(usage, "claude-sonnet-5", 0, new Date("2026-07-09T12:00:00.000Z"))).toBeCloseTo(12, 10);
     expect(computeCostUsd(usage, "claude-haiku-4-5")).toBeCloseTo(6, 10);
   });
@@ -271,10 +282,16 @@ describe("computeCostUsd", () => {
     expect(computeCostUsd(usage, "claude-sonnet-5", 0, new Date("2027-06-01T00:00:00.000Z"))).toBeCloseTo(12, 10);
   });
 
-  it("matches dated snapshot ids by prefix", () => {
+  // Dated ids are accepted only when the registry LISTS them. Haiku 4.5 has
+  // one; from the 4.6 generation on the dateless id is the pinned snapshot and
+  // dated variants do not exist, so pricing them would price a model that
+  // cannot be called.
+  it("prices a listed dated snapshot and refuses an unlisted one", () => {
     const usage = { input_tokens: 1_000_000, output_tokens: 0 };
     expect(computeCostUsd(usage, "claude-haiku-4-5-20251001")).toBeCloseTo(1, 10);
-    expect(findPricing("claude-opus-4-8-20260601")).toEqual(PRICING["claude-opus-4-8"]);
+    expect(findPricing("claude-haiku-4-5-20251001")).toEqual(PRICING["claude-haiku-4-5"]);
+    expect(findPricing("claude-opus-4-8-20260601")).toBeUndefined();
+    expect(() => computeCostUsd(usage, "claude-opus-4-8-20260601")).toThrow(/no pricing entry/);
   });
 
   it("throws for a model with no pricing entry", () => {
@@ -297,14 +314,19 @@ describe("buildPassParams", () => {
     );
   });
 
-  it("enforces pass-specific output caps and positive integer max_tokens", () => {
-    expect(() => buildPassParams({ ...baseOpts, field: "llm.bull", maxTokens: 64_000 })).not.toThrow();
-    expect(() => buildPassParams({ ...baseOpts, field: "llm.bear", maxTokens: 64_001 })).toThrow(
-      /max_tokens.*64,?000/i,
+  // The output ceiling is now the model registry max output rather than a
+  // per-pass constant: at effort high and above buildPassParams raises
+  // max_tokens to that ceiling (DECISIONS D-05), and the pass reservation
+  // bounds the same ceiling, so validating below it would reject requests the
+  // reservation already covers.
+  it("enforces the registry output ceiling and positive integer max_tokens", () => {
+    expect(() => buildPassParams({ ...baseOpts, field: "llm.bull", maxTokens: 128_000 })).not.toThrow();
+    expect(() => buildPassParams({ ...baseOpts, field: "llm.bear", maxTokens: 128_001 })).toThrow(
+      /max_tokens.*128,?000/i,
     );
-    expect(() => buildPassParams({ ...baseOpts, field: "llm.judge", maxTokens: 96_000 })).not.toThrow();
-    expect(() => buildPassParams({ ...baseOpts, field: "llm.judge", maxTokens: 96_001 })).toThrow(
-      /max_tokens.*96,?000/i,
+    expect(() => buildPassParams({ ...baseOpts, model: "claude-haiku-4-5", field: "llm.bull", maxTokens: 64_000 })).not.toThrow();
+    expect(() => buildPassParams({ ...baseOpts, model: "claude-haiku-4-5", field: "llm.bull", maxTokens: 64_001 })).toThrow(
+      /max_tokens.*64,?000/i,
     );
     for (const maxTokens of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => buildPassParams({ ...baseOpts, maxTokens })).toThrow(/max_tokens/i);
@@ -368,7 +390,9 @@ describe("buildPassParams", () => {
     expect(thinkingConfigFor("claude-fable-5")).toBeUndefined();
     expect(thinkingConfigFor("claude-opus-4-8")).toEqual({ type: "adaptive" });
     expect(thinkingConfigFor("claude-opus-5")).toEqual({ type: "adaptive" });
-    expect(thinkingConfigFor("claude-opus-5-20260601")).toEqual({ type: "adaptive" });
+    expect(thinkingConfigFor("claude-fable-5-1")).toBeUndefined();
+    // An id outside the registry has no thinking rule to apply.
+    expect(() => thinkingConfigFor("claude-opus-5-20260601")).toThrow(/unsupported model/);
   });
 
   it("prices, sizes and equips opus-5 like the rest of the Opus tier", () => {
@@ -376,9 +400,9 @@ describe("buildPassParams", () => {
     // mis-bill every default run.
     expect(PREFERENCE_ORDER[0]).toBe("claude-opus-5");
     expect(pricedModelAlias("claude-opus-5")).toBe("claude-opus-5");
-    expect(pricedModelAlias("claude-opus-5-20260601")).toBe("claude-opus-5");
+    expect(pricedModelAlias("claude-opus-5-20260601")).toBeNull();
     expect(pricedModelAlias("claude-opus-5-latest")).toBeNull();
-    expect(findPricing("claude-opus-5")).toEqual({ inputPerMTok: 5, outputPerMTok: 25 });
+    expect(findPricing("claude-opus-5")).toMatchObject({ inputPerMTok: 5, outputPerMTok: 25, cacheWrite5mPerMTok: 6.25, cacheReadPerMTok: 0.5 });
     expect(modelContextTokenLimit("claude-opus-5")).toBe(1_000_000);
     // Dynamic-filtering web search, not haiku's basic variant.
     expect(webSearchTool(4, "claude-opus-5")).toMatchObject({
@@ -431,13 +455,13 @@ describe("buildPassParams", () => {
       outputSchema: schema,
     });
     expect(params.output_config).toEqual({ format: { type: "json_schema", schema } });
-    for (const model of ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-sonnet-4-6"]) {
+    for (const model of ["claude-fable-5-1", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5"]) {
       expect(supportsEffort(model)).toBe(true);
     }
   });
 
   it("never sends sampling parameters", () => {
-    for (const model of ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"]) {
+    for (const model of ["claude-fable-5-1", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"]) {
       const { params } = buildPassParams({ ...baseOpts, model });
       expect(params).not.toHaveProperty("temperature");
       expect(params).not.toHaveProperty("top_p");

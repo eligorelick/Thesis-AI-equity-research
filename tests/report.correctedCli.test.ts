@@ -268,6 +268,7 @@ describe("corrected report CLI", () => {
           effectiveEffort: null,
           fallbackUsed: true,
           adjustments: ["fallback"],
+          note: "bull: served by the server-side fallback model effective-bull after synthetic-fixture declined the request.",
         },
         {
           step: "verify",

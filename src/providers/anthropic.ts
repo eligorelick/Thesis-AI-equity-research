@@ -12,9 +12,11 @@
  *   so fable-5 server-side refusal fallbacks and fallback detection share one
  *   code path; without `betas` the beta endpoint behaves like the GA API.
  * - NEVER send `temperature` / `top_p` / `top_k` (400 on 4.7+ models) and
- *   NEVER send a `thinking` param for claude-fable-5 (always-on; explicit
- *   config is a 400). Opus 4.8 gets `thinking: {type: "adaptive"}`; Sonnet 5
- *   runs adaptive by default when the param is omitted.
+ *   NEVER send a `thinking` param for the Fable family (always-on; explicit
+ *   config is a 400). Opus 4.8 and Opus 5 get `thinking: {type: "adaptive"}`;
+ *   Sonnet 5 runs adaptive by default when the param is omitted. Thinking is
+ *   never disabled. Every per-model rule is read from the model registry
+ *   (config/models.json via src/models/registry.ts), never hard-coded here.
  *
  * Bull-first-then-bear cache-write sequencing (load-bearing for cost —
  * the cost model §2): a prompt-cache entry becomes readable only once the first
@@ -44,6 +46,17 @@ import type {
   MessageCreateParamsNonStreaming,
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import { modelSupportsEffort } from "@/report/execution";
+import {
+  MODEL_REGISTRY,
+  REGISTRY_SNAPSHOT_DATE,
+  activeModelIds,
+  activeModels,
+  assertRegistryModel,
+  autoPreferenceIds,
+  isHighOrAboveEffort,
+  resolveRegistryModel,
+  type RegistryModel,
+} from "@/models/registry";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
 import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
 
@@ -67,14 +80,18 @@ import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
  * it requires 30-day org data retention (400s under ZDR). Sonnet 5 is the safe
  * cheaper middle (near-Opus quality, no classifier/retention constraints).
  * Fable 5 stays reachable via an explicit ANALYSIS_MODEL override ("deep-dive"
- * mode) but is never auto-selected while Opus/Sonnet are available.
+ * mode) but is never auto-selected while Opus/Sonnet are available. Fable 5.1
+ * sits just before Fable 5 at the tail for the same reasons (same price tier).
+ *
+ * The order is `autoPreference` in config/models.json.
  */
-export const PREFERENCE_ORDER = [
-  "claude-opus-5",
-  "claude-opus-4-8",
-  "claude-sonnet-5",
-  "claude-fable-5",
-] as const;
+export const PREFERENCE_ORDER: readonly string[] = autoPreferenceIds();
+
+function defaultAutoModel(): string {
+  const first = PREFERENCE_ORDER[0];
+  if (first === undefined) throw new Error("model registry: empty auto preference");
+  return first;
+}
 
 /** Beta header required for server-side refusal fallbacks (fable-5 only). */
 export const SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-06-01";
@@ -107,73 +124,53 @@ export const MODEL_RESOLUTION_TTL_MS = 60 * 60 * 1000;
 export const ANTHROPIC_REQUEST_TIMEOUT_MS = 600_000;
 
 /* ------------------------------------------------------------------------ *
- * Pricing (verified against live docs 2026-07-05 — the cost model §1)
+ * Pricing — every figure comes from the model registry (config/models.json,
+ * snapshot REGISTRY_SNAPSHOT_DATE). Nothing in this section is hard-coded.
  * ------------------------------------------------------------------------ */
 
-export interface ModelPricing {
-  /** USD per million input tokens. */
-  inputPerMTok: number;
-  /** USD per million output tokens (thinking is billed as output). */
-  outputPerMTok: number;
-}
+export type ModelPricing = RegistryModel["pricing"];
 
-/** 5-minute-TTL cache write bills at 1.25x base input. */
-export const CACHE_WRITE_MULTIPLIER = 1.25;
-/** Cache read (hit) bills at 0.1x base input. */
-export const CACHE_READ_MULTIPLIER = 0.1;
 /** Web search: $10 per 1,000 searches, on top of token costs. */
-export const WEB_SEARCH_USD_PER_SEARCH = 10 / 1000;
+export const WEB_SEARCH_USD_PER_SEARCH = MODEL_REGISTRY.webSearchUsdPerThousand / 1000;
 
 /** Scheduler reservation and provider-boundary cap for one analyst request. */
 export const MAX_PROVIDER_WEB_SEARCHES = 8;
 
-export const PRICING: Record<string, ModelPricing> = {
-  "claude-fable-5": { inputPerMTok: 10, outputPerMTok: 50 },
-  "claude-opus-5": { inputPerMTok: 5, outputPerMTok: 25 },
-  "claude-opus-4-8": { inputPerMTok: 5, outputPerMTok: 25 },
-  // $2/$10 launched as introductory pricing "through August 31, 2026" and is
-  // now the STANDARD price: Anthropic cancelled the scheduled 2026-09-01
-  // increase to $3/$15 (docs: pricing#claude-sonnet-5-introductory-pricing,
-  // re-verified live 2026-09-01). There is no longer a dated pricing window —
-  // reintroducing one would over-bill every Sonnet 5 pass by 50%.
-  "claude-sonnet-5": { inputPerMTok: 2, outputPerMTok: 10 },
-  "claude-haiku-4-5": { inputPerMTok: 1, outputPerMTok: 5 },
-};
+/** Registry snapshot date, surfaced in report metadata and the pricing table. */
+export const MODEL_REGISTRY_SNAPSHOT_DATE: string = REGISTRY_SNAPSHOT_DATE;
 
-export const PRICED_MODEL_ALIASES = [
-  "claude-haiku-4-5",
-  "claude-sonnet-5",
-  "claude-opus-4-8",
-  "claude-opus-5",
-  "claude-fable-5",
-] as const;
-export type PricedModelAlias = (typeof PRICED_MODEL_ALIASES)[number];
+/** Active model ids in registry order — the ANALYSIS_MODEL allow-list. */
+export const PRICED_MODEL_ALIASES: readonly string[] = activeModelIds();
+export type PricedModelAlias = string;
 
-/** Return the exact priced family for an alias or an eight-digit dated snapshot. */
+/** Prices by active model id (a registry view for callers that index by id). */
+export const PRICING: Readonly<Record<string, ModelPricing>> = Object.fromEntries(
+  activeModels().map((entry) => [entry.id, entry.pricing]),
+);
+
+/**
+ * The registry id an accepted model resolves to: the exact active id, or the
+ * active id behind a dated snapshot the registry lists
+ * (`claude-haiku-4-5-20251001` → `claude-haiku-4-5`). Dated ids the registry
+ * does not list — every family from the 4.6 generation on — resolve to null,
+ * as do `-latest` aliases and unknown ids.
+ */
 export function pricedModelAlias(model: string): PricedModelAlias | null {
-  for (const alias of PRICED_MODEL_ALIASES) {
-    if (model === alias || new RegExp(`^${alias}-\\d{8}$`).test(model)) return alias;
-  }
-  return null;
+  return resolveRegistryModel(model)?.entry.id ?? null;
+}
+
+/** Registry entry for an accepted model; throws with an actionable message otherwise. */
+export function registryEntryFor(model: string): RegistryModel {
+  return assertRegistryModel(model).entry;
 }
 
 export function assertPricedModel(model: string): PricedModelAlias {
-  const alias = pricedModelAlias(model);
-  if (alias === null) {
-    throw new Error(
-      `unsupported model "${model}": expected a priced model alias or eight-digit dated snapshot`,
-    );
-  }
-  return alias;
+  return assertRegistryModel(model).entry.id;
 }
 
-/**
- * Look up pricing for a model id, tolerating dated snapshot ids
- * (e.g. "claude-haiku-4-5-20251001" matches "claude-haiku-4-5").
- */
+/** Look up pricing for an accepted model id. */
 export function findPricing(model: string): ModelPricing | undefined {
-  const alias = pricedModelAlias(model);
-  return alias === null ? undefined : PRICING[alias];
+  return resolveRegistryModel(model)?.entry.pricing;
 }
 
 /**
@@ -197,16 +194,18 @@ export interface UsageLike {
 
 /**
  * USD cost of one request. Reads `input_tokens`, `output_tokens`,
- * `cache_creation_input_tokens` (1.25x input), `cache_read_input_tokens`
- * (0.1x input) plus $0.01 per web search.
+ * `cache_creation_input_tokens` (the 5-minute cache-write price from the
+ * registry — the only cache TTL Thesis requests), `cache_read_input_tokens`
+ * (the cache-read price from the registry: 0.1x input on every model except
+ * Fable 5.1, which reads at $0.25/MTok) plus $0.01 per web search.
  *
- * Throws for a model with no PRICING entry — silent wrong cost accounting is
+ * Throws for a model outside the registry — silent wrong cost accounting is
  * worse than a loud failure (programming error, not a data gap).
  */
 export function computeCostUsd(usage: UsageLike, model: string, webSearches = 0, at = new Date()): number {
   const pricing = effectivePricingFor(model, at);
   if (!pricing) {
-    throw new Error(`computeCostUsd: no pricing entry for model "${model}" — add it to PRICING`);
+    throw new Error(`computeCostUsd: no pricing entry for model "${model}" — add it to config/models.json`);
   }
   const M = 1_000_000;
   const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
@@ -214,15 +213,20 @@ export function computeCostUsd(usage: UsageLike, model: string, webSearches = 0,
   return (
     (usage.input_tokens / M) * pricing.inputPerMTok +
     (usage.output_tokens / M) * pricing.outputPerMTok +
-    (cacheWriteTokens / M) * pricing.inputPerMTok * CACHE_WRITE_MULTIPLIER +
-    (cacheReadTokens / M) * pricing.inputPerMTok * CACHE_READ_MULTIPLIER +
+    (cacheWriteTokens / M) * pricing.cacheWrite5mPerMTok +
+    (cacheReadTokens / M) * pricing.cacheReadPerMTok +
     webSearches * WEB_SEARCH_USD_PER_SEARCH
   );
 }
 
 /** Provider context cap used by the reservation proof. */
 export function modelContextTokenLimit(model: string): number {
-  return assertPricedModel(model) === "claude-haiku-4-5" ? 200_000 : 1_000_000;
+  return registryEntryFor(model).contextWindowTokens;
+}
+
+/** Provider output ceiling (max_tokens) for a model, from the registry. */
+export function modelMaxOutputTokens(model: string): number {
+  return registryEntryFor(model).maxOutputTokens;
 }
 
 export type ReservationPass = "bull" | "bear" | "synthesize" | "verify";
@@ -260,14 +264,14 @@ export function maximumPassCostUsd(
     }
   }
 
-  const requestedAlias = assertPricedModel(selectedModel);
+  const requested = registryEntryFor(selectedModel);
   const effectiveModel =
-    pass === "synthesize" && requestedAlias === "claude-haiku-4-5"
+    pass === "synthesize" && requested.family === "haiku"
       ? "claude-sonnet-5"
       : selectedModel;
-  const effectiveAlias = assertPricedModel(effectiveModel);
-  const pricing = PRICING[effectiveAlias];
-  const contextCap = modelContextTokenLimit(effectiveModel);
+  const effective = registryEntryFor(effectiveModel);
+  const pricing = effective.pricing;
+  const contextCap = effective.contextWindowTokens;
 
   const inputTokens = pass === "verify"
     ? boundedInteger(
@@ -276,15 +280,16 @@ export function maximumPassCostUsd(
         contextCap,
       )
     : contextCap;
+  // Bull, bear and synthesize requests raise max_tokens to the registry
+  // ceiling at effort high and above (effectiveMaxTokens), so the bound
+  // covers that ceiling rather than the pass constants.
   const outputTokens = pass === "verify"
     ? boundedInteger(
         (verifyCapability as Extract<VerifyReservationCapability, { billable: true }>).maxOutputTokens,
         "verify output",
-        effectiveAlias === "claude-haiku-4-5" ? 64_000 : 128_000,
+        effective.maxOutputTokens,
       )
-    : pass === "synthesize"
-      ? 96_000
-      : 64_000;
+    : effective.maxOutputTokens;
   const searches = pass === "verify"
     ? boundedInteger(
         (verifyCapability as Extract<VerifyReservationCapability, { billable: true }>).maxWebSearches,
@@ -295,12 +300,15 @@ export function maximumPassCostUsd(
       ? 0
       : MAX_PROVIDER_WEB_SEARCHES;
 
-  // Work in quarter-micro-USD so the 1.25 cache multiplier and cap comparison
-  // never acquire a binary-floating-point extra micro-dollar.
-  const quarterMicroUsdPerExecution =
-    inputTokens * pricing.inputPerMTok * 5 +
+  // Work in quarter-micro-USD so the cache-write price (a quarter-dollar
+  // multiple on every registry entry) and the cap comparison never acquire a
+  // binary-floating-point extra micro-dollar. Input is bounded at the
+  // 5-minute cache-write price, the dearest way an input token can bill.
+  const quarterMicroUsdPerExecution = Math.round(
+    inputTokens * pricing.cacheWrite5mPerMTok * 4 +
     outputTokens * pricing.outputPerMTok * 4 +
-    searches * 40_000;
+    searches * 40_000,
+  );
   const microUsd = Math.ceil(
     (quarterMicroUsdPerExecution * PASS_BILLING_EXPOSURE_MULTIPLIER) / 4,
   );
@@ -460,8 +468,9 @@ let autoResolution: { model: string; resolvedAt: number } | null = null;
 
 /**
  * Pure preference selection: first PREFERENCE_ORDER entry present in the
- * available id list (dated snapshot ids match their alias). Unknown models are
- * rejected because the scheduler cannot prove a spend bound for them.
+ * available id list (a dated snapshot the registry lists matches its entry).
+ * Unknown models are rejected because the scheduler cannot prove a spend
+ * bound for them.
  */
 export function pickPreferredModel(availableIds: readonly string[]): string {
   for (const preferred of PREFERENCE_ORDER) {
@@ -495,7 +504,7 @@ export async function resolveModel(setting: string): Promise<ResolvedModel> {
 
   const client = getClient();
   if (!client) {
-    return { model: PREFERENCE_ORDER[0], resolvedFrom: "auto" };
+    return { model: defaultAutoModel(), resolvedFrom: "auto" };
   }
 
   const availableIds: string[] = [];
@@ -513,7 +522,7 @@ export async function resolveModel(setting: string): Promise<ResolvedModel> {
  * ------------------------------------------------------------------------ */
 
 export interface RunPassOptions {
-  /** Model id (alias or dated snapshot). */
+  /** Model id: an active registry id or a dated snapshot the registry lists. */
   model: string;
   system: string | BetaTextBlockParam[];
   messages: BetaMessageParam[];
@@ -535,22 +544,28 @@ export interface RunPassOptions {
   signal?: AbortSignal;
 }
 
-/** Output ceilings used by the durable reservation proof. */
-export const ANALYST_PROVIDER_MAX_OUTPUT_TOKENS = 64_000;
-export const JUDGE_PROVIDER_MAX_OUTPUT_TOKENS = 96_000;
-export const DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS = 128_000;
-
+/**
+ * Output ceiling for one request: the registry max output for the model.
+ * The pass constants (ANALYST_MAX_TOKENS, JUDGE_MAX_TOKENS in stageC) stay at
+ * or below it and apply at effort low/medium; at high and above
+ * buildPassParams raises max_tokens to this ceiling (DECISIONS D-05).
+ */
 function requestOutputTokenLimit(opts: RunPassOptions): number {
-  const alias = assertPricedModel(opts.model);
-  if (opts.field === "llm.bull" || opts.field === "llm.bear") {
-    return ANALYST_PROVIDER_MAX_OUTPUT_TOKENS;
-  }
-  if (opts.field === "llm.judge" || opts.field === "llm.synthesize") {
-    return JUDGE_PROVIDER_MAX_OUTPUT_TOKENS;
-  }
-  return alias === "claude-haiku-4-5"
-    ? ANALYST_PROVIDER_MAX_OUTPUT_TOKENS
-    : DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS;
+  return modelMaxOutputTokens(opts.model);
+}
+
+/**
+ * The max_tokens actually sent: the registry ceiling when the model accepts
+ * effort and the requested effort is high, xhigh or max; otherwise the
+ * pass constant the caller supplied. Exported for the request-shaping tests
+ * and the generated pricing table.
+ */
+export function effectiveMaxTokens(
+  opts: Pick<RunPassOptions, "model" | "maxTokens" | "effort">,
+): number {
+  const entry = registryEntryFor(opts.model);
+  const effortApplies = entry.effort.supported && isHighOrAboveEffort(opts.effort);
+  return effortApplies ? entry.maxOutputTokens : opts.maxTokens;
 }
 
 /**
@@ -622,36 +637,30 @@ export function validateRunPassOptions(opts: RunPassOptions): void {
 }
 
 /**
- * Thinking config per model family:
- * - fable-5: OMIT the param entirely (always-on; any explicit config is a 400).
- * - opus-4-8: `{type: "adaptive"}` — omitting it would run WITHOUT thinking.
- * - opus-5: `{type: "adaptive"}`. Unlike 4.8, opus-5 already runs adaptive when
- *   the param is omitted, so this is belt-and-braces rather than load-bearing —
- *   it is sent explicitly so the request states the intent and does not depend
- *   on a per-model default. (`{type: "disabled"}` is what opus-5 restricts, and
- *   only above effort `high`; we never disable.)
- * - everything else (sonnet-5 runs adaptive by default when omitted;
- *   haiku-4-5 has no adaptive support): omit.
+ * Thinking config from the `thinking` block of the registry entry:
+ * - mode "always-on" (Fable family): OMIT the param entirely (explicit config
+ *   is a 400).
+ * - mode "adaptive" with sendParam (Opus 4.8, Opus 5): `{type: "adaptive"}`.
+ *   Opus 4.8 would run WITHOUT thinking if the param were omitted; Opus 5
+ *   already runs adaptive by default, so the explicit param states intent.
+ * - mode "adaptive" without sendParam (Sonnet 5) and mode "none" (Haiku 4.5):
+ *   omit.
+ *
+ * `{type: "disabled"}` is never produced: Opus 5 rejects it above effort
+ * `high`, and no pass ever wants thinking off.
  */
 export function thinkingConfigFor(model: string): BetaThinkingConfigParam | undefined {
-  if (model === "claude-fable-5" || model.startsWith("claude-fable-5-")) return undefined;
-  if (
-    model === "claude-opus-4-8" ||
-    model.startsWith("claude-opus-4-8-") ||
-    model === "claude-opus-5" ||
-    model.startsWith("claude-opus-5-")
-  ) {
-    return { type: "adaptive" };
-  }
-  return undefined;
+  const entry = registryEntryFor(model);
+  return entry.thinking.mode === "adaptive" && entry.thinking.sendParam
+    ? { type: "adaptive" }
+    : undefined;
 }
 
 /**
- * Whether a model accepts `output_config.effort`. Haiku 4.5 (and pre-4.6
- * Sonnets) reject it with 400 "This model does not support the effort
+ * Whether a model accepts `output_config.effort` (registry `effort.supported`).
+ * Haiku 4.5 rejects it with 400 "This model does not support the effort
  * parameter" — sending it fails the whole pass, so buildPassParams drops
- * effort for those families instead. Fable/Opus 4.5+/Sonnet 4.6+/Sonnet 5
- * all support it.
+ * effort there instead.
  */
 export function supportsEffort(model: string): boolean {
   return modelSupportsEffort(model);
@@ -664,17 +673,19 @@ export interface BuiltPassRequest {
 }
 
 /**
- * Pure request builder (exported for tests). Applies the model-family rules:
- * fable-5 always carries `betas: [SERVER_SIDE_FALLBACK_BETA]` +
- * `fallbacks: [{model: FABLE_FALLBACK_MODEL}]`; sampling params are never sent.
+ * Pure request builder (exported for tests). Applies the registry rules for
+ * the model: an entry with `serverSideFallback` (the Fable family) carries
+ * `betas: [beta]` + `fallbacks: [{model}]`; effort is sent only when the entry
+ * supports it; thinking follows {@link thinkingConfigFor}; max_tokens follows
+ * {@link effectiveMaxTokens}; sampling params are never sent.
  */
 export function buildPassParams(opts: RunPassOptions): BuiltPassRequest {
   validateRunPassOptions(opts);
-  const isFable = opts.model === "claude-fable-5" || opts.model.startsWith("claude-fable-5-");
+  const fallback = registryEntryFor(opts.model).serverSideFallback;
 
   const params: MessageCreateParamsNonStreaming = {
     model: opts.model,
-    max_tokens: opts.maxTokens,
+    max_tokens: effectiveMaxTokens(opts),
     system: opts.system,
     messages: opts.messages,
   };
@@ -693,12 +704,12 @@ export function buildPassParams(opts: RunPassOptions): BuiltPassRequest {
     };
   }
 
-  if (isFable) {
-    params.betas = [SERVER_SIDE_FALLBACK_BETA];
-    params.fallbacks = [{ model: FABLE_FALLBACK_MODEL }];
+  if (fallback !== null) {
+    params.betas = [fallback.beta];
+    params.fallbacks = [{ model: fallback.model }];
   }
 
-  return { params, usesFallbackBeta: isFable };
+  return { params, usesFallbackBeta: fallback !== null };
 }
 
 /**
@@ -716,9 +727,12 @@ export function webSearchTool(
       `web-search max_uses must be a positive integer no greater than ${MAX_PROVIDER_WEB_SEARCHES}`,
     );
   }
-  const alias = model === undefined ? undefined : assertPricedModel(model);
-  if (alias === "claude-haiku-4-5") {
+  const toolType = model === undefined ? WEB_SEARCH_TOOL_TYPE : registryEntryFor(model).webSearchToolType;
+  if (toolType === WEB_SEARCH_TOOL_TYPE_BASIC) {
     return { type: WEB_SEARCH_TOOL_TYPE_BASIC, name: "web_search", max_uses: maxUses };
+  }
+  if (toolType !== WEB_SEARCH_TOOL_TYPE) {
+    throw new Error(`model registry: unsupported web-search tool type "${toolType}" for ${model}`);
   }
   return {
     type: WEB_SEARCH_TOOL_TYPE,

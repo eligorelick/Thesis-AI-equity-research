@@ -5,34 +5,32 @@
  * must remain browser-safe and free of runtime infrastructure dependencies.
  */
 
-export const ANALYSIS_MODEL_OPTIONS = [
-  "auto",
-  "claude-haiku-4-5",
-  "claude-fable-5",
-  "claude-opus-5",
-  "claude-opus-4-8",
-  "claude-sonnet-5",
-] as const;
+import {
+  activeModelIds,
+  explainRejectedModelId,
+  isRegistryDatedSnapshot,
+  resolveRegistryModel,
+} from "@/models/registry";
 
-export type AnalysisModelOption = (typeof ANALYSIS_MODEL_OPTIONS)[number];
+/** "auto" plus every active registry id (config/models.json), in registry order. */
+export const ANALYSIS_MODEL_OPTIONS: readonly string[] = ["auto", ...activeModelIds()];
+
+export type AnalysisModelOption = string;
 
 export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type EffortLevel = (typeof EFFORT_LEVELS)[number];
 
 export const DEFAULT_ANALYSIS_EFFORT: EffortLevel = "high";
 
-const DATED_MODEL_FAMILIES = [
-  "claude-haiku-4-5",
-  "claude-fable-5",
-  "claude-opus-5",
-  "claude-opus-4-8",
-  "claude-sonnet-5",
-] as const;
-
-/** A provider model snapshot whose priced family and date shape are known. */
+/** A dated provider snapshot the registry lists (only the Haiku 4.5 family has one). */
 export type DatedAnalysisModel = string & { readonly __datedAnalysisModel: unique symbol };
 
-/** Values a caller may submit. Unlisted dated models are carry-forward only. */
+/**
+ * Values a caller may submit. A listed dated snapshot is carry-forward only:
+ * kept when it is already the current value, never offered as a new choice.
+ * Dated ids the registry does not list (every family from the 4.6 generation
+ * on) are invalid, not carry-forward.
+ */
 export type AnalysisModelSetting = AnalysisModelOption | DatedAnalysisModel;
 
 export function isAnalysisModelOption(value: unknown): value is AnalysisModelOption {
@@ -41,10 +39,16 @@ export function isAnalysisModelOption(value: unknown): value is AnalysisModelOpt
 }
 
 export function isValidDatedAnalysisModel(value: unknown): value is DatedAnalysisModel {
-  if (typeof value !== "string") return false;
-  return DATED_MODEL_FAMILIES.some((family) =>
-    new RegExp(`^${family}-\\d{8}$`).test(value),
-  );
+  return typeof value === "string" && isRegistryDatedSnapshot(value);
+}
+
+/**
+ * Why a model value is not accepted, or null when it is ("auto", an active
+ * registry id, or a listed dated snapshot). Browser-safe.
+ */
+export function explainAnalysisModel(value: string): string | null {
+  if (value === "auto" || resolveRegistryModel(value) !== null) return null;
+  return explainRejectedModelId(value);
 }
 
 export function isAnalysisModelSetting(value: unknown): value is AnalysisModelSetting {

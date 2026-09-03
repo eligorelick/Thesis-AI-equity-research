@@ -407,6 +407,8 @@ export const ExecutionMetadataEntrySchema = z
     effectiveEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable(),
     fallbackUsed: z.boolean(),
     adjustments: z.array(z.enum(["model-floor", "fallback", "effort-stripped"])),
+    /** Sentence(s) naming what each adjustment changed and why; absent when none. */
+    note: z.string().optional(),
   })
   .strict();
 export type ExecutionMetadataEntry = z.infer<typeof ExecutionMetadataEntrySchema>;

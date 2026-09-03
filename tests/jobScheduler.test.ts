@@ -2506,16 +2506,23 @@ describe("atomic paid settlement", () => {
 });
 
 describe("conservative provider reservation bounds", () => {
+  // Output is bounded by the REGISTRY max output (128K, or 64K on Haiku 4.5),
+  // not by the former per-pass 64K/96K constants: buildPassParams raises
+  // max_tokens to that ceiling at effort high and above (DECISIONS D-05), so
+  // the reservation has to cover it. Input is bounded at the 5-minute
+  // cache-write price, the dearest way an input token can bill.
   it.each([
     // Sonnet 5 reserves at its $2/$10 standard price (the scheduled 2026-09-01
     // increase to $3/$15 was cancelled). haiku's synthesize floor is sonnet-5.
-    ["claude-haiku-4-5", 70.2, 373.68],
-    ["claude-sonnet-5", 347.76, 373.68],
+    ["claude-haiku-4-5", 70.2, 408.24],
+    ["claude-sonnet-5", 416.88, 408.24],
     // Opus 5 and Opus 4.8 are the same price ($5/$25) and context (1M), so
     // they reserve identically.
-    ["claude-opus-5", 856.44, 934.2],
-    ["claude-opus-4-8", 856.44, 934.2],
-    ["claude-fable-5", 1704.24, 1868.4],
+    ["claude-opus-5", 1029.24, 1020.6],
+    ["claude-opus-4-8", 1029.24, 1020.6],
+    // Fable 5.1 matches Fable 5 on price, context and output ceiling.
+    ["claude-fable-5", 2049.84, 2041.2],
+    ["claude-fable-5-1", 2049.84, 2041.2],
   ])("bounds every retry layer for %s", async (model, analyst, synthesize) => {
     const provider = await import("@/providers/anthropic");
     expect(provider.maximumPassCostUsd(model, "bull")).toBe(analyst);
@@ -2524,13 +2531,16 @@ describe("conservative provider reservation bounds", () => {
     expect(provider.maximumPassCostUsd(model, "verify", { billable: false })).toBe(0);
   });
 
-  it("accepts only priced aliases or eight-digit snapshots and fails closed for unknown auto/explicit results", async () => {
+  it("accepts only active registry ids or listed dated snapshots and fails closed for unknown auto/explicit results", async () => {
     const provider = await import("@/providers/anthropic");
-    expect(provider.maximumPassCostUsd("claude-opus-4-8-20260601", "bull")).toBe(856.44);
-    expect(() => provider.maximumPassCostUsd("claude-opus-4-8-beta", "bull")).toThrow(/unsupported|priced/i);
-    expect(() => provider.maximumPassCostUsd("claude-mystery-9", "bull")).toThrow(/unsupported|priced/i);
-    await expect(provider.resolveModel("claude-mystery-9")).rejects.toThrow(/unsupported|priced/i);
-    expect(() => provider.pickPreferredModel(["claude-mystery-9"])).toThrow(/supported|priced/i);
+    // Haiku 4.5 is the one family with a dated id in the registry; a dated id
+    // for a 4.6+ family does not exist and is rejected before any spend.
+    expect(provider.maximumPassCostUsd("claude-haiku-4-5-20251001", "bull")).toBe(70.2);
+    expect(() => provider.maximumPassCostUsd("claude-opus-4-8-20260601", "bull")).toThrow(/unsupported|registry/i);
+    expect(() => provider.maximumPassCostUsd("claude-opus-4-8-beta", "bull")).toThrow(/unsupported|priced|registry/i);
+    expect(() => provider.maximumPassCostUsd("claude-mystery-9", "bull")).toThrow(/unsupported|priced|registry/i);
+    await expect(provider.resolveModel("claude-mystery-9")).rejects.toThrow(/unsupported|priced|registry/i);
+    expect(() => provider.pickPreferredModel(["claude-mystery-9"])).toThrow(/supported|priced|registry/i);
   });
 
   it("requires explicit bounded billable capability for non-deterministic verify", async () => {

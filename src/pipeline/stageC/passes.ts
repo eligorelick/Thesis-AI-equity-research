@@ -92,6 +92,7 @@ import {
 } from "@/pipeline/stageC/entityValidation";
 import { buildDataCompleteness } from "@/report/completeness";
 import { buildExecutionMetadataEntry } from "@/report/execution";
+import { resolveRegistryModel } from "@/models/registry";
 import {
   SHARED_RULES_BLOCK,
   buildBullFraming,
@@ -322,7 +323,7 @@ export const JUDGE_MODEL_FLOOR = "claude-sonnet-5";
 
 /** Model the judge/synthesis pass should run on for a given analysis model. */
 export function judgeModelFor(analysisModel: string): string {
-  return analysisModel.startsWith("claude-haiku-") ? JUDGE_MODEL_FLOOR : analysisModel;
+  return resolveRegistryModel(analysisModel)?.entry.family === "haiku" ? JUDGE_MODEL_FLOOR : analysisModel;
 }
 
 /**

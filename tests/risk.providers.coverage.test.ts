@@ -148,20 +148,24 @@ afterEach(() => {
 });
 
 describe("Anthropic finite request contracts", () => {
-  it("recognizes only exact aliases or eight-digit snapshots and prices them", () => {
+  // Acceptance is by REGISTRY LISTING, never by id shape: an active id, or a
+  // dated snapshot config/models.json lists (only Haiku 4.5 has one).
+  it("recognizes only active registry ids or listed dated snapshots and prices them", () => {
     expect(pricedModelAlias("claude-sonnet-5")).toBe("claude-sonnet-5");
-    expect(pricedModelAlias("claude-sonnet-5-20260808")).toBe("claude-sonnet-5");
+    expect(pricedModelAlias("claude-sonnet-5-20260808")).toBeNull();
     expect(pricedModelAlias("claude-sonnet-5-latest")).toBeNull();
-    expect(assertPricedModel("claude-opus-4-8-20260808")).toBe("claude-opus-4-8");
+    expect(pricedModelAlias("claude-fable-5-1")).toBe("claude-fable-5-1");
+    expect(assertPricedModel("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5");
+    expect(() => assertPricedModel("claude-opus-4-8-20260808")).toThrow(/unsupported model/);
     expect(() => assertPricedModel("unpriced-model")).toThrow(/unsupported model/);
     expect(effectivePricingFor("unpriced-model")).toBeUndefined();
     // $2/$10 is Sonnet 5's standard price on both sides of the cancelled
     // 2026-09-01 increase — pricing is date-independent.
     const sonnet5Pricing = { inputPerMTok: 2, outputPerMTok: 10 };
-    expect(effectivePricingFor("claude-sonnet-5", new Date("2026-08-31T23:59:59Z"))).toEqual(
+    expect(effectivePricingFor("claude-sonnet-5", new Date("2026-08-31T23:59:59Z"))).toMatchObject(
       sonnet5Pricing,
     );
-    expect(effectivePricingFor("claude-sonnet-5", new Date("2026-09-01T00:00:00Z"))).toEqual(
+    expect(effectivePricingFor("claude-sonnet-5", new Date("2026-09-01T00:00:00Z"))).toMatchObject(
       sonnet5Pricing,
     );
     expect(modelContextTokenLimit("claude-haiku-4-5")).toBe(200_000);
@@ -179,7 +183,8 @@ describe("Anthropic finite request contracts", () => {
       field: "llm.bull",
     };
     expect(() => validateRunPassOptions(base)).not.toThrow();
-    expect(() => validateRunPassOptions({ ...base, maxTokens: 64_001 })).toThrow(/max_tokens/);
+    // The ceiling is the registry max output for the model (128K on Opus 4.8).
+    expect(() => validateRunPassOptions({ ...base, maxTokens: 128_001 })).toThrow(/max_tokens/);
     expect(() =>
       validateRunPassOptions({
         ...base,

@@ -66,7 +66,7 @@ carries the long form of each one, so the two cannot drift apart.
 | `THESIS_MAX_ACTIVE_LLM_CALLS` | `2` | Cross-process concurrency is enforced in SQLite. |
 | `THESIS_MAX_JOB_COST_USD` | unset | Optional exact USD caps. |
 | `THESIS_MAX_ROLLING_COST_USD` | unset | Optional exact USD caps. |
-| `THESIS_RESERVATION_MODE` | `request` | How paid work is admitted against these caps: `npm run docs:pricing` prints the current table for every model. |
+| `THESIS_RESERVATION_MODE` | `request` | How paid work is admitted against these caps: one reservation per provider request, or one per pass. |
 | `THESIS_STREAM_IDLE_SECONDS` | `120` | Gap with no stream event after which a paid request is abandoned. |
 | `THESIS_ROLLING_COST_WINDOW_MINUTES` | `1440` | Maximum supported window: 52,560,000 minutes (100 years). |
 | `THESIS_PAID_PASS_LEASE_SECONDS` | `900` | Anthropic requests hard-timeout after 600 seconds. |

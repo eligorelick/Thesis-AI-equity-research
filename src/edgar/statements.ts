@@ -492,15 +492,14 @@ const LEASE_LIABILITY_SPEC: ChainSpec = {
 const COMBINED_CURRENT_TAG = COMBINED_CURRENT_DEBT_TAG;
 
 /**
- * The four balance-sheet current-debt tags, in the order the house rule (D-13)
- * checks them. Every one is a line ON the balance sheet; the debt-maturity
- * schedule below is a NOTE disclosure and is only consulted when all four miss.
+ * Borrowings with an initial term under a year. A DIFFERENT INSTRUMENT from the
+ * current maturities of long-term debt below, which is why the two are separate
+ * components of one sum rather than alternatives in a first-wins chain.
  */
-const CURRENT_DEBT_TAGS = [
-  ...tagsFor("shortTermBorrowings"),
-  ...tagsFor("commercialPaper"),
-  ...tagsFor("currentMaturitiesOfLongTermDebt"),
-];
+const SHORT_TERM_BORROWING_TAGS = [...tagsFor("shortTermBorrowings"), ...tagsFor("commercialPaper")];
+
+/** The balance-sheet lines that carry the current maturities of long-term debt. */
+const CURRENT_MATURITY_BALANCE_TAGS = [...tagsFor("currentMaturitiesOfLongTermDebt")];
 
 /** The tags that specifically carry the CURRENT MATURITIES of long-term debt. */
 const CURRENT_MATURITY_TAGS: readonly string[] = [...tagsFor("debtCurrent"), ...tagsFor("currentMaturitiesOfLongTermDebt")];
@@ -527,19 +526,47 @@ const BALANCE_CHAINS: Record<string, ChainSpec> = {
   totalAssets: lineItemChain("totalAssets", "money"),
   /**
    * D-13 order: the filed total (`DebtCurrent`) first; then the sum of the
-   * balance-sheet current-debt lines the filer did tag (`ShortTermBorrowings`,
-   * `CommercialPaper`, `LongTermDebtCurrent`, the combined debt-and-leases
-   * current tag); and only when ALL of them miss, the debt-maturity schedule's
-   * next-twelve-months principal, which is a note disclosure rather than a
-   * balance-sheet line and is disclosed as a stand-in on every row it serves.
+   * balance-sheet current-debt lines the filer did tag.
+   *
+   * That sum has TWO components, because short-term borrowings and the current
+   * maturities of long-term debt are different instruments and a filer can tag
+   * one without the other. The maturity schedule's next-twelve-months principal
+   * is the stand-in for the CURRENT-MATURITIES COMPONENT ALONE — a note
+   * disclosure rather than a balance-sheet line, disclosed as a stand-in on
+   * every row it serves. Making it a step of the whole chain (as this did
+   * before) meant a filer that tagged `ShortTermBorrowings` while tagging its
+   * current maturities only by extension lost the current maturities entirely:
+   * Caterpillar FY2024 published short-term debt 5,514 against a filed 12,634,
+   * understating total debt by 7.12B. `resolveDebtOverlaps` case 5 still nets
+   * the schedule figure out whenever a balance-sheet current-maturities tag
+   * did resolve, so it is never counted twice.
    */
   shortTermDebt: {
     kind: "chain",
     unit: "money",
     steps: [
       { kind: "first", tags: tagsFor("debtCurrent"), unit: "money" },
-      { kind: "sumAny", tags: CURRENT_DEBT_TAGS, unit: "money" },
-      ...MATURITIES_STAND_IN_SPEC,
+      {
+        kind: "sumAnyOf",
+        unit: "money",
+        parts: [
+          {
+            label: "short-term borrowings",
+            spec: { kind: "sumAny", tags: SHORT_TERM_BORROWING_TAGS, unit: "money" },
+          },
+          {
+            label: "current maturities of long-term debt",
+            spec: {
+              kind: "chain",
+              unit: "money",
+              steps: [
+                { kind: "sumAny", tags: CURRENT_MATURITY_BALANCE_TAGS, unit: "money" },
+                ...MATURITIES_STAND_IN_SPEC,
+              ],
+            },
+          },
+        ],
+      },
     ],
   },
   longTermDebt: lineItemChain("longTermDebt", "money"),
@@ -1116,10 +1143,15 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
     case "sumAnyOf": {
       // Same contract as `sumAny`, one level up: at least one part must resolve,
       // parts in a foreign currency are dropped, and every absent part is named.
+      // `at` travels INTO the parts: unlike `sumAll` (whose composite words its
+      // own disclosure), a `sumAnyOf` part that resolved through a stand-in is
+      // a stand-in for a slice of this very field, so it is that field's
+      // substitution — the debt-maturity schedule standing in for the current
+      // maturities of long-term debt is the case.
       const present: { label: string; r: Resolved }[] = [];
       const absent: string[] = [];
       for (const part of spec.parts) {
-        const r = resolveSpec(part.spec, resolve, notes, `${label} (${part.label})`);
+        const r = resolveSpec(part.spec, resolve, notes, `${label} (${part.label})`, at);
         if (r === null || (present.length > 0 && present[0]!.r.unit !== r.unit)) {
           absent.push(part.label);
           continue;
@@ -1568,22 +1600,23 @@ function resolveDebtOverlaps(
   }
 
   // Case 5: the maturity schedule's first year is the current portion of
-  // long-term debt. Under the house rule (D-13) the chain reaches it only when
-  // all four balance-sheet current-debt tags miss, so here it either stood in
-  // for them or was never summed at all — and the figure the filer did disclose
-  // is named either way, because a reader has to see what the row leaves out.
+  // long-term debt. It stands in for THAT COMPONENT of the sum only, so it is
+  // reached whenever no balance-sheet current-maturities tag resolved — beside
+  // short-term borrowings as readily as alone. When such a tag DID resolve the
+  // schedule figure never entered the sum, and it is named anyway, because a
+  // reader has to see the figure the filer disclosed either way.
   const maturitiesStand = shortTermTags.includes(MATURITIES_NEXT_YEAR_TAG);
   const maturities = cc.money(MATURITIES_NEXT_YEAR_TAG);
   if (maturitiesStand) {
     notes.add(
-      `shortTermDebt ${ctx}: current maturities taken from the debt maturity schedule (${MATURITIES_NEXT_YEAR_TAG} ${maturities}) — no balance-sheet current-debt tag filed; the figure is CURRENT MATURITIES ONLY and, being a note disclosure rather than a balance-sheet line, is often filed annually only, so quarterly rows can lack it`,
+      `shortTermDebt ${ctx}: current maturities taken from the debt maturity schedule (${MATURITIES_NEXT_YEAR_TAG} ${maturities}) — no balance-sheet current-maturities tag was filed for the period; the figure is CURRENT MATURITIES ONLY (any short-term borrowings and commercial paper the filer tagged are added beside it) and, being a note disclosure rather than a balance-sheet line, is often filed annually only, so quarterly rows can lack it`,
     );
   } else if (maturities !== null) {
     const currentMaturityTagResolved = CURRENT_MATURITY_TAGS.some((tag) => shortTermTags.includes(tag));
     notes.add(
       currentMaturityTagResolved
         ? `shortTermDebt ${ctx}: ${MATURITIES_NEXT_YEAR_TAG} excluded — the balance sheet's own current-debt tag resolved for this period and already carries the current maturities`
-        : `shortTermDebt ${ctx}: the debt maturity schedule reports ${maturities} of long-term debt due within a year (${MATURITIES_NEXT_YEAR_TAG}); it is NOT added because the filer tagged a balance-sheet current-debt line (${shortTermTags.join(" + ")}) and the house rule takes the schedule only when every current-debt tag misses, so short-term debt here may exclude the current maturities of long-term debt`,
+        : `shortTermDebt ${ctx}: the debt maturity schedule reports ${maturities} of long-term debt due within a year (${MATURITIES_NEXT_YEAR_TAG}) and it did NOT enter the sum — it could not be combined with the tags that did resolve (${shortTermTags.length === 0 ? "none" : shortTermTags.join(" + ")}), which happens when the schedule is filed in another currency, so short-term debt here may exclude the current maturities of long-term debt`,
     );
   }
 

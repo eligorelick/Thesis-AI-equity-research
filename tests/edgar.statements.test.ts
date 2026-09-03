@@ -1378,10 +1378,10 @@ describe("buildStatementsFromCompanyFacts — Caterpillar-style balance sheets",
     expect(built.balanceAnnual.substitutions).toEqual([]);
   });
 
-  it("takes current maturities from the debt maturity schedule only when every balance-sheet current-debt tag misses", () => {
-    // House rule D-13: ShortTermBorrowings, CommercialPaper, DebtCurrent and
-    // LongTermDebtCurrent are checked first; the maturity schedule is a NOTE
-    // disclosure, so it serves only when all of them miss.
+  it("takes current maturities from the debt maturity schedule when no balance-sheet current-maturities tag was filed", () => {
+    // House rule D-13: DebtCurrent, then the balance-sheet current-debt lines;
+    // the maturity schedule is a NOTE disclosure, so it stands in only for the
+    // current-maturities component and only when that component's own tags miss.
     const built = build(catLike({
       LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
       LongTermDebtNoncurrent: at(30_696),
@@ -1401,23 +1401,79 @@ describe("buildStatementsFromCompanyFacts — Caterpillar-style balance sheets",
     ]);
   });
 
-  it("leaves the schedule figure out when another current-debt tag resolved, and says what that omits", () => {
-    // CAT FY2025 as filed: ShortTermBorrowings 5,514 beside first-year
-    // maturities of 7,120. Before D-13 the two were summed to 12,634; the
-    // house rule now takes the balance-sheet line alone and discloses that the
-    // current maturities are not inside it. (Changed deliberately: the previous
-    // test encoded the pre-D-13 sum.)
+  it("adds the schedule figure BESIDE short-term borrowings, which are a different instrument", () => {
+    // Caterpillar FY2024 as filed: short-term borrowings 5,514 AND current
+    // maturities of long-term debt 7,120, total current debt 12,634. CAT tags
+    // the current maturities only by extension, so the only us-gaap source for
+    // them is the maturity schedule. Treating that schedule as a step of the
+    // whole chain dropped them the moment ShortTermBorrowings resolved and
+    // published 5,514 — understating total debt by 7.12B (16.4%), straight
+    // into net debt, EV, invested capital, ROIC and the DCF equity bridge.
     const built = build(catLike({
       ShortTermBorrowings: at(5_514),
       LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
       LongTermDebtNoncurrent: at(30_696),
     }));
     const fy = built.balanceAnnual.rows[0]!;
-    expect(fy.shortTermDebt).toBe(5_514);
-    expect(fy.totalDebt).toBe(36_210);
+    expect(fy.shortTermDebt).toBe(12_634);
+    expect(fy.totalDebt).toBe(43_330);
     expect(
       built.balanceAnnual.notes.some((n) =>
-        /the debt maturity schedule reports 7120 of long-term debt due within a year.*NOT added.*may exclude the current maturities of long-term debt/.test(n),
+        /current maturities taken from the debt maturity schedule \(LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths 7120\).*CURRENT MATURITIES ONLY/.test(n),
+      ),
+    ).toBe(true);
+    // The stand-in is still disclosed on the field it served, per period.
+    expect(built.balanceAnnual.substitutions).toEqual([
+      {
+        field: "shortTermDebt",
+        periods: ["2025-12-31"],
+        text: expect.stringMatching(/^current maturities of long-term debt from the debt maturity schedule/),
+      },
+    ]);
+  });
+
+  it("does not double-count the schedule figure when a balance-sheet current-maturities tag resolved beside borrowings", () => {
+    // Both components tagged on the balance sheet: 5,514 + 7,000 = 12,514, and
+    // the schedule's 7,120 is named as excluded rather than added on top.
+    const built = build(catLike({
+      ShortTermBorrowings: at(5_514),
+      LongTermDebtCurrent: at(7_000),
+      LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
+      LongTermDebtNoncurrent: at(30_696),
+    }));
+    const fy = built.balanceAnnual.rows[0]!;
+    expect(fy.shortTermDebt).toBe(12_514);
+    expect(fy.totalDebt).toBe(43_210);
+    expect(built.balanceAnnual.substitutions).toEqual([]);
+    expect(
+      built.balanceAnnual.notes.some((n) =>
+        /LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths excluded — the balance sheet's own current-debt tag resolved/.test(n),
+      ),
+    ).toBe(true);
+  });
+
+  it("says the schedule figure was left out when it could not be combined with the tags that resolved", () => {
+    // The schedule filed in another currency: `sumAnyOf` drops the part rather
+    // than adding euros to dollars, and the row says what it may be missing.
+    const built = build(
+      facts(
+        {
+          Revenues: [{ start: "2025-01-01", end: "2025-12-31", val: 64_000, ...k }],
+          Assets: at(98_585),
+          CashAndCashEquivalentsAtCarryingValue: at(9_980),
+          ShortTermBorrowings: at(5_514),
+          LongTermDebtNoncurrent: at(30_696),
+          LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
+        },
+        {},
+        { LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: "EUR" },
+      ),
+    );
+    const fy = built.balanceAnnual.rows[0]!;
+    expect(fy.shortTermDebt).toBe(5_514);
+    expect(
+      built.balanceAnnual.notes.some((n) =>
+        /did NOT enter the sum.*could not be combined with the tags that did resolve \(ShortTermBorrowings\)/.test(n),
       ),
     ).toBe(true);
   });

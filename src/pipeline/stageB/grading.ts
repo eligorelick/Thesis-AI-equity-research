@@ -438,8 +438,11 @@ const UPSIDE_BAND: readonly BandPoint[] = [
   [20, 75],
   [50, 92],
 ];
-// Valuation: own-history multiple percentile (0–100) — LOWER = cheaper = better.
-const MULTIPLE_PERCENTILE_BAND: readonly BandPoint[] = [
+// Valuation: own-history multiple RANK among N quarters (0-100) — LOWER =
+// cheaper = better. WS6 review (SHOULD-FIX 3): it is a rank within the observed
+// sample, never a percentile of a distribution; 8-20 quarters cannot estimate
+// one, and every reader-visible surface says rank.
+const MULTIPLE_OWN_HISTORY_RANK_BAND: readonly BandPoint[] = [
   [10, 88],
   [25, 74],
   [50, 56],
@@ -505,7 +508,7 @@ function latestMarginPct(series: { pct: number | null }[]): number | null {
 }
 
 /** Own-history percentile of a named multiple (valuation, any route). */
-function multiplePercentile(valuation: ValuationResult, keys: string[]): number | null {
+function multipleOwnHistoryRank(valuation: ValuationResult, keys: string[]): number | null {
   if (valuation.kind === "pre-revenue") return null;
   const stats = valuation.multiples?.multiples ?? [];
   for (const key of keys) {
@@ -625,7 +628,7 @@ export function computeScores(inputs: ScoringInputs): Scoring {
     const achievable = bestCagr(growth.revenueCagrs);
     const impliedVsAchievable = isNum(impliedG) && isNum(achievable) ? impliedG - achievable : null;
     valuationSignals.push({ name: "reverseImpliedVsAchievable", raw: impliedVsAchievable, unit: "pp", weight: 0.3, band: IMPLIED_VS_ACHIEVABLE_BAND, suppressedBy: "fcfDcf" });
-    valuationSignals.push({ name: "peOwnPercentile", raw: multiplePercentile(valuation, ["peTtm", "evToEbitda", "priceToFcf"]), unit: "pctile", weight: 0.3, band: MULTIPLE_PERCENTILE_BAND });
+    valuationSignals.push({ name: "peOwnHistoryRank", raw: multipleOwnHistoryRank(valuation, ["peTtm", "evToEbitda", "priceToFcf"]), unit: "rank", weight: 0.3, band: MULTIPLE_OWN_HISTORY_RANK_BAND });
   } else if (valuation.kind === "excess-return") {
     const cur = valuation.excessReturn?.roePathPct?.value?.[0] ?? null; // current/achievable ROE (path start)
     const implied = valuation.excessReturn?.reverseSolve?.impliedCurrentRoePct ?? null;
@@ -637,19 +640,19 @@ export function computeScores(inputs: ScoringInputs): Scoring {
     // the reverse solve held ROE constant.
     const impliedVsAchievable = isNum(cur) && isNum(implied) ? implied - cur : null;
     valuationSignals.push({ name: "roeImpliedVsAchievable", raw: impliedVsAchievable, unit: "pp", weight: 0.5, band: IMPLIED_VS_ACHIEVABLE_BAND });
-    valuationSignals.push({ name: "priceToTbvPercentile", raw: multiplePercentile(valuation, ["priceToTbv", "priceToBook"]), unit: "pctile", weight: 0.5, band: MULTIPLE_PERCENTILE_BAND });
+    valuationSignals.push({ name: "priceToTbvOwnHistoryRank", raw: multipleOwnHistoryRank(valuation, ["priceToTbv", "priceToBook"]), unit: "rank", weight: 0.5, band: MULTIPLE_OWN_HISTORY_RANK_BAND });
   } else if (valuation.kind === "reit") {
-    valuationSignals.push({ name: "pFfoPercentile", raw: multiplePercentile(valuation, ["priceToFfo", "priceToAffo"]), unit: "pctile", weight: 1.0, band: MULTIPLE_PERCENTILE_BAND });
+    valuationSignals.push({ name: "pFfoOwnHistoryRank", raw: multipleOwnHistoryRank(valuation, ["priceToFfo", "priceToAffo"]), unit: "rank", weight: 1.0, band: MULTIPLE_OWN_HISTORY_RANK_BAND });
   } else if (valuation.kind === "dcf-suppressed") {
     // Mirror the "dcf" branch's signal shape so dataCompleteness matches the
     // unprofitable overlay's actual scoring behavior from before this fix:
     // dcfUpside/reverseImpliedVsAchievable still count toward totalWeight but
     // are excluded via suppressedBy (no dcf/reverseDcf object exists to source
-    // them from), so only peOwnPercentile actually scores — same math as the
+    // them from), so only peOwnHistoryRank actually scores — same math as the
     // "dcf" branch already produced for unprofitable-overlay routes.
     valuationSignals.push({ name: "dcfUpside", raw: null, unit: "%", weight: 0.4, band: UPSIDE_BAND, suppressedBy: "fcfDcf" });
     valuationSignals.push({ name: "reverseImpliedVsAchievable", raw: null, unit: "pp", weight: 0.3, band: IMPLIED_VS_ACHIEVABLE_BAND, suppressedBy: "fcfDcf" });
-    valuationSignals.push({ name: "peOwnPercentile", raw: multiplePercentile(valuation, ["peTtm", "evToEbitda", "priceToFcf"]), unit: "pctile", weight: 0.3, band: MULTIPLE_PERCENTILE_BAND });
+    valuationSignals.push({ name: "peOwnHistoryRank", raw: multipleOwnHistoryRank(valuation, ["peTtm", "evToEbitda", "priceToFcf"]), unit: "rank", weight: 0.3, band: MULTIPLE_OWN_HISTORY_RANK_BAND });
   }
   const valuationScore =
     valuation.kind === "pre-revenue"
@@ -659,7 +662,9 @@ export function computeScores(inputs: ScoringInputs): Scoring {
           valuationSignals,
           weights.valuation,
           inputs.asOf,
-          "Attractiveness vs intrinsic value: DCF upside, reverse-DCF implied vs achievable growth, and multiple percentile.",
+          "Attractiveness vs intrinsic value: DCF upside, reverse-DCF implied vs achievable growth, and where the current " +
+            "multiple RANKS among the issuer's own quarters (a rank within the observed 8-20 quarter sample, not a percentile " +
+            "of a distribution; N is published beside every rendered rank).",
           policy,
         );
 

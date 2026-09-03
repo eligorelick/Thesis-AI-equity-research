@@ -620,7 +620,11 @@ function renderValuation(v: Valuation, scenarioTargets?: ScenarioTargets, fairVa
         m.name,
         m.current === null ? DASH : num(m.current, 1),
         m.peerMedian === null ? DASH : num(m.peerMedian, 1),
-        m.own5yPercentile === null ? DASH : `rank ${m.own5yPercentile.toFixed(0)}/100`,
+        m.own5yPercentile === null
+          ? DASH
+          : `rank ${m.own5yPercentile.toFixed(0)}/100${
+              typeof m.ownHistoryObservations === "number" ? ` of ${m.ownHistoryObservations} quarters` : ""
+            }`,
         m.sectorAppropriate ? "yes" : "no",
       ]),
     ),

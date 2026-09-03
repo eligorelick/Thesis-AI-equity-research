@@ -855,8 +855,8 @@ function MultiplesTable({ rows }: { rows: readonly MultipleRow[] }) {
     {
       key: "pct",
       // WS6 (D-19): a RANK among the issuer's own quarters, never a percentile
-      // - the window is 8-20 observations. N is stated per multiple in the
-      // computed valuation notes.
+      // - the window is 8-20 observations. WS6 review (SHOULD-FIX 3): N is
+      // printed beside the rank, not left in the computed valuation notes.
       header: "own-history rank",
       align: "right",
       render: (m) =>
@@ -868,7 +868,11 @@ function MultiplesTable({ rows }: { rows: readonly MultipleRow[] }) {
               <ShareBar
                 pct={m.own5yPercentile}
                 tone={m.own5yPercentile >= 70 ? "warn" : "accent"}
-                label={`rank ${m.own5yPercentile.toFixed(0)}`}
+                label={
+                  typeof m.ownHistoryObservations === "number"
+                    ? `rank ${m.own5yPercentile.toFixed(0)} of ${m.ownHistoryObservations} quarters`
+                    : `rank ${m.own5yPercentile.toFixed(0)}`
+                }
               />
             </div>
           </div>

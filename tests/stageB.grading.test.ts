@@ -386,7 +386,7 @@ describe("grading — computeScores", () => {
   it("dcf-suppressed valuation (unprofitable overlay) keeps dataCompleteness at 0.3, not 0 or 1 (2026-07 audit finding 3)", () => {
     // Mirrors the "dcf" branch's unprofitable-overlay behavior exactly: dcfUpside
     // (0.4) and reverseImpliedVsAchievable (0.3) are suppressed via metric
-    // policy, only peOwnPercentile (0.3) actually scores — same math as before
+    // policy, only peOwnHistoryRank (0.3) actually scores — same math as before
     // the dcf-suppressed kind existed, so this must NOT regress to 0 (no
     // signals emitted) or silently jump to 1.0 (only the un-suppressed signal
     // counted toward totalWeight).
@@ -609,7 +609,7 @@ describe("grading — currency-suppressed DCF path (audit H3)", () => {
     // The ADR currency guard suppresses dcf + reverseDcf (both null) while the
     // multiples framework stays available. The dcfUpside (0.4) and
     // reverseImpliedVsAchievable (0.3) signals must be DROPPED (no data), the
-    // aspect scored on peOwnPercentile alone with completeness 0.3 — never a
+    // aspect scored on peOwnHistoryRank alone with completeness 0.3 — never a
     // saturated UPSIDE_BAND score from a mixed-currency +800% "upside".
     const suppressed = {
       ...(valuationDcf() as unknown as Record<string, unknown>),
@@ -620,13 +620,14 @@ describe("grading — currency-suppressed DCF path (audit H3)", () => {
     } as unknown as ValuationResult;
     const s = computeScores(makeInputs({ valuation: suppressed, currentPrice: 100 }));
     const v = s.aspects.valuation;
-    // peOwnPercentile fixture = 40 -> MULTIPLE_PERCENTILE_BAND breakpoints
+    // peOwnHistoryRank fixture = 40 -> MULTIPLE_OWN_HISTORY_RANK_BAND breakpoints
     // [25,74]..[50,56]: 74 + (56-74)*(40-25)/25 = 74 - 10.8 = 63.2 exactly.
     expect(v.score).toBeCloseTo(63.2, 6);
     expect(v.dataCompleteness).toBeCloseTo(0.3, 6);
     expect(v.drivers.some((d) => d.source.endsWith(".dcfUpside"))).toBe(false);
     expect(v.drivers.some((d) => d.source.endsWith(".reverseImpliedVsAchievable"))).toBe(false);
-    expect(v.drivers.some((d) => d.source.endsWith(".peOwnPercentile"))).toBe(true);
+    // WS6 review (SHOULD-FIX 3): the driver names the rank, not a percentile.
+    expect(v.drivers.some((d) => d.source.endsWith(".peOwnHistoryRank"))).toBe(true);
   });
 });
 

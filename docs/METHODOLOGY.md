@@ -272,8 +272,20 @@ percentile of a distribution, and CFA Institute guidance is to describe such a
 figure as a rank within the observed sample. The numeric field keeps its
 historical name for backward compatibility with persisted reports, but its
 description, every rendered label, the basis strings and the missing-data
-reason all say rank, and N is published per multiple in the computed valuation
-notes.
+reason all say rank.
+
+**N is rendered beside the rank**, not left in a note: the multiples row carries
+`ownHistoryObservations`, and Markdown, print HTML and the app all read "rank 62
+of 12 quarters". A report persisted before that field existed still parses and
+still renders, without inventing an N. The field is optional in Zod for exactly
+that reason and is stripped from the judge's request schema — the judge never
+authors this table (`applyMultiples` replaces it wholesale from computed
+numbers), so carrying it costs nothing against the request schema's
+optional-parameter budget. The score drivers built from the rank are named
+`peOwnHistoryRank`, `priceToTbvOwnHistoryRank` and `pFfoOwnHistoryRank` with
+unit `rank`, the valuation aspect note says rank, and the Stage C prompt
+instructs the model in the same terms, so the narrative cannot call it a
+percentile either.
 
 Fewer than 8 quarters produces no rank at all. Fewer than 20 (a full five
 years) flags the window as low-sample, because at those sizes the 5th and 95th

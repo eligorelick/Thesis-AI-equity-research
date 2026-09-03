@@ -2035,6 +2035,9 @@ export function applyMultiples(
           current: stat.current,
           peerMedian: stat.peers?.median ?? null,
           own5yPercentile: stat.ownHistory?.percentileRank ?? null,
+          // WS6 review (SHOULD-FIX 3): N travels with the rank so every render
+          // surface can print "rank 62 of 12 quarters" instead of a bare 62.
+          ownHistoryObservations: stat.ownHistory?.observations ?? null,
           sectorAppropriate: mr.sectorAppropriate.includes(stat.key),
         }));
   return { ...valuation, multiples: rows };

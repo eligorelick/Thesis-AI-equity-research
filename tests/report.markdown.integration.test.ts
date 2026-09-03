@@ -806,6 +806,25 @@ describe("real report consumers use context-safe Markdown boundaries", () => {
     }).success).toBe(false);
   });
 
+  // WS6 review (SHOULD-FIX 3): a bare "rank 62" is not a rank a reader can read.
+  // N reached only the Stage C payload notes; every rendered surface now prints
+  // it, and a report written before the review (no N) still renders and parses.
+  it("prints N beside the own-history rank in Markdown and print HTML, and degrades cleanly without it", () => {
+    const report = loadFixtureReport();
+    report.valuation.multiples = [
+      { name: "P/E (TTM)", current: 11.2, peerMedian: 10.5, own5yPercentile: 62, ownHistoryObservations: 12, sectorAppropriate: true },
+      { name: "P/FCF (before SBC)", current: 18, peerMedian: null, own5yPercentile: 40, sectorAppropriate: true },
+    ];
+    expect(ReportSchema.safeParse(report).success).toBe(true);
+    const markdown = reportToMarkdown(report);
+    expect(markdown).toContain("rank 62/100 of 12 quarters");
+    // The legacy row (no N persisted) still renders, without inventing one.
+    expect(markdown).toContain("rank 40/100");
+    expect(markdown).not.toContain("rank 40/100 of");
+    const html = reportToPrintHtml(report, { autoPrint: false });
+    expect(html).toContain("rank 62/100 of 12 quarters");
+  });
+
   it("remains deterministic, non-mutating, and terminated by exactly one LF", () => {
     const report = consumerReport(true);
     const before = JSON.stringify(report);

@@ -55,6 +55,8 @@ const ALLOWED_MARKDOWN = new Set([
   "docs/audit/README-RECONCILIATION.md",
   "docs/audit/DECISIONS.md",
   "docs/audit/PROGRESS.md",
+  "docs/METHODOLOGY.md", // WS6
+  "docs/audit/README-NOTES-WS6.md", // WS6
 ]);
 const VERIFY_GATES = [
   "npm run check:dependencies",

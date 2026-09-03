@@ -32,6 +32,7 @@ const REQUIRED_RELEASE_FILES = [
   "scripts/models-refresh.mjs",
   "scripts/reconcile-presumed-costs.mjs",
   "scripts/docs-pricing.mjs",
+  "scripts/docs-config.mjs",
   "scripts/audit-deltas.mjs",
   "tests/fixtures/audit-intended-deltas.json",
   "scripts/run-security-audit.mjs",

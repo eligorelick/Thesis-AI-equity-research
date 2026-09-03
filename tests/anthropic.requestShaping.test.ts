@@ -9,9 +9,13 @@ import { describe, expect, it } from "vitest";
 
 import { activeModels, type RegistryModel } from "@/models/registry";
 import {
+  PASS_BILLING_EXPOSURE_MULTIPLIER,
+  PASS_MAX_REQUESTS,
   buildPassParams,
   effectiveMaxTokens,
   maximumPassCostUsd,
+  maximumRequestCostUsd,
+  passWorstCaseCostUsd,
   modelContextTokenLimit,
   modelMaxOutputTokens,
   supportsEffort,
@@ -97,12 +101,21 @@ describe.each(activeModels().map((entry) => [entry.id, entry] as const))("reques
     expect(webSearchTool(4, id)).toMatchObject({ type: entry.webSearchToolType, max_uses: 4 });
   });
 
-  it("bounds the pass reservation with the registry output ceiling and the 5-minute cache-write price", () => {
-    const perExecutionUsd =
+  it("bounds one request with the registry output ceiling and the 5-minute cache-write price", () => {
+    const perRequestUsd =
       (entry.contextWindowTokens / 1e6) * entry.pricing.cacheWrite5mPerMTok +
       (entry.maxOutputTokens / 1e6) * entry.pricing.outputPerMTok +
       8 * 0.01;
-    expect(maximumPassCostUsd(id, "bull")).toBeCloseTo(perExecutionUsd * 108, 6);
+    // What a single request can bill: the amount request-reservation mode
+    // admits before sending it (DECISIONS D-10).
+    expect(maximumRequestCostUsd(id, "bull")).toBeCloseTo(perRequestUsd, 6);
+    // The pass worst case is reported, not reserved: every request the pass
+    // could make, at that maximum.
+    expect(passWorstCaseCostUsd(id, "bull")).toBeCloseTo(perRequestUsd * PASS_MAX_REQUESTS, 5);
+    expect(maximumPassCostUsd(id, "bull")).toBeCloseTo(
+      perRequestUsd * PASS_BILLING_EXPOSURE_MULTIPLIER,
+      5,
+    );
   });
 });
 

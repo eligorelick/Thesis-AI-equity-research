@@ -36,6 +36,7 @@ import { costLog, jobPassArtifacts, jobs, reports, type JobRow } from "@/db/sche
 import { getConfig } from "@/config/env";
 import {
   maximumPassCostUsd,
+  maximumRequestCostUsd,
   resolveModel,
   type VerifyReservationCapability,
 } from "@/providers/anthropic";
@@ -62,6 +63,7 @@ import {
 } from "@/report/schema";
 import { buildDataCompleteness } from "@/report/completeness";
 import { buildExecutionMetadataEntry } from "@/report/execution";
+import type { RequestAdmission, RequestPermit } from "@/providers/anthropic";
 import { buildDataBundle, type BuildDataBundleOptions } from "@/pipeline/dataBundle";
 import { runStageB, type ComputedMetrics } from "@/pipeline/compute";
 import { validateBundle, type ValidationReport } from "@/pipeline/stageA/validate";
@@ -104,7 +106,10 @@ import {
   releaseUnbilledPaidPassLease,
   renewJobLease,
   renewPaidPassLease,
+  requestAttemptId,
+  resizePaidPassLease,
   settlePaidPassLease,
+  settleRequestCost,
   PaidPassOverReservationError,
   type JobClaim,
   type PaidPassLease,
@@ -224,6 +229,14 @@ export interface PassUsageLike {
  */
 export interface PassDeps<TPayload = unknown> {
   analysisModel: string;
+  /**
+   * Per-request cost admission for a pass (DECISIONS D-10). The Stage C
+   * adapter threads the returned object into every provider request the pass
+   * makes, so each one is reserved before it is sent and settled with its own
+   * usage. Absent in "pass" reservation mode and in mocks.
+   */
+  admissionFor?: (pass: DurablePass) => RequestAdmission | undefined;
+
   /** One job-scoped cancellation/deadline signal shared by every provider pass. */
   signal?: AbortSignal;
   /**
@@ -861,6 +874,8 @@ function adoptCommittedSettlement<T>(
 
 interface SettlementCheckpoint<T> {
   attemptId: string;
+  /** Per-request cost admission for every provider request this pass makes. */
+  admission: RequestAdmission;
   beforeLaunch(): Promise<void>;
   authorizeLaunch(startStepAtBoundary: boolean): void;
   wasLaunched(): boolean;
@@ -877,6 +892,34 @@ function throwFirstSettlementRejection(outcomes: PromiseSettledResult<unknown>[]
     (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
   );
   if (rejected) throw rejected.reason;
+}
+
+/**
+ * What the PASS-level lease reserves (DECISIONS D-10).
+ *
+ * In "request" mode it reserves ONE request maximum. That covers a pass that
+ * settles without ever reaching the provider, and it is released the moment
+ * the first request takes its own reservation, so live exposure stays at one
+ * request maximum per in-flight call. In "pass" mode it reserves the
+ * pre-remediation bound covering every request the pass could make, kept for
+ * one release as a fallback.
+ */
+function passReservationUsd(
+  model: string,
+  pass: DurablePass,
+  verifyCapability?: VerifyReservationCapability,
+): number {
+  if (pass === "verify" && verifyCapability?.billable !== true) {
+    return maximumPassCostUsd(model, pass, verifyCapability);
+  }
+  return getConfig().reservationMode === "pass"
+    ? maximumPassCostUsd(model, pass, verifyCapability)
+    : maximumRequestCostUsd(model, pass, verifyCapability);
+}
+
+/** Whether provider requests are admitted individually. */
+function usesRequestAdmission(): boolean {
+  return getConfig().reservationMode === "request";
 }
 
 function createSettlementCheckpoint<T>(
@@ -897,6 +940,10 @@ function createSettlementCheckpoint<T>(
   let lease: PaidPassLease | null = null;
   let renewal: ReturnType<typeof setInterval> | undefined;
   let permitBackoffMs = 250;
+  // Live per-request leases, keyed by the permit id the provider carries
+  // (DECISIONS D-10). In "pass" reservation mode this map stays empty.
+  const requestLeases = new Map<string, PaidPassLease>();
+  let requestSequence = 0;
 
   const stopRenewal = (): void => {
     if (renewal !== undefined) clearInterval(renewal);
@@ -923,6 +970,18 @@ function createSettlementCheckpoint<T>(
             if (lease !== null && !renewPaidPassLease(lease, undefined, state.schedulerLimits)) {
               stopRenewal();
               controller.abort(new Error(`paid ${pass} lease renewal lost authority`));
+              return;
+            }
+            // A request in flight holds its own lease; renew it on the same
+            // beat so a long generation cannot expire into presumed spend
+            // while it is still being read.
+            for (const [permitId, requestLease] of requestLeases) {
+              if (!renewPaidPassLease(requestLease, undefined, state.schedulerLimits)) {
+                requestLeases.delete(permitId);
+                stopRenewal();
+                controller.abort(new Error(`paid ${pass} request lease renewal lost authority`));
+                return;
+              }
             }
           } catch (error) {
             stopRenewal();
@@ -963,6 +1022,89 @@ function createSettlementCheckpoint<T>(
       permitBackoffMs = Math.min(1_000, permitBackoffMs * 2);
     }
   };
+  /**
+   * Admit one provider request against the durable spend caps, waiting out
+   * transient capacity/pending refusals exactly as the pass gate does. A
+   * refusal that is not transient (a cap that is genuinely full) is thrown, and
+   * the provider turns it into a stop at the request boundary.
+   */
+  const reserveRequest = async (maximumUsd: number): Promise<RequestPermit> => {
+    let backoffMs = 250;
+    for (;;) {
+      signal.throwIfAborted();
+      const sequence = requestSequence + 1;
+      const acquired = acquirePaidPassLease(
+        state.claim,
+        pass,
+        requestAttemptId(attemptId, sequence),
+        maximumUsd,
+        undefined,
+        state.schedulerLimits,
+        undefined,
+        reservationModel,
+      );
+      if (acquired.acquired) {
+        requestSequence = sequence;
+        requestLeases.set(acquired.lease.permitId, acquired.lease);
+        // The pass lease's one-request headroom exists only until a real
+        // request reserves for itself; release it so the two do not stack.
+        if (sequence === 1 && lease !== null && lease.reservedCostUsd > 0) {
+          const resized = resizePaidPassLease(lease, 0, undefined, undefined);
+          if (resized !== null) lease = resized;
+        }
+        return { id: acquired.lease.permitId, maximumUsd: acquired.lease.reservedCostUsd };
+      }
+      if (
+        acquired.reason !== "capacity" &&
+        acquired.reason !== "job-budget-pending" &&
+        acquired.reason !== "rolling-budget-pending"
+      ) {
+        throw new Error(`paid ${pass} request blocked by ${acquired.reason}`);
+      }
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = (): void => signal.removeEventListener("abort", onAbort);
+        const timer = setTimeout(() => {
+          cleanup();
+          resolve();
+        }, backoffMs);
+        const onAbort = (): void => {
+          clearTimeout(timer);
+          cleanup();
+          reject(signal.reason ?? new DOMException("aborted", "AbortError"));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        timer.unref?.();
+      });
+      backoffMs = Math.min(1_000, backoffMs * 2);
+    }
+  };
+
+  const admission: RequestAdmission = {
+    reserve: async ({ maximumUsd }) => reserveRequest(maximumUsd),
+    settle: async (permit, settled) => {
+      const requestLease = requestLeases.get(permit.id);
+      if (requestLease === undefined) return;
+      requestLeases.delete(permit.id);
+      settleRequestCost(requestLease, {
+        model: settled.model,
+        inputTokens: settled.usage?.input_tokens ?? 0,
+        outputTokens: settled.usage?.output_tokens ?? 0,
+        cacheReadTokens: settled.usage?.cache_read_input_tokens ?? 0,
+        cacheWriteTokens: settled.usage?.cache_creation_input_tokens ?? 0,
+        webSearches: settled.webSearches,
+        costUsd: settled.costUsd,
+        fallbackUsed: settled.fallbackUsed,
+        ...(settled.presumed === true ? { presumed: true } : {}),
+      });
+    },
+    release: async (permit) => {
+      const requestLease = requestLeases.get(permit.id);
+      if (requestLease === undefined) return;
+      requestLeases.delete(permit.id);
+      releaseUnbilledPaidPassLease(requestLease);
+    },
+  };
+
   const authorizeLaunch = (startStepAtBoundary: boolean): void => {
     signal.throwIfAborted();
     if (lease === null) {
@@ -1026,8 +1168,17 @@ function createSettlementCheckpoint<T>(
         throw new Error(`paid ${pass} settlement occurred before its durable lease was acquired`);
       }
       stopRenewal();
+      // When this pass admitted its own requests, each already wrote a cost
+      // row, so the artifact records the same figures WITHOUT billing them a
+      // second time. A pass that settled without reaching the provider (an
+      // injected adapter, or a durable replay) still bills here: suppression
+      // follows the rows that exist, never the mode alone.
+      const settlementForPass: PassSettlement<T> =
+        requestSequence > 0 && settlement.telemetry.billable
+          ? { ...settlement, telemetry: { ...settlement.telemetry, billable: false } }
+          : settlement;
       const persisted = settlePaidPassLease(lease, {
-        settlement,
+        settlement: settlementForPass,
         payloadFingerprint,
         step: {
           finishedAt: findStep(state, pass).finishedAt ?? nowIso(),
@@ -1065,12 +1216,17 @@ function createSettlementCheckpoint<T>(
   };
   return {
     attemptId,
+    admission,
     beforeLaunch,
     authorizeLaunch,
     wasLaunched: () => launched,
     releaseIfPrelaunch: () => {
       if (lease !== null && !launched && !called) {
         stopRenewal();
+        for (const [permitId, requestLease] of requestLeases) {
+          releaseUnbilledPaidPassLease(requestLease);
+          requestLeases.delete(permitId);
+        }
         releaseUnbilledPaidPassLease(lease);
         lease = null;
       }
@@ -2499,11 +2655,17 @@ export async function runJob<TPayload = unknown>(
 
     // -- assemble payload (deterministic) -------------------------------------
     const payload = passes.assembleContextPayload(bundle, computed, validation);
+    // Each pass registers its checkpoint's admission here as it is created, so
+    // the Stage C adapter can reserve every provider request the pass makes.
+    const passAdmissions = new Map<DurablePass, RequestAdmission>();
     const deps: PassDeps<TPayload> = {
       analysisModel,
       effort: analysisEffort,
       payload,
       signal: jobSignal,
+      ...(usesRequestAdmission()
+        ? { admissionFor: (pass: DurablePass) => passAdmissions.get(pass) }
+        : {}),
     };
     const fingerprint = passes.fingerprintPayload?.(payload) ?? null;
     if (preparedResume !== null && fingerprint !== preparedResume.payloadFingerprint) {
@@ -2631,9 +2793,10 @@ export async function runJob<TPayload = unknown>(
             state,
             "synthesize",
             fingerprint,
-            maximumPassCostUsd(analysisModel, "synthesize"),
+            passReservationUsd(analysisModel, "synthesize"),
             jobSignal,
             jobController,
+            analysisModel,
           );
           try {
             await passes.preflightPass?.(deps, {
@@ -2642,6 +2805,7 @@ export async function runJob<TPayload = unknown>(
               bear,
               validationFeedback: feedback,
             });
+            passAdmissions.set("synthesize", judgeCheckpoint.admission);
             await judgeCheckpoint.beforeLaunch();
             judge = await awaitJobStage(
               passes.runJudgePass(
@@ -2713,9 +2877,10 @@ export async function runJob<TPayload = unknown>(
           state,
           "verify",
           fingerprint,
-          maximumPassCostUsd(analysisModel, "verify", passes.verifyCapability),
+          passReservationUsd(analysisModel, "verify", passes.verifyCapability),
           jobSignal,
           jobController,
+          analysisModel,
         );
         // Verification measures citation coverage against the evidence the run
         // actually gathered. On a synthesize-reuse resume `bull`/`bear` are null
@@ -2996,12 +3161,14 @@ export async function runJob<TPayload = unknown>(
           state,
           side,
           fingerprint,
-          maximumPassCostUsd(analysisModel, side),
+          passReservationUsd(analysisModel, side),
           jobSignal,
           jobController,
+          analysisModel,
         );
         try {
           await passes.preflightPass?.(deps, { pass: side });
+          passAdmissions.set(side, analystCheckpoint.admission);
           await analystCheckpoint.beforeLaunch();
           const fresh = await awaitJobStage(
             passes.runAnalystPass!(
@@ -3065,21 +3232,24 @@ export async function runJob<TPayload = unknown>(
       state,
       "bull",
       fingerprint,
-      maximumPassCostUsd(analysisModel, "bull"),
+      passReservationUsd(analysisModel, "bull"),
       jobSignal,
       jobController,
+      analysisModel,
     );
     const bearCheckpoint = createSettlementCheckpoint<AnalystCase>(
       state,
       "bear",
       fingerprint,
-      maximumPassCostUsd(analysisModel, "bear"),
+      passReservationUsd(analysisModel, "bear"),
       jobSignal,
       jobController,
+      analysisModel,
     );
     const analystHooks: AnalystPassHooks = {
       beforePass: async (side) => {
         const checkpoint = side === "bull" ? bullCheckpoint : bearCheckpoint;
+        passAdmissions.set(side, checkpoint.admission);
         await checkpoint.beforeLaunch();
       },
       onPassStart: (side) => {
@@ -3118,12 +3288,14 @@ export async function runJob<TPayload = unknown>(
         state,
         side,
         fingerprint,
-        maximumPassCostUsd(analysisModel, side),
+        passReservationUsd(analysisModel, side),
         jobSignal,
         jobController,
+        analysisModel,
       );
       try {
         await passes.preflightPass?.(deps, { pass: side });
+        passAdmissions.set(side, checkpoint.admission);
         await checkpoint.beforeLaunch();
         const fresh = await awaitJobStage(
           passes.runAnalystPass!(

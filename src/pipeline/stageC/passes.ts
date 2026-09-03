@@ -193,6 +193,14 @@ export interface RunPassArgs {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   field?: string;
   signal?: AbortSignal;
+  /**
+   * Per-request cost admission for this pass (DECISIONS D-10). Opaque here:
+   * the adapter hands it to the provider, which reserves and settles every
+   * request it makes.
+   */
+  admission?: unknown;
+  /** Reservation identity for the per-request maximum. */
+  reservationPass?: "bull" | "bear" | "synthesize" | "verify";
 }
 
 /** The injected non-streaming runner. */
@@ -228,6 +236,8 @@ export interface PassDeps {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /** One job-scoped cancellation/deadline signal. */
   signal?: AbortSignal;
+  /** Per-request cost admission, by pass (DECISIONS D-10). */
+  admissionFor?: (pass: "bull" | "bear" | "synthesize" | "verify") => unknown;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -538,6 +548,8 @@ export function buildAnalystRunPassArgs(
     effort: deps.effort ?? "high",
     field: `llm.${side}`,
     signal: deps.signal,
+    admission: deps.admissionFor?.(side),
+    reservationPass: side,
   };
 }
 
@@ -1425,6 +1437,8 @@ export function buildJudgeRunPassArgs(
     effort: deps.effort ?? "high",
     field: "llm.judge",
     signal: deps.signal,
+    admission: deps.admissionFor?.("synthesize"),
+    reservationPass: "synthesize",
   };
 }
 

@@ -20,6 +20,8 @@ import {
   MAX_PROVIDER_WEB_SEARCHES,
   PASS_TRANSPORT_MAX_ATTEMPTS,
   PASS_BILLING_EXPOSURE_MULTIPLIER,
+  PASS_MAX_REQUESTS,
+  PASS_MID_STREAM_RETRY_DELAYS_MS,
   PASS_TRANSPORT_RETRY_DELAYS_MS,
   PREFERENCE_ORDER,
   PRICING,
@@ -512,7 +514,12 @@ describe("webSearchTool", () => {
     expect(PASS_BILLING_EXPOSURE_MULTIPLIER).toBe(
       (CLIENT_MAX_RETRIES + 1) * PASS_TRANSPORT_MAX_ATTEMPTS * (MAX_PAUSE_RESUMPTIONS + 1),
     );
-    expect(PASS_BILLING_EXPOSURE_MULTIPLIER).toBe(108);
+    // 36, not the former 108: the SDK's own retry budget is now zero, because
+    // an SDK retry is a billable request the scheduler never saw. Every retry
+    // is a pass-level attempt that reserves for itself (DECISIONS D-10).
+    expect(CLIENT_MAX_RETRIES).toBe(0);
+    expect(PASS_BILLING_EXPOSURE_MULTIPLIER).toBe(36);
+    expect(PASS_MAX_REQUESTS).toBe(36);
   });
 });
 
@@ -1113,7 +1120,9 @@ describe("runPassStreaming transport retry", () => {
     const result = await handle.result;
 
     expect(streamCalls.length).toBe(2);
-    expect(delays).toEqual([PASS_TRANSPORT_RETRY_DELAYS_MS[0]]);
+    // This attempt streamed before it died, so the longer mid-stream ladder
+    // applies: Anthropic shed load while already generating.
+    expect(delays).toEqual([PASS_MID_STREAM_RETRY_DELAYS_MS[0]]);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     // The failed attempt's streamed tokens WERE billed — they must be folded
@@ -1138,20 +1147,28 @@ describe("runPassStreaming transport retry", () => {
     const result = await handle.result; // must RESOLVE, not reject
 
     expect(streamCalls.length).toBe(PASS_TRANSPORT_MAX_ATTEMPTS);
-    expect(delays).toEqual([...PASS_TRANSPORT_RETRY_DELAYS_MS]);
+    expect(delays).toEqual([
+      PASS_MID_STREAM_RETRY_DELAYS_MS[0],
+      ...Array.from(
+        { length: PASS_TRANSPORT_MAX_ATTEMPTS - 2 },
+        () => PASS_MID_STREAM_RETRY_DELAYS_MS[PASS_MID_STREAM_RETRY_DELAYS_MS.length - 1],
+      ),
+    ]);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe("transport");
     expect(result.gap.field).toBe("llm.bull");
     expect(result.gap.reason).toContain(`${PASS_TRANSPORT_MAX_ATTEMPTS} attempt`);
     expect(result.error.message).toContain("Overloaded");
-    // Billed usage across ALL attempts is surfaced so cost_log records real spend.
-    expect(result.error.usage?.input_tokens).toBe(15_000);
-    expect(result.error.usage?.output_tokens).toBe(24_000);
+    // Billed usage across ALL attempts is surfaced so cost_log records real
+    // spend. Derived from the attempt budget rather than restated, because
+    // that budget absorbed the SDK's retries (DECISIONS D-10).
+    expect(result.error.usage?.input_tokens).toBe(5_000 * PASS_TRANSPORT_MAX_ATTEMPTS);
+    expect(result.error.usage?.output_tokens).toBe(8_000 * PASS_TRANSPORT_MAX_ATTEMPTS);
     expect(result.error.model).toBe("claude-opus-4-8");
-    expect(result.error.webSearches).toBe(6);
+    expect(result.error.webSearches).toBe(2 * PASS_TRANSPORT_MAX_ATTEMPTS);
     expect(result.error.costUsd).toBeCloseTo(
-      3 * computeCostUsd(attemptBilledUsage, "claude-opus-4-8", 2),
+      PASS_TRANSPORT_MAX_ATTEMPTS * computeCostUsd(attemptBilledUsage, "claude-opus-4-8", 2),
       10,
     );
   });

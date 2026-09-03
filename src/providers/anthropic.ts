@@ -32,7 +32,12 @@
 
 import "server-only";
 
-import Anthropic, { APIConnectionError, APIError, APIUserAbortError } from "@anthropic-ai/sdk";
+import Anthropic, {
+  APIConnectionError,
+  APIConnectionTimeoutError,
+  APIError,
+  APIUserAbortError,
+} from "@anthropic-ai/sdk";
 import type {
   BetaMessage,
   BetaMessageParam,
@@ -351,44 +356,49 @@ export function maximumPassCostUsd(
 let clientSingleton: Anthropic | null | undefined;
 
 /**
- * SDK auto-retry budget for transient failures (408/409/429/5xx incl. 529
- * `overloaded_error`), retried with exponential backoff + jitter and honoring
- * any `retry-after` header. The SDK default is 2; a report is 3–4 sequential
- * LLM passes, so a brief Anthropic overload would fail the whole run (→ a
- * degraded data-only report) far too often at the default. Bumping to 5 rides
- * out short overloads at the cost of a few minutes on a bad-capacity moment.
+ * SDK auto-retry budget: ZERO (DECISIONS D-10). An SDK retry is a whole extra
+ * billable request that the durable scheduler never saw, so it cannot be
+ * reserved, cannot be admitted against a spend cap, and cannot be settled
+ * against a permit. Every retry now happens in {@link runPassStreaming}, one
+ * reserved request at a time.
  *
- * IMPORTANT SCOPE LIMIT: these SDK retries only cover failures of the initial
- * HTTP response. Once a stream is open, a mid-stream SSE `error` event (e.g.
- * `overloaded_error` minutes into generation — observed live 2026-07-10, both
- * analyst passes killed by one capacity blip after ~8 minutes of billed
- * output each) is thrown TERMINALLY by the SDK with no retry. That class of
- * failure is handled by the pass-level retry in {@link runPassStreaming}
- * (PASS_TRANSPORT_MAX_ATTEMPTS below).
+ * Resilience is not lost: the pass-level loop retries the same transient
+ * classes the SDK did (408/409/429/5xx incl. 529 `overloaded_error`, and
+ * connection failures) AND the mid-stream SSE `error` events the SDK never
+ * retried at all — the failure mode of 2026-07-10, where one capacity blip
+ * killed both analyst passes after ~8 minutes of billed output each.
  */
-export const CLIENT_MAX_RETRIES = 5;
+export const CLIENT_MAX_RETRIES = 0;
 
 /**
- * Total attempts per streaming pass (1 initial + 2 retries) for retryable
- * transport failures the SDK cannot retry itself — chiefly mid-stream SSE
- * `error` events (overloaded/api_error) and dropped connections. Each retry is
- * a FRESH request: partial streamed output cannot be resumed, so the retry
- * re-bills input (a cache read when the previous attempt's 5-minute-TTL cache
- * entry is still warm; a re-write when not). Bounded low because each attempt
- * can run minutes and bill real output tokens; past this, the pass fails typed
- * ("transport") carrying the billed usage of every attempt.
+ * Total attempts per streaming pass. This is now the ONLY retry budget (the
+ * SDK's is zero), so it covers both classes: a failure of the initial HTTP
+ * response, which the SDK used to retry up to five times, and a mid-stream SSE
+ * `error` event, which it never retried. Six keeps the combined resilience of
+ * the old arrangement while every attempt stays individually reserved.
+ *
+ * Each retry is a FRESH request: partial streamed output cannot be resumed, so
+ * the retry re-bills input (a cache read when the previous attempt's
+ * 5-minute-TTL cache entry is still warm; a re-write when not). Past this the
+ * pass fails typed ("transport") carrying the billed usage of every attempt.
  */
-export const PASS_TRANSPORT_MAX_ATTEMPTS = 3;
+export const PASS_TRANSPORT_MAX_ATTEMPTS = 6;
 
 /**
- * Backoff before pass-level retry k (index k-1). Deliberately much longer than
- * the SDK's sub-10s HTTP backoff: a mid-stream overload means Anthropic shed
- * load while ALREADY serving the request, so immediate re-entry mostly dies
- * again. Deterministic (no jitter) for testability; bull/bear retrying in
- * lockstep can at worst duplicate one 1.25x payload cache write (~$0.15),
- * which is not worth cross-pass coordination machinery.
+ * Backoff before pass-level retry k (index k-1), by failure class.
+ *
+ * A request that failed BEFORE any token is the case the SDK used to handle:
+ * short exponential backoff is right, since nothing was generated and the
+ * request is cheap to re-issue. A failure AFTER generation started means
+ * Anthropic shed load while already serving the request, so immediate re-entry
+ * mostly dies again — and the retry re-bills the input, so it is worth waiting.
+ *
+ * Deterministic (no jitter) for testability; bull/bear retrying in lockstep can
+ * at worst duplicate one 1.25x payload cache write (~$0.15), which is not worth
+ * cross-pass coordination machinery.
  */
-export const PASS_TRANSPORT_RETRY_DELAYS_MS: readonly number[] = [15_000, 30_000];
+export const PASS_TRANSPORT_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000];
+export const PASS_MID_STREAM_RETRY_DELAYS_MS: readonly number[] = [15_000, 30_000];
 
 /**
  * Whether a failed pass attempt is worth re-issuing from scratch.
@@ -571,6 +581,27 @@ export interface RunPassOptions {
   field?: string;
   /** Job-level cancellation/deadline signal. */
   signal?: AbortSignal;
+  /**
+   * Per-request cost admission. When present, every provider request this
+   * pass makes is reserved before it is sent and settled with its own usage
+   * (DECISIONS D-10).
+   */
+  admission?: RequestAdmission;
+  /** Reservation pass identity; sizes the per-request maximum. */
+  reservationPass?: ReservationPass;
+  /** Verify-pass capability, when `reservationPass` is "verify". */
+  verifyCapability?: VerifyReservationCapability;
+}
+
+/** The per-request maximum for these options, from the registry. */
+export function requestReservationUsd(opts: RunPassOptions): number {
+  const pass: ReservationPass = opts.reservationPass
+    ?? (opts.field === "llm.judge" || opts.field === "llm.synthesize"
+      ? "synthesize"
+      : opts.field === "llm.bear"
+        ? "bear"
+        : "bull");
+  return maximumRequestCostUsd(opts.model, pass, opts.verifyCapability);
 }
 
 /**
@@ -902,6 +933,134 @@ export const MAX_PAUSE_RESUMPTIONS = 5;
 export const PASS_BILLING_EXPOSURE_MULTIPLIER =
   (CLIENT_MAX_RETRIES + 1) * PASS_TRANSPORT_MAX_ATTEMPTS * (MAX_PAUSE_RESUMPTIONS + 1);
 
+/**
+ * Most provider requests one pass can make: every transport attempt, each of
+ * which can pause and resume up to the resumption bound. In request-reservation
+ * mode this is REPORTED as the pass worst case but never reserved — each
+ * request is admitted and settled on its own (DECISIONS D-10).
+ */
+export const PASS_MAX_REQUESTS = PASS_TRANSPORT_MAX_ATTEMPTS * (MAX_PAUSE_RESUMPTIONS + 1);
+
+/**
+ * Maximum a SINGLE provider request can bill, at standard prices:
+ *
+ *   input_cap x input_price x cache_mult
+ * + output_cap x output_price
+ * + search_cap x $0.01
+ *
+ * `cache_mult` is the dearest way an input token can bill for this request:
+ * the 1-hour cache-write price when a 1-hour TTL could be requested, the
+ * 5-minute price when only 5-minute blocks are sent (what Thesis sends), and
+ * the plain input price when caching is off. Prices come from the registry, so
+ * a model's own cache economics are used rather than one global ratio.
+ */
+export function maximumRequestCostUsd(
+  model: string,
+  pass: ReservationPass,
+  verifyCapability?: VerifyReservationCapability,
+): number {
+  if (pass === "verify") {
+    if (verifyCapability?.billable === false) return 0;
+    if (verifyCapability?.billable !== true) {
+      throw new Error("maximum request cost: verify requires explicit billable capability metadata");
+    }
+  }
+  const requested = registryEntryFor(model);
+  const effectiveModel =
+    pass === "synthesize" && requested.family === "haiku" ? "claude-sonnet-5" : model;
+  const effective = registryEntryFor(effectiveModel);
+  const pricing = effective.pricing;
+
+  const inputTokens = pass === "verify"
+    ? boundedInteger(
+        (verifyCapability as Extract<VerifyReservationCapability, { billable: true }>).maxInputTokens,
+        "verify input",
+        effective.contextWindowTokens,
+      )
+    : effective.contextWindowTokens;
+  const outputTokens = pass === "verify"
+    ? boundedInteger(
+        (verifyCapability as Extract<VerifyReservationCapability, { billable: true }>).maxOutputTokens,
+        "verify output",
+        effective.maxOutputTokens,
+      )
+    : effective.maxOutputTokens;
+  const searches = pass === "verify"
+    ? boundedInteger(
+        (verifyCapability as Extract<VerifyReservationCapability, { billable: true }>).maxWebSearches,
+        "verify web-search",
+        MAX_PROVIDER_WEB_SEARCHES,
+      )
+    : pass === "synthesize"
+      ? 0
+      : MAX_PROVIDER_WEB_SEARCHES;
+
+  // Quarter-micro-USD, as in maximumPassCostUsd: every registry cache-write
+  // price is a quarter-dollar multiple, so the arithmetic stays exact.
+  const quarterMicroUsd = Math.round(
+    inputTokens * pricing.cacheWrite5mPerMTok * 4 +
+    outputTokens * pricing.outputPerMTok * 4 +
+    searches * 40_000,
+  );
+  return Math.ceil(quarterMicroUsd / 4) / 1_000_000;
+}
+
+/**
+ * Worst case for a whole pass: every request it could make, at the per-request
+ * maximum. Reported in the pricing table and the report's cost metadata so the
+ * exposure stays visible after it stops being reserved.
+ */
+export function passWorstCaseCostUsd(
+  model: string,
+  pass: ReservationPass,
+  verifyCapability?: VerifyReservationCapability,
+): number {
+  const perRequest = maximumRequestCostUsd(model, pass, verifyCapability);
+  return Math.ceil(perRequest * 1_000_000 * PASS_MAX_REQUESTS) / 1_000_000;
+}
+
+/**
+ * One admitted provider request. The scheduler issues these; the provider only
+ * carries the token back to `settle`.
+ */
+export interface RequestPermit {
+  readonly id: string;
+  readonly maximumUsd: number;
+}
+
+/** Usage a single request actually billed. */
+export interface RequestSettlement {
+  usage?: UsageLike;
+  costUsd: number;
+  model: string;
+  webSearches: number;
+  fallbackUsed: boolean;
+  /**
+   * True when the figure is a presumed maximum rather than reported usage:
+   * the request was sent and then timed out or went silent, so what it billed
+   * is unknown and the bound stands until something reconciles it.
+   */
+  presumed?: boolean;
+}
+
+/**
+ * Per-request cost admission (DECISIONS D-10). The runner supplies this so
+ * every provider request — first attempt, retry, or pause resumption — is
+ * reserved against the durable spend caps before it is sent and settled with
+ * its own usage afterwards. Omitted (tests, and the "pass" reservation mode)
+ * the provider behaves exactly as before.
+ */
+export interface RequestAdmission {
+  reserve(request: {
+    attempt: number;
+    kind: "stream" | "resume";
+    maximumUsd: number;
+  }): Promise<RequestPermit>;
+  settle(permit: RequestPermit, settlement: RequestSettlement): Promise<void>;
+  /** A request that never reached the provider: release without billing. */
+  release(permit: RequestPermit): Promise<void>;
+}
+
 export interface PassError {
   kind: PassErrorKind;
   message: string;
@@ -1128,29 +1287,92 @@ function errorMessageOf(err: unknown): string {
  * Throws {@link ResumptionFailedError} (wrapping the cause + the messages
  * billed so far) if a resumption call itself fails.
  */
+/**
+ * Settle one admitted request with what it actually billed. A request the
+ * provider never answered settles at $0 unless it was sent and then timed out
+ * — that case is presumed at the request maximum until something reconciles
+ * it, because Anthropic may have generated (and billed) the whole response
+ * with nobody listening (DECISIONS D-10).
+ */
+async function settleRequest(
+  admission: RequestAdmission | undefined,
+  permit: RequestPermit | null,
+  opts: RunPassOptions,
+  billed: BetaMessage | null,
+  presumeOnNoUsage: boolean,
+): Promise<void> {
+  if (admission === undefined || permit === null) return;
+  if (billed === null) {
+    if (!presumeOnNoUsage) {
+      await admission.release(permit);
+      return;
+    }
+    await admission.settle(permit, {
+      costUsd: permit.maximumUsd,
+      model: opts.model,
+      webSearches: 0,
+      fallbackUsed: false,
+      presumed: true,
+    });
+    return;
+  }
+  await admission.settle(permit, {
+    usage: billed.usage,
+    costUsd: costForMessage(billed, opts),
+    model: billed.model || opts.model,
+    webSearches: webSearchCount(billed),
+    fallbackUsed: detectFallbackUsed(billed),
+  });
+}
+
+/** Did this request reach the provider and then stop answering? */
+function timedOutAfterSend(err: unknown): boolean {
+  if (err instanceof StreamIdleTimeoutError) return true;
+  if (err instanceof APIConnectionTimeoutError) return true;
+  const message = errorMessageOf(err).toLowerCase();
+  return message.includes("timeout") || message.includes("timed out");
+}
+
 async function resumeIfPausedWithUsage(
   client: Anthropic,
   params: MessageCreateParamsNonStreaming,
   message: BetaMessage,
   signal?: AbortSignal,
+  opts?: RunPassOptions,
+  attempt = 1,
 ): Promise<ResumedMessage> {
   let current = params;
   let msg = message;
   const billableMessages = [message];
   let resumptions = 0;
+  const admission = opts?.admission;
   while (msg.stop_reason === "pause_turn" && resumptions < MAX_PAUSE_RESUMPTIONS) {
     current = {
       ...current,
       messages: [...current.messages, { role: "assistant", content: msg.content }],
     };
+    // A resumption is its own billable request, so it is admitted and settled
+    // on its own rather than riding the first request's reservation.
+    let permit: RequestPermit | null = null;
+    if (admission !== undefined && opts !== undefined) {
+      permit = await admission.reserve({
+        attempt,
+        kind: "resume",
+        maximumUsd: requestReservationUsd(opts),
+      });
+    }
     try {
       msg = await client.beta.messages.create(current, {
         signal,
         timeout: REQUEST_TIMEOUT_MS,
       });
     } catch (err) {
+      if (opts !== undefined) {
+        await settleRequest(admission, permit, opts, null, timedOutAfterSend(err));
+      }
       throw new ResumptionFailedError(err, billableMessages);
     }
+    if (opts !== undefined) await settleRequest(admission, permit, opts, msg, false);
     billableMessages.push(msg);
     resumptions++;
   }
@@ -1315,6 +1537,66 @@ function deadStreamResult(
   };
 }
 
+/**
+ * Settle a request abandoned by the idle guard: what it reported, plus the
+ * presumed remainder, as one admitted request.
+ */
+async function settleIdleRequest(
+  opts: RunPassOptions,
+  permit: RequestPermit | null,
+  snapshot: StreamedUsageSnapshot,
+  idleMs: number,
+): Promise<void> {
+  if (opts.admission === undefined || permit === null) return;
+  const reported = billedMessageFromSnapshot(snapshot, opts);
+  const reportedOutputTokens = reported?.usage.output_tokens ?? 0;
+  const pricing = registryEntryFor(opts.model).pricing;
+  const remainderUsd =
+    (Math.max(0, effectiveMaxTokens(opts) - reportedOutputTokens) / 1_000_000) *
+    pricing.outputPerMTok;
+  const reportedUsd = reported === null ? 0 : costForMessage(reported, opts);
+  await opts.admission.settle(permit, {
+    ...(reported === null ? {} : { usage: reported.usage }),
+    costUsd: Math.min(permit.maximumUsd, reportedUsd + remainderUsd),
+    model: reported?.model || opts.model,
+    webSearches: reported === null ? 0 : webSearchCount(reported),
+    fallbackUsed: reported === null ? false : detectFallbackUsed(reported),
+    presumed: true,
+  });
+  void idleMs;
+}
+
+/**
+ * A request the spend caps refused. The pass stops at a request boundary with
+ * whatever it had already billed disclosed, rather than being cut mid-request.
+ */
+function admissionRefusedResult(
+  opts: RunPassOptions,
+  error: unknown,
+  billedMessages: readonly BetaMessage[],
+  attempts: number,
+): RunPassResult {
+  const raw = errorMessageOf(error);
+  const billed = billedMessages.length > 0;
+  return {
+    ok: false,
+    gap: gapEntry(opts, `LLM pass stopped at a request boundary: ${raw}`),
+    error: {
+      kind: "transport",
+      message: `spend admission refused request ${attempts}: ${raw}`,
+      ...(billed
+        ? {
+            usage: aggregateUsage(billedMessages),
+            costUsd: billedMessages.reduce((sum, m) => sum + costForMessage(m, opts), 0),
+            fallbackUsed: billedMessages.some(detectFallbackUsed),
+            model: billedMessages[billedMessages.length - 1].model || opts.model,
+            webSearches: billedMessages.reduce((sum, m) => sum + webSearchCount(m), 0),
+          }
+        : {}),
+    },
+  };
+}
+
 /** Typed `ok:false` transport result carrying the billed usage of all attempts. */
 function transportFailureResult(
   opts: RunPassOptions,
@@ -1395,6 +1677,22 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
         if (idleTimer !== undefined) clearTimeout(idleTimer);
         idleTimer = undefined;
       };
+      // Admit this exact request before it is sent. A refusal here is a spend
+      // cap doing its job: the pass stops at a request boundary rather than
+      // half-way through one.
+      let permit: RequestPermit | null = null;
+      if (opts.admission !== undefined) {
+        try {
+          permit = await opts.admission.reserve({
+            attempt,
+            kind: "stream",
+            maximumUsd: requestReservationUsd(opts),
+          });
+        } catch (error) {
+          signalFirst("error");
+          return admissionRefusedResult(opts, error, billedFailedAttempts, attempt);
+        }
+      }
       try {
         stream = client.beta.messages.stream(params, {
           signal: opts.signal,
@@ -1419,11 +1717,15 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
         stream.on("streamEvent", resetIdle);
         resetIdle();
         const message = await Promise.race([stream.finalMessage(), idleGuard]);
+        await settleRequest(opts.admission, permit, opts, message, false);
+        permit = null;
         const { final, billableMessages } = await resumeIfPausedWithUsage(
           client,
           params,
           message,
           opts.signal,
+          opts,
+          attempt,
         );
         signalFirst("end"); // only reachable pre-signal if the stream emitted no events
         return interpretPassMessages(final, opts, [...billedFailedAttempts, ...billableMessages]);
@@ -1432,6 +1734,8 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
           // Stop the request so it cannot keep generating (and billing) after
           // we have given up on reading it.
           (stream as { abort?: () => void } | undefined)?.abort?.();
+          await settleIdleRequest(opts, permit, snapshot, idleMs);
+          permit = null;
           console.error(
             `[anthropic] ${opts.field ?? "llm.pass"}: ${err.message}; abandoning the attempt and settling reported usage plus the presumed remainder`,
           );
@@ -1443,16 +1747,24 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
         // last streamed usage snapshot.
         const cause = err instanceof ResumptionFailedError ? err.cause : err;
         if (err instanceof ResumptionFailedError) {
+          // The resumption path already settled its own permits; this
+          // attempt's stream permit settled when its message arrived.
           billedFailedAttempts.push(...err.billableMessages);
         } else {
           const billed = billedMessageFromSnapshot(snapshot, opts);
+          await settleRequest(opts.admission, permit, opts, billed, timedOutAfterSend(cause));
+          permit = null;
           if (billed) billedFailedAttempts.push(billed);
         }
         if (isRetryableTransportError(cause) && attempt < PASS_TRANSPORT_MAX_ATTEMPTS) {
-          const delay =
-            PASS_TRANSPORT_RETRY_DELAYS_MS[
-              Math.min(attempt - 1, PASS_TRANSPORT_RETRY_DELAYS_MS.length - 1)
-            ];
+          // A failure after generation started means Anthropic shed load while
+          // already serving the request; re-entering immediately mostly dies
+          // again, and the retry re-bills the input either way.
+          const midStream = snapshot.usage !== null;
+          const delays = midStream
+            ? PASS_MID_STREAM_RETRY_DELAYS_MS
+            : PASS_TRANSPORT_RETRY_DELAYS_MS;
+          const delay = delays[Math.min(attempt - 1, delays.length - 1)];
           // Server-log every retry — post-mortems must not depend on the
           // transient pipeline UI (2026-07-10: the only trace of two failed
           // ~8-minute passes was a step detail on one page).
@@ -1474,6 +1786,12 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
         return transportFailureResult(opts, cause, billedFailedAttempts, attempt);
       } finally {
         clearIdle();
+        // Any exit that did not settle this request never reached the
+        // provider; release it so the reservation is not held.
+        if (permit !== null && opts.admission !== undefined) {
+          await opts.admission.release(permit);
+          permit = null;
+        }
       }
     }
     throw new Error("unreachable: transport retry loop exited without returning");

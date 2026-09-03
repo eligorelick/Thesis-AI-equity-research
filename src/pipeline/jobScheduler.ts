@@ -370,6 +370,147 @@ function pruneExpiredPaidLeases(db: ThesisDb, nowIso: string): number {
   return deleted;
 }
 
+/**
+ * Attempt id for one provider REQUEST inside a pass attempt (DECISIONS D-10).
+ * The pass keeps its own id for the durable artifact; each request gets a
+ * suffixed id so its reservation and its cost row are addressable on their
+ * own, and the billed-attempt unique index still holds.
+ */
+export function requestAttemptId(passAttemptId: string, sequence: number): string {
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new Error("jobScheduler: request sequence must be a positive integer");
+  }
+  return `${passAttemptId}#r${sequence}`;
+}
+
+/**
+ * Lower an exact live lease's reservation (DECISIONS D-10).
+ *
+ * In request-reservation mode the pass lease is taken for one request's
+ * maximum, which covers a pass that settles without ever reaching the
+ * provider. Once the first request has its OWN reservation that headroom is
+ * redundant, so it is released: live exposure then stays at exactly
+ * THESIS_MAX_ACTIVE_LLM_CALLS request maxima rather than twice that. Only
+ * downward, and only on the exact live lease.
+ */
+export function resizePaidPassLease(
+  lease: PaidPassLease,
+  reservedCostUsd: number,
+  now: Date | undefined = undefined,
+  db: ThesisDb = getDb(),
+): PaidPassLease | null {
+  const nextMicro = reservationMicroUsd(reservedCostUsd);
+  return db.transaction((tx): PaidPassLease | null => {
+    const authority = authorityDate(now, "paid-pass resize");
+    const nowIso = authority.toISOString();
+    const exact = tx.select().from(jobLlmLeases).where(exactLeaseWhere(lease)).get();
+    if (exact === undefined || exact.leaseExpiresAt <= nowIso) return null;
+    if (BigInt(nextMicro) > BigInt(reservationMicroUsd(exact.reservedCostUsd))) {
+      throw new Error("jobScheduler: a paid-pass reservation can only be lowered");
+    }
+    tx.update(jobLlmLeases)
+      .set({ reservedCostUsd: nextMicro / MICRO_USD })
+      .where(exactLeaseWhere(lease))
+      .run();
+    return { ...lease, reservedCostUsd: nextMicro / MICRO_USD };
+  }, { behavior: "immediate" });
+}
+
+export interface RequestCostSettlement {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  webSearches: number;
+  costUsd: number;
+  fallbackUsed: boolean;
+  /** True when the figure is a presumed maximum rather than reported usage. */
+  presumed?: boolean;
+}
+
+/**
+ * Settle ONE provider request: record what it billed and release its
+ * reservation. Unlike {@link settlePaidPassLease} this writes no artifact and
+ * no step projection — the pass settles those once, after its last request.
+ *
+ * A presumed settlement (the request was sent and then timed out) is recorded
+ * as such so `npm run costs:reconcile` can lower it later; a reported one is
+ * final.
+ */
+export function settleRequestCost(
+  lease: PaidPassLease,
+  settlement: RequestCostSettlement,
+  now: Date | undefined = undefined,
+  db: ThesisDb = getDb(),
+): { recorded: boolean; costUsd: number } {
+  if (!Number.isFinite(settlement.costUsd) || settlement.costUsd < 0) {
+    throw new Error("jobScheduler: request settlement cost must be a nonnegative finite number");
+  }
+  return db.transaction((tx) => {
+    const authority = authorityDate(now, "request settlement");
+    const authorityAt = authority.toISOString();
+    const existing = tx.select({ id: costLog.id, costUsd: costLog.costUsd })
+      .from(costLog)
+      .where(and(
+        eq(costLog.jobId, lease.jobId),
+        eq(costLog.runGeneration, lease.runGeneration),
+        eq(costLog.attemptId, lease.attemptId),
+        eq(costLog.step, lease.pass),
+      ))
+      .get();
+    if (existing !== undefined) {
+      // Idempotent replay: the exact request already settled.
+      tx.delete(jobLlmLeases).where(exactLeaseWhere(lease)).run();
+      return { recorded: false, costUsd: existing.costUsd };
+    }
+    const reservedMicro = BigInt(reservationMicroUsd(lease.reservedCostUsd));
+    const settledMicro = settledMicroUsd(settlement.costUsd);
+    if (settledMicro > reservedMicro) {
+      throw new PaidPassOverReservationError({
+        inserted: false,
+        currentGeneration: false,
+        telemetry: null,
+        overReservation: true,
+        currentRevision: null,
+        currentSteps: null,
+        currentTotalCostUsd: null,
+        projectionError: null,
+      } as unknown as SettlePaidPassResult);
+    }
+    if (settledMicro > 0n) {
+      tx.insert(costLog).values({
+        jobId: lease.jobId,
+        runGeneration: lease.runGeneration,
+        attemptId: lease.attemptId,
+        presumedAttemptId: null,
+        settlementKind: settlement.presumed === true ? "presumed" : "actual",
+        step: lease.pass,
+        model: settlement.model,
+        inputTokens: settlement.inputTokens,
+        outputTokens: settlement.outputTokens,
+        cacheReadTokens: settlement.cacheReadTokens,
+        cacheWriteTokens: settlement.cacheWriteTokens,
+        webSearches: settlement.webSearches,
+        costUsd: Number(settledMicro) / MICRO_USD,
+        fallbackUsed: settlement.fallbackUsed,
+        reconciledAt: null,
+        createdAt: authorityAt,
+      }).run();
+    }
+    // A presumed row for this request (its lease expired earlier) is
+    // superseded by the measurement that just arrived.
+    tx.delete(costLog).where(and(
+      eq(costLog.jobId, lease.jobId),
+      eq(costLog.runGeneration, lease.runGeneration),
+      eq(costLog.presumedAttemptId, lease.attemptId),
+      eq(costLog.step, lease.pass),
+    )).run();
+    tx.delete(jobLlmLeases).where(exactLeaseWhere(lease)).run();
+    return { recorded: settledMicro > 0n, costUsd: Number(settledMicro) / MICRO_USD };
+  }, { behavior: "immediate" });
+}
+
 export interface PresumedCostRow {
   id: number;
   jobId: string;
@@ -1162,6 +1303,12 @@ export function acquirePaidPassLease(
     }
 
     const allLive = tx.select().from(jobLlmLeases).all();
+    // Global LLM capacity counts leases that reserve money — the provider
+    // requests actually in flight. A zero-reservation lease is bookkeeping
+    // (deterministic verify, and the pass-level artifact authority in
+    // request-reservation mode); letting one occupy a paid slot would block a
+    // real request behind work that cannot bill.
+    const liveBillable = allLive.filter((lease) => reservationMicroUsd(lease.reservedCostUsd) > 0);
     const outstandingForJob = allLive.filter((lease) => lease.jobId === claim.jobId).length;
     // Reserve one visible launch transition, every already-issued settlement,
     // this permit's future settlement, and the conservative postlaunch runner
@@ -1172,7 +1319,7 @@ export function acquirePaidPassLease(
     )) {
       return { acquired: false, reason: "revision-headroom" };
     }
-    if (allLive.length >= limits.maxActiveLlmCalls) {
+    if (reserveMicro > 0 && liveBillable.length >= limits.maxActiveLlmCalls) {
       return { acquired: false, reason: "capacity" };
     }
 
@@ -1646,10 +1793,14 @@ export function settlePaidPassLease<T>(
       currentTotalCostUsd,
       projectionError,
       // A settlement against a presumed row is bounded by the presumed amount,
-      // which IS the reservation that was taken for this attempt.
+      // which IS the reservation that was taken for this attempt. A settlement
+      // that bills nothing (request-reservation mode records cost per request,
+      // so the pass artifact carries the figure without charging it again)
+      // cannot over-run a reservation it never draws on.
       overReservation:
+        prepared.telemetry.billable &&
         settledMicroUsd(prepared.telemetry.costUsd) >
-        BigInt(reservationMicroUsd(exact?.reservedCostUsd ?? presumed?.costUsd ?? 0)),
+          BigInt(reservationMicroUsd(exact?.reservedCostUsd ?? presumed?.costUsd ?? 0)),
     };
   }, { behavior: "immediate" });
   if (result.inserted) requestPump(schedulerPumpState());

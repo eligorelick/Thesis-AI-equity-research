@@ -55,6 +55,7 @@ const configMocks = vi.hoisted(() => ({
     paidPassLeaseTtlMs: 900_000,
     jobLeaseTtlMs: 900_000,
     streamIdleTimeoutMs: 120_000,
+    reservationMode: "request" as const,
   })),
 }));
 
@@ -69,6 +70,9 @@ vi.mock("@/config/env", () => ({
 // fail loudly so the real Stage C facade remains network-free in recovery tests.
 vi.mock("@/providers/anthropic", () => ({
   maximumPassCostUsd: vi.fn((_model: string, pass: string, capability?: { billable?: boolean }) =>
+    pass === "verify" && capability?.billable === false ? 0 : 100),
+  // The pass lease reserves one request maximum in request-reservation mode.
+  maximumRequestCostUsd: vi.fn((_model: string, pass: string, capability?: { billable?: boolean }) =>
     pass === "verify" && capability?.billable === false ? 0 : 100),
   resolveModel: vi.fn(async (setting: string) => ({
     model: setting === "auto" || setting === "" ? "claude-opus-4-8" : setting,

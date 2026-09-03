@@ -144,6 +144,8 @@ function toRunPassOptions(args: RunPassArgs): RunPassOptions {
     effort: args.effort,
     field: args.field,
     signal: args.signal,
+    admission: args.admission as RunPassOptions["admission"],
+    reservationPass: args.reservationPass,
   };
 }
 
@@ -178,6 +180,7 @@ function toPassDeps(deps: RunnerPassDeps<ContextPayload>): PassDeps {
     model: deps.analysisModel,
     effort: deps.effort ?? "high",
     signal: deps.signal,
+    admissionFor: deps.admissionFor,
   };
 }
 

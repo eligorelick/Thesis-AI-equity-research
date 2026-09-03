@@ -146,6 +146,25 @@ const envSchema = z.object({
   ),
   /** Gap with no stream event that aborts a stalled paid request. */
   THESIS_STREAM_IDLE_SECONDS: positiveIntegerEnv(DEFAULT_STREAM_IDLE_SECONDS, 0, 3_600),
+  /**
+   * How paid work is admitted against the spend caps (DECISIONS D-10).
+   *  - "request" (default): every provider request reserves its own maximum
+   *    and settles its own usage, so a cap can be set near real spend.
+   *  - "pass": the pre-remediation bound — one reservation per pass covering
+   *    every retry and resumption it could make. Kept for one release so a
+   *    deployment can fall back without a downgrade.
+   */
+  THESIS_RESERVATION_MODE: z
+    .string()
+    .optional()
+    .transform((v, ctx) => {
+      const value = blank(v) ?? "request";
+      if (value !== "request" && value !== "pass") {
+        ctx.addIssue({ code: "custom", message: 'must be "request" or "pass"' });
+        return z.NEVER;
+      }
+      return value;
+    }),
   // VERIFY_MODEL was removed (SPEC §12): verification is deterministic
   // numeric-source tracing and never calls a model. A leftover env var is
   // simply ignored.
@@ -210,6 +229,7 @@ export interface ThesisConfig {
   paidPassLeaseTtlMs: number;
   jobLeaseTtlMs: number;
   streamIdleTimeoutMs: number;
+  reservationMode: "request" | "pass";
 }
 
 /**
@@ -240,6 +260,7 @@ export function parseEnv(
     paidPassLeaseTtlMs: parsed.THESIS_PAID_PASS_LEASE_SECONDS * 1_000,
     jobLeaseTtlMs: parsed.THESIS_JOB_LEASE_SECONDS * 1_000,
     streamIdleTimeoutMs: parsed.THESIS_STREAM_IDLE_SECONDS * 1_000,
+    reservationMode: parsed.THESIS_RESERVATION_MODE,
   };
   return Object.freeze(config);
 }

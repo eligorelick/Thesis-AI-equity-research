@@ -2533,15 +2533,15 @@ describe("conservative provider reservation bounds", () => {
   it.each([
     // Sonnet 5 reserves at its $2/$10 standard price (the scheduled 2026-09-01
     // increase to $3/$15 was cancelled). haiku's synthesize floor is sonnet-5.
-    ["claude-haiku-4-5", 70.2, 408.24],
-    ["claude-sonnet-5", 416.88, 408.24],
+    ["claude-haiku-4-5", 23.4, 136.08],
+    ["claude-sonnet-5", 138.96, 136.08],
     // Opus 5 and Opus 4.8 are the same price ($5/$25) and context (1M), so
     // they reserve identically.
-    ["claude-opus-5", 1029.24, 1020.6],
-    ["claude-opus-4-8", 1029.24, 1020.6],
+    ["claude-opus-5", 343.08, 340.2],
+    ["claude-opus-4-8", 343.08, 340.2],
     // Fable 5.1 matches Fable 5 on price, context and output ceiling.
-    ["claude-fable-5", 2049.84, 2041.2],
-    ["claude-fable-5-1", 2049.84, 2041.2],
+    ["claude-fable-5", 683.28, 680.4],
+    ["claude-fable-5-1", 683.28, 680.4],
   ])("bounds every retry layer for %s", async (model, analyst, synthesize) => {
     const provider = await import("@/providers/anthropic");
     expect(provider.maximumPassCostUsd(model, "bull")).toBe(analyst);
@@ -2554,7 +2554,7 @@ describe("conservative provider reservation bounds", () => {
     const provider = await import("@/providers/anthropic");
     // Haiku 4.5 is the one family with a dated id in the registry; a dated id
     // for a 4.6+ family does not exist and is rejected before any spend.
-    expect(provider.maximumPassCostUsd("claude-haiku-4-5-20251001", "bull")).toBe(70.2);
+    expect(provider.maximumPassCostUsd("claude-haiku-4-5-20251001", "bull")).toBe(23.4);
     expect(() => provider.maximumPassCostUsd("claude-opus-4-8-20260601", "bull")).toThrow(/unsupported|registry/i);
     expect(() => provider.maximumPassCostUsd("claude-opus-4-8-beta", "bull")).toThrow(/unsupported|priced|registry/i);
     expect(() => provider.maximumPassCostUsd("claude-mystery-9", "bull")).toThrow(/unsupported|priced|registry/i);

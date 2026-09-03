@@ -779,7 +779,11 @@ describe("pipelinePasses.runBullThenBear against a persistently overloaded strea
     // …and the billed spend of those attempts survives for cost_log.
     expect(details.bullBilledAttempt?.model).toBe("claude-opus-4-8");
     expect(details.bullBilledAttempt?.costUsd ?? 0).toBeGreaterThan(0);
-    expect(details.bullBilledAttempt?.usage?.output_tokens).toBe(3 * 9_000);
+    // One billed attempt per transport attempt; the budget absorbed the SDK's
+    // own retries when they were removed (DECISIONS D-10).
+    expect(details.bullBilledAttempt?.usage?.output_tokens).toBe(
+      PASS_TRANSPORT_MAX_ATTEMPTS * 9_000,
+    );
     expect(details.bearBilledAttempt?.costUsd ?? 0).toBeGreaterThan(0);
   });
 });

@@ -31,12 +31,13 @@ import { sectorIndustryForSic } from "@/edgar/sic";
 import {
   BALANCE_SHEET_SHARES_TAG,
   buildStatementsFromCompanyFacts,
+  coverShareCountsByPeriod,
   RESTATEMENT_THRESHOLD_PCT,
   type BuiltStatements,
   type SharesBasis,
   type StatementRowsResult,
 } from "@/edgar/statements";
-import { conceptFactsSchema, dedupFactPoints, parseFactPoints, type CompanyFacts } from "@/edgar/xbrl";
+import { conceptFactsSchema, dedupFactPoints, parseFactPoints, type CompanyFacts, type FactPoint } from "@/edgar/xbrl";
 import { describeSplitRatio, discoverStockSplits, SPLIT_RATIO_TAG, type SplitEvent } from "@/edgar/splits";
 import {
   SUCCESSOR_FORM,
@@ -307,20 +308,8 @@ export function isUsJurisdiction(code: string | null | undefined): boolean {
   return typeof code === "string" && US_JURISDICTIONS.has(code.trim().toUpperCase());
 }
 
-/**
- * One share-count concept as a deduped series, oldest first; empty when absent.
- * Each point is carried to the current share basis by the splits dated after
- * its own filing (`factorFor`), the same rule `src/edgar/statements.ts`
- * applies: a cover count filed before a 4-for-1 split is a quarter of today's
- * share count, and the daily market-cap history would be a quarter short.
- */
-function sharePointsForConcept(
-  facts: CompanyFacts,
-  namespaceName: string,
-  tag: string,
-  instantOnly: boolean,
-  factorFor: (filed: string) => number,
-): { value: number; asOf: string }[] {
+/** The `shares`-unit fact points of one concept, unparsed by any rule; empty when absent. */
+function sharesUnitPoints(facts: CompanyFacts, namespaceName: string, tag: string): FactPoint[] {
   const namespace = facts.facts[namespaceName];
   if (namespace === null || namespace === undefined || typeof namespace !== "object") return [];
   const raw = (namespace as Record<string, unknown>)[tag];
@@ -328,16 +317,60 @@ function sharePointsForConcept(
   const parsed = conceptFactsSchema.safeParse(raw);
   if (!parsed.success) return [];
   const unitPoints = parsed.data.units["shares"];
-  if (!Array.isArray(unitPoints)) return [];
-  return dedupFactPoints(parseFactPoints(unitPoints))
+  return Array.isArray(unitPoints) ? parseFactPoints(unitPoints) : [];
+}
+
+/**
+ * Carry one share count to the current share basis with the splits dated after
+ * its own filing (`factorFor`), the same rule `src/edgar/statements.ts` applies:
+ * a cover count filed before a 4-for-1 split is a quarter of today's share
+ * count, and the daily market-cap history would be a quarter short.
+ */
+function splitAdjusted(value: number, filed: string, factorFor: (filed: string) => number): number {
+  return Math.round(value * factorFor(filed));
+}
+
+/**
+ * The us-gaap balance-sheet share concept as a deduped series, oldest first.
+ * It is the all-classes total in ONE fact, so same-`end` duplicates are
+ * refilings and the max(`filed`) winner is the right one — never summed.
+ */
+function balanceSheetSharePoints(
+  facts: CompanyFacts,
+  factorFor: (filed: string) => number,
+): { value: number; asOf: string }[] {
+  return dedupFactPoints(sharesUnitPoints(facts, "us-gaap", BALANCE_SHEET_SHARES_TAG))
     .flatMap((point) => {
-      if (instantOnly && point.start !== undefined) return [];
+      if (point.start !== undefined) return [];
       const day = isoDay(point.end);
       return day !== null && isFiniteNumber(point.val) && point.val > 0
-        ? [{ value: Math.round(point.val * factorFor(point.filed)), asOf: day }]
+        ? [{ value: splitAdjusted(point.val, point.filed, factorFor), asOf: day }]
         : [];
     })
     .sort((a, b) => (a.asOf < b.asOf ? -1 : a.asOf > b.asOf ? 1 : 0));
+}
+
+/**
+ * The dei cover-page concept as a series, oldest first, with the per-class
+ * facts of each period's winning filing SUMMED — `coverShareCountsByPeriod`,
+ * the same rule the spot count uses.
+ *
+ * Deduplicating this series while summing the spot count made one report
+ * contradict itself: on a three-class issuer (5,000,000 + 3,000,000 +
+ * 2,000,000) at a 50 dollar close the profile showed a market cap of 500M and
+ * the same day's history point 250M, and every enterprise value in the series
+ * carried the same error.
+ */
+function coverSharePoints(
+  facts: CompanyFacts,
+  factorFor: (filed: string) => number,
+): { value: number; asOf: string }[] {
+  return coverShareCountsByPeriod(sharesUnitPoints(facts, "dei", DEI_SHARES_TAG)).flatMap((count) => {
+    const day = isoDay(count.asOf);
+    return day !== null && isFiniteNumber(count.value) && count.value > 0
+      ? [{ value: splitAdjusted(count.value, count.filing.filed, factorFor), asOf: day }]
+      : [];
+  });
 }
 
 /**
@@ -350,8 +383,12 @@ function sharePointsForConcept(
  * so the dei concept is absent for them entirely while the non-dimensional
  * balance-sheet total — all classes combined — is present. Without the fallback
  * those issuers get no market cap, enterprise value or market-cap history at
- * all. Same-`end` duplicates are refilings and stay deduped by max(`filed`);
- * they are never summed.
+ * all.
+ *
+ * Within one period the dei facts are the registrant's SHARE CLASSES and are
+ * summed (`coverShareCountsByPeriod`); ACROSS filings a repeated period is a
+ * refiling and stays deduped by max(`filed`). The us-gaap fallback is a single
+ * all-classes fact, so it is only ever deduped.
  */
 export function sharesOutstandingSeries(facts: CompanyFacts): {
   points: { value: number; asOf: string }[];
@@ -360,9 +397,9 @@ export function sharesOutstandingSeries(facts: CompanyFacts): {
   splits: SplitEvent[];
 } {
   const splits = discoverStockSplits(facts);
-  const cover = sharePointsForConcept(facts, "dei", DEI_SHARES_TAG, false, splits.factorFor);
+  const cover = coverSharePoints(facts, splits.factorFor);
   if (cover.length > 0) return { points: cover, basis: "dei cover page", splits: splits.events };
-  const balanceSheet = sharePointsForConcept(facts, "us-gaap", BALANCE_SHEET_SHARES_TAG, true, splits.factorFor);
+  const balanceSheet = balanceSheetSharePoints(facts, splits.factorFor);
   return balanceSheet.length > 0
     ? { points: balanceSheet, basis: "balance sheet CommonStockSharesOutstanding", splits: splits.events }
     : { points: [], basis: null, splits: splits.events };
@@ -577,8 +614,10 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       reason:
         `the cover page of ${filing === undefined ? "the latest filing" : `${filing.form} ${filing.accn} (filed ${filing.filed})`} ` +
         `reports dei:${DEI_SHARES_TAG} once per share class; companyfacts carries no class dimension, so the ${coverClasses.length} ` +
-        `unnamed counts (${coverClasses.join(" + ")}) are summed to ${point.value} as of ${point.asOf}. Per-class figures are not ` +
-        "recoverable from this source, so any per-class analysis is out of reach keylessly.",
+        `unnamed counts (${coverClasses.join(" + ")}) are summed to ${point.value} as of ${point.asOf}. The same rule is ` +
+        "applied to every period of the share-count series, so the market-cap history and the enterprise values rest on " +
+        "the same total as the spot figure. Per-class figures are not recoverable from this source, so any per-class " +
+        "analysis is out of reach keylessly.",
       severity: "info",
       attemptedSources: [`edgar:companyfacts dei/${DEI_SHARES_TAG}`],
       expected: true,
@@ -586,6 +625,19 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     notes.push(
       `keyless share count: ${coverClasses.length} share classes summed (${coverClasses.join(" + ")} = ${point.value} at ${point.asOf})`,
     );
+  }
+  // What the class sum could NOT establish from this source: a repeated value
+  // that may be a second class (N1), and classes so unequal that a raw sum is
+  // not economic ownership (N2). Both are `warn`: they qualify a figure the
+  // whole report's per-share arithmetic rests on.
+  for (const [i, note] of (built?.shares.outstanding?.classNotes ?? []).entries()) {
+    gaps.push({
+      field: `keyless.sharesOutstanding.classes.caveat${i + 1}`,
+      reason: note,
+      severity: "warn",
+      attemptedSources: [`edgar:companyfacts dei/${DEI_SHARES_TAG}`],
+    });
+    notes.push(`keyless share count: ${note}`);
   }
   const factsFetchedAt = inputs.edgar.companyFacts.ok
     ? inputs.edgar.companyFacts.value.fetchedAt

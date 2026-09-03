@@ -1634,6 +1634,51 @@ describe("buildStatementsFromCompanyFacts — multi-class cover-page share count
     const built = buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "TCEH", cik: "0009900001" });
     expect(built.shares.outstanding?.value).toBe(10_000_000);
   });
+
+  it("discloses that a collapsed repeat may be a second class with the same count (N1)", () => {
+    // Companyfacts drops the class dimension, so two classes with identical
+    // counts are byte-identical facts. The repeat is still counted once — but
+    // the ambiguity is stated rather than resolved silently.
+    const f = multiClass();
+    const unit = (f.facts.dei!.EntityCommonStockSharesOutstanding as { units: { shares: unknown[] } }).units.shares;
+    unit.push(structuredClone(unit[0]));
+    const built = buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "TCEH", cik: "0009900001" });
+    const [note] = built.shares.outstanding!.classNotes!;
+    expect(note).toMatch(/carries 4 dei:EntityCommonStockSharesOutstanding facts for 2026-02-13 but only 3 distinct value/);
+    expect(note).toMatch(/indistinguishable from a SECOND SHARE CLASS/);
+    expect(note).toMatch(/understates the registered shares/);
+  });
+
+  it("adds no class caveat when every per-class count is distinct and comparable", () => {
+    const built = buildStatementsFromCompanyFacts(multiClass(), { ...OPTS, symbol: "TCEH", cik: "0009900001" });
+    expect(built.shares.outstanding?.classNotes).toBeUndefined();
+  });
+
+  it("warns when one class dwarfs another by more than a hundredfold (N2)", () => {
+    // Berkshire's shape: the B class converts 1:1500 to an A share, so a raw
+    // sum of the two counts is an order of magnitude away from economic
+    // ownership and companyfacts carries no conversion ratio.
+    const built = buildStatementsFromCompanyFacts(
+      facts(
+        {
+          Revenues: [{ start: "2025-01-01", end: "2025-12-31", val: 1_000, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20" }],
+          Assets: [{ end: "2025-12-31", val: 5_000, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20" }],
+        },
+        {
+          EntityCommonStockSharesOutstanding: [
+            { end: "2026-02-13", val: 550_000, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20", accn: "0000000000-26-000001" },
+            { end: "2026-02-13", val: 1_290_000_000, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20", accn: "0000000000-26-000001" },
+          ],
+        },
+      ),
+      { ...OPTS, symbol: "BRKB" },
+    );
+    expect(built.shares.outstanding?.value).toBe(1_290_550_000);
+    const [note] = built.shares.outstanding!.classNotes!;
+    expect(note).toMatch(/differ by a factor of 2345/);
+    expect(note).toMatch(/SAME per-share economics/);
+    expect(note).toMatch(/must not be read as economically weighted ownership/);
+  });
 });
 
 describe("buildStatementsFromCompanyFacts — duplicate periods and restatements", () => {

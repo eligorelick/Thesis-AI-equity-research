@@ -1,4 +1,8 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
+import { buildStatementsFromCompanyFacts } from "@/edgar/statements";
 import {
   applyKeylessFallbacks,
   isUsJurisdiction,
@@ -811,6 +815,46 @@ describe("sharesOutstandingSeries", () => {
     expect(series.splits).toEqual([]);
     expect(series.points.map((p) => p.value)).toEqual([14_900, 14_776]);
   });
+
+  it("sums the per-class cover counts of EVERY period, not only the newest", () => {
+    // The spot count summed the classes while this series deduplicated them, so
+    // one report showed a 500M spot market cap and a same-day history point of
+    // 250M; for an Alphabet-shaped issuer the whole series was about half.
+    const multiClass = JSON.parse(
+      readFileSync(path.join(process.cwd(), "fixtures", "edgar", "multiclass_companyfacts.json"), "utf8"),
+    ) as CompanyFacts;
+    const series = sharesOutstandingSeries(multiClass);
+    expect(series.basis).toBe("dei cover page");
+    expect(series.points).toEqual([
+      { value: 7_800_000, asOf: "2025-02-14" }, // 4,800,000 + 3,000,000
+      { value: 10_000_000, asOf: "2026-02-13" }, // 5,000,000 + 3,000,000 + 2,000,000
+    ]);
+    // ...and the newest series point is the very number the spot count publishes.
+    const built = buildStatementsFromCompanyFacts(multiClass, {
+      symbol: "TCEH",
+      cik: "0009900001",
+      annualPeriods: 10,
+      quarterlyPeriods: 24,
+    });
+    expect(series.points[series.points.length - 1]!.value).toBe(built.shares.outstanding!.value);
+  });
+
+  it("keeps deduplicating a REFILED period rather than summing it", () => {
+    // Two filings of one cover date are a refiling, not two classes: max(filed)
+    // wins and nothing is added.
+    const series = sharesOutstandingSeries(
+      facts(
+        { Assets: [{ end: "2026-02-13", val: 5_000 }] },
+        {
+          EntityCommonStockSharesOutstanding: [
+            { end: "2026-02-13", val: 900, filed: "2026-02-20", accn: "0000000000-26-000001" },
+            { end: "2026-02-13", val: 950, filed: "2026-03-20", accn: "0000000000-26-000002" },
+          ],
+        },
+      ),
+    );
+    expect(series.points).toEqual([{ value: 950, asOf: "2026-02-13" }]);
+  });
 });
 
 describe("applyKeylessFallbacks — stock split disclosure", () => {
@@ -1074,5 +1118,46 @@ describe("applyKeylessFallbacks — restatements and multi-class share counts", 
   it("adds no class entry when the cover count came from a single fact", async () => {
     const out = await applyKeylessFallbacks(inputs());
     expect(out.gaps.some((g) => g.field === "keyless.sharesOutstanding.classes")).toBe(false);
+  });
+
+  it("files the class caveats as warns in the manifest and in the notes", async () => {
+    // A repeated count that may be a second class (N1) AND a hundredfold class
+    // ratio a raw sum cannot represent (N2), in one filing.
+    const f = appleFacts();
+    const shares = f.facts["dei"]!["EntityCommonStockSharesOutstanding"] as {
+      units: Record<string, Record<string, unknown>[]>;
+    };
+    const unit = Object.keys(shares.units)[0]!;
+    const common = { end: "2025-10-17", form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31", accn: "0000320193-25-000099" };
+    shares.units[unit] = [
+      { ...common, val: 1_000_000 },
+      { ...common, val: 1_000 },
+      { ...common, val: 1_000 },
+    ];
+    const out = await applyKeylessFallbacks(withFacts(f));
+    const caveats = out.gaps.filter((g) => g.field.startsWith("keyless.sharesOutstanding.classes.caveat"));
+    expect(caveats.map((g) => g.severity)).toEqual(["warn", "warn"]);
+    expect(caveats[0]!.reason).toMatch(/indistinguishable from a SECOND SHARE CLASS/);
+    expect(caveats[1]!.reason).toMatch(/differ by a factor of 1000/);
+    // Rule: every caveat reaches the notes as well as the manifest.
+    for (const caveat of caveats) {
+      expect(out.notes).toContain(`keyless share count: ${caveat.reason}`);
+    }
+  });
+
+  it("files no class caveat for a plain multi-class filing", async () => {
+    const f = appleFacts();
+    const shares = f.facts["dei"]!["EntityCommonStockSharesOutstanding"] as {
+      units: Record<string, Record<string, unknown>[]>;
+    };
+    const unit = Object.keys(shares.units)[0]!;
+    const common = { end: "2025-10-17", form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31", accn: "0000320193-25-000099" };
+    shares.units[unit] = [
+      { ...common, val: 9_000 },
+      { ...common, val: 4_000 },
+      { ...common, val: 1_776 },
+    ];
+    const out = await applyKeylessFallbacks(withFacts(f));
+    expect(out.gaps.some((g) => g.field.startsWith("keyless.sharesOutstanding.classes.caveat"))).toBe(false);
   });
 });

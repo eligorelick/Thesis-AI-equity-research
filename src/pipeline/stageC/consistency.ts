@@ -8,16 +8,18 @@
  * FY-end record, or say "bps" about a dollar figure, and still count as fully
  * cited. This module adds four checks that need no model call:
  *
- *  - DIRECTION: a direction word ("rose", "fell", "improved", "declined") glued
- *    to the cited figure must match the sign of that figure, when the figure is
- *    a signed change rather than a level.
+ *  - DIRECTION: a direction word ("rose", "fell", "declined") glued to the cited
+ *    figure must match the sign of that figure, when the figure is a signed
+ *    change rather than a level. Only words whose sign is fixed by the word
+ *    itself count; see {@link DIRECTION_WORDS}.
  *  - PERIOD: a period phrase that names a year ("in Q3 2025", "in FY2025") must
  *    name the period the cited record carries, under the SAME fiscal-spelling
  *    tolerance the citation check already uses ({@link periodsAgree}).
  *  - UNIT: the unit token attached to the cited figure ("%", "bps", "billion")
  *    must belong to the family the record's registry unit can express.
  *  - NAMED INDIVIDUAL: a claim that names a person may cite filings, transcripts
- *    or registry figures — never a web-search result and never nothing.
+ *    or registry figures — never a web-search result, never any other web
+ *    citation (news, a press release), and never nothing.
  *
  * DESIGN RULE — precision over recall. Every check first has to LOCATE the cited
  * figure inside the sentence (a number in the text whose magnitude, after any
@@ -209,21 +211,39 @@ export function parseNumbers(sentence: string): ParsedNumber[] {
 }
 
 /**
- * Does this written number name the record's value? Compares MAGNITUDES: a
- * sentence routinely expresses the sign in words ("fell 3.2%"), and the sign is
- * what the direction check exists to test separately.
+ * How a number in the sentence came to match the record's value. Lower is a
+ * better match, and only the best rank present in a sentence is kept (see
+ * {@link locateRecord}).
+ */
+const enum LocateRank {
+  /** The written scale IS the record's scale: a scale word, a bare number, bps. */
+  Written = 0,
+  /** A speculative display scale, but the number was written as money ("$5.0"). */
+  SpeculativeCurrency = 1,
+  /** A speculative display scale on a number that claimed no money at all. */
+  Speculative = 2,
+}
+
+/**
+ * Does this written number name the record's value, and how confidently?
+ * Compares MAGNITUDES: a sentence routinely expresses the sign in words ("fell
+ * 3.2%"), and the sign is what the direction check exists to test separately.
+ * Returns the {@link LocateRank} of the best matching reading, or null.
  *
  * `bps` is read as hundredths of a percentage point, so "up 250 bps" locates a
  * record whose value is 2.5.
  */
-function locatesRecord(parsed: ParsedNumber, record: NumericProvenanceRecord): boolean {
+function locateRecord(
+  parsed: ParsedNumber,
+  record: NumericProvenanceRecord,
+): LocateRank | null {
   const target = Math.abs(record.value);
-  const candidates: { value: number; scale: number }[] = [
-    { value: parsed.magnitude * parsed.scale, scale: parsed.scale },
+  const candidates: { value: number; scale: number; rank: LocateRank }[] = [
+    { value: parsed.magnitude * parsed.scale, scale: parsed.scale, rank: LocateRank.Written },
   ];
   if (parsed.unitToken === "bp" || parsed.unitToken === "bps" ||
       parsed.unitToken === "basis point" || parsed.unitToken === "basis points") {
-    candidates.push({ value: parsed.magnitude / 100, scale: 1 / 100 });
+    candidates.push({ value: parsed.magnitude / 100, scale: 1 / 100, rank: LocateRank.Written });
   }
   // A LARGE-MAGNITUDE record (money, share counts) is registered in units and
   // written in billions, so a writer who names the wrong unit — "revenue was
@@ -231,21 +251,53 @@ function locatesRecord(parsed: ParsedNumber, record: NumericProvenanceRecord): b
   // from. Try the display scales for those records only. Doing it for every
   // record would be unsafe: a 6.4-percent record would then be "located" by an
   // unrelated "$6.4 billion" elsewhere in the sentence and fail its own unit
-  // check.
+  // check. These readings are SPECULATIVE — the sentence never wrote that
+  // scale — which is why they rank below a written one.
   const scalable = record.unit === "currency" || record.unit === "currency-per-share" ||
     record.unit === "shares";
   if (scalable && parsed.scaleWord === null) {
+    const rank = parsed.hadCurrencyPrefix
+      ? LocateRank.SpeculativeCurrency
+      : LocateRank.Speculative;
     for (const scale of [1e3, 1e6, 1e9, 1e12]) {
-      candidates.push({ value: parsed.magnitude * scale, scale });
+      candidates.push({ value: parsed.magnitude * scale, scale, rank });
     }
   }
-  return candidates.some(({ value, scale }) => {
+  let best: LocateRank | null = null;
+  for (const { value, scale, rank } of candidates) {
     const tolerance = Math.max(
       0.5 * 10 ** -parsed.decimals * Math.abs(scale),
       Math.abs(target) * 1e-9,
     );
-    return Math.abs(value - target) <= tolerance;
+    if (Math.abs(value - target) <= tolerance && (best === null || rank < best)) best = rank;
+  }
+  return best;
+}
+
+/**
+ * The numbers in a sentence that name the cited record, keeping only the
+ * BEST-SCALE readings.
+ *
+ * Two numbers can both "locate" one record when a percentage coincides with a
+ * scaled currency value: "Revenue of $5.0 billion came with a 5.0% operating
+ * margin" against a $5.0e9 record located BOTH the correctly written figure and
+ * the unrelated percentage (5.0 × 1e9). The percentage then failed the unit
+ * check — one spurious match poisoning an otherwise correct sentence. A reading
+ * whose scale the sentence actually wrote (a scale word, a bare number, bps),
+ * or failing that one written as money, always wins over a speculative display
+ * scale, so the check decides on the figure the sentence really cited.
+ */
+function locateNumbers(
+  numbers: readonly ParsedNumber[],
+  record: NumericProvenanceRecord,
+): ParsedNumber[] {
+  const hits = numbers.flatMap((parsed) => {
+    const rank = locateRecord(parsed, record);
+    return rank === null ? [] : [{ parsed, rank }];
   });
+  if (hits.length === 0) return [];
+  const best = Math.min(...hits.map((hit) => hit.rank));
+  return hits.filter((hit) => hit.rank === best).map((hit) => hit.parsed);
 }
 
 function unitFamilyOf(parsed: ParsedNumber): UnitFamily | null {
@@ -292,28 +344,37 @@ function admissibleFamilies(unit: CanonicalUnit): ReadonlySet<UnitFamily> {
  * ------------------------------------------------------------------------ */
 
 /**
- * Direction vocabulary. Deliberately EXCLUDES second-order and ambiguous words:
- * "accelerated"/"slowed"/"moderated" describe a change IN a rate (so "growth
- * slowed to 4%" is consistent with a +4 record and would be a false failure);
- * "widened"/"narrowed"/"reversed"/"recovered" carry the opposite sign depending
- * on whether the metric is a good or a bad thing. Leaving them out costs recall,
- * which `checked` reports honestly, and buys correctness.
+ * Direction vocabulary. Every entry names the sign of the NUMBER, never a
+ * judgement about it. Deliberately EXCLUDES three groups:
+ *
+ *  - second-order words — "accelerated"/"slowed"/"moderated" describe a change
+ *    IN a rate, so "growth slowed to 4%" is consistent with a +4 record;
+ *  - sign-by-context words — "widened"/"narrowed"/"reversed"/"recovered" carry
+ *    the opposite sign depending on whether the metric is a good or a bad thing;
+ *  - EVALUATIVE words, removed 2026-09 for exactly the same reason as the group
+ *    above: "improved"/"improvement"/"improves"/"improving"/"strengthened" and
+ *    "weakened"/"deteriorated"/"deterioration"/"worsened" say the metric got
+ *    better or worse, and for a lower-is-better metric (net leverage, churn,
+ *    DSO, net debt, a cost ratio) better IS a negative number. "Net leverage
+ *    improved 0.4 points" against a -0.4pp record is correct prose and was
+ *    being filed as a direction mismatch.
+ *
+ * Leaving them out costs recall, which `checked` reports honestly, and buys
+ * correctness.
  */
 const DIRECTION_WORDS: Record<string, 1 | -1> = {
   rose: 1, rise: 1, rises: 1, rising: 1, risen: 1,
   increased: 1, increase: 1, increases: 1, increasing: 1,
   grew: 1, gained: 1, gain: 1, gains: 1,
-  improved: 1, improvement: 1, improves: 1, improving: 1,
   expanded: 1, expansion: 1, expanding: 1,
-  climbed: 1, jumped: 1, surged: 1, advanced: 1, strengthened: 1,
+  climbed: 1, jumped: 1, surged: 1, advanced: 1,
   higher: 1, up: 1,
   fell: -1, fall: -1, falls: -1, falling: -1, fallen: -1,
   declined: -1, decline: -1, declines: -1, declining: -1,
   decreased: -1, decrease: -1, decreases: -1, decreasing: -1,
   dropped: -1, drop: -1, drops: -1, dropping: -1,
   contracted: -1, contraction: -1, contracting: -1,
-  shrank: -1, shrunk: -1, weakened: -1, deteriorated: -1,
-  deterioration: -1, worsened: -1, slipped: -1, tumbled: -1, plunged: -1,
+  shrank: -1, shrunk: -1, slipped: -1, tumbled: -1, plunged: -1,
   lower: -1, down: -1,
 };
 
@@ -372,8 +433,17 @@ export function isDeltaRecord(record: NumericProvenanceRecord): boolean {
  * Period phrases
  * ------------------------------------------------------------------------ */
 
+// The quarter pattern REQUIRES the century (2026-09). With it optional the two
+// digits swallowed whatever number followed the quarter: "Q1 15% growth was
+// reported" matched "Q1 15" and failed against a 2025-12-31 record, claiming the
+// sentence named a period it never named. The phrase starts at the Q, so the
+// "skip a phrase starting inside a value span" guard below could not help. The
+// forms that lose their quarter this way — "Q3 '25", "Q1 25" — could never have
+// PASSED anyway: periodsAgree only reads a two-digit year behind an FY prefix,
+// so they failed every record. "Q3 FY25" keeps its check through the FY pattern
+// on the next line.
 const PERIOD_PATTERNS: readonly RegExp[] = [
-  /\bQ[1-4]\s*(?:of\s+)?(?:FY\s?)?['’]?(?:19|20)?\d{2}\b/gi,
+  /\bQ[1-4]\s*(?:of\s+)?(?:FY\s?)?['’]?(?:19|20)\d{2}\b/gi,
   /\bFY\s?['’]?(?:19|20)?\d{2}\b/gi,
   /\b(?:first|second|third|fourth)\s+quarter\s+(?:of\s+)?(?:FY\s?)?(?:19|20)\d{2}\b/gi,
   /\b(?:19|20)\d{2}\b/g,
@@ -545,10 +615,17 @@ export function runConsistencyChecks(input: ConsistencyInput): ConsistencyResult
         : input.citationRegistry.find((entry) => entry.id === sourceId);
       const canonicalUrl = sourceId === null ? null : canonicalizeFetchedUrl(sourceId);
       const isWeb = canonicalUrl !== null;
+      // The filing-or-transcript restriction applies to EVERY claim that names
+      // a person, not only to the executive-credibility section (2026-09). It
+      // previously ran on the credibility path alone, so an ordinary claim
+      // naming a person could cite anything in the citation registry — news, a
+      // press release — while the prompt, the module docstring and the reader-
+      // facing table all said "filings/transcripts only". Registry figures stay
+      // admissible: a traced number is the payload itself, not a source about
+      // a person.
       const allowed =
         record !== undefined ||
-        (citation !== undefined &&
-          (!credibility || isFilingOrTranscriptSource(citation.id)));
+        (citation !== undefined && isFilingOrTranscriptSource(citation.id));
       if (allowed) {
         namedIndividual.pass();
       } else {
@@ -579,7 +656,7 @@ export function runConsistencyChecks(input: ConsistencyInput): ConsistencyResult
     /* ---- the numeric checks need a located registry figure --------------- */
     if (record === undefined) continue;
     const numbers = parseNumbers(sentence);
-    const located = numbers.filter((parsed) => locatesRecord(parsed, record));
+    const located = locateNumbers(numbers, record);
 
     /* ---- period ---------------------------------------------------------- */
     if (record.period !== null) {

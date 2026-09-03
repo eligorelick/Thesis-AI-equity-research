@@ -23,6 +23,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 
 import { runStageB, type ComputedMetrics } from "@/pipeline/compute";
 import { validateBundle } from "@/pipeline/stageA/validate";
@@ -41,8 +42,10 @@ import {
   buildJudgeProtocolDraft,
   capAnalystCase,
   DEFAULT_JUDGE_ORDER_SETTING,
+  JUDGE_ORDER_ENV_KEY,
   JUDGE_ORDER_SETTINGS,
   JUDGE_PASSES_PER_SETTING,
+  judgeSeedFingerprint,
   reconcileJudgeOutputs,
   reconciliationFields,
   resolveJudgeOrder,
@@ -346,10 +349,68 @@ describe("judge case order (THESIS_JUDGE_ORDER)", () => {
     expect(b.bear).toBeLessThan(b.bull);
   });
 
-  it("tells the judge the order carries no meaning", () => {
+  it("draws on more than the byte parity of the seed", () => {
+    // N10: the draw was the LOW bit of FNV-1a. The FNV prime is odd, so the
+    // multiply never changes bit 0 — the low bit is nothing but the XOR of the
+    // input bytes' low bits. Unbiased over UUIDs (49.7% measured over 20,000),
+    // but two facts follow that a fairness control should not have: it cannot
+    // see the ORDER of the characters, so every anagram of a seed drew the same
+    // side first; and it alternates strictly across sequential seeds, so if job
+    // ids ever became sequential the order would be predictable per job.
+    const anagrams = ["job-abc", "job-acb", "job-bac", "job-bca", "job-cab", "job-cba"];
+    expect(
+      new Set(anagrams.map((seed) => resolveJudgeOrder("random", seed).order)).size,
+    ).toBe(2);
+
+    const sequential = Array.from(
+      { length: 10 },
+      (_, i) => resolveJudgeOrder("random", `job-${i}`).order,
+    );
+    expect(sequential.every((order, i) => i === 0 || order !== sequential[i - 1])).toBe(false);
+
+    // Still unbiased across the job ids actually used, and still reproducible.
+    const uuids = Array.from({ length: 2000 }, () => randomUUID());
+    const bearFirst = uuids.filter(
+      (seed) => resolveJudgeOrder("random", seed).order === "bear-first",
+    ).length;
+    expect(bearFirst).toBeGreaterThan(uuids.length * 0.4);
+    expect(bearFirst).toBeLessThan(uuids.length * 0.6);
+    expect(resolveJudgeOrder("random", uuids[0]).order).toBe(
+      resolveJudgeOrder("random", uuids[0]).order,
+    );
+  });
+
+  it("tells the judge the order carries no meaning, in terms of the setting in force", () => {
     const framing = buildJudgeFraming();
     expect(framing).toContain("RANDOMIZED PER REPORT");
     expect(framing).toContain("Neither being first nor being second is evidence");
+
+    // N11: the sentence must not claim randomization when the setting pins it.
+    for (const setting of ["bull-first", "bear-first"] as const) {
+      const pinned = buildJudgeFraming(setting);
+      expect(pinned).toContain(`PINNED BY CONFIGURATION (${JUDGE_ORDER_ENV_KEY}=${setting})`);
+      expect(pinned).not.toContain("RANDOMIZED PER REPORT");
+      expect(pinned).toContain("Neither being first nor being second is evidence");
+    }
+    const both = buildJudgeFraming("both");
+    expect(both).toContain("judged TWICE with the two orders swapped");
+
+    // And the pass that actually builds the request uses the setting it ran on.
+    const { payload } = buildInputs();
+    const turns = judgeUserTurns(
+      payload,
+      analystCase("bull"),
+      analystCase("bear"),
+      buildJudgePresentation({
+        setting: "bear-first",
+        seed: "job-seed-a",
+        bull: analystCase("bull"),
+        bear: analystCase("bear"),
+      }),
+    );
+    const text = JSON.stringify(turns);
+    expect(text).toContain("PINNED BY CONFIGURATION");
+    expect(text).not.toContain("RANDOMIZED PER REPORT");
   });
 
   it("records the order used in report metadata, the reader sentence and the manifest", async () => {
@@ -394,6 +455,16 @@ describe("judge case order (THESIS_JUDGE_ORDER)", () => {
         (entry) => entry.field === "llm.judge.case-order" && entry.reason === protocol?.note,
       ),
     ).toBe(true);
+
+    // N12: the seed IS the job id. The reader sentence goes into the Markdown
+    // and print-HTML headers of a file a user may forward, so it prints a short
+    // fingerprint; the exact value stays in the report JSON for traceability.
+    expect(protocol?.note).not.toContain("job-seed-a");
+    expect(protocol?.note).toContain(judgeSeedFingerprint("job-seed-a"));
+    for (const exported of [reportToMarkdown(report), reportToPrintHtml(report)]) {
+      expect(exported).toContain(judgeSeedFingerprint("job-seed-a"));
+      expect(exported).not.toContain("job-seed-a");
+    }
   });
 
   it("falls back to the payload fingerprint when no job seed is threaded", async () => {
@@ -569,6 +640,94 @@ describe("THESIS_JUDGE_ORDER=both", () => {
     expect(reconciliation?.performed).toBe(false);
     expect(reconciliation?.note).toContain("mirrored judge attempt died");
   });
+
+  it("keeps a completed, already-billed primary when the mirrored attempt THROWS", async () => {
+    // BLOCKER 3 (2026-09 review): the mirrored attempt was awaited unwrapped,
+    // and `attempt()` can REJECT rather than return a failure shape — a validate
+    // hook throws, an abort throws, and an over-reservation error is rethrown by
+    // the provider because it is neither an APIError nor retryable. The throw
+    // propagated out of runJudgePass, discarding a successful billed primary,
+    // skipping its settlement (the runner then settled the pass at zero while
+    // the spend sat in the ledger) and burning a retry — two more judge passes.
+    const { bundle, computed, payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { costUsd: 0.4 });
+    let validations = 0;
+    const settlements: { outcome: string; costUsd: number }[] = [];
+
+    const run = await runJudgePass(
+      makeDeps(mock, {
+        judgeOrder: "both",
+        validateRunPass: () => {
+          validations += 1;
+          if (validations === 2) {
+            throw new Error("request reservation exceeds the remaining job cost cap");
+          }
+        },
+      }),
+      payload,
+      analystCase("bull"),
+      analystCase("bear"),
+      undefined,
+      async (settlement) => {
+        settlements.push({
+          outcome: settlement.outcome,
+          costUsd: settlement.telemetry.costUsd,
+        });
+      },
+    );
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    // The mirrored request never launched, so only the primary was billed —
+    // and the pass settles ONCE, at what the primary actually cost.
+    expect(mock.calls.filter((call) => call.field === "llm.judge")).toHaveLength(1);
+    expect(run.result.costUsd).toBeCloseTo(0.4, 10);
+    expect(settlements).toEqual([{ outcome: "success", costUsd: 0.4 }]);
+    // The throw is disclosed on the same path a returned failure takes.
+    const reconciliation = run.result.judgeProtocol?.reconciliation;
+    expect(reconciliation?.performed).toBe(false);
+    expect(reconciliation?.note).toContain("threw before it could report an outcome");
+    expect(reconciliation?.note).toContain("remaining job cost cap");
+
+    const report = assembleReport(
+      {
+        symbol: "AAPL",
+        bundle,
+        computed,
+        judgeOutput: run.result.output,
+        verify: { verificationRate: null, log: [] },
+        costEntries: [{ step: "synthesize", model: "claude-opus-4-8", costUsd: 0.4 }],
+        model: "claude-opus-4-8",
+        judgeProtocol: run.result.judgeProtocol,
+      },
+      GENERATED_AT,
+    );
+    const disclosure = report.appendix.missingData.find(
+      (entry) => entry.field === "llm.judge.order-reconciliation",
+    );
+    expect(disclosure?.severity).toBe("warn");
+    expect(disclosure?.reason).toContain("threw before it could report an outcome");
+  });
+
+  it("sums the mirrored request's web-search counter into the merged server-tool block", async () => {
+    // N13: `webSearches` summed both requests while `server_tool_use` kept only
+    // the primary's, contradicting the provider's own aggregation.
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { webSearches: 2 });
+    mock.onJson("llm.judge", fakeJudgeOutput(), { webSearches: 3 });
+    const run = await runJudgePass(
+      makeDeps(mock, { judgeOrder: "both" }),
+      payload,
+      analystCase("bull"),
+      analystCase("bear"),
+    );
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.webSearches).toBe(5);
+    expect(run.result.usage.server_tool_use?.web_search_requests).toBe(5);
+  });
 });
 
 /* ------------------------------------------------------------------------ *
@@ -677,8 +836,8 @@ describe("analyst case length cap", () => {
       },
       GENERATED_AT,
     );
-    expect(report.meta.judgeProtocol?.bull.truncated).toBe(true);
-    expect(report.meta.judgeProtocol?.bear.truncated).toBe(false);
+    expect(report.meta.judgeProtocol?.bull?.truncated).toBe(true);
+    expect(report.meta.judgeProtocol?.bear?.truncated).toBe(false);
     expect(report.meta.judgeProtocol?.note).toContain("after truncation");
     const entry = report.appendix.missingData.find((m) => m.field === "llm.bull.length-cap");
     expect(entry?.severity).toBe("warn");
@@ -760,8 +919,8 @@ describe("analyst case_strength", () => {
       },
       GENERATED_AT,
     );
-    expect(report.meta.judgeProtocol?.bull.caseStrength).toBe(4);
-    expect(report.meta.judgeProtocol?.bear.caseStrength).toBe(2);
+    expect(report.meta.judgeProtocol?.bull?.caseStrength).toBe(4);
+    expect(report.meta.judgeProtocol?.bear?.caseStrength).toBe(2);
     expect(report.meta.judgeProtocol?.note).toContain("bull 4, bear 2");
   });
 

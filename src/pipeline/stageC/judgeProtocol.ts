@@ -87,10 +87,14 @@ export function resolveJudgeOrderSetting(
  * re-run (a resume, a judge retry, the preflight request validation that has to
  * reproduce the exact forthcoming request) always draws the same order.
  *
- * The draw is the low bit of the payload module's FNV-1a hash of the seed. That
- * is not a cryptographic shuffle and does not need to be: it needs to be
- * unbiased ACROSS jobs and stable WITHIN one, and a 32-bit FNV-1a of a UUID is
- * both. `both` draws its primary the same way and mirrors it.
+ * The draw is the PARITY OF THE WHOLE 32-bit FNV-1a word of the seed. That is
+ * not a cryptographic shuffle and does not need to be: it needs to be unbiased
+ * ACROSS jobs and stable WITHIN one. It was previously the LOW BIT alone, which
+ * is unbiased over UUIDs (measured 49.7% over 20,000) but is a parity function
+ * of the input bytes — FNV's prime is odd, so the multiply never changes bit 0
+ * — and therefore alternates deterministically for SEQUENTIAL seeds. Job ids
+ * are UUIDs today; folding every bit in keeps the draw unpredictable if they
+ * ever stop being. `both` draws its primary the same way and mirrors it.
  */
 export function resolveJudgeOrder(
   setting: JudgeOrderSetting,
@@ -98,12 +102,33 @@ export function resolveJudgeOrder(
 ): { order: JudgeOrder; secondaryOrder: JudgeOrder | null } {
   if (setting === "bull-first") return { order: "bull-first", secondaryOrder: null };
   if (setting === "bear-first") return { order: "bear-first", secondaryOrder: null };
-  const drawn: JudgeOrder =
-    (Number.parseInt(fnv1a32(seed), 16) & 1) === 1 ? "bear-first" : "bull-first";
+  const drawn: JudgeOrder = seedParity(seed) === 1 ? "bear-first" : "bull-first";
   return {
     order: drawn,
     secondaryOrder: setting === "both" ? oppositeOrder(drawn) : null,
   };
+}
+
+/** XOR-fold of all 32 bits of the seed's FNV-1a word down to one bit. */
+function seedParity(seed: string): 0 | 1 {
+  let word = Number.parseInt(fnv1a32(seed), 16);
+  word ^= word >>> 16;
+  word ^= word >>> 8;
+  word ^= word >>> 4;
+  word ^= word >>> 2;
+  word ^= word >>> 1;
+  return (word & 1) as 0 | 1;
+}
+
+/**
+ * Short, stable fingerprint of the seed for the READER-FACING sentence. The
+ * seed is the job id; printing it into the Markdown and print-HTML headers put
+ * a live identifier into a file a user may forward, for no reader benefit — the
+ * fingerprint is enough to see that two reports drew different seeds, and
+ * `judgeProtocol.seed` still carries the exact value in the report JSON.
+ */
+export function judgeSeedFingerprint(seed: string): string {
+  return fnv1a32(seed);
 }
 
 export function oppositeOrder(order: JudgeOrder): JudgeOrder {
@@ -437,11 +462,54 @@ export interface JudgeProtocolDraft {
   setting: JudgeOrderSetting;
   order: JudgeOrder;
   seed: string;
-  bull: AnalystCasePresentation;
-  bear: AnalystCasePresentation;
+  /** Null only on a RECOVERED protocol — see {@link recoveredJudgeProtocolDraft}. */
+  bull: AnalystCasePresentation | null;
+  bear: AnalystCasePresentation | null;
   reconciliation?: JudgeReconciliation;
   /** Manifest disclosures the protocol itself produced (truncation, and more). */
   disclosures: ManifestEntry[];
+}
+
+/**
+ * The protocol as much as it can be RECONSTRUCTED after the fact, for a report
+ * whose judge output was replayed from a durable synthesize artifact: the judge
+ * pass never ran in this process, so nothing recorded the protocol it ran under.
+ *
+ * Order, setting and seed survive because the draw is deterministic in (setting,
+ * seed) — the same two inputs the original pass used, so the same order comes
+ * back unless the operator changed `THESIS_JUDGE_ORDER` between the two
+ * processes. The per-side lengths, truncations and self-assessments do not
+ * survive: they are facts about two analyst cases this process never saw. They
+ * are reported as null and DISCLOSED — in the reader sentence and as a warn
+ * manifest entry — rather than fabricated or, as before, dropped along with the
+ * entire protocol block with no error and no gap entry.
+ */
+export function recoveredJudgeProtocolDraft(args: {
+  setting: JudgeOrderSetting;
+  seed: string;
+}): JudgeProtocolDraft {
+  const { order } = resolveJudgeOrder(args.setting, args.seed);
+  return {
+    setting: args.setting,
+    order,
+    seed: args.seed,
+    bull: null,
+    bear: null,
+    disclosures: [
+      {
+        field: "llm.judge.protocol-recovered",
+        reason:
+          "The judge output for this report was replayed from a durable artifact rather than " +
+          `produced in this run, so the judgement protocol was reconstructed from the job seed and ` +
+          `${JUDGE_ORDER_ENV_KEY}=${args.setting} rather than recorded by the pass that ran. The case ` +
+          "order above is what that pair draws; the two case lengths against the shared cap, whether " +
+          "either was truncated, and both analysts' self-assessed case strength are not recoverable " +
+          "and are not reported.",
+        severity: "warn",
+        attemptedSources: ["anthropic"],
+      },
+    ],
+  };
 }
 
 export function buildJudgeProtocolDraft(
@@ -493,6 +561,26 @@ export function withReconciliation(
     }
   }
   return { ...draft, reconciliation, disclosures };
+}
+
+/**
+ * Re-stamp a STORED protocol with the model families the final execution list
+ * names, rebuilding the reader sentence from them.
+ *
+ * The families are the one fact the judge pass cannot know: which model actually
+ * served each step is settled after it. Stage C's verify path assembles the
+ * report before the runner's execution metadata exists, so the block it stores
+ * always says "not shared"; the runner re-stamps it in reconcileMeta, where the
+ * effective model per step is finally known.
+ */
+export function restampSharedModelFamily(
+  protocol: JudgeProtocol,
+  sharedModelFamily: JudgeProtocol["sharedModelFamily"],
+): JudgeProtocol {
+  const rest: Record<string, unknown> = { ...protocol, sharedModelFamily };
+  delete rest.note;
+  const withoutNote = rest as unknown as Omit<JudgeProtocol, "note">;
+  return { ...withoutNote, note: buildJudgeProtocolNote(withoutNote) };
 }
 
 /** Fill the model-family fact and the reader sentence, producing the stored block. */
@@ -547,11 +635,21 @@ export function buildJudgeProtocolNote(
 ): string {
   const first = protocol.order === "bull-first" ? "bull" : "bear";
   const second = protocol.order === "bull-first" ? "bear" : "bull";
-  const sentences = [
-    `The judge read the ${first} case first and the ${second} case second (${JUDGE_ORDER_ENV_KEY}=${protocol.setting}, drawn from seed ${protocol.seed}), so first position was not fixed to one side.`,
-    `Both cases were capped at ${protocol.bull.capChars} characters: the bull case ran ${protocol.bull.chars}${protocol.bull.truncated ? " after truncation" : ""} and the bear case ${protocol.bear.chars}${protocol.bear.truncated ? " after truncation" : ""}, and the judge was told both lengths.`,
-    `Self-assessed case strength (1-5, the analyst's own score for its own side): bull ${protocol.bull.caseStrength ?? "not supplied"}, bear ${protocol.bear.caseStrength ?? "not supplied"}.`,
-  ];
+  const { bull, bear } = protocol;
+  const sentences =
+    bull === null || bear === null
+      ? [
+          // A RECOVERED protocol: reconstructed, not recorded. Saying "the judge
+          // read X first" outright would assert something this process did not
+          // observe, so the sentence says where the order came from instead.
+          `The judge output was replayed from a durable artifact, so this protocol was reconstructed rather than recorded: with ${JUDGE_ORDER_ENV_KEY}=${protocol.setting} and seed ${judgeSeedFingerprint(protocol.seed)} the ${first} case is drawn to be read first and the ${second} case second.`,
+          "Neither case's length against the shared cap, whether either was truncated, nor either analyst's self-assessed case strength was recoverable, so none of them is reported here.",
+        ]
+      : [
+          `The judge read the ${first} case first and the ${second} case second (${JUDGE_ORDER_ENV_KEY}=${protocol.setting}, drawn from seed ${judgeSeedFingerprint(protocol.seed)}), so first position was not fixed to one side.`,
+          `Both cases were capped at ${bull.capChars} characters: the bull case ran ${bull.chars}${bull.truncated ? " after truncation" : ""} and the bear case ${bear.chars}${bear.truncated ? " after truncation" : ""}, and the judge was told both lengths.`,
+          `Self-assessed case strength (1-5, the analyst's own score for its own side): bull ${bull.caseStrength ?? "not supplied"}, bear ${bear.caseStrength ?? "not supplied"}.`,
+        ];
   if (protocol.sharedModelFamily.shared) {
     sentences.push(
       `The judge ran on the ${protocol.sharedModelFamily.judgeFamily} model family — the same family that wrote both analyst cases — so it is grading output from its own family.`,

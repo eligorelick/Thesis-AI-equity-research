@@ -279,16 +279,37 @@ function boundedInteger(value: number, label: string, maximum: number): number {
 }
 
 /**
+ * How many provider REQUESTS one pass issues per attempt. Every pass issues one
+ * — except the judge under `THESIS_JUDGE_ORDER=both`, which issues a mirrored
+ * second request with the two cases swapped (D-20). Callers pass the count for
+ * the setting in force (JUDGE_PASSES_PER_SETTING); it defaults to 1 so a caller
+ * that does not know the setting still gets the historical single-order bound.
+ */
+export type JudgeRequestsPerPass = 1 | 2;
+
+function judgeRequestMultiplier(
+  pass: ReservationPass,
+  judgeRequestsPerPass: JudgeRequestsPerPass,
+): number {
+  return pass === "synthesize" ? judgeRequestsPerPass : 1;
+}
+
+/**
  * Conservative standard-price upper bound for every request that one durable
  * attempt can expose: {@link PASS_BILLING_EXPOSURE_MULTIPLIER} request maxima,
  * which is PASS_TRANSPORT_MAX_ATTEMPTS transport executions × one pause
  * resumption cycle each (CLIENT_MAX_RETRIES is 0 under D-10, so the SDK adds
- * no executions of its own).
+ * no executions of its own) × {@link JudgeRequestsPerPass} orders on the judge.
+ *
+ * The judge multiplier matters in "pass" reservation mode, which has no
+ * per-request admission at all: without it a `both`-mode judge pass ran two
+ * requests against one pass reservation sized for one order.
  */
 export function maximumPassCostUsd(
   selectedModel: string,
   pass: ReservationPass,
   verifyCapability?: VerifyReservationCapability,
+  judgeRequestsPerPass: JudgeRequestsPerPass = 1,
 ): number {
   if (pass === "verify") {
     if (verifyCapability?.billable === false) return 0;
@@ -343,7 +364,10 @@ export function maximumPassCostUsd(
     searches * 40_000,
   );
   const microUsd = Math.ceil(
-    (quarterMicroUsdPerExecution * PASS_BILLING_EXPOSURE_MULTIPLIER) / 4,
+    (quarterMicroUsdPerExecution *
+      PASS_BILLING_EXPOSURE_MULTIPLIER *
+      judgeRequestMultiplier(pass, judgeRequestsPerPass)) /
+      4,
   );
   return microUsd / 1_000_000;
 }
@@ -1010,16 +1034,29 @@ export function maximumRequestCostUsd(
 
 /**
  * Worst case for a whole pass: every request it could make, at the per-request
- * maximum. Reported in the pricing table and the report's cost metadata so the
- * exposure stays visible after it stops being reserved.
+ * maximum. Reported in the pricing table so the exposure stays visible after it
+ * stops being reserved.
+ *
+ * `judgeRequestsPerPass` doubles the JUDGE figure under
+ * `THESIS_JUDGE_ORDER=both`, which issues a mirrored second request per attempt
+ * (D-20). Without it the published judge worst case understated the real one by
+ * two times for anyone running that setting.
  */
 export function passWorstCaseCostUsd(
   model: string,
   pass: ReservationPass,
   verifyCapability?: VerifyReservationCapability,
+  judgeRequestsPerPass: JudgeRequestsPerPass = 1,
 ): number {
   const perRequest = maximumRequestCostUsd(model, pass, verifyCapability);
-  return Math.ceil(perRequest * 1_000_000 * PASS_MAX_REQUESTS) / 1_000_000;
+  return (
+    Math.ceil(
+      perRequest *
+        1_000_000 *
+        PASS_MAX_REQUESTS *
+        judgeRequestMultiplier(pass, judgeRequestsPerPass),
+    ) / 1_000_000
+  );
 }
 
 /**

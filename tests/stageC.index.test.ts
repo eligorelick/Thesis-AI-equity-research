@@ -30,6 +30,7 @@ import type { AnalystCase, JudgeOutput, Report } from "@/report/schema";
 import { BullBearPassFailure, type AssembleReportInput, type PassDeps } from "@/pipeline/jobRunner";
 import type { ContextPayload, PayloadSection } from "@/pipeline/stageC/payload";
 import { pipelinePasses } from "@/pipeline/stageC/index";
+import { deriveReportCompletenessPresentation } from "@/report/completeness";
 import {
   PASS_TRANSPORT_MAX_ATTEMPTS,
   _resetAnthropicForTests,
@@ -501,6 +502,30 @@ describe("pipelinePasses.runVerifyPass (WeakMap context recovery)", () => {
           entry.check === "named-individual" && entry.reason === "named-individual-web-source",
       ),
     ).toBe(true);
+
+    // 2026-09 review: the merge happened AFTER meta.dataCompleteness had been
+    // computed from the UNMERGED manifest, and nothing recomputed it — so
+    // adding one check disclosure left the persisted counts one short of the
+    // manifest they summarize. deriveReportCompletenessPresentation recomputes,
+    // disagrees, and reports metadataStatus "inconsistent", which renders as
+    // "Completeness unknown" and forces state, both counts, EDGAR, XBRL and
+    // forensic validation to "unknown" in the appendix AND the banner. Adding a
+    // disclosure must not blank the completeness of the whole report.
+    const presentation = deriveReportCompletenessPresentation(
+      result.verifiedReport.meta.dataCompleteness,
+      result.verifiedReport.appendix.missingData,
+    );
+    expect(presentation.metadataStatus).toBe("confirmed");
+    expect(presentation.state).not.toBe("unknown");
+    expect(presentation.warningCount).not.toBe("unknown");
+    // And it agreed because the recomputation COUNTED the merged entry, not
+    // because nothing was merged.
+    expect(result.verifiedReport.meta.dataCompleteness?.warningCount).toBe(
+      result.verifiedReport.appendix.missingData.filter(
+        (entry) => entry.severity === "warn" && entry.expected !== true,
+      ).length,
+    );
+    expect(result.verifiedReport.meta.dataCompleteness?.warningCount ?? 0).toBeGreaterThan(0);
   });
 
   it("falls back to the minimal stand-in for an unregistered payload (no cross-job leak)", async () => {

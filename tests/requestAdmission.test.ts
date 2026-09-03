@@ -38,9 +38,14 @@ import { readGenerationResumeArtifacts } from "@/pipeline/jobArtifacts";
 import { readStoredJobResumeInTransaction } from "@/pipeline/jobStore";
 import type { AnalystCase } from "@/report/schema";
 import {
+  JUDGE_ORDER_SETTINGS,
+  JUDGE_PASSES_PER_SETTING,
+} from "@/pipeline/stageC/judgeProtocol";
+import {
   MAX_PROVIDER_WEB_SEARCHES,
   PASS_MAX_REQUESTS,
   _resetAnthropicForTests,
+  maximumPassCostUsd,
   maximumRequestCostUsd,
   passWorstCaseCostUsd,
   runPass,
@@ -264,6 +269,39 @@ describe("what one request may cost", () => {
     const perRequest = maximumRequestCostUsd("claude-sonnet-5", "bull");
     expect(passWorstCaseCostUsd("claude-sonnet-5", "bull")).toBeCloseTo(perRequest * PASS_MAX_REQUESTS, 5);
     expect(PASS_MAX_REQUESTS).toBe(36);
+  });
+
+  it("sizes the JUDGE worst case and pass bound for the orders the setting runs", () => {
+    // WS7 (D-20), 2026-09 review: `THESIS_JUDGE_ORDER=both` issues a MIRRORED
+    // second judge request per attempt. The published worst case and the
+    // "pass"-mode reservation were both sized for one order, so the figure
+    // understated the real exposure by two times and, in pass mode (which has
+    // no per-request admission at all), two requests shared one reservation
+    // sized for one.
+    const perRequest = maximumRequestCostUsd("claude-sonnet-5", "synthesize");
+    const oneOrder = passWorstCaseCostUsd("claude-sonnet-5", "synthesize");
+    expect(oneOrder).toBeCloseTo(perRequest * PASS_MAX_REQUESTS, 5);
+    expect(
+      passWorstCaseCostUsd("claude-sonnet-5", "synthesize", undefined, JUDGE_PASSES_PER_SETTING.both),
+    ).toBeCloseTo(oneOrder * 2, 5);
+    expect(
+      maximumPassCostUsd("claude-sonnet-5", "synthesize", undefined, JUDGE_PASSES_PER_SETTING.both),
+    ).toBeCloseTo(maximumPassCostUsd("claude-sonnet-5", "synthesize") * 2, 5);
+
+    // Only the judge multiplies, and only when the setting says two orders.
+    for (const setting of JUDGE_ORDER_SETTINGS.filter((value) => value !== "both")) {
+      expect(
+        passWorstCaseCostUsd("claude-sonnet-5", "synthesize", undefined, JUDGE_PASSES_PER_SETTING[setting]),
+      ).toBeCloseTo(oneOrder, 5);
+    }
+    for (const pass of ["bull", "bear"] as const) {
+      expect(
+        passWorstCaseCostUsd("claude-sonnet-5", pass, undefined, JUDGE_PASSES_PER_SETTING.both),
+      ).toBeCloseTo(passWorstCaseCostUsd("claude-sonnet-5", pass), 5);
+      expect(
+        maximumPassCostUsd("claude-sonnet-5", pass, undefined, JUDGE_PASSES_PER_SETTING.both),
+      ).toBeCloseTo(maximumPassCostUsd("claude-sonnet-5", pass), 5);
+    }
   });
 
   it("refuses a verify bound without explicit capability metadata", () => {

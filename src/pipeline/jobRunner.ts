@@ -63,7 +63,20 @@ import {
   type ExecutionMetadataEntry,
 } from "@/report/schema";
 import { buildDataCompleteness } from "@/report/completeness";
-import { buildExecutionMetadataEntry } from "@/report/execution";
+import {
+  annotateSharedModelFamily,
+  buildExecutionMetadataEntry,
+  sharedModelFamilyOf,
+} from "@/report/execution";
+// WS7 (D-20): the judgement-protocol block the passes store is completed with
+// the model families only the runner's settled execution list knows. This is a
+// PURE module (no clock, no network, no provider) — the passes module itself
+// stays injected, as the decoupling note above requires.
+import {
+  JUDGE_PASSES_PER_SETTING,
+  judgeProtocolManifestEntries,
+  restampSharedModelFamily,
+} from "@/pipeline/stageC/judgeProtocol";
 import type { RequestAdmission, RequestPermit } from "@/providers/anthropic";
 import { buildDataBundle, type BuildDataBundleOptions } from "@/pipeline/dataBundle";
 import { runStageB, type ComputedMetrics } from "@/pipeline/compute";
@@ -919,6 +932,12 @@ function throwFirstSettlementRejection(outcomes: PromiseSettledResult<unknown>[]
  * request maximum per in-flight call. In "pass" mode it reserves the
  * pre-remediation bound covering every request the pass could make, kept for
  * one release as a fallback.
+ *
+ * WS7 (D-20), 2026-09 review: "every request the pass could make" includes the
+ * MIRRORED judge request under `THESIS_JUDGE_ORDER=both`. In "request" mode both
+ * requests are admitted and settled individually, so the pass lease is still one
+ * request maximum; in "pass" mode there is no per-request admission at all, and
+ * two judge requests were sharing one reservation sized for one order.
  */
 function passReservationUsd(
   model: string,
@@ -929,8 +948,13 @@ function passReservationUsd(
     return maximumPassCostUsd(model, pass, verifyCapability);
   }
   return getConfig().reservationMode === "pass"
-    ? maximumPassCostUsd(model, pass, verifyCapability)
+    ? maximumPassCostUsd(model, pass, verifyCapability, judgeRequestsPerPass())
     : maximumRequestCostUsd(model, pass, verifyCapability);
+}
+
+/** How many provider requests one judge pass issues under the setting in force. */
+function judgeRequestsPerPass(): 1 | 2 {
+  return JUDGE_PASSES_PER_SETTING[getConfig().judgeOrder];
 }
 
 /** Whether provider requests are admitted individually. */
@@ -4078,6 +4102,13 @@ function presumedSpendDisclosure(
   };
 }
 
+/** Manifest fields reconcileMeta owns and therefore re-stamps wholesale. */
+const RECONCILED_MANIFEST_FIELDS = new Set([
+  "cost.presumed",
+  "llm.judge.case-order",
+  "llm.judge.model-family",
+]);
+
 /**
  * Reconcile the runner-owned meta + appendix cost/verification fields onto a
  * Report the passes assembled (the passes may not know the final cost or the
@@ -4091,6 +4122,42 @@ function reconcileMeta(
   verifyLog: unknown,
   presumed: PresumedSpendDisclosure | null = null,
 ): Report {
+  // WS7 (D-20), 2026-09 review: the shared-model-family disclosure has to be
+  // computed HERE, from the runner's execution list, because this is the only
+  // place the effective models per step are known for certain.
+  //
+  // Stage C's verify path assembles the report with `costEntries: []`, so
+  // `sharedModelFamilyOf([])` returned "not shared" on every verify-succeeded
+  // run — the normal path — and NOTHING lit: no metadata flag, no reader
+  // sentence (both branches need non-null families), no llm.judge.model-family
+  // manifest entry, no badge. And even where it was computed (the unverified
+  // fallback), the `execution:` line below replaced meta.execution with the
+  // runner's own list, discarding the appended execution note. Re-stamping the
+  // protocol, the execution note and the manifest entry from `meta.execution`
+  // fixes both paths at once, including durable verify recovery.
+  const execution = meta.execution ?? report.meta.execution;
+  const annotatedExecution =
+    execution === undefined ? undefined : annotateSharedModelFamily(execution);
+  const judgeProtocol =
+    report.meta.judgeProtocol === undefined || annotatedExecution === undefined
+      ? report.meta.judgeProtocol
+      : restampSharedModelFamily(
+          report.meta.judgeProtocol,
+          sharedModelFamilyOf(annotatedExecution),
+        );
+
+  const missingData = [
+    ...report.appendix.missingData.filter((gap) => !RECONCILED_MANIFEST_FIELDS.has(gap.field)),
+    ...(judgeProtocol === undefined ? [] : judgeProtocolManifestEntries(judgeProtocol)),
+    ...(presumed === null ? [] : [presumed.entry]),
+  ];
+  // Both edits above CHANGE the manifest this metadata summarizes. Recomputing
+  // is not optional: deriveReportCompletenessPresentation recomputes from the
+  // manifest and reports "inconsistent" — which blanks state, counts, EDGAR,
+  // XBRL and forensic validation in the appendix and the banner — the moment
+  // the two disagree by a single warn entry.
+  const dataCompleteness = buildDataCompleteness(missingData);
+
   const next: Report = {
     ...report,
     meta: {
@@ -4105,8 +4172,9 @@ function reconcileMeta(
       verificationRate: meta.verificationRate,
       disclaimer: DISCLAIMER_TEXT,
       asOfMap: { ...meta.asOfMap, ...report.meta.asOfMap },
-      execution: meta.execution ?? report.meta.execution,
-      dataCompleteness: report.meta.dataCompleteness,
+      ...(annotatedExecution === undefined ? {} : { execution: annotatedExecution }),
+      ...(judgeProtocol === undefined ? {} : { judgeProtocol }),
+      dataCompleteness,
       runId: meta.runId ?? report.meta.runId,
       startedAt: meta.startedAt ?? report.meta.startedAt,
       completedAt: meta.completedAt ?? report.meta.completedAt,
@@ -4115,12 +4183,7 @@ function reconcileMeta(
     appendix: {
       ...report.appendix,
       verificationRate: meta.verificationRate,
-      missingData: presumed === null
-        ? report.appendix.missingData
-        : [
-            ...report.appendix.missingData.filter((gap) => gap.field !== "cost.presumed"),
-            presumed.entry,
-          ],
+      missingData,
       costBreakdown: costBreakdown.length > 0
         ? costBreakdown.map((entry) => {
             const execution = meta.execution?.find((item) => item.step === entry.step);

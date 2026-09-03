@@ -10,13 +10,15 @@ Read this, `DECISIONS.md`, and `git log` before resuming.
 | WS1 model registry / request shaping | done | main | c639a8c | D-01..D-06; `config/models.json` + `src/models/registry.ts` drive shaping, prices, allow-list |
 | WS2 leases / spend under failure | done | main | ddd30b0 | D-07..D-09; presumed spend, lease invariants, stream idle guard |
 | WS3 per-request admission | done | main | 6d8343f | D-10; one reservation and one cost row per provider request |
-| WS4 data layer | running (subagent) | `ws4-data-layer` | — | D-11..D-15 |
 | WS5 sector routing / financials | merged | main | b058dff | D-16, D-17; subagent reported nine of nine criteria met |
 | WS6 valuation inputs / disclosure | merged | main | 8e88364 | D-18, D-19; eight of eight met, one residual (N is not a column in the multiples table) |
 | WS7 AI pipeline | running (subagent) | `ws7-pipeline` | — | D-20 |
 | WS8 security / privacy / compliance | merged | main | 1c5d771 | D-21; five of five met |
 | WS9 README / docs | last (me) | main | — | D-22 |
-| Fresh-context review of WS5, WS6, WS8 | running (3 subagents) | main | — | Findings feed back into main before WS9 |
+| WS4 data layer | merged | main | 8d3b3b3 | D-11..D-15; eleven of twelve criteria met, Form 4 deferred with a disclosed gap |
+| Fresh-context reviews | done (4 subagents) | main | — | WS1-3: 2 blockers, 4 should-fix, 8 nits. WS5: 2 blockers, 5 should-fix, 5 nits. WS6: 2 blockers, 5 should-fix, 9 nits. WS8: 3 should-fix, 6 nits |
+| Review fixes | running (4 subagents) | `fix-ws123-review`, `fix-ws5-review`, `fix-ws6-review`, `fix-ws8-review` | — | Each branched from main, merged with the full gate |
+| Audited delta contract | done | main | 57cdee7 | D-23; `npm run audit:deltas`, grouped reasons, manifest identity, escaped path keys |
 
 ## Plan
 

@@ -387,16 +387,25 @@ describe("corrected report CLI", () => {
     try {
       mkdirSync(nested, { recursive: true });
       seedReportDatabase(dbFile);
-      const npmCli = process.env.npm_execpath;
-      expect(npmCli && path.isAbsolute(npmCli) && existsSync(npmCli)).toBe(true);
+      // The argv package.json declares, spawned without npm: `npm run` fires
+      // npm's update-notifier, a live pacote.manifest("npm@*") request to
+      // registry.npmjs.org from a child process that
+      // tests/setup/noLiveNetwork.ts cannot reach. `npm_execpath` is also
+      // unset under node_modules/.bin/vitest and IDE runners.
+      const script = (
+        JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")) as {
+          scripts: Record<string, string>;
+        }
+      ).scripts["export:corrected"];
+      const [runner, ...scriptArgv] = script.split(/\s+/);
+      expect(runner).toBe("tsx");
+      expect(scriptArgv).toEqual([path.relative(ROOT, CLI_SOURCE).replaceAll("\\", "/")]);
+
       const result = spawnSync(
         process.execPath,
         [
-          npmCli!,
-          "run",
-          "--silent",
-          "export:corrected",
-          "--",
+          TSX_CLI,
+          ...scriptArgv,
           "--db",
           dbFile,
           "--report",

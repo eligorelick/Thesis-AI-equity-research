@@ -25,7 +25,12 @@
 // WS7 (D-20): the per-side character cap the analyst prompt must state and the
 // pipeline enforces. Imported (not re-declared) so the number the model is told
 // and the number the code applies can never drift apart.
-import { ANALYST_CASE_CHAR_CAP } from "@/pipeline/stageC/judgeProtocol";
+import type { JudgeOrderSetting } from "@/report/schema";
+import {
+  ANALYST_CASE_CHAR_CAP,
+  DEFAULT_JUDGE_ORDER_SETTING,
+  JUDGE_ORDER_ENV_KEY,
+} from "@/pipeline/stageC/judgeProtocol";
 
 /* ------------------------------------------------------------------------ *
  * The five non-negotiable rules — VERBATIM from the application contract §1.
@@ -225,12 +230,34 @@ export function buildBearFraming(capChars: number = ANALYST_CASE_CHAR_CAP): stri
  * ------------------------------------------------------------------------ */
 
 /**
+ * How the case order was decided, in one line the judge reads. A FUNCTION OF
+ * THE SETTING, exactly as the length banner is a function of the presentation:
+ * telling the judge the order is "randomized per report" when the operator
+ * pinned it with `THESIS_JUDGE_ORDER=bull-first` is a false statement in the
+ * prompt, and a model told something false about its own inputs has one less
+ * reason to trust the rest of them.
+ */
+function judgeOrderSentence(setting: JudgeOrderSetting): string {
+  switch (setting) {
+    case "bull-first":
+    case "bear-first":
+      return `THE ORDER THE TWO CASES APPEAR IN BELOW IS PINNED BY CONFIGURATION (${JUDGE_ORDER_ENV_KEY}=${setting}) and carries no meaning.`;
+    case "both":
+      return "THE ORDER THE TWO CASES APPEAR IN BELOW IS RANDOMIZED PER REPORT, and this report is judged TWICE with the two orders swapped; the order carries no meaning.";
+    default:
+      return "THE ORDER THE TWO CASES APPEAR IN BELOW IS RANDOMIZED PER REPORT and carries no meaning.";
+  }
+}
+
+/**
  * Judge/synthesis FRAMING — sent as a message content block after the cached
  * payload (NOT in `system`; see module docstring). The judge receives the
  * payload plus BOTH analyst cases and emits the full JUDGE_OUTPUT structured
  * schema. Must not manufacture balance; rejects claims only for lack of support.
  */
-export function buildJudgeFraming(): string {
+export function buildJudgeFraming(
+  setting: JudgeOrderSetting = DEFAULT_JUDGE_ORDER_SETTING,
+): string {
   return [
     "YOUR ROLE: JUDGE / synthesizer.",
     "You receive the payload and TWO independent analyst cases (bull and bear). Produce the final",
@@ -238,9 +265,9 @@ export function buildJudgeFraming(): string {
     "",
     // WS7 (D-20): the two cases used to arrive in a fixed BULL-then-BEAR order
     // with no stated lengths, so position and volume were silent advantages.
-    "THE ORDER THE TWO CASES APPEAR IN BELOW IS RANDOMIZED PER REPORT and carries no meaning.",
+    judgeOrderSentence(setting),
     "Neither being first nor being second is evidence. The order actually used is recorded in the",
-    "report's metadata so a reader can check that it varies.",
+    "report's metadata so a reader can check it.",
     "",
     "HOW TO ADJUDICATE:",
     "- Weigh each side on the EVIDENCE. Accept a claim only if it is supported by the payload or a",

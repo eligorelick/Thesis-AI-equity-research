@@ -1266,7 +1266,10 @@ export function judgeUserTurns(
     buildCachedUserMessage(
       payload,
       [
-        buildJudgeFraming(),
+        // WS7 (D-20), N11: the order sentence follows the SETTING, exactly as
+        // the length banner follows the presentation. A legacy caller with no
+        // presentation gets the historical fixed order, hence the default.
+        buildJudgeFraming(presentation?.setting),
         ...(presentation === undefined ? [] : ["", caseLengthBanner(presentation)]),
         "",
         caseBlock(first),

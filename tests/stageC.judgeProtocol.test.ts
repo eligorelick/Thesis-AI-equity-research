@@ -23,6 +23,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 
 import { runStageB, type ComputedMetrics } from "@/pipeline/compute";
 import { validateBundle } from "@/pipeline/stageA/validate";
@@ -41,8 +42,10 @@ import {
   buildJudgeProtocolDraft,
   capAnalystCase,
   DEFAULT_JUDGE_ORDER_SETTING,
+  JUDGE_ORDER_ENV_KEY,
   JUDGE_ORDER_SETTINGS,
   JUDGE_PASSES_PER_SETTING,
+  judgeSeedFingerprint,
   reconcileJudgeOutputs,
   reconciliationFields,
   resolveJudgeOrder,
@@ -346,10 +349,68 @@ describe("judge case order (THESIS_JUDGE_ORDER)", () => {
     expect(b.bear).toBeLessThan(b.bull);
   });
 
-  it("tells the judge the order carries no meaning", () => {
+  it("draws on more than the byte parity of the seed", () => {
+    // N10: the draw was the LOW bit of FNV-1a. The FNV prime is odd, so the
+    // multiply never changes bit 0 — the low bit is nothing but the XOR of the
+    // input bytes' low bits. Unbiased over UUIDs (49.7% measured over 20,000),
+    // but two facts follow that a fairness control should not have: it cannot
+    // see the ORDER of the characters, so every anagram of a seed drew the same
+    // side first; and it alternates strictly across sequential seeds, so if job
+    // ids ever became sequential the order would be predictable per job.
+    const anagrams = ["job-abc", "job-acb", "job-bac", "job-bca", "job-cab", "job-cba"];
+    expect(
+      new Set(anagrams.map((seed) => resolveJudgeOrder("random", seed).order)).size,
+    ).toBe(2);
+
+    const sequential = Array.from(
+      { length: 10 },
+      (_, i) => resolveJudgeOrder("random", `job-${i}`).order,
+    );
+    expect(sequential.every((order, i) => i === 0 || order !== sequential[i - 1])).toBe(false);
+
+    // Still unbiased across the job ids actually used, and still reproducible.
+    const uuids = Array.from({ length: 2000 }, () => randomUUID());
+    const bearFirst = uuids.filter(
+      (seed) => resolveJudgeOrder("random", seed).order === "bear-first",
+    ).length;
+    expect(bearFirst).toBeGreaterThan(uuids.length * 0.4);
+    expect(bearFirst).toBeLessThan(uuids.length * 0.6);
+    expect(resolveJudgeOrder("random", uuids[0]).order).toBe(
+      resolveJudgeOrder("random", uuids[0]).order,
+    );
+  });
+
+  it("tells the judge the order carries no meaning, in terms of the setting in force", () => {
     const framing = buildJudgeFraming();
     expect(framing).toContain("RANDOMIZED PER REPORT");
     expect(framing).toContain("Neither being first nor being second is evidence");
+
+    // N11: the sentence must not claim randomization when the setting pins it.
+    for (const setting of ["bull-first", "bear-first"] as const) {
+      const pinned = buildJudgeFraming(setting);
+      expect(pinned).toContain(`PINNED BY CONFIGURATION (${JUDGE_ORDER_ENV_KEY}=${setting})`);
+      expect(pinned).not.toContain("RANDOMIZED PER REPORT");
+      expect(pinned).toContain("Neither being first nor being second is evidence");
+    }
+    const both = buildJudgeFraming("both");
+    expect(both).toContain("judged TWICE with the two orders swapped");
+
+    // And the pass that actually builds the request uses the setting it ran on.
+    const { payload } = buildInputs();
+    const turns = judgeUserTurns(
+      payload,
+      analystCase("bull"),
+      analystCase("bear"),
+      buildJudgePresentation({
+        setting: "bear-first",
+        seed: "job-seed-a",
+        bull: analystCase("bull"),
+        bear: analystCase("bear"),
+      }),
+    );
+    const text = JSON.stringify(turns);
+    expect(text).toContain("PINNED BY CONFIGURATION");
+    expect(text).not.toContain("RANDOMIZED PER REPORT");
   });
 
   it("records the order used in report metadata, the reader sentence and the manifest", async () => {
@@ -394,6 +455,16 @@ describe("judge case order (THESIS_JUDGE_ORDER)", () => {
         (entry) => entry.field === "llm.judge.case-order" && entry.reason === protocol?.note,
       ),
     ).toBe(true);
+
+    // N12: the seed IS the job id. The reader sentence goes into the Markdown
+    // and print-HTML headers of a file a user may forward, so it prints a short
+    // fingerprint; the exact value stays in the report JSON for traceability.
+    expect(protocol?.note).not.toContain("job-seed-a");
+    expect(protocol?.note).toContain(judgeSeedFingerprint("job-seed-a"));
+    for (const exported of [reportToMarkdown(report), reportToPrintHtml(report)]) {
+      expect(exported).toContain(judgeSeedFingerprint("job-seed-a"));
+      expect(exported).not.toContain("job-seed-a");
+    }
   });
 
   it("falls back to the payload fingerprint when no job seed is threaded", async () => {

@@ -1080,6 +1080,36 @@ describe("applyKeylessFallbacks — public float measurement date", () => {
     expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.data.rows[0]!.publicFloatStale).toBe(false);
   });
 
+  it("converts the float at the close of ITS OWN measurement date, not today's price", async () => {
+    // Dividing by the latest quote rescaled the share count by every price move
+    // since the measurement date: an issuer whose stock doubled reported half
+    // its float shares and a free float falling from ~90% to ~45%.
+    const out = await applyKeylessFallbacks(withFacts(withFloatDate("2022-06-30")));
+    const bars = out.members.eodPrices.ok ? out.members.eodPrices.value.data.rows : [];
+    const onDate = bars.find((b) => b.date === "2022-06-30")!;
+    const latest = bars.reduce((a, b) => (a.date > b.date ? a : b));
+    expect(onDate.close).toBeDefined();
+    expect(latest.close).not.toBeCloseTo(onDate.close!, 6); // the two dates really differ
+    const row = out.members.sharesFloat.ok ? out.members.sharesFloat.value.data.rows[0]! : null;
+    expect(row).toMatchObject({ publicFloatPriceDate: "2022-06-30", publicFloatPriceBasis: "measurement date" });
+    expect(row!.publicFloatPrice).toBeCloseTo(onDate.close!, 8);
+    expect(row!.floatShares).toBeCloseTo(3_000_000 / onDate.close!, 6);
+    const entry = out.gaps.find((g) => g.field === "keyless.sharesFloat.publicFloat")!;
+    expect(entry.reason).toMatch(/divided by the close of 2022-06-30, the float's own measurement date/);
+    expect(entry.reason).toMatch(/both sides of the division are dated 2022-06-30/);
+  });
+
+  it("falls back to the latest quote, as a warn, when no close reaches the measurement date", async () => {
+    // The fake price history starts 2021-09-01.
+    const out = await applyKeylessFallbacks(withFacts(withFloatDate("2019-06-28")));
+    const row = out.members.sharesFloat.ok ? out.members.sharesFloat.value.data.rows[0]! : null;
+    expect(row).toMatchObject({ publicFloatPriceBasis: "latest quote", publicFloatPriceDate: null });
+    const entry = out.gaps.find((g) => g.field === "keyless.sharesFloat.publicFloat")!;
+    expect(entry.severity).toBe("warn");
+    expect(entry.reason).toMatch(/NO CLOSE was available on or before 2019-06-28/);
+    expect(entry.reason).toMatch(/rescaled by every price move since that date/);
+  });
+
   it("says the float share count is absent when no EntityPublicFloat fact was filed", async () => {
     const f = appleFacts();
     delete f.facts["dei"]!["EntityPublicFloat"];

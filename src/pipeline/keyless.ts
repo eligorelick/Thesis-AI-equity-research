@@ -1300,9 +1300,24 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       // much the stock has moved since. The figure is therefore labelled with
       // its own measurement date and flagged when that date is stale.
       const publicFloat = built?.shares.publicFloat ?? null;
-      const floatShares = publicFloat !== null && price !== null && price > 0 ? publicFloat.value / price : null;
+      // The right price for that conversion is the one that ruled ON THE
+      // MEASUREMENT DATE, not today's: dividing by the latest quote rescales
+      // the share count by every price move since, so an issuer whose stock
+      // doubled reported half its float shares and a free float falling from
+      // about 90% to about 45%. The latest price is the fallback only when the
+      // history reaches no further back than the measurement date.
+      const floatPriceOnDate = publicFloat === null ? null : lastCloseOnOrBefore(eodRows, publicFloat.asOf);
+      const floatPrice = floatPriceOnDate ?? price;
+      const floatPriceBasis: PublicFloatPriceBasis =
+        publicFloat === null || floatPrice === null
+          ? "none"
+          : floatPriceOnDate !== null
+            ? "measurement date"
+            : "latest quote";
+      const floatShares =
+        publicFloat !== null && floatPrice !== null && floatPrice > 0 ? publicFloat.value / floatPrice : null;
       const freeFloat = floatShares !== null && outstanding.value > 0 ? (floatShares / outstanding.value) * 100 : null;
-      const floatAge = describePublicFloatAge(publicFloat, price, inputs.today);
+      const floatAge = describePublicFloatAge(publicFloat, floatPrice, floatPriceBasis, inputs.today);
       gaps.push(floatAge.gap);
       if (floatAge.note !== null) notes.push(`keyless shares float: ${floatAge.note}`);
       const row: Record<string, unknown> = {
@@ -1316,6 +1331,10 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         publicFloatUsd: publicFloat?.value ?? null,
         publicFloatAsOf: publicFloat?.asOf ?? null,
         publicFloatStale: floatAge.stale,
+        // Which price turned the dollar float into shares, and on which date.
+        publicFloatPrice: floatShares === null ? null : floatPrice,
+        publicFloatPriceDate: floatPriceBasis === "measurement date" ? (publicFloat?.asOf ?? null) : null,
+        publicFloatPriceBasis: floatShares === null ? null : floatPriceBasis,
         source: "edgar",
       };
       // The endpoint names the concept that actually served the count: a
@@ -1345,17 +1364,27 @@ function monthsSince(day: string, today: string): number | null {
 /** A public float older than this is disclosed as stale (D-14). */
 export const PUBLIC_FLOAT_STALE_MONTHS = 6;
 
+/** Which price turned the dollar float into a share count. */
+export type PublicFloatPriceBasis = "measurement date" | "latest quote" | "none";
+
 /**
- * The disclosure that travels with a keyless float share count. Three cases,
- * one manifest field so a reader always finds the answer in the same place:
- * no float fact at all, a float converted at a price from a later date, and
- * the same conversion where the float is more than six months old — which is
- * the common case, because the cover-page figure is measured at the end of the
- * second fiscal quarter and refreshed once a year.
+ * The disclosure that travels with a keyless float share count. One manifest
+ * field so a reader always finds the answer in the same place, covering: no
+ * float fact at all, no price to convert it, a conversion at the close of the
+ * float's own MEASUREMENT DATE (the correct case, and the usual one), and a
+ * conversion at the latest quote because the price history reaches no further
+ * back — which rescales the share count by every price move since and is
+ * therefore a `warn` in its own right.
+ *
+ * Staleness of the float itself is reported either way: the cover-page figure
+ * is measured at the end of the second fiscal quarter and refreshed once a
+ * year, so it is normally months old. That is a caveat on how CURRENT the
+ * figure is, not on the arithmetic.
  */
 function describePublicFloatAge(
   publicFloat: { value: number; asOf: string } | null,
   price: number | null,
+  priceBasis: PublicFloatPriceBasis,
   today: string,
 ): { gap: ManifestEntry; note: string | null; stale: boolean } {
   const field = "keyless.sharesFloat.publicFloat";
@@ -1388,20 +1417,31 @@ function describePublicFloatAge(
   const months = monthsSince(publicFloat.asOf, today);
   const stale = months !== null && months > PUBLIC_FLOAT_STALE_MONTHS;
   const age = months === null ? "" : ` (${months} month${months === 1 ? "" : "s"} before the analysis date)`;
+  const onMeasurementDate = priceBasis === "measurement date";
+  const priceText = onMeasurementDate
+    ? `the close of ${publicFloat.asOf}, the float's own measurement date (${price})`
+    : `the latest price (${price})`;
   const conversion =
     `float shares = dei:EntityPublicFloat, a dollar amount measured ${publicFloat.asOf}${age}, ` +
-    "divided by the latest price";
+    `divided by ${priceText}`;
+  const mismatch = onMeasurementDate
+    ? `; both sides of the division are dated ${publicFloat.asOf}, so no price move since is folded into the share count`
+    : `. NO CLOSE was available on or before ${publicFloat.asOf}, so the latest price was used instead and this share count is rescaled by every price move since that date — read it as an order of magnitude, not a count`;
+  const staleness = stale
+    ? ` The float itself is more than ${PUBLIC_FLOAT_STALE_MONTHS} months old: the cover-page figure is measured at the end of the issuer's second fiscal quarter and refreshed once a year, so the COMPANY may have issued or retired shares since ${publicFloat.asOf}.`
+    : ` The float is within ${PUBLIC_FLOAT_STALE_MONTHS} months of the analysis date.`;
+  const severity = stale || !onMeasurementDate ? "warn" : "info";
   return {
     gap: {
       field,
-      reason: stale
-        ? `${conversion}. The two dates differ by more than ${PUBLIC_FLOAT_STALE_MONTHS} months: the cover-page float is measured at the end of the issuer's second fiscal quarter and refreshed once a year, so this share count is rescaled by every price move since ${publicFloat.asOf} and should be read as an order of magnitude, not a current figure`
-        : `${conversion}; the two dates are within ${PUBLIC_FLOAT_STALE_MONTHS} months of each other`,
-      severity: stale ? "warn" : "info",
-      attemptedSources,
-      ...(stale ? {} : { expected: true }),
+      reason: `${conversion}${mismatch}.${staleness}`,
+      severity,
+      attemptedSources: [...attemptedSources, "yahoo:chart(close on the measurement date)"],
+      ...(severity === "warn" ? {} : { expected: true }),
     },
-    note: `public float ${publicFloat.value} USD measured ${publicFloat.asOf}${age}, converted to shares at the latest price${stale ? " — stale, see the manifest" : ""}`,
+    note: `public float ${publicFloat.value} USD measured ${publicFloat.asOf}${age}, converted to shares at ${priceText}${
+      severity === "warn" ? " — see the manifest" : ""
+    }`,
     stale,
   };
 }

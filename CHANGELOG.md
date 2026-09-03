@@ -36,6 +36,12 @@ made.
 - **`DEMO` and `DBNK` are reserved.** They are served from fixtures whatever
   keys are configured, and reach no provider at all. Previously a configured FMP
   key sent them to the vendor as ordinary symbols.
+- **`THESIS_JUDGE_ORDER=both` reserves twice as much in pass mode.** It issues a
+  second, mirrored judge request per attempt, and only the default
+  `THESIS_RESERVATION_MODE=request` admits and settles each one on its own. In
+  pass mode the judge reservation now doubles to cover both, because nothing
+  admits them separately — a `THESIS_MAX_JOB_COST_USD` sized against the old
+  single-order bound will reject those jobs. The default mode is unaffected.
 - **Node 22.18 is the floor** (`engines.node`). CI tests Node 24.
 
 ### Added
@@ -98,3 +104,21 @@ made.
 - The declared SEC contact identity no longer travels in Yahoo requests.
 - `npm test` and `npm run test:integration` no longer spawn a package manager
   that can reach the network.
+- EBIT is the issuer's operating income. It was pre-tax income plus interest
+  expense whenever both were filed, which reintroduced every non-operating item
+  the operating-income derivation removes and published a figure that
+  derivation had refused outright for a bank or a double-counted interest
+  add-back. Where operating income cannot be derived, EBIT is withheld and
+  named in the missing-data manifest.
+- The shared-model-family disclosure now fires on the production path. It was
+  computed from a list that is empty there, so a run whose judge and analyst
+  shared a model family never said so.
+- Disclosing a failed consistency check no longer invalidates the completeness
+  metadata computed from the same manifest. The same repair closes a run with
+  presumed spend reporting itself inconsistent.
+- A mirrored judge request that throws no longer discards the already-billed
+  primary; the primary stands, settles once, and the failure is disclosed.
+- Four consistency checks stopped flagging correct prose: a lower-is-better
+  metric described correctly, a percentage coinciding with a scaled figure, a
+  bare quarter read as a two-digit year, and person claims accepting any
+  citation in the payload.

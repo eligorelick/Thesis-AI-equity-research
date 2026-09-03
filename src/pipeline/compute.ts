@@ -122,7 +122,14 @@ import {
 // WS6 (D-19): THESIS_EV_INCLUDE_LEASES.
 import { getConfig } from "@/config/env";
 import { mergeManifest } from "@/pipeline/stageA/manifest";
-import type { Scoring, Projections, ScenarioTargets, FairValue } from "@/report/schema";
+import type {
+  Scoring,
+  Projections,
+  ScenarioTargets,
+  FairValue,
+  RouteMetrics,
+  RouteMetricRow,
+} from "@/report/schema";
 
 // ---------------------------------------------------------------------------
 // Public result contract
@@ -1383,6 +1390,99 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     notes,
     gaps,
   };
+}
+
+/**
+ * WS5 (D-17): the report-ready route-metrics block, or null on a route that has
+ * none.
+ *
+ * `Report.routeMetrics` was defined and never populated, and the excess-return
+ * model's P/TBV-against-ROTE reading had no consumer anywhere downstream, so a
+ * bank report could say a metric was WITHHELD (through the missing-data
+ * manifest) but could never show one. This assembles both into the single
+ * schema surface: every computed route metric, and the multiple a financial is
+ * actually read on beside the return that justifies it.
+ *
+ * Pure and deterministic — it copies figures Stage B already computed, with
+ * their own basis strings, source paths and as-of dates.
+ */
+export function routeMetricsBlock(computed: ComputedMetrics): RouteMetrics | null {
+  const fm = computed.financialMetrics;
+  const rows: RouteMetricRow[] = [];
+  const notes = [...fm.notes];
+  const val = computed.valuation;
+
+  if (val.kind === "excess-return") {
+    const er = val.excessReturn;
+    const p = er.priceToTangibleBookVsRote;
+    const src = ["computed.valuation.excessReturn.priceToTangibleBookVsRote"];
+    const unavailable = p.withheldReason ?? "not computed";
+    rows.push(
+      {
+        key: "pTbv",
+        label: "price / tangible book value",
+        unit: "x",
+        value: p.pTbv,
+        basis: p.basis,
+        sources: src,
+        asOf: er.asOf,
+        withheldReason: p.pTbv === null ? unavailable : null,
+        proxy: false,
+      },
+      {
+        key: "rote",
+        label: "return on tangible common equity",
+        unit: "%",
+        value: p.rotePct,
+        basis:
+          "net income available to common / average tangible common equity — the return the P/TBV multiple above is read against, on the SAME tangible denominator",
+        sources: ["computed.returns.rote"],
+        asOf: computed.returns.rote.asOf,
+        withheldReason:
+          p.rotePct === null
+            ? "return on tangible common equity unavailable — see the returns block for the reason"
+            : null,
+        proxy: false,
+      },
+      {
+        key: "justifiedPTbv",
+        label: "justified P/TBV (stable-growth cross-check)",
+        unit: "x",
+        value: p.justifiedPTbv,
+        basis: p.basis,
+        sources: src,
+        asOf: er.asOf,
+        withheldReason: p.justifiedPTbv === null ? unavailable : null,
+        proxy: false,
+      },
+      {
+        key: "premiumToJustified",
+        label: "P/TBV premium to the justified multiple",
+        unit: "x",
+        value: p.premiumToJustified,
+        basis:
+          "P/TBV − justified P/TBV; positive means the market pays more than the return supports under the stable-growth cross-check, which rests on a different assumption than the fading forward model",
+        sources: src,
+        asOf: er.asOf,
+        withheldReason: p.premiumToJustified === null ? unavailable : null,
+        proxy: false,
+      },
+    );
+    notes.push(
+      "P/TBV is read against ROTE on the same tangible denominator (equity less goodwill, other intangibles and " +
+        "preferred): a goodwill-heavy acquirer at 1.0x book can be at 2.0x tangible book, and pairing a book multiple " +
+        "with a tangible-equity return would compare two different bases.",
+    );
+  }
+
+  rows.push(...fm.metrics);
+  if (rows.length === 0) return null;
+
+  const asOf = rows.reduce<string | null>(
+    (acc, m) => (m.asOf !== null && (acc === null || m.asOf > acc) ? m.asOf : acc),
+    null,
+  );
+  return { route: fm.route, metrics: rows, notes, asOf };
 }
 
 // ---------------------------------------------------------------------------

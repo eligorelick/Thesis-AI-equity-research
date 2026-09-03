@@ -25,7 +25,7 @@
  * pulling in a provider client.
  */
 
-import type { ComputedMetrics } from "@/pipeline/compute";
+import { routeMetricsBlock, type ComputedMetrics } from "@/pipeline/compute";
 import type { DataBundle } from "@/pipeline/types";
 import type { ForensicFlag } from "@/pipeline/stageB/forensics";
 import { scoreToBand } from "@/pipeline/stageB/grading";
@@ -739,6 +739,7 @@ export interface EnrichDataOnlyReportArgs {
  */
 export function enrichDataOnlyReport(stub: Report, args: EnrichDataOnlyReportArgs): Report {
   const { bundle, computed } = args;
+  const routeMetrics = routeMetricsBlock(computed);
   const currency = statementCurrency(bundle);
   const priceCurrency = tradingCurrency(bundle) ?? currency;
   const asOf = computed.builtAt.slice(0, 10);
@@ -789,6 +790,10 @@ export function enrichDataOnlyReport(stub: Report, args: EnrichDataOnlyReportArg
     projections: computed.projections,
     scenarioTargets: computed.scenarioTargets,
     fairValue: computed.fairValue,
+    // WS5 (D-17): the route metrics a financial report leads with, and the
+    // P/TBV-against-ROTE reading, on the data-only surface too — this report
+    // has no analyst pass to describe them in prose.
+    ...(routeMetrics ? { routeMetrics } : {}),
   };
 
   const coverage = provenanceCoverage(candidate);

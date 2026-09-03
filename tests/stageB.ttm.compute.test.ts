@@ -13,6 +13,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  routeMetricsBlock,
   runStageB,
   ttmCashFlow,
   ttmIncome,
@@ -1301,5 +1302,32 @@ describe("runStageB wiring — FFO is built on ONE period, and carries that peri
     expect(notes).not.toContain("net income 200000000");
     expect(notes).toContain("FISCAL YEAR ending 2025-12-31");
     expect(notes).toContain("not on a trailing twelve months");
+  });
+});
+
+describe("routeMetricsBlock — the report-ready route metrics, and nothing on other routes", () => {
+  it("carries every computed bank metric plus the P/TBV-against-ROTE reading", () => {
+    const block = routeMetricsBlock(runStageB(wiringBundle({ bank: true })));
+
+    expect(block).not.toBeNull();
+    expect(block?.route).toBe("bank");
+    const keys = (block?.metrics ?? []).map((m) => m.key);
+    // The pairing a financial is actually judged on...
+    for (const key of ["pTbv", "rote", "justifiedPTbv", "premiumToJustified"]) {
+      expect(keys, key).toContain(key);
+    }
+    // ...and the route metrics themselves, computed or withheld with a reason.
+    for (const key of ["nim", "efficiencyRatio", "provisionsToLoans", "depositCost"]) {
+      expect(keys, key).toContain(key);
+    }
+    for (const m of block?.metrics ?? []) {
+      // Never a value AND a withholding, and never a blank with no reason.
+      if (m.value === null) expect(m.withheldReason, m.key).not.toBeNull();
+      else expect(m.withheldReason, m.key).toBeNull();
+    }
+  });
+
+  it("returns null on the general route, so an ordinary report gains no empty block", () => {
+    expect(routeMetricsBlock(runStageB(wiringBundle()))).toBeNull();
   });
 });

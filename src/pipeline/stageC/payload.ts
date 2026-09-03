@@ -488,7 +488,19 @@ function computedSections(
       { label: "reverse-DCF implied terminal margin", value: val.reverseDcf?.impliedTerminalMarginPct ?? null, unit: "%", source: "computed.valuation.reverseDcf", asOf: null },
     );
   } else if (val.kind === "excess-return") {
-    valFigures.push({ label: "excess-return per share", value: val.excessReturn.perShare ?? null, unit: "currency/share", currency: reportingCurrency, source: "computed.valuation.excessReturn", asOf: null });
+    // WS5 review (NIT 8): the model's shape and the multiple a financial is
+    // actually read on had no consumer anywhere downstream — the payload showed
+    // one number from a model whose horizon, discount rate and opening book
+    // value were only inferable from prose.
+    valFigures.push(
+      { label: "excess-return per share", value: val.excessReturn.perShare ?? null, unit: "currency/share", currency: reportingCurrency, source: "computed.valuation.excessReturn", asOf: null },
+      { label: "excess-return horizon (years)", value: val.excessReturn.horizonYears.value, unit: "", source: "computed.valuation.excessReturn.horizonYears", asOf: null },
+      { label: "cost of equity (the model's only discount rate)", value: val.excessReturn.costOfEquityPct.value, unit: "%", source: "computed.valuation.excessReturn.costOfEquityPct", asOf: null },
+      { label: "opening book equity (BV0)", value: val.excessReturn.openingBookValue.value, unit: "currency", currency: reportingCurrency, source: "computed.valuation.excessReturn.openingBookValue", asOf: val.excessReturn.asOf },
+      { label: "P/TBV", value: val.excessReturn.priceToTangibleBookVsRote.pTbv, unit: "x", source: "computed.valuation.excessReturn.priceToTangibleBookVsRote", asOf: val.excessReturn.asOf },
+      { label: "ROTE (the return P/TBV is read against)", value: val.excessReturn.priceToTangibleBookVsRote.rotePct, unit: "%", source: "computed.valuation.excessReturn.priceToTangibleBookVsRote", asOf: val.excessReturn.asOf },
+      { label: "justified P/TBV (stable-growth cross-check)", value: val.excessReturn.priceToTangibleBookVsRote.justifiedPTbv, unit: "x", source: "computed.valuation.excessReturn.priceToTangibleBookVsRote", asOf: val.excessReturn.asOf },
+    );
   } else if (val.kind === "reit") {
     valFigures.push(
       { label: "REIT P/FFO", value: val.reit.pToFfo ?? null, unit: "x", source: "computed.valuation.reit", asOf: val.reit.asOf },

@@ -204,12 +204,22 @@ naming the missing one, rather than published as a complete figure.
   charge for the real-estate impairment — and both leave FFO at or above the
   definition.
 
-## 8. Follow-up for the integration owner
+## 8. Where the route metrics reach a reader
 
 `Report.routeMetrics` (optional, `RouteMetricsSchema` in `src/report/schema.ts`)
-is the contract for section 6 above, and Stage B already produces the data as
-`computed.financialMetrics`. Populating it at report assembly lives in
-`src/pipeline/stageC/passes.ts` (`assembleReport`), which WS5 does not own — so
-the field is defined and unpopulated until that hunk lands. Until then the route
-metrics reach a reader through the missing-data manifest (withheld ones) and the
-Stage B computed object.
+is populated at report assembly from `computed.financialMetrics` plus the
+excess-return model's P/TBV-against-ROTE reading, by `routeMetricsBlock` in
+`src/pipeline/compute.ts`. Both assembly paths fill it —
+`assembleReport` (`src/pipeline/stageC/passes.ts`) and `enrichDataOnlyReport`
+(`src/pipeline/stageC/dataOnlyReport.ts`) — and the field is absent entirely on
+routes with no route metrics, so a general report is unchanged.
+
+It renders inside the Valuation section on all three surfaces: the live report
+(`ValuationSection` in `src/components/report/sections.tsx`), the Markdown export
+and the print HTML. Every row shows its value or the word **withheld** beside the
+REASON it was withheld, and a stand-in is marked as one. The same figures reach
+the analyst payload: the excess-return horizon, the cost of equity, the opening
+book value, P/TBV, ROTE and the justified multiple are all payload figures.
+
+Withheld metrics also continue to reach the missing-data manifest as
+`financialMetrics.<key>`.

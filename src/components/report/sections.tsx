@@ -42,6 +42,8 @@ import type {
   Projections,
   Quality,
   Report,
+  RouteMetricRow,
+  RouteMetrics,
   Scoring,
   SourcedClaim,
   FairValue,
@@ -54,6 +56,7 @@ import type {
 import { citationOutcomeLabel } from "@/report/schema";
 import {
   formatCostUsd,
+  formatFinancialValue,
   roundedDisplayedCostTotal,
 } from "@/report/format";
 import type { ReportCompletenessPresentation } from "@/report/completeness";
@@ -896,16 +899,62 @@ function MultiplesTable({ rows }: { rows: readonly MultipleRow[] }) {
   );
 }
 
+/**
+ * WS5 (D-17): the metrics a bank, insurer or mortgage REIT leads with.
+ *
+ * A withheld metric renders its REASON, never a blank cell: a blank reads as a
+ * fetch that failed when in fact the figure was refused because the filer's
+ * tags cannot satisfy its definition. A `proxy` row is a labeled stand-in,
+ * published under its own name and marked as one.
+ */
+function RouteMetricsTable({ rows }: { rows: readonly RouteMetricRow[] }) {
+  const cols: Column<RouteMetricRow>[] = [
+    {
+      key: "label",
+      header: "metric",
+      render: (m) => (
+        <span className="mono text-muted">
+          {m.label}
+          {m.proxy ? <span className="ml-1 text-[10px] text-faint">(stand-in)</span> : null}
+        </span>
+      ),
+    },
+    {
+      key: "value",
+      header: "value",
+      align: "right",
+      render: (m) =>
+        m.value === null ? (
+          <span className="mono text-faint">withheld</span>
+        ) : (
+          <span className="mono">{formatFinancialValue(m.value, m.unit)}</span>
+        ),
+    },
+    {
+      key: "basis",
+      header: "basis / reason withheld",
+      render: (m) => (
+        <span className="text-[11px] leading-snug text-faint">{m.withheldReason ?? m.basis}</span>
+      ),
+    },
+  ];
+  return (
+    <DataTable columns={cols} rows={rows} rowKey={(m) => m.key} empty="no route metrics" />
+  );
+}
+
 export function ValuationSection({
   valuation,
   scenarioTargets,
   fairValue,
+  routeMetrics,
   index,
   openReasoning,
 }: {
   valuation: Valuation;
   scenarioTargets?: ScenarioTargets;
   fairValue?: FairValue;
+  routeMetrics?: RouteMetrics;
   index: number;
   openReasoning?: boolean;
 }) {
@@ -1041,6 +1090,19 @@ export function ValuationSection({
           })}
         </div>
       </SubBlock>
+
+      {routeMetrics ? (
+        <SubBlock
+          label={`route metrics · ${routeMetrics.route}${routeMetrics.asOf === null ? "" : ` · as of ${routeMetrics.asOf}`}`}
+        >
+          <RouteMetricsTable rows={routeMetrics.metrics} />
+          {routeMetrics.notes.map((n) => (
+            <p key={n} className="mt-2 text-[11px] leading-snug text-faint">
+              {n}
+            </p>
+          ))}
+        </SubBlock>
+      ) : null}
     </SectionFrame>
   );
 }

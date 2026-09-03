@@ -1314,7 +1314,10 @@ describe("computePiotroski — financial route", () => {
     const { current, prior, prior2 } = piotroskiPeriods();
     const r = computePiotroski(
       current,
-      { ...prior, income: { ...prior.income, netIncomeFromContinuingOperations: null } },
+      {
+        ...prior,
+        income: { date: "2024-12-31", revenue: 100, grossProfit: 40, netIncomeFromContinuingOperations: null },
+      },
       prior2,
       { financialsSuppressed: true, balanceSheetFunded: true },
     );

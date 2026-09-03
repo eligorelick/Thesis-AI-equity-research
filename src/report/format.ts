@@ -19,7 +19,7 @@ const UNIT_ALIASES: Record<string, CanonicalFinancialUnit> = {
   "%": "percent", pct: "percent", percent: "percent",
   x: "multiple", "×": "multiple", multiple: "multiple",
   usd: "usd", "$": "usd", currency: "usd", usd_large: "usd", "usd-large": "usd", "$_large": "usd",
-  "usd/share": "usd-per-share", "$/share": "usd-per-share",
+  "usd/share": "usd-per-share", "$/share": "usd-per-share", "currency/share": "usd-per-share",
   large: "large-count", count_large: "large-count",
   bps: "basis-points",
   years: "years", yr: "years", y: "years",

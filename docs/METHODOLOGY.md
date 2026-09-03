@@ -199,21 +199,50 @@ belong in EV; undisclosed means zero, following the provider's convention. The
 DCF's equity bridge is the same identity read backwards: equity value =
 EV − net debt − minority interest − preferred equity.
 
-**Operating leases are excluded by default**, and the option to include them is
-`THESIS_EV_INCLUDE_LEASES=1`. Off is the correct default rather than a timid
-one: under US GAAP (ASC 842) the operating-lease cost stays in operating
-expenses, so EBITDA is already *after* it, and adding the lease liability to EV
-as well double-counts the leases in EV/EBITDA. The provider's `totalDebt`
-already contains the lease liability, so the default subtracts it back out.
+**The OPERATING-lease liability is excluded by default; the finance-lease
+liability is not.** The option to keep the operating slice in is
+`THESIS_EV_INCLUDE_LEASES=1`. The split is the whole point. Under US GAAP
+(ASC 842) operating-lease cost stays in operating expenses, so EBIT and EBITDA
+are already *after* it and adding that liability to EV as well double-counts the
+leases in EV/EBITDA. Finance-lease cost is *not* in either figure: it is split
+between right-of-use amortisation, which EBITDA adds back, and interest, which
+sits below EBIT. The finance-lease liability is therefore debt in both frames
+and stays in enterprise value and in net debt, always. The provider's
+`totalDebt` contains both, so the default subtracts the operating slice back out
+and leaves the finance slice where it is.
 
-Both enterprise values — with and without leases — are computed and shown in
-the assumption block, along with the lease liability itself. When leases are
-not disclosed separately they cannot be separated from total debt, and that is
-disclosed rather than guessed. Turning the option on raises a warning-level
-manifest entry stating that EV/EBITDA then pairs a lease-inclusive numerator
-with a lease-expensed denominator and is not comparable to the default basis.
-The DCF equity bridge follows the identical convention through net debt, so the
-two can never disagree.
+Only the EDGAR route resolves the split: the lease chain there sums a separately
+resolved operating and finance liability, and the operating slice is published
+as its own balance-sheet field. FMP publishes one combined
+`capitalLeaseObligations` and no split, so on that route **no lease adjustment
+is made at all** — enterprise value is reported as-is and an info-level
+`valuation.multiples.enterpriseValue.leases` manifest entry says that removing
+the combined figure would strip an unknown amount of finance-lease debt out of
+EV. The same entry fires when no lease liability is disclosed at all. Nothing is
+guessed, and nothing unknown is netted.
+
+Both enterprise values — as reported, and less the operating-lease liability —
+are computed, together with the total lease liability and its finance slice.
+They are published in the EV bridge basis string, which is a computed valuation
+note and is quoted verbatim into the EV/EBITDA and EV/sales basis lines and into
+the DCF equity-bridge note; there is no separate assumption-block row for them.
+Turning the option on raises a warning-level manifest entry stating that
+EV/EBITDA then pairs a lease-inclusive numerator with a lease-expensed
+denominator and is not comparable to the default basis. The DCF equity bridge
+follows the identical convention through net debt, so the two can never
+disagree.
+
+**The own-history enterprise value carries the same adjustment.** Each
+historical quarter window removes *its own* operating-lease liability whenever
+the current EV removed one, so the rank compares like with like. A window whose
+balance sheet discloses no operating-lease liability cannot be put on that basis;
+its EV/EBITDA and EV/sales are dropped from the distribution — never ranked
+against a differently-defined history — and the count of dropped windows is
+disclosed as `valuation.multiples.ownHistory.evLeaseBasis`. The vendor's
+pre-baked EV ratios are built on the vendor's own lease-inclusive enterprise
+value, so when the adjustment fires those bands are withheld under the same
+manifest entry rather than published on a basis the current number does not
+share.
 
 ---
 

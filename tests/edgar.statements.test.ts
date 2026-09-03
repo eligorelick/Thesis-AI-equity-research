@@ -599,6 +599,40 @@ describe("buildStatementsFromCompanyFacts — lease obligations belong in total 
     });
   });
 
+  it("publishes the OPERATING slice on its own, so only that slice can leave enterprise value", () => {
+    // WS6 review (BLOCKER 1): EBIT and EBITDA are AFTER operating-lease cost
+    // (ASC 842 keeps it in operating expenses) but BEFORE finance-lease cost
+    // (right-of-use amortisation + interest), so only the operating liability
+    // may be netted out of EV and the DCF's net debt.
+    const built = buildStatementsFromCompanyFacts(
+      addTags(appleLike(), {
+        OperatingLeaseLiabilityCurrent: [{ ...FY25_INSTANT, val: 1.6 }],
+        OperatingLeaseLiabilityNoncurrent: [{ ...FY25_INSTANT, val: 10.91 }],
+        FinanceLeaseLiability: [{ ...FY25_INSTANT, val: 1.23 }],
+      }),
+      OPTS,
+    );
+    expect(built.balanceAnnual.rows.find((r) => r.date === "2025-09-27")).toMatchObject({
+      capitalLeaseObligations: 13.74,
+      operatingLeaseLiability: 12.51, // 1.6 + 10.91; the 1.23 of finance leases stays debt
+    });
+  });
+
+  it("leaves the operating slice null when the filer tags finance leases only", () => {
+    const built = buildStatementsFromCompanyFacts(
+      addTags(appleLike(), {
+        FinanceLeaseLiabilityCurrent: [{ ...FY25_INSTANT, val: 0.4 }],
+        FinanceLeaseLiabilityNoncurrent: [{ ...FY25_INSTANT, val: 0.8 }],
+      }),
+      OPTS,
+    );
+    const fy25 = built.balanceAnnual.rows.find((r) => r.date === "2025-09-27")!;
+    expect(fy25.capitalLeaseObligations).toBe(1.2);
+    // Never zero: an untagged operating liability is unknown, and the EV bridge
+    // reports enterprise value as-is rather than removing a guess.
+    expect(fy25.operatingLeaseLiability).toBeNull();
+  });
+
   it("prefers a tagged operating-lease total over the current + noncurrent split", () => {
     const built = buildStatementsFromCompanyFacts(
       addTags(appleLike(), {

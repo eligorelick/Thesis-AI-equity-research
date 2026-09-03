@@ -165,6 +165,14 @@ export interface FmpBalanceSheetRow extends FmpStatementRow {
   totalLiabilities?: number;
   deferredRevenue?: number;
   capitalLeaseObligations?: number;
+  /**
+   * WS6 review (BLOCKER 1): the OPERATING slice of `capitalLeaseObligations`.
+   * FMP publishes no such field, so this is present only on the EDGAR-built
+   * statements (`src/edgar/statements.ts`), where the lease chain resolves the
+   * operating and finance liabilities separately. Absent ⇒ the split is
+   * unknown and the EV bridge leaves enterprise value as reported.
+   */
+  operatingLeaseLiability?: number;
   treasuryStock?: number;
   preferredStock?: number;
   commonStock?: number;

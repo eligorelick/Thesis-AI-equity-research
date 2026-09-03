@@ -513,8 +513,16 @@ describe("payload determinism + provenance", () => {
       // are reported), states the enterprise-value bridge both with and
       // without lease liabilities, and publishes the own-history figure as a
       // rank among N quarters rather than a percentile.
-      fingerprint: "1.3.0:2307bf33",
-      promptBytes: 88_933,
+      // Changed 2026-09-02 by the WS6 financial-correctness review. The EV
+      // bridge and the DCF equity bridge now remove ONLY the operating-lease
+      // liability (EBIT and EBITDA are before finance-lease cost, so that
+      // liability is debt in both frames), the own-history EV carries the same
+      // adjustment, the growth anchor states its clamp, the free-cash-flow
+      // conversion names the definition it is graded on, and the multiples
+      // table publishes N beside each rank. Every one of those is extra stated
+      // basis in the prompt, so promptBytes/financeHash/provenanceHash move.
+      fingerprint: "1.3.0:94515687",
+      promptBytes: 88_987,
       provenanceCount: 306,
       provenanceHash: "67b88217",
       provenanceIdsHash: "1e316594",
@@ -528,7 +536,7 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "ef06bbcf",
+      financeHash: "3ebe00c7",
     });
   });
 

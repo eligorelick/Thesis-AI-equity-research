@@ -1773,8 +1773,13 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
         intangibleAssets: num(balPoint.intangibleAssets),
         minorityInterest: num(balPoint.minorityInterest),
         preferredStock: num(balPoint.preferredStock),
-        // WS6 (D-19): lease liabilities for the EV bridge.
+        // WS6 (D-19): lease liabilities for the EV bridge. The TOTAL is
+        // disclosure context; only the OPERATING slice is netted out of EV
+        // (WS6 review, BLOCKER 1), and the EDGAR route is the only one that
+        // resolves the split — on the FMP route it is absent and EV is
+        // reported as-is with the leases gap raised.
         capitalLeaseObligations: num(balPoint.capitalLeaseObligations),
+        operatingLeaseLiability: num(balPoint.operatingLeaseLiability),
       }
     : null;
 
@@ -1892,6 +1897,7 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
     preferred: balPoint ? num(balPoint.preferredStock) : null,
     // WS6 (D-19): the DCF equity bridge follows the same lease convention.
     leaseLiability: balPoint ? num(balPoint.capitalLeaseObligations) : null,
+    operatingLeaseLiability: balPoint ? num(balPoint.operatingLeaseLiability) : null,
     includeLeasesInEv: evIncludeLeases,
     dcfInputs,
     multiples,
@@ -2099,6 +2105,9 @@ function mergeQuarterly(
       cashAndShortTermInvestments: bal ? num(bal.cashAndShortTermInvestments) : null,
       preferredStock: bal ? num(bal.preferredStock) : null,
       minorityInterest: bal ? num(bal.minorityInterest) : null,
+      // WS6 review (BLOCKER 2): the lease slice too, so a lease-adjusted current
+      // EV is ranked against a lease-adjusted history.
+      operatingLeaseLiability: bal ? num(bal.operatingLeaseLiability) : null,
     };
   });
 }

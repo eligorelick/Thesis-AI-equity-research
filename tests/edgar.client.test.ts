@@ -9,7 +9,9 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getProviderLimiter, makeLimiter, setProviderLimiter } from "@/providers/http";
 import {
+  EDGAR_MAX_RPS,
   EDGAR_USER_AGENT,
   hasConfiguredEdgarIdentity,
   EdgarClient,
@@ -1243,3 +1245,91 @@ describe.runIf(process.env.EDGAR_LIVE_SMOKE === "1")(
     });
   },
 );
+
+
+// ---------------------------------------------------------------------------
+// WS4: the SEC fair-access contract. SEC publishes a 10 request/second ceiling
+// and 403s any request without a declared User-Agent; exceeding either gets an
+// IP blocked, which for a local-first app means every later report fails. The
+// pace, the header and the back-off were implemented but only the header and
+// the 403 were pinned, so a change to the shared limiter or to the 429 branch
+// could have gone unnoticed.
+// ---------------------------------------------------------------------------
+
+describe("EDGAR fair-access limits (WS4)", () => {
+  it("declares a rate at or under SEC's 10 requests a second and uses it as the shared edgar limiter", () => {
+    expect(EDGAR_MAX_RPS).toBeLessThanOrEqual(10);
+    const limiter = getProviderLimiter("edgar");
+    expect(limiter.ratePerSec).toBe(EDGAR_MAX_RPS);
+    // Burst is what a cold start can spend at once; it must respect the same
+    // ceiling or the first N requests of a report would exceed it.
+    expect(limiter.burst).toBeLessThanOrEqual(10);
+  });
+
+  it("a transport with no rate override waits on that shared limiter rather than firing at will", async () => {
+    const original = getProviderLimiter("edgar");
+    try {
+      const limiter = makeLimiter(EDGAR_MAX_RPS, EDGAR_MAX_RPS);
+      setProviderLimiter("edgar", limiter);
+      // Spend the whole burst, so the next request must wait for a refill.
+      for (let i = 0; i < EDGAR_MAX_RPS; i++) expect(limiter.tryTake(1)).toBe(true);
+      expect(limiter.tryTake(1)).toBe(false);
+
+      let hits = 0;
+      const fetchFn: typeof fetch = () => {
+        hits++;
+        return Promise.resolve(new Response("BODY", { status: 200 }));
+      };
+      // No maxRps: this is the production wiring.
+      const transport = createDefaultEdgarTransport({ fetchFn });
+      const started = Date.now();
+      const res = await transport.fetchText("https://www.sec.gov/paced", { ttlMs: 0 });
+      const waited = Date.now() - started;
+
+      expect(res.status).toBe(200);
+      expect(hits).toBe(1);
+      // One token at EDGAR_MAX_RPS/s ≈ 1000/EDGAR_MAX_RPS ms; assert most of it
+      // rather than the exact figure, so a slow machine cannot fail the test.
+      expect(waited).toBeGreaterThanOrEqual((1000 / EDGAR_MAX_RPS) * 0.5);
+    } finally {
+      setProviderLimiter("edgar", original);
+    }
+  });
+
+  it("sends the declared User-Agent on every request, not only the first", async () => {
+    const seen: (string | undefined)[] = [];
+    const encodings: (string | undefined)[] = [];
+    const fetchFn: typeof fetch = (_input, init) => {
+      const headers = init?.headers as Record<string, string>;
+      seen.push(headers["User-Agent"]);
+      encodings.push(headers["Accept-Encoding"]);
+      return Promise.resolve(new Response("BODY", { status: 200 }));
+    };
+    const transport = createDefaultEdgarTransport({ fetchFn, maxRps: 1000 });
+    // Distinct URLs, so neither is served from the TTL cache.
+    await transport.fetchText("https://www.sec.gov/a", { ttlMs: 0 });
+    await transport.fetchText("https://www.sec.gov/b", { ttlMs: 0 });
+    await transport.fetchText("https://data.sec.gov/c", { ttlMs: 0 });
+    expect(seen).toEqual([EDGAR_USER_AGENT, EDGAR_USER_AGENT, EDGAR_USER_AGENT]);
+    expect(seen.every((ua) => typeof ua === "string" && ua.includes("@"))).toBe(true);
+    expect(encodings.every((enc) => enc === "gzip, deflate")).toBe(true);
+  });
+
+  it("429 backs off exactly like a 403: retryable error, cooldown, no further requests", async () => {
+    const { transport, calls } = fakeTransport({
+      "submissions/": { status: 429, body: "Too Many Requests" },
+    });
+    const client = new EdgarClient({ transport, cooldownMs: 60_000 });
+    await expect(client.submissions(320193)).rejects.toBeInstanceOf(EdgarRateLimitError);
+    expect(client.cooldownRemainingMs()).toBeGreaterThan(0);
+    const callsBefore = calls.length;
+    // Inside the cooldown the client must not touch the transport at all —
+    // retrying into a rate limit is what gets an IP blocked.
+    await expect(client.companyFacts(320193)).rejects.toBeInstanceOf(EdgarRateLimitError);
+    expect(calls.length).toBe(callsBefore);
+    await client.submissions(320193).catch((e: unknown) => {
+      expect((e as EdgarRateLimitError).retryable).toBe(true);
+      expect((e as EdgarRateLimitError).retryAfterMs).toBeGreaterThan(0);
+    });
+  });
+});

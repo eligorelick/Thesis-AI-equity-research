@@ -234,7 +234,11 @@ describe("buildDataBundle without an FMP key", () => {
     expect(bundle.edgar.registrant?.sic).toBe("3571");
     expect(bundle.sourceManifest["statements.incomeAnnual"]?.provider).toBe("edgar");
     expect(bundle.sourceManifest["eodPrices"]?.provider).toBe("yahoo");
-    const keyless = bundle.gaps.filter((g) => g.field.startsWith("keyless."));
+    // WS4: narrowed to the member-replacement gaps `keyless.<member>`. The
+    // sub-field entries added since (keyless.sharesFloat.publicFloat) disclose
+    // HOW a derived number was built and can legitimately warn — a public float
+    // measured more than six months before the analysis date, for one.
+    const keyless = bundle.gaps.filter((g) => /^keyless\.[a-zA-Z]+$/.test(g.field));
     expect(keyless.length).toBeGreaterThanOrEqual(10);
     expect(keyless.every((g) => g.severity === "info" && g.expected === true)).toBe(true);
     // The original "no API key + no fixture" gaps for replaced members are gone.

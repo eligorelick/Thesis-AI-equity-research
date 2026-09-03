@@ -1,0 +1,173 @@
+{
+  "_fixture": "synthetic-structure — hand-built, fictional issuer; structurally faithful to https://data.sec.gov/api/xbrl/companyfacts/CIK##########.json. Not observed SEC data.",
+  "_shape": "A three-class registrant states dei:EntityCommonStockSharesOutstanding once per class of registered common stock. companyfacts drops the class dimension, so the three facts differ only by value while sharing end, accn, form and filed.",
+  "cik": 9900001,
+  "entityName": "Tri-Class Example Holdings Inc",
+  "facts": {
+    "dei": {
+      "EntityCommonStockSharesOutstanding": {
+        "label": "Entity Common Stock, Shares Outstanding",
+        "description": "Indicate number of shares or other units outstanding of each of registrant's classes of capital or common stock.",
+        "units": {
+          "shares": [
+            {
+              "end": "2026-02-13",
+              "val": 5000000,
+              "accn": "0009900001-26-000004",
+              "fy": 2025,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2026-02-20"
+            },
+            {
+              "end": "2026-02-13",
+              "val": 3000000,
+              "accn": "0009900001-26-000004",
+              "fy": 2025,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2026-02-20"
+            },
+            {
+              "end": "2026-02-13",
+              "val": 2000000,
+              "accn": "0009900001-26-000004",
+              "fy": 2025,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2026-02-20"
+            },
+            {
+              "end": "2025-02-14",
+              "val": 4800000,
+              "accn": "0009900001-25-000004",
+              "fy": 2024,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2025-02-21"
+            },
+            {
+              "end": "2025-02-14",
+              "val": 3000000,
+              "accn": "0009900001-25-000004",
+              "fy": 2024,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2025-02-21"
+            }
+          ]
+        }
+      },
+      "EntityPublicFloat": {
+        "label": "Entity Public Float",
+        "units": {
+          "USD": [
+            {
+              "end": "2025-06-30",
+              "val": 640000000,
+              "accn": "0009900001-26-000004",
+              "fy": 2025,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2026-02-20"
+            }
+          ]
+        }
+      }
+    },
+    "us-gaap": {
+      "Revenues": {
+        "label": "Revenues",
+        "units": {
+          "USD": [
+            {
+              "start": "2025-01-01",
+              "end": "2025-12-31",
+              "val": 820000000,
+              "accn": "0009900001-26-000004",
+              "fy": 2025,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2026-02-20"
+            },
+            {
+              "start": "2024-01-01",
+              "end": "2024-12-31",
+              "val": 740000000,
+              "accn": "0009900001-25-000004",
+              "fy": 2024,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2025-02-21"
+            }
+          ]
+        }
+      },
+      "NetIncomeLoss": {
+        "label": "Net Income (Loss)",
+        "units": {
+          "USD": [
+            {
+              "start": "2025-01-01",
+              "end": "2025-12-31",
+              "val": 96000000,
+              "accn": "0009900001-26-000004",
+              "fy": 2025,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2026-02-20"
+            }
+          ]
+        }
+      },
+      "Assets": {
+        "label": "Assets",
+        "units": {
+          "USD": [
+            {
+              "end": "2025-12-31",
+              "val": 1450000000,
+              "accn": "0009900001-26-000004",
+              "fy": 2025,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2026-02-20"
+            }
+          ]
+        }
+      },
+      "StockholdersEquity": {
+        "label": "Stockholders' Equity",
+        "units": {
+          "USD": [
+            {
+              "end": "2025-12-31",
+              "val": 610000000,
+              "accn": "0009900001-26-000004",
+              "fy": 2025,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2026-02-20"
+            }
+          ]
+        }
+      },
+      "CommonStockSharesOutstanding": {
+        "label": "Common Stock, Shares, Outstanding",
+        "units": {
+          "shares": [
+            {
+              "end": "2025-12-31",
+              "val": 9900000,
+              "accn": "0009900001-26-000004",
+              "fy": 2025,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2026-02-20"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

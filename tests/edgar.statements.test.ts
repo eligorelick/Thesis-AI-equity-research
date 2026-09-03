@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 import { buildStatementsFromCompanyFacts } from "@/edgar/statements";
 import type { CompanyFacts } from "@/edgar/xbrl";
@@ -307,7 +310,14 @@ describe("buildStatementsFromCompanyFacts — edge cases", () => {
   it("exposes cover-page shares and float, newest first, and returns empty results with gaps for an empty payload", () => {
     const built = buildStatementsFromCompanyFacts(appleLike(), OPTS);
     expect(built.shares).toEqual({
-      outstanding: { value: 14_776, asOf: "2025-10-17", basis: "dei cover page" },
+      outstanding: {
+        value: 14_776,
+        asOf: "2025-10-17",
+        basis: "dei cover page",
+        // WS4: the cover count now names the filing it came from, because a
+        // multi-class count is the SUM of that filing's per-class facts.
+        filing: { accn: "0000000000-26-000000", filed: "2025-10-31", form: "10-K" },
+      },
       publicFloat: { value: 3_000_000, asOf: "2025-03-28" },
     });
     const empty = buildStatementsFromCompanyFacts({ cik: 1, entityName: "Empty", facts: {} }, OPTS);
@@ -675,7 +685,12 @@ describe("buildStatementsFromCompanyFacts — multi-class share counts", () => {
       }),
       OPTS,
     );
-    expect(built.shares.outstanding).toEqual({ value: 14_776, asOf: "2025-10-17", basis: "dei cover page" });
+    expect(built.shares.outstanding).toEqual({
+      value: 14_776,
+      asOf: "2025-10-17",
+      basis: "dei cover page",
+      filing: { accn: "0000000000-26-000000", filed: "2025-10-31", form: "10-K" },
+    });
   });
 
   it("stays null when neither concept is filed", () => {
@@ -779,7 +794,9 @@ describe("buildStatementsFromCompanyFacts — debt chain overlaps", () => {
   it("still sums commercial paper when the filer tags no short-term borrowings", () => {
     const built = row(bare({ CommercialPaper: [...at(50)], LongTermDebtCurrent: [...at(30)] }));
     expect(built.rows[0]).toMatchObject({ shortTermDebt: 80, totalDebt: 80 });
-    expect(built.notes).toContain("shortTermDebt 2025-12-31: from LongTermDebtCurrent + CommercialPaper");
+    // The composition note lists the tags in the order the D-13 chain checks
+    // them: short-term borrowings, commercial paper, then current maturities.
+    expect(built.notes).toContain("shortTermDebt 2025-12-31: from CommercialPaper + LongTermDebtCurrent");
   });
 
   it("names the winning tags for the three debt fields on every row", () => {
@@ -1361,18 +1378,48 @@ describe("buildStatementsFromCompanyFacts — Caterpillar-style balance sheets",
     expect(built.balanceAnnual.substitutions).toEqual([]);
   });
 
-  it("takes current maturities from the debt maturity schedule when no current-debt tag is filed", () => {
-    // CAT FY2025: ShortTermBorrowings 5,514 + first-year maturities 7,120 + LongTermDebtNoncurrent 30,696.
+  it("takes current maturities from the debt maturity schedule only when every balance-sheet current-debt tag misses", () => {
+    // House rule D-13: ShortTermBorrowings, CommercialPaper, DebtCurrent and
+    // LongTermDebtCurrent are checked first; the maturity schedule is a NOTE
+    // disclosure, so it serves only when all of them miss.
+    const built = build(catLike({
+      LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
+      LongTermDebtNoncurrent: at(30_696),
+    }));
+    const fy = built.balanceAnnual.rows[0]!;
+    expect(fy.shortTermDebt).toBe(7_120);
+    expect(fy.longTermDebt).toBe(30_696);
+    expect(fy.totalDebt).toBe(37_816);
+    expect(built.balanceAnnual.notes.some((n) => /current maturities taken from the debt maturity schedule \(LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths 7120\).*CURRENT MATURITIES ONLY.*filed annually only/.test(n))).toBe(true);
+    // The stand-in is disclosed per period, not only in the run log.
+    expect(built.balanceAnnual.substitutions).toEqual([
+      {
+        field: "shortTermDebt",
+        periods: ["2025-12-31"],
+        text: expect.stringMatching(/^current maturities of long-term debt from the debt maturity schedule/),
+      },
+    ]);
+  });
+
+  it("leaves the schedule figure out when another current-debt tag resolved, and says what that omits", () => {
+    // CAT FY2025 as filed: ShortTermBorrowings 5,514 beside first-year
+    // maturities of 7,120. Before D-13 the two were summed to 12,634; the
+    // house rule now takes the balance-sheet line alone and discloses that the
+    // current maturities are not inside it. (Changed deliberately: the previous
+    // test encoded the pre-D-13 sum.)
     const built = build(catLike({
       ShortTermBorrowings: at(5_514),
       LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
       LongTermDebtNoncurrent: at(30_696),
     }));
     const fy = built.balanceAnnual.rows[0]!;
-    expect(fy.shortTermDebt).toBe(12_634);
-    expect(fy.longTermDebt).toBe(30_696);
-    expect(fy.totalDebt).toBe(43_330);
-    expect(built.balanceAnnual.notes.some((n) => /current maturities taken from the debt maturity schedule \(LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths 7120\)/.test(n))).toBe(true);
+    expect(fy.shortTermDebt).toBe(5_514);
+    expect(fy.totalDebt).toBe(36_210);
+    expect(
+      built.balanceAnnual.notes.some((n) =>
+        /the debt maturity schedule reports 7120 of long-term debt due within a year.*NOT added.*may exclude the current maturities of long-term debt/.test(n),
+      ),
+    ).toBe(true);
   });
 
   it("drops the schedule figure beside a balance-sheet current-debt tag", () => {
@@ -1394,5 +1441,244 @@ describe("buildStatementsFromCompanyFacts — Caterpillar-style balance sheets",
     expect(built.balanceAnnual.notes).toContain(
       "longTermDebt 2025-12-31: LongTermDebt less current maturities (LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths 7120)",
     );
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * WS4 — versioned tag synonyms, EBIT non-operating adjustments, multi-class
+ * share counts, the duplicate-period rule and one filing lineage per derived
+ * quarter.
+ * ------------------------------------------------------------------------- */
+
+describe("buildStatementsFromCompanyFacts — per-tag interest stand-in wording", () => {
+  const K = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" } as const;
+  const annual = (val: number): Pt[] => [{ start: "2025-01-01", end: "2025-12-31", val, ...K }];
+  const base = (extra: Record<string, Pt[]>): CompanyFacts =>
+    facts({
+      Revenues: annual(64_000),
+      NetIncomeLoss: annual(6_200),
+      Assets: [{ end: "2025-12-31", val: 210_000, ...K }],
+      OperatingIncomeLoss: annual(11_151),
+      ...extra,
+    });
+
+  it("says InterestPaidNet EXCLUDES capitalized interest", () => {
+    const built = buildStatementsFromCompanyFacts(base({ InterestPaidNet: annual(1_842) }), { ...OPTS, symbol: "CAT" });
+    expect(built.incomeAnnual.rows[0]!.interestExpense).toBe(1_842);
+    const text = built.incomeAnnual.substitutions[0]!.text;
+    expect(text).toMatch(/net of capitalized interest/);
+    expect(text).toMatch(/EXCLUDES the interest capitalized into assets/);
+  });
+
+  it("says InterestPaid INCLUDES capitalized interest", () => {
+    const built = buildStatementsFromCompanyFacts(base({ InterestPaid: annual(1_900) }), { ...OPTS, symbol: "CAT" });
+    expect(built.incomeAnnual.rows[0]!.interestExpense).toBe(1_900);
+    const text = built.incomeAnnual.substitutions[0]!.text;
+    expect(text).toMatch(/gross/);
+    expect(text).toMatch(/INCLUDES the interest capitalized into assets/);
+  });
+
+  it("prefers the net cash tag over the gross one when a filer files both", () => {
+    const built = buildStatementsFromCompanyFacts(
+      base({ InterestPaidNet: annual(1_842), InterestPaid: annual(1_900) }),
+      { ...OPTS, symbol: "CAT" },
+    );
+    expect(built.incomeAnnual.rows[0]!.interestExpense).toBe(1_842);
+    expect(built.incomeAnnual.substitutions[0]!.text).toMatch(/InterestPaidNet/);
+  });
+});
+
+describe("buildStatementsFromCompanyFacts — derived EBIT subtracts non-operating items", () => {
+  const K = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" } as const;
+  const annual = (val: number): Pt[] => [{ start: "2025-01-01", end: "2025-12-31", val, ...K }];
+  const pretax = (extra: Record<string, Pt[]>): CompanyFacts =>
+    facts({
+      Revenues: annual(64_000),
+      NetIncomeLoss: annual(6_200),
+      Assets: [{ end: "2025-12-31", val: 210_000, ...K }],
+      IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest: annual(7_520),
+      InterestExpense: annual(2_671),
+      ...extra,
+    });
+  const ebit = (f: CompanyFacts) => buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "PFE" }).incomeAnnual;
+
+  it("removes the non-operating aggregate and equity-method results from the derivation", () => {
+    const built = ebit(pretax({ NonoperatingIncomeExpense: annual(900), IncomeLossFromEquityMethodInvestments: annual(300) }));
+    // 7,520 + 2,671 - 900 - 300
+    expect(built.rows[0]!.operatingIncome).toBe(8_991);
+    expect(built.substitutions[0]!.text).toMatch(
+      /non-operating items subtracted from the derivation: NonoperatingIncomeExpense, IncomeLossFromEquityMethodInvestments/,
+    );
+  });
+
+  it("does not subtract InvestmentIncomeInterest twice when the aggregate that contains it resolved", () => {
+    const built = ebit(pretax({ NonoperatingIncomeExpense: annual(900), InvestmentIncomeInterest: annual(400) }));
+    expect(built.rows[0]!.operatingIncome).toBe(9_291); // 7,520 + 2,671 - 900 only
+    expect(built.substitutions[0]!.text).toMatch(
+      /not subtracted separately because the aggregate already contains them: InvestmentIncomeInterest/,
+    );
+  });
+
+  it("subtracts investment income on its own when the filer tags no aggregate", () => {
+    const built = ebit(pretax({ InvestmentIncomeInterest: annual(400) }));
+    expect(built.rows[0]!.operatingIncome).toBe(9_791); // 7,520 + 2,671 - 400
+  });
+
+  it("names the unavailable adjustments as the error band when none is filed", () => {
+    const built = ebit(pretax({}));
+    expect(built.rows[0]!.operatingIncome).toBe(10_191);
+    expect(built.substitutions[0]!.text).toMatch(
+      /error band — the filer tags none of NonoperatingIncomeExpense, InvestmentIncomeInterest, IncomeLossFromEquityMethodInvestments/,
+    );
+  });
+
+  it("never derives an EBIT for a bank-style filer", () => {
+    const bank = facts({
+      RevenuesNetOfInterestExpense: annual(180_000),
+      InterestIncomeExpenseNet: annual(90_000),
+      NetIncomeLoss: annual(57_000),
+      Assets: [{ end: "2025-12-31", val: 4_400_000, ...K }],
+      IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest: annual(72_000),
+      InterestExpense: annual(97_900),
+      NonoperatingIncomeExpense: annual(500),
+    });
+    const built = buildStatementsFromCompanyFacts(bank, { ...OPTS, symbol: "JPM" });
+    expect(built.incomeAnnual.rows[0]!.operatingIncome).toBeNull();
+    expect(built.incomeAnnual.substitutions).toEqual([]);
+  });
+});
+
+describe("buildStatementsFromCompanyFacts — multi-class cover-page share counts", () => {
+  const multiClass = (): CompanyFacts =>
+    JSON.parse(
+      readFileSync(path.join(process.cwd(), "fixtures", "edgar", "multiclass_companyfacts.json"), "utf8"),
+    ) as CompanyFacts;
+
+  it("sums the per-class counts of one filing and discloses the breakdown", () => {
+    const built = buildStatementsFromCompanyFacts(multiClass(), { ...OPTS, symbol: "TCEH", cik: "0009900001" });
+    expect(built.shares.outstanding).toMatchObject({
+      value: 10_000_000,
+      asOf: "2026-02-13",
+      basis: "dei cover page",
+      classes: [5_000_000, 3_000_000, 2_000_000],
+    });
+    expect(built.shares.outstanding?.filing).toMatchObject({ accn: "0009900001-26-000004", form: "10-K" });
+  });
+
+  it("carries no class breakdown for a single-class filer", () => {
+    const built = buildStatementsFromCompanyFacts(appleLike(), OPTS);
+    expect(built.shares.outstanding).toMatchObject({ value: 14_776, basis: "dei cover page" });
+    expect(built.shares.outstanding?.classes).toBeUndefined();
+  });
+
+  it("counts a byte-identical repeat of one class once", () => {
+    const f = multiClass();
+    const unit = (f.facts.dei!.EntityCommonStockSharesOutstanding as { units: { shares: unknown[] } }).units.shares;
+    unit.push(structuredClone(unit[0]));
+    const built = buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "TCEH", cik: "0009900001" });
+    expect(built.shares.outstanding?.value).toBe(10_000_000);
+  });
+});
+
+describe("buildStatementsFromCompanyFacts — duplicate periods and restatements", () => {
+  const K = { form: "10-K", fp: "FY", fy: 2025 } as const;
+  const restated = (originalRevenue: number, revisedRevenue: number): CompanyFacts =>
+    facts({
+      Revenues: [
+        { start: "2025-01-01", end: "2025-12-31", val: originalRevenue, ...K, filed: "2026-02-13", accn: "0000000000-26-000001" },
+        { start: "2025-01-01", end: "2025-12-31", val: revisedRevenue, ...K, filed: "2027-02-12", accn: "0000000000-27-000001" },
+      ],
+      NetIncomeLoss: [
+        { start: "2025-01-01", end: "2025-12-31", val: 57_048, ...K, filed: "2026-02-13", accn: "0000000000-26-000001" },
+      ],
+      Assets: [{ end: "2025-12-31", val: 4_424_900, ...K, filed: "2026-02-13", accn: "0000000000-26-000001" }],
+    });
+
+  it("keeps the last-filed value, retains the superseded one as original, and flags a material move", () => {
+    const built = buildStatementsFromCompanyFacts(restated(182_447, 190_000), { ...OPTS, symbol: "JPM" });
+    const row = built.incomeAnnual.rows[0] as Record<string, unknown>;
+    expect(row.revenue).toBe(190_000);
+    expect(row.original).toMatchObject({
+      revenue: { value: 182_447, accn: "0000000000-26-000001", filed: "2026-02-13", form: "10-K" },
+    });
+    expect(built.incomeAnnual.restatements).toEqual([
+      {
+        date: "2025-12-31",
+        field: "revenue",
+        original: 182_447,
+        restated: 190_000,
+        changePct: expect.closeTo(4.1399, 3),
+        originalFiling: { accn: "0000000000-26-000001", filed: "2026-02-13", form: "10-K" },
+        restatedFiling: { accn: "0000000000-27-000001", filed: "2027-02-12", form: "10-K" },
+      },
+    ]);
+    expect(row.restatement).toEqual(built.incomeAnnual.restatements);
+    expect(built.incomeAnnual.notes.some((n) => /revenue restated from 182447 .* to 190000 .*\+4\.14%/.test(n))).toBe(true);
+  });
+
+  it("keeps the original value but raises no flag for a move within one percent", () => {
+    const built = buildStatementsFromCompanyFacts(restated(182_447, 183_000), { ...OPTS, symbol: "JPM" });
+    const row = built.incomeAnnual.rows[0] as Record<string, unknown>;
+    expect(row.revenue).toBe(183_000);
+    expect((row.original as Record<string, { value: number }>).revenue.value).toBe(182_447);
+    expect(built.incomeAnnual.restatements).toEqual([]);
+    expect(row.restatement).toBeUndefined();
+  });
+
+  it("adds neither key when no period was refiled with a different value", () => {
+    const built = buildStatementsFromCompanyFacts(appleLike(), OPTS);
+    const row = built.incomeAnnual.rows[0] as Record<string, unknown>;
+    expect(row.original).toBeUndefined();
+    expect(built.incomeAnnual.restatements).toEqual([]);
+    expect(built.balanceAnnual.restatements).toEqual([]);
+  });
+});
+
+describe("buildStatementsFromCompanyFacts — one filing lineage per derived quarter", () => {
+  /** FY revenue plus Q3 year-to-date revenue, optionally restated in a later filing. */
+  const lineage = (opts: { originalYtd: boolean; laterYtd: boolean }): CompanyFacts => {
+    const rows: Pt[] = [
+      { start: "2025-01-01", end: "2025-12-31", val: 400, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13", accn: "0000000000-26-000001" },
+    ];
+    if (opts.originalYtd) {
+      rows.push({ start: "2025-01-01", end: "2025-09-30", val: 300, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-10-30", accn: "0000000000-25-000003" });
+    }
+    if (opts.laterYtd) {
+      rows.push({ start: "2025-01-01", end: "2025-09-30", val: 280, form: "10-Q", fp: "Q3", fy: 2025, filed: "2026-05-01", accn: "0000000000-26-000009" });
+    }
+    return facts({
+      Revenues: rows,
+      NetIncomeLoss: [{ start: "2025-01-01", end: "2025-12-31", val: 100, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" }],
+      Assets: [
+        { end: "2025-12-31", val: 900, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" },
+        { end: "2025-09-30", val: 880, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-10-30" },
+      ],
+    });
+  };
+  const q4Revenue = (f: CompanyFacts): { value: number | null; notes: string[] } => {
+    const built = buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "LIN" });
+    const row = built.incomeQuarterly.rows.find((r) => r.date === "2025-12-31");
+    return { value: row?.revenue ?? null, notes: built.incomeQuarterly.notes };
+  };
+
+  it("derives the fourth quarter from the year-to-date copy the annual filing itself reported", () => {
+    expect(q4Revenue(lineage({ originalYtd: true, laterYtd: false })).value).toBe(100); // 400 - 300
+  });
+
+  it("keeps using that copy when a LATER filing restated the year-to-date figure", () => {
+    // The dedup winner for the year-to-date period is the 2026-05-01 copy (280),
+    // but it belongs to a filing the 10-K could not have known about: netting it
+    // against the 10-K FY figure would publish a quarter neither filing reported.
+    expect(q4Revenue(lineage({ originalYtd: true, laterYtd: true })).value).toBe(100);
+  });
+
+  it("refuses the derivation, and says why, when every year-to-date copy is younger than the annual fact", () => {
+    const out = q4Revenue(lineage({ originalYtd: false, laterYtd: true }));
+    expect(out.value).toBeNull();
+    expect(
+      out.notes.some((n) =>
+        /Revenues 2025-12-31: FY − YTD not derived — no year-to-date fact filed on or before the 10-K of 2026-02-13 .*mix two filing lineages/.test(n),
+      ),
+    ).toBe(true);
   });
 });

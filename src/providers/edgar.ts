@@ -174,6 +174,13 @@ export interface FilingDocumentEntry {
   description?: string;
 }
 
+/** One FILER block of a submission header: who filed, or was co-registered. */
+export interface FilingFiler {
+  /** 10-digit zero-padded CIK. */
+  cik10: string;
+  name: string | null;
+}
+
 export interface FilingIndex {
   documents: FilingDocumentEntry[];
   /** filename -> TYPE (e.g. "wfc-20251231.htm" -> "EX-13"). */
@@ -182,6 +189,15 @@ export interface FilingIndex {
   periodOfReport?: string;
   /** From FILED AS OF DATE (YYYY-MM-DD) when present. */
   filedAsOf?: string;
+  /**
+   * WS4: the FILER blocks of the submission header, in filed order. A single
+   * registrant files alone; a Form 8-K12B announcing a successor issuer
+   * co-registers the PREDECESSOR, and that co-registrant CIK is the only
+   * machine-readable link between the two entities — EDGAR's submissions and
+   * companyfacts endpoints do not connect them. Present only for the
+   * index-headers parse; the human -index.htm page carries no header.
+   */
+  filers?: FilingFiler[];
 }
 
 /** Minimal HTML entity unescape sufficient for the escaped SGML in index-headers.html. */
@@ -228,7 +244,31 @@ export function parseIndexHeaders(html: string): FilingIndex {
     typeByFilename,
     periodOfReport: yyyymmddToIso(period?.[1]),
     filedAsOf: yyyymmddToIso(filed?.[1]),
+    filers: parseFilers(text),
   };
+}
+
+/**
+ * The FILER blocks of a submission header, deduped by CIK, in filed order.
+ * Every block pairs COMPANY CONFORMED NAME with the CENTRAL INDEX KEY on the
+ * following line; a header with one registrant yields one entry.
+ */
+export function parseFilers(headerText: string): FilingFiler[] {
+  const filers: FilingFiler[] = [];
+  const seen = new Set<string>();
+  const re = new RegExp(
+    "COMPANY CONFORMED NAME:\\s*([^\\r\\n]*?)\\s*[\\r\\n]+\\s*CENTRAL INDEX KEY:\\s*(\\d{1,10})",
+    "gi",
+  );
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(headerText)) !== null) {
+    const cik10 = padCik(m[2]!);
+    if (seen.has(cik10)) continue;
+    seen.add(cik10);
+    const name = m[1]!.trim();
+    filers.push({ cik10, name: name === "" ? null : name });
+  }
+  return filers;
 }
 
 /**

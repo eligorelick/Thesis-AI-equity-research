@@ -1,3 +1,8 @@
+/**
+ * WS4 (D-11): the placeholder ticker here is EXMP, not DEMO. DEMO and DBNK are
+ * reserved fixture symbols that short-circuit every provider, so they cannot
+ * stand in for an ordinary ticker in a test about provider behaviour.
+ */
 import { describe, expect, it } from "vitest";
 import type { Sourced } from "@/types/core";
 import {
@@ -92,7 +97,7 @@ describe("buildDataBundle EDGAR filing boundary", () => {
       sicDescription: "Prepackaged Software",
       fiscalYearEnd: "1231",
       stateOfIncorporation: "CA",
-      tickers: ["DEMO"],
+      tickers: ["EXMP"],
       exchanges: ["TEST"],
       filings: {
         files: [],
@@ -109,7 +114,7 @@ describe("buildDataBundle EDGAR filing boundary", () => {
       fetchText(url): Promise<EdgarTransportResponse> {
         calls.push(url);
         if (url.includes("company_tickers.json")) {
-          return Promise.resolve(response(JSON.stringify({ "0": { cik_str: 0, ticker: "DEMO", title: "Thesis Example Systems" } })));
+          return Promise.resolve(response(JSON.stringify({ "0": { cik_str: 0, ticker: "EXMP", title: "Thesis Example Systems" } })));
         }
         if (url.includes("submissions/CIK0000000000.json")) return Promise.resolve(response(submissionsBody));
         if (url.includes("companyfacts/CIK0000000000.json")) {
@@ -121,7 +126,7 @@ describe("buildDataBundle EDGAR filing boundary", () => {
     const noNetworkResponse = (): Promise<Response> =>
       Promise.resolve(new Response("not available in test", { status: 404 }));
 
-    const bundle = await buildDataBundle("DEMO", {
+    const bundle = await buildDataBundle("EXMP", {
       now: () => new Date("2026-07-06T00:00:00.000Z"),
       eodYears: 1,
       fmp: createFmpClient({ apiKey: "" }),

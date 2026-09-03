@@ -69,6 +69,8 @@ const ALLOWED_MARKDOWN = new Set([
   "docs/audit/ws5-methodology.md",
   "docs/METHODOLOGY.md", // WS6
   "docs/audit/README-NOTES-WS6.md", // WS6
+  // WS4: the data-layer handover notes for the README rewrite.
+  "docs/audit/README-NOTES-WS4.md",
 ]);
 const VERIFY_GATES = [
   "npm run check:dependencies",
@@ -512,9 +514,15 @@ describe("public release contract", () => {
       read("tests/edgar.client.test.ts"),
       read("tests/edgar.extract.test.ts"),
       read("tests/edgar.xbrl.test.ts"),
+      // WS4: the hand-built three-class companyfacts payload the multi-class
+      // share-count tests read.
+      read("tests/edgar.statements.test.ts"),
+      // WS4: the hand-built 8-K12B submission header the successor-registrant
+      // tests read.
+      read("tests/edgar.successor.test.ts"),
     ].join("\n");
 
-    expect(edgarFixtures).toHaveLength(15);
+    expect(edgarFixtures).toHaveLength(17);
     for (const fixture of edgarFixtures) {
       expect(edgarTests).toContain(path.basename(fixture));
     }

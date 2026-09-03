@@ -237,6 +237,23 @@ describe("parseEnv", () => {
   });
 });
 
+describe("parseEnv — THESIS_STATEMENT_SOURCE (WS4, D-12)", () => {
+  it("defaults to auto when unset or blank", () => {
+    expect(parseEnv({}).statementSource).toBe("auto");
+    expect(parseEnv({ THESIS_STATEMENT_SOURCE: "   " }).statementSource).toBe("auto");
+  });
+
+  it("accepts the three policies, case-insensitively", () => {
+    expect(parseEnv({ THESIS_STATEMENT_SOURCE: "fmp" }).statementSource).toBe("fmp");
+    expect(parseEnv({ THESIS_STATEMENT_SOURCE: "EDGAR" }).statementSource).toBe("edgar");
+    expect(parseEnv({ THESIS_STATEMENT_SOURCE: " Auto " }).statementSource).toBe("auto");
+  });
+
+  it("rejects anything else, naming the accepted values", () => {
+    expect(() => parseEnv({ THESIS_STATEMENT_SOURCE: "sec" })).toThrow(/must be one of/);
+  });
+});
+
 describe("getConfig", () => {
   const mutatedKeys = [
     "FMP_API_KEY",

@@ -47,6 +47,8 @@ const configMocks = vi.hoisted(() => ({
     hasFredKey: false,
     hasAnthropicKey: false,
     fixtureMode: true,
+    // WS4 (D-12): statement-source policy; the default.
+    statementSource: "auto" as const,
     maxActiveJobs: 1,
     maxActiveLlmCalls: 2,
     maxJobCostUsd: null,

@@ -32,6 +32,8 @@ import { z } from "zod";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
 import { fetchWithPolicy, HttpTransportError, type FetchPolicy, type TokenBucketLimiter } from "@/providers/http";
 import { canonicalEntitySymbol, isValidSymbol, sameEntitySymbol } from "@/symbol";
+// WS4 (D-11): DEMO and DBNK are reserved fixture symbols and never reach the vendor.
+import { anyReservedFixtureSymbol, isReservedFixtureSymbol } from "@/providers/reservedSymbols";
 
 // ---------------------------------------------------------------------------
 // Cache contract (implemented by @/cache/apiCache — injected to keep this
@@ -1146,6 +1148,8 @@ function validateEntityBody(
 const DEFAULT_BASE_URL = "https://financialmodelingprep.com/stable";
 
 export class FmpClient {
+  /** Kept so `fixturesOnly()` can rebuild this client with its key dropped. */
+  private readonly config: FmpClientConfig;
   private readonly apiKey: string | undefined;
   private readonly baseUrl: string;
   private readonly fixturesDir: string;
@@ -1157,6 +1161,7 @@ export class FmpClient {
   private readonly signal: AbortSignal | undefined;
 
   constructor(config: FmpClientConfig = {}) {
+    this.config = config;
     const envKey = typeof process !== "undefined" ? process.env.FMP_API_KEY : undefined;
     const key = (config.apiKey ?? envKey ?? "").trim();
     this.apiKey = key.length > 0 ? key : undefined;
@@ -1178,8 +1183,41 @@ export class FmpClient {
   // -- core plumbing --------------------------------------------------------
 
   private async call<TRow extends FmpRawRow>(spec: CallSpec): Promise<FetchResult<FmpPayload<TRow>>> {
-    if (this.fixtureMode) return this.fromFixture<TRow>(spec);
+    if (this.fixtureMode || FmpClient.isReservedRequest(spec)) return this.fromFixture<TRow>(spec);
     return this.fromLive<TRow>(spec);
+  }
+
+  /**
+   * WS4 (D-11): a request about a reserved fixture symbol is served from
+   * fixtures even on a keyed plan, so the two fictional issuers can never be
+   * sent to the vendor and can never collide with a real ticker of the same
+   * name. The symbol is read from the call's declared entity scope, else from
+   * the request parameters, so a new method cannot forget the rule.
+   */
+  private static isReservedRequest(spec: CallSpec): boolean {
+    if (spec.entityScope !== undefined && anyReservedFixtureSymbol(spec.entityScope.expectedSymbols)) return true;
+    const single = spec.params["symbol"];
+    if (typeof single === "string" && isReservedFixtureSymbol(single)) return true;
+    const many = spec.params["symbols"];
+    return typeof many === "string" && anyReservedFixtureSymbol(many.split(","));
+  }
+
+  /** True when this symbol is served from fixtures: no key, or a reserved symbol. */
+  servesFixtures(symbol: string): boolean {
+    return this.fixtureMode || isReservedFixtureSymbol(symbol);
+  }
+
+  /**
+   * WS4 (D-11): the same client with its key dropped, so EVERY method serves
+   * fixtures. A reserved-symbol run uses this rather than the per-request rule
+   * alone, because a report also calls endpoints that carry no symbol at all
+   * (treasury rates, the market risk premium) and a reserved symbol must reach
+   * the vendor through none of them. Injected transports and clocks are kept,
+   * so a test counting calls still sees this client's traffic — of which there
+   * is none.
+   */
+  fixturesOnly(): FmpClient {
+    return this.fixtureMode ? this : new FmpClient({ ...this.config, apiKey: "" });
   }
 
   private async fromLive<TRow extends FmpRawRow>(spec: CallSpec): Promise<FetchResult<FmpPayload<TRow>>> {
@@ -1898,7 +1936,9 @@ export class FmpClient {
    * newest-first (FMP convention). Close is split-adjusted ONLY.
    */
   async historicalPriceEodFull(symbol: string, from: string, to: string): FmpResult<FmpEodBarRow> {
-    if (this.fixtureMode) {
+    // The chunking loop below bypasses `call`, so the reserved-symbol rule is
+    // applied here too (WS4, D-11).
+    if (this.servesFixtures(symbol)) {
       return this.call<FmpEodBarRow>({
         method: "historicalPriceEodFull",
         endpoint: "historical-price-eod/full",

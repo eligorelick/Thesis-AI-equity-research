@@ -56,7 +56,14 @@ import {
   type ParsedDocument,
   type SectionSpec,
 } from "@/edgar/extract";
-import { latestFactEnd, looksLikeBankTagging } from "@/edgar/xbrl";
+import { latestFactEnd, looksLikeBankTagging, type CompanyFacts } from "@/edgar/xbrl";
+// WS4 (D-14): successor registrants — the predecessor CIK and its facts.
+import {
+  SUCCESSOR_FORM,
+  predecessorFromFilers,
+  usGaapConceptCount,
+  type PredecessorFacts,
+} from "@/edgar/successor";
 import {
   FINRA_MAX_TREND_PARTITIONS,
   FINRA_TTL_SECONDS,
@@ -83,6 +90,12 @@ import {
   type InsiderSentimentMonth,
 } from "@/providers/finnhub";
 import { getConfig } from "@/config/env";
+// WS4 (D-11): the two reserved fixture symbols short-circuit every provider.
+import {
+  isReservedFixtureSymbol,
+  reservedFixtureManifestEntry,
+  reservedProviderGap,
+} from "@/providers/reservedSymbols";
 import {
   derive13FCoverage,
   resolve13FQuarter,
@@ -1039,6 +1052,7 @@ async function buildEdgarBundle(
       auditorChange8Ks: dep("auditorChange8Ks", "warn"),
       nonReliance8Ks: dep("nonReliance8Ks", "warn"),
       companyFacts: dep("companyFacts", "warn"),
+      predecessor: null, // WS4 (D-14): no CIK, so no successor lookup either.
       xbrlSummary: null,
       sic: null,
       registrant: null,
@@ -1229,6 +1243,17 @@ async function buildEdgarBundle(
     };
   }
 
+  // WS4 (D-14): a successor registrant's own facts begin at the
+  // reorganization; the predecessor's CIK is only in the 8-K12B's header.
+  const predecessor = await resolvePredecessor(
+    symbol,
+    cikRes.value.data.cik10,
+    sub.ok ? sub.value.data.recentFilings : [],
+    companyFacts.ok ? companyFacts.value.data : null,
+    edgar,
+    progress,
+  );
+
   return {
     cik: cikRes,
     latestTenK,
@@ -1239,6 +1264,7 @@ async function buildEdgarBundle(
     auditorChange8Ks,
     nonReliance8Ks,
     companyFacts,
+    predecessor,
     xbrlSummary,
     // Altman's variant selection is SIC-decisive; FMP's profile has no SIC, so
     // the submissions payload is the only source and was previously discarded.
@@ -1258,6 +1284,84 @@ async function buildEdgarBundle(
           forms: [...new Set(sub.value.data.recentFilings.map((f) => f.form))],
         }
       : null,
+  };
+}
+
+/**
+ * WS4 (D-14): resolve a successor registrant's predecessor and fetch its facts.
+ *
+ * Two extra EDGAR requests, and only in the one situation that needs them: the
+ * registrant filed a Form 8-K12B AND its own companyfacts payload carries no
+ * us-gaap history. The 8-K12B's submission header co-registers the
+ * predecessor, which is the only machine-readable link between the two CIKs;
+ * from there the predecessor's companyfacts are an ordinary fetch. Any failure
+ * degrades to `null` and a disclosed gap — never a throw, and never a guess at
+ * a CIK from a company name.
+ */
+async function resolvePredecessor(
+  symbol: string,
+  successorCik10: string,
+  recentFilings: readonly EdgarFiling[],
+  facts: CompanyFacts | null,
+  edgar: EdgarClient,
+  progress: (msg: string) => void,
+): Promise<PredecessorFacts | null> {
+  const eightK = recentFilings.find((filing) => filing.form.trim() === SUCCESSOR_FORM);
+  if (eightK === undefined) return null;
+  // A successor that HAS its own history needs no second hop: the reorganized
+  // entity may have carried the XBRL forward, in which case reaching for the
+  // predecessor would double-count periods.
+  if (usGaapConceptCount(facts) > 0) return null;
+
+  progress(`EDGAR: ${symbol} is a successor issuer (${SUCCESSOR_FORM}) — resolving the predecessor CIK`);
+  const index = await settle(
+    `edgar.predecessorIndex(${symbol})`,
+    edgar.filingIndexHeaders(successorCik10, eightK.accessionNumber),
+  );
+  if (!index.ok) return null;
+  const registrant = predecessorFromFilers(index.value.data.filers, successorCik10);
+  if (registrant === null) return null;
+
+  const predecessorFacts = await settle(
+    `edgar.predecessorFacts(${symbol})`,
+    edgar.companyFacts(registrant.cik10),
+  );
+  if (!predecessorFacts.ok) return null;
+  return {
+    ...registrant,
+    facts: predecessorFacts.value.data,
+    endpoint: predecessorFacts.value.endpoint,
+    via: { accession: eightK.accessionNumber, filed: eightK.filingDate === "" ? null : eightK.filingDate },
+    fetchedAt: predecessorFacts.value.fetchedAt,
+  };
+}
+
+/**
+ * WS4 (D-11): the EDGAR half of a reserved-symbol run. `buildEdgarBundle` is
+ * never called, so data.sec.gov is never asked about a fictional issuer — the
+ * synthetic CIK `0000000000` in the DEMO profile fixture used to be sent on
+ * every fixture report. Each member is disclosed absent with the reserved rule
+ * as its reason.
+ */
+function reservedEdgarBundle(symbol: string): EdgarBundle {
+  const gap = <T>(member: string): FetchResult<T> => ({
+    ok: false,
+    gap: reservedProviderGap(`edgar.${member}(${symbol})`, symbol, ["fixtures/edgar"]),
+  });
+  return {
+    cik: gap("cik"),
+    latestTenK: gap("latestTenK"),
+    latestTenQ: gap("latestTenQ"),
+    item1a: gap("item1a"),
+    mdna: gap("mdna"),
+    tenQMdna: gap("tenQMdna"),
+    auditorChange8Ks: gap("auditorChange8Ks"),
+    nonReliance8Ks: gap("nonReliance8Ks"),
+    companyFacts: gap("companyFacts"),
+    predecessor: null, // WS4 (D-14): no request, so no predecessor lookup.
+    xbrlSummary: null,
+    sic: null,
+    registrant: null,
   };
 }
 
@@ -1312,7 +1416,17 @@ export async function buildDataBundle(
   const today = builtAt.slice(0, 10);
 
   const cfg = getConfig();
-  const fmp = opts.fmp ?? createFmpClient({ cachedFetch: makeFmpCachedFetch(), signal: opts.signal });
+  // WS4 (D-11): DEMO and DBNK are reserved. Every keyless provider below is
+  // replaced by a disclosed gap and the EDGAR bundle is never built, so a
+  // reserved-symbol report issues no request to any provider whatever keys are
+  // configured — and an injected client is short-circuited too, so a test can
+  // count the calls and see zero.
+  const reserved = isReservedFixtureSymbol(sym);
+  const configuredFmp = opts.fmp ?? createFmpClient({ cachedFetch: makeFmpCachedFetch(), signal: opts.signal });
+  // A reserved symbol also reaches endpoints that carry no symbol (treasury
+  // rates, the market risk premium), so the whole client drops its key rather
+  // than relying on the per-request rule alone.
+  const fmp = reserved ? configuredFmp.fixturesOnly() : configuredFmp;
   const edgar =
     opts.edgar ??
     createEdgarClient({ transport: createDbCachedEdgarTransport({ signal: opts.signal }) });
@@ -1337,11 +1451,13 @@ export async function buildDataBundle(
   // Production wraps FRED in the durable api_cache (fred.ts had TTLs defined but
   // never wired — 12–16 uncached live series/load). An injected `fred` config
   // (tests) takes the direct path, matching how injected fmp/edgar bypass theirs.
-  const fredFetch: FredSeriesFetch =
-    opts.fredFetch ??
-    (opts.fred !== undefined
-      ? (id, o): Promise<FetchResult<FredObservation[]>> => fredSeries(id, o, fredCfg)
-      : makeCachedFredSeries(fredCfg));
+  const fredFetch: FredSeriesFetch = reserved
+    ? (id): Promise<FetchResult<FredObservation[]>> =>
+        Promise.resolve({ ok: false, gap: reservedProviderGap(`macro.${id.trim().toUpperCase()}`, sym, ["fred"]) })
+    : opts.fredFetch ??
+      (opts.fred !== undefined
+        ? (id, o): Promise<FetchResult<FredObservation[]>> => fredSeries(id, o, fredCfg)
+        : makeCachedFredSeries(fredCfg));
   const finnhubBase: FinnhubConfig =
     opts.finnhub ?? (cfg.finnhubApiKey !== undefined ? { apiKey: cfg.finnhubApiKey } : {});
   const finnhubCfg: FinnhubConfig = {
@@ -1350,16 +1466,28 @@ export async function buildDataBundle(
   };
   const finraBase: FinraConfig = opts.finra ?? {};
   const finraCfg: FinraConfig = { ...finraBase, signal: opts.signal ?? finraBase.signal };
-  const finraTrendFetch: FinraShortInterestTrendFetch =
-    opts.finra !== undefined
+  const finraTrendFetch: FinraShortInterestTrendFetch = reserved
+    ? (s): Promise<FetchResult<ShortInterestPoint[]>> =>
+        Promise.resolve({
+          ok: false,
+          gap: reservedProviderGap(`shortInterest.trend.${s.trim().toUpperCase()}`, sym, ["finra"]),
+        })
+    : opts.finra !== undefined
       ? (s, n): Promise<FetchResult<ShortInterestPoint[]>> => finraShortInterestTrend(s, n, finraCfg)
       : makeCachedFinraShortInterestTrend(finraCfg);
-  const finnhubSentimentFetch: FinnhubInsiderSentimentFetch =
-    opts.finnhub !== undefined
+  const finnhubSentimentFetch: FinnhubInsiderSentimentFetch = reserved
+    ? (s): Promise<FetchResult<InsiderSentimentMonth[]>> =>
+        Promise.resolve({
+          ok: false,
+          gap: reservedProviderGap(`insiderSentiment.${s.trim().toUpperCase()}`, sym, ["finnhub"]),
+        })
+    : opts.finnhub !== undefined
       ? (s, from, to): Promise<FetchResult<InsiderSentimentMonth[]>> => insiderSentiment(s, from, to, finnhubCfg)
       : makeCachedFinnhubInsiderSentiment(finnhubCfg);
 
-  if (fmp.fixtureMode) {
+  if (reserved) {
+    progress(`${sym}: reserved fixture symbol — synthetic contract fixtures only, no provider request`);
+  } else if (fmp.fixtureMode) {
     progress("FMP: no API key — using synthetic contract fixtures for DEMO/DBNK");
   }
 
@@ -1472,7 +1600,9 @@ export async function buildDataBundle(
 
   const pTranscript = buildTranscriptBundle(sym, fmp);
   const edgarSectionBudgetMs = opts.edgarSectionBudgetMs ?? DEFAULT_EDGAR_SECTION_BUDGET_MS;
-  const pEdgar = buildEdgarBundle(sym, profileCik, edgar, progress, builtAt, edgarSectionBudgetMs);
+  const pEdgar = reserved
+    ? Promise.resolve(reservedEdgarBundle(sym))
+    : buildEdgarBundle(sym, profileCik, edgar, progress, builtAt, edgarSectionBudgetMs);
 
   // ---- await + assemble (deterministic ordering applied here) ---------------
   let statements: StatementSet = {
@@ -1584,6 +1714,9 @@ export async function buildDataBundle(
       edgarBundle.registrant?.tickers.some((t) => t.trim().toUpperCase() === sym) === true);
   const runKeyless =
     opts.keyless !== false &&
+    // A reserved symbol has no EDGAR bundle to confirm an issuer with, so this
+    // is belt and braces: the layer is off for them by construction.
+    !reserved &&
     edgarBundle.cik.ok &&
     (edgarConfirmedIssuer || !fmp.fixtureMode);
   if (runKeyless) {
@@ -1616,11 +1749,16 @@ export async function buildDataBundle(
           sharesFloat,
         },
         fmpKeyless: fmp.fixtureMode,
+        // WS4 (D-12): FMP first with an EDGAR backfill of older periods
+        // (`auto`), FMP alone (`fmp`), or companyfacts alone (`edgar`).
+        statementSource: cfg.statementSource,
         edgarConfirmedIssuer,
         edgar: {
           cik: edgarBundle.cik,
           registrant: edgarBundle.registrant,
           companyFacts: edgarBundle.companyFacts,
+          // WS4 (D-14): pre-reorganization history for a successor registrant.
+          predecessor: edgarBundle.predecessor,
         },
         yahoo,
         annualPeriods: ANNUAL_PERIODS,
@@ -1822,6 +1960,10 @@ export async function buildDataBundle(
       // Every keyless substitution and every keyless failure, disclosed beside
       // the provider gaps. Empty whenever the fallback layer was off or skipped.
       ...keylessGaps,
+      // WS4 (D-11): one entry naming the whole reserved-symbol rule, so a
+      // reader of a DEMO/DBNK report is told that nothing here came from a
+      // provider — not merely that individual members are missing.
+      ...(reserved ? [reservedFixtureManifestEntry(sym)] : []),
     ],
   );
 

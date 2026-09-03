@@ -200,6 +200,7 @@ function inputs(over: Partial<KeylessInputs> = {}): KeylessInputs {
     sectorEtfSymbol: null,
     fmp: allGaps(),
     fmpKeyless: true,
+    statementSource: "auto",
     edgarConfirmedIssuer: true,
     edgar: {
       cik: { ok: true, value: { data: { cik10: "0000320193", cik: 320193, ticker: "AAPL", title: "Apple Inc." }, asOf: "2026-09-01", source: "edgar", endpoint: "company_tickers.json", fetchedAt: NOW.toISOString() } },
@@ -300,18 +301,95 @@ describe("applyKeylessFallbacks", () => {
     expect(out.replaced.sort()).toEqual(Object.keys(allGaps()).sort());
     const fields = out.gaps.map((g) => g.field);
     expect(fields).toContain("keyless.incomeAnnual");
-    expect(out.gaps.every((g) => g.severity === "info" && g.expected === true)).toBe(true);
+    // WS4: narrowed from "every gap" to "every member-replacement gap". The
+    // fixture's cover-page public float is measured 2025-03-28 against an
+    // analysis date of 2026-09-01, and a stale float is now its own `warn`
+    // entry (asserted below), so the happy path is no longer info-only.
+    const replacements = out.gaps.filter((g) => /^keyless\.[a-zA-Z]+$/.test(g.field));
+    expect(replacements.length).toBeGreaterThan(0);
+    expect(replacements.every((g) => g.severity === "info" && g.expected === true)).toBe(true);
     expect(out.gaps.find((g) => g.field === "keyless.profile")?.reason).toMatch(/served by computed .* because FMP no API key \+ no fixture/);
   });
 
   it("never overwrites an FMP member that has rows, and marks gaps as unexpected on a keyed plan", async () => {
+    // WS4 (D-12) changed the expectation from "the member is the same object"
+    // to "the vendor's own rows are untouched": under `auto`, periods OLDER
+    // than the oldest vendor row are backfilled from companyfacts. The vendor
+    // period itself is never rebuilt or merged.
     const fmp = allGaps();
     fmp.incomeAnnual = okRows([{ date: "2025-09-27", revenue: 1 }]);
     const out = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false }));
+    const rows = out.members.incomeAnnual.ok ? out.members.incomeAnnual.value.data.rows : [];
+    expect(rows[0]).toEqual({ date: "2025-09-27", revenue: 1 });
+    expect(rows.slice(1).every((row) => row.source === "edgar")).toBe(true);
+    expect(out.gaps.filter((g) => g.field === "statements.backfill.incomeAnnual")).toHaveLength(1);
+    // WS4: scoped to the member-replacement gaps `keyless.<member>`, which are
+    // the ones whose expectedness depends on whether the plan is keyless. The
+    // methodology disclosures added since (profile.beta.method,
+    // keyless.sharesFloat.publicFloat) describe how a number was computed and
+    // are structural on any plan.
+    expect(
+      out.gaps
+        .filter((g) => /^keyless\.[a-zA-Z]+$/.test(g.field))
+        .every((g) => g.expected === undefined || g.expected === false),
+    ).toBe(true);
+    expect(out.gaps.find((g) => g.field === "keyless.sectorEtf")?.reason).toMatch(/HTTP 402/);
+  });
+
+  it("leaves the vendor member untouched under THESIS_STATEMENT_SOURCE=fmp", async () => {
+    const fmp = allGaps();
+    fmp.incomeAnnual = okRows([{ date: "2025-09-27", revenue: 1 }]);
+    const out = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false, statementSource: "fmp" }));
     expect(out.members.incomeAnnual).toBe(fmp.incomeAnnual);
     expect(out.replaced).not.toContain("incomeAnnual");
-    expect(out.gaps.every((g) => g.expected === undefined || g.expected === false)).toBe(true);
-    expect(out.gaps.find((g) => g.field === "keyless.sectorEtf")?.reason).toMatch(/HTTP 402/);
+    expect(out.gaps.some((g) => g.field.startsWith("statements.backfill."))).toBe(false);
+  });
+
+  it("backfills only periods the vendor did not serve, with per-row provenance and a depth disclosure", async () => {
+    const fmp = allGaps();
+    // A capped plan: one annual period served of ten requested.
+    fmp.incomeAnnual = {
+      ok: true,
+      value: {
+        data: { rows: [{ date: "2025-09-27", revenue: 1 }], raw: null, planLimit: { requested: 10, applied: 1 } },
+        asOf: "2025-09-27",
+        source: "fmp",
+        endpoint: "/stable/income-statement?limit=1",
+        fetchedAt: NOW.toISOString(),
+      },
+    };
+    const out = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false }));
+    expect(out.members.incomeAnnual.ok).toBe(true);
+    if (!out.members.incomeAnnual.ok) return;
+    const rows = out.members.incomeAnnual.value.data.rows;
+    expect(rows.map((row) => row.date)).toEqual(["2025-09-27", "2024-09-28"]);
+    expect(rows[0]!.source).toBeUndefined();
+    expect(rows[1]).toMatchObject({
+      source: "edgar",
+      sourceEndpoint: "companyfacts→income-statement(annual)",
+      revenue: 380,
+    });
+    expect(out.members.incomeAnnual.value.endpoint).toBe(
+      "/stable/income-statement?limit=1 + companyfacts→income-statement(annual) (older periods)",
+    );
+    const entry = out.gaps.find((g) => g.field === "statements.backfill.incomeAnnual");
+    expect(entry).toMatchObject({ severity: "info", expected: true });
+    expect(entry?.reason).toMatch(/FMP served 1 period\(s\) back to 2025-09-27/);
+    expect(entry?.reason).toMatch(/caps 'limit' at 1, so 1 of 10 requested periods arrived/);
+    expect(entry?.reason).toMatch(/supplied 1 older period\(s\), 2024-09-28 to 2024-09-28/);
+    expect(entry?.reason).toMatch(/No period mixes the two sources/);
+  });
+
+  it("rebuilds every statement member from companyfacts under THESIS_STATEMENT_SOURCE=edgar", async () => {
+    const fmp = allGaps();
+    fmp.incomeAnnual = okRows([{ date: "2025-09-27", revenue: 1 }]);
+    fmp.balanceAnnual = okRows([{ date: "2025-09-27", totalAssets: 2 }]);
+    const out = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false, statementSource: "edgar" }));
+    expect(out.members.incomeAnnual.ok && out.members.incomeAnnual.value.source).toBe("edgar");
+    expect(out.members.incomeAnnual.ok && out.members.incomeAnnual.value.data.rows[0]!.revenue).toBe(400);
+    expect(out.members.balanceAnnual.ok && out.members.balanceAnnual.value.source).toBe("edgar");
+    expect(out.replaced).toContain("incomeAnnual");
+    expect(out.gaps.some((g) => g.field.startsWith("statements.backfill."))).toBe(false);
   });
 
   it("leaves the FMP gap in place and records the keyless failure when Yahoo is unavailable", async () => {
@@ -407,7 +485,9 @@ describe("applyKeylessFallbacks", () => {
     // explains.
     const out = await applyKeylessFallbacks(inputs());
     const note = out.notes.find((n) => /^profile: beta /.test(n));
-    expect(note).toMatch(/^profile: beta -?\d+\.\d{3} from \d+ monthly log returns/);
+    // WS4 (D-15) widened the note: the standard error and the Blume-adjusted
+    // value now sit between the slope and the sample size.
+    expect(note).toMatch(/^profile: beta -?\d+\.\d{3} ± \d+\.\d{3} \(OLS standard error\), Blume-adjusted -?\d+\.\d{3}, from \d+ monthly log returns/);
     expect(note).toMatch(/\(R² \d\.\d{2}\)$/);
   });
 
@@ -847,5 +927,152 @@ describe("applyKeylessFallbacks — why a parsable companyfacts yields no statem
     const out = await withFacts(facts, ["10-K", "10-Q"]);
     const entry = out.gaps.find((g) => g.field === "keyless.incomeAnnual");
     expect(entry?.reason).not.toMatch(/IFRS|successor/);
+  });
+});
+
+/**
+ * The cover-page public float is a DOLLAR amount measured on one date — the
+ * last business day of the issuer's most recently completed second fiscal
+ * quarter — and refreshed once a year. Turning it into a share count needs a
+ * price, and using the latest price rescales the count by every move since
+ * that date. The figure therefore carries its own measurement date, separate
+ * from the share count's, and is flagged when the two dates are far apart.
+ */
+describe("applyKeylessFallbacks — public float measurement date", () => {
+  /** Replace the fixture's EntityPublicFloat with one measured on `end`. */
+  function withFloatDate(end: string, val = 3_000_000): CompanyFacts {
+    const f = appleFacts();
+    const concept = f.facts["dei"]!["EntityPublicFloat"] as { units: Record<string, Record<string, unknown>[]> };
+    const unit = Object.keys(concept.units)[0]!;
+    concept.units[unit] = [{ ...concept.units[unit]![0]!, end, val }];
+    return f;
+  }
+  const withFacts = (facts: CompanyFacts): KeylessInputs =>
+    inputs({
+      edgar: {
+        ...inputs().edgar,
+        companyFacts: { ok: true, value: { data: facts, asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+      },
+    });
+
+  it("labels the float row with its own measurement date, distinct from the share count's", async () => {
+    const out = await applyKeylessFallbacks(inputs());
+    const row = out.members.sharesFloat.ok ? out.members.sharesFloat.value.data.rows[0]! : null;
+    expect(row).toMatchObject({
+      outstandingShares: 14_776,
+      date: "2025-10-17", // the cover-page SHARE COUNT date
+      publicFloatUsd: 3_000_000,
+      publicFloatAsOf: "2025-03-28", // the FLOAT's own, earlier date
+    });
+    expect(row!.floatShares).toBeGreaterThan(0);
+    expect(out.notes.some((n) => n.includes("public float 3000000 USD measured 2025-03-28"))).toBe(true);
+  });
+
+  it("flags a float measured more than six months before the analysis date", async () => {
+    const out = await applyKeylessFallbacks(inputs()); // float 2025-03-28, today 2026-09-01
+    const entry = out.gaps.find((g) => g.field === "keyless.sharesFloat.publicFloat")!;
+    expect(entry.severity).toBe("warn");
+    expect(entry.expected).toBeUndefined();
+    expect(entry.reason).toMatch(/measured 2025-03-28 \(17 months before the analysis date\)/);
+    expect(entry.reason).toMatch(/more than 6 months/);
+    expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.data.rows[0]!.publicFloatStale).toBe(true);
+  });
+
+  it("does not flag a float measured within six months, but still names the date", async () => {
+    const out = await applyKeylessFallbacks(withFacts(withFloatDate("2026-06-30")));
+    const entry = out.gaps.find((g) => g.field === "keyless.sharesFloat.publicFloat")!;
+    expect(entry.severity).toBe("info");
+    expect(entry.expected).toBe(true);
+    expect(entry.reason).toMatch(/measured 2026-06-30 \(2 months before the analysis date\)/);
+    expect(entry.reason).toMatch(/within 6 months/);
+    expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.data.rows[0]!.publicFloatStale).toBe(false);
+  });
+
+  it("says the float share count is absent when no EntityPublicFloat fact was filed", async () => {
+    const f = appleFacts();
+    delete f.facts["dei"]!["EntityPublicFloat"];
+    const out = await applyKeylessFallbacks(withFacts(f));
+    const entry = out.gaps.find((g) => g.field === "keyless.sharesFloat.publicFloat")!;
+    expect(entry.severity).toBe("warn");
+    expect(entry.reason).toMatch(/no dei:EntityPublicFloat fact/);
+    const row = out.members.sharesFloat.ok ? out.members.sharesFloat.value.data.rows[0]! : null;
+    // The outstanding count still stands on its own; only the float is absent.
+    expect(row).toMatchObject({ outstandingShares: 14_776, floatShares: null, freeFloat: null, publicFloatAsOf: null });
+  });
+});
+
+/**
+ * Two things companyfacts knows that the manifest used to drop on the floor: a
+ * material line a later filing restated, and a cover-page share count that is
+ * the sum of several unnamed share classes.
+ */
+describe("applyKeylessFallbacks — restatements and multi-class share counts", () => {
+  const withFacts = (f: CompanyFacts): KeylessInputs =>
+    inputs({
+      edgar: {
+        ...inputs().edgar,
+        companyFacts: { ok: true, value: { data: f, asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+      },
+    });
+
+  it("reports a restated material line, both filings and the direction of the change", async () => {
+    const f = appleFacts();
+    const revenue = f.facts["us-gaap"]!["RevenueFromContractWithCustomerExcludingAssessedTax"] as {
+      units: Record<string, Record<string, unknown>[]>;
+    };
+    const unit = Object.keys(revenue.units)[0]!;
+    // FY2024 was first reported as 380 in the FY2024 10-K and carried at 400 as
+    // a comparative in the FY2025 10-K: a 5.3% restatement of revenue.
+    revenue.units[unit] = [
+      ...revenue.units[unit]!,
+      { start: "2023-10-01", end: "2024-09-28", val: 400, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31", accn: "0000320193-25-000010" },
+    ];
+    const out = await applyKeylessFallbacks(withFacts(f));
+    const entry = out.gaps.find((g) => g.field === "keyless.incomeAnnual.restatements")!;
+    expect(entry.severity).toBe("warn");
+    expect(entry.reason).toMatch(/1 material line\(s\) restated by more than 1%/);
+    expect(entry.reason).toMatch(/2024-09-28 revenue 380 → 400 \(\+5\.3%/);
+    expect(entry.reason).toMatch(/first 10-K .* filed 2024-11-01/);
+    expect(entry.reason).toMatch(/restated in 10-K 0000320193-25-000010 filed 2025-10-31/);
+    // The row carries the last-filed value and keeps the first-reported one.
+    const row = out.members.incomeAnnual.ok
+      ? out.members.incomeAnnual.value.data.rows.find((r) => r["date"] === "2024-09-28")!
+      : null;
+    expect(row!["revenue"]).toBe(400);
+    expect(out.notes.some((n) => n.startsWith("incomeAnnual: 1 restated material line"))).toBe(true);
+  });
+
+  it("adds no restatement entry when every period was filed once", async () => {
+    const out = await applyKeylessFallbacks(inputs());
+    expect(out.gaps.some((g) => g.field.endsWith(".restatements"))).toBe(false);
+  });
+
+  it("sums the per-class cover counts and names the parts, the filing and the total", async () => {
+    const f = appleFacts();
+    const shares = f.facts["dei"]!["EntityCommonStockSharesOutstanding"] as {
+      units: Record<string, Record<string, unknown>[]>;
+    };
+    const unit = Object.keys(shares.units)[0]!;
+    const common = { end: "2025-10-17", form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31", accn: "0000320193-25-000099" };
+    // Three unnamed classes in one filing: companyfacts drops the dimension.
+    shares.units[unit] = [
+      { ...common, val: 9_000 },
+      { ...common, val: 4_000 },
+      { ...common, val: 1_776 },
+    ];
+    const out = await applyKeylessFallbacks(withFacts(f));
+    const entry = out.gaps.find((g) => g.field === "keyless.sharesOutstanding.classes")!;
+    expect(entry.severity).toBe("info");
+    expect(entry.expected).toBe(true);
+    expect(entry.reason).toMatch(/10-K 0000320193-25-000099 \(filed 2025-10-31\)/);
+    expect(entry.reason).toMatch(/3 unnamed counts \(9000 \+ 4000 \+ 1776\) are summed to 14776 as of 2025-10-17/);
+    expect(out.notes).toContain("keyless share count: 3 share classes summed (9000 + 4000 + 1776 = 14776 at 2025-10-17)");
+    // The summed total is what every derived figure then uses.
+    expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.data.rows[0]!.outstandingShares).toBe(14_776);
+  });
+
+  it("adds no class entry when the cover count came from a single fact", async () => {
+    const out = await applyKeylessFallbacks(inputs());
+    expect(out.gaps.some((g) => g.field === "keyless.sharesOutstanding.classes")).toBe(false);
   });
 });

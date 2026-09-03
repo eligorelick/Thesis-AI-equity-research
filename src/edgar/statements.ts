@@ -15,20 +15,42 @@
  *     literal `0` as "undisclosed", so a fabricated `0` here would silently
  *     become a real (wrong) datum downstream — hence `null`, never `0`.
  *
- *  2. THE CRITICAL DEDUP RULE (see xbrl.ts): facts are filtered to the audited
- *     core forms BEFORE deduping, then grouped by period and reduced to
- *     max(filed) with amendments winning a tie, applied once per (tag, unit)
- *     when the index is built. That rule governs the VALUE; row LABELS come
- *     from the earliest core-form filing of the same period, because `fy`/`fp`
- *     on a later comparative describe that later FILING (see UnitPoints.reporters).
+ *  2. THE DUPLICATE-PERIOD RULE (see xbrl.ts): facts are filtered to the audited
+ *     core forms BEFORE deduping, then grouped by period and reduced to the
+ *     LAST-FILED copy — max(filed), then the amendment on a same-day tie, then
+ *     the larger accession number — applied once per (tag, unit) when the index
+ *     is built. That rule governs the VALUE; row LABELS come from the earliest
+ *     core-form filing of the same period, because `fy`/`fp` on a later
+ *     comparative describe that later FILING (see UnitPoints.reporters). When
+ *     the two differ, the earliest filing's value is kept on the row as
+ *     `original`, and a material line that moved by more than 1% raises a
+ *     `restatement` flag (see `Restatement`).
  *
- * The module is pure: no network, no clock, no environment. The companyfacts
- * JSON comes from src/providers/edgar.ts.
+ *  3. ONE FILING LINEAGE PER DERIVATION. A derived quarter (YTD difference,
+ *     FY − YTD, FY − Q1 − Q2 − Q3) subtracts the newest copy of each operand
+ *     that was filed NO LATER than the minuend's own filing, so a restated FY
+ *     is never netted against an unrestated YTD or vice versa. When no such
+ *     copy exists the quarter is left null and the notes say why.
+ *
+ * Tag lists come from src/edgar/tagSynonyms.ts (stamped with the taxonomy
+ * year they were reviewed against). The module is pure: no network, no clock,
+ * no environment. The companyfacts JSON comes from src/providers/edgar.ts.
  */
 
 import type { FmpBalanceSheetRow, FmpCashFlowRow, FmpIncomeStatementRow } from "@/providers/fmp";
 import type { ManifestEntry } from "@/types/core";
 import { discoverStockSplits, type SplitEvent, type SplitNote, type StockSplits } from "@/edgar/splits";
+import {
+  BALANCE_SHEET_SHARES_TAG,
+  COMBINED_CURRENT_DEBT_TAG,
+  EBIT_NON_OPERATING_ADJUSTMENTS,
+  INCOME_BEFORE_TAX_TAGS,
+  MATURITIES_NEXT_YEAR_TAG,
+  REVENUE_TAGS,
+  standInsFor,
+  tagsFor,
+  type TagStandIn,
+} from "@/edgar/tagSynonyms";
 import {
   CORE_FACT_FORMS,
   conceptFactsSchema,
@@ -39,6 +61,8 @@ import {
   type CompanyFacts,
   type FactPoint,
 } from "@/edgar/xbrl";
+
+export { BALANCE_SHEET_SHARES_TAG } from "@/edgar/tagSynonyms";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -61,7 +85,53 @@ export interface StatementRowsResult<TRow> {
   gaps: ManifestEntry[];
   /** Concepts a fallback step served instead of the concept's own tag, with the periods it served. */
   substitutions: Substitution[];
+  /**
+   * Material lines whose last-filed value moved by more than
+   * `RESTATEMENT_THRESHOLD_PCT` of the value the period was first reported
+   * with. The rows carry the same facts as `original` / `restated`; this list
+   * is the statement-level flag the forensics module and the manifest read.
+   */
+  restatements: Restatement[];
 }
+
+/** A filing's identity, as carried on `original` values and restatement flags. */
+export interface FilingRef {
+  accn: string;
+  filed: string;
+  form: string;
+}
+
+/**
+ * The value a period was FIRST reported with, kept beside the last-filed value
+ * that the row carries. Present only on fields resolved directly from a fact
+ * (never on a derived quarter, whose operands may each have their own).
+ */
+export interface OriginalValue extends FilingRef {
+  value: number;
+}
+
+/** One material line that a later filing restated by more than the threshold. */
+export interface Restatement {
+  /** Row date (fiscal period end). */
+  date: string;
+  field: string;
+  original: number;
+  restated: number;
+  /** Signed change as a percentage of the original value. */
+  changePct: number;
+  originalFiling: FilingRef;
+  restatedFiling: FilingRef;
+}
+
+/** A material line moving by more than this share of its prior value is a restatement flag. */
+export const RESTATEMENT_THRESHOLD_PCT = 1;
+
+/** The lines whose restatement is material enough to flag, per statement. */
+const MATERIAL_FIELDS: Record<StatementName, readonly string[]> = {
+  income: ["revenue", "netIncome"],
+  balance: ["totalAssets", "totalStockholdersEquity"],
+  cashflow: ["operatingCashFlow"],
+};
 
 /**
  * One field of one statement resolved by a stand-in rather than its own tag
@@ -91,6 +161,16 @@ export interface SharesOutstandingPoint {
   value: number;
   asOf: string;
   basis: SharesBasis;
+  /**
+   * The per-class cover counts summed into `value` when the filing reported
+   * `dei:EntityCommonStockSharesOutstanding` once per share class (same
+   * accession, same date, distinct facts). Companyfacts drops the class
+   * dimension, so the classes are unnamed; the order is as filed. Absent when
+   * the count came from a single fact.
+   */
+  classes?: number[];
+  /** The filing the count (or the summed per-class counts) came from. */
+  filing?: FilingRef;
 }
 
 export interface BuiltStatements {
@@ -191,10 +271,35 @@ export type ChainSpec =
   | { kind: "sum"; tags: string[]; unit: "money"; disclose?: string }
   | { kind: "sumAny"; tags: string[]; unit: "money" }
   | { kind: "sumAnyOf"; parts: { label: string; spec: ChainSpec }[]; unit: "money" }
-  /** Every part must resolve (a derivation such as pretax income + interest expense). */
-  | { kind: "sumAll"; parts: { label: string; spec: ChainSpec }[]; unit: "money"; disclose?: string }
+  /**
+   * Every part must resolve (a derivation such as pretax income + interest
+   * expense). `minusAny` lists optional subtrahends resolved afterwards: each
+   * one present is subtracted, one whose `componentOf` is itself present is
+   * skipped (it is already inside that aggregate), and `discloseAdjusted`
+   * words the disclosure from what was and was not subtracted.
+   */
+  | {
+      kind: "sumAll";
+      parts: { label: string; spec: ChainSpec }[];
+      unit: "money";
+      disclose?: string;
+      minusAny?: { label: string; tags: readonly string[]; componentOf?: string }[];
+      discloseAdjusted?: (ctx: { subtracted: string[]; unavailable: string[]; alreadyInside: string[] }) => string;
+    }
   | { kind: "diff"; plus: string; minus: string; unit: "money"; disclose?: string }
   | { kind: "chain"; steps: ChainSpec[]; unit: UnitKind };
+
+/** One `first` step per stand-in so each tag carries its own disclosure wording. */
+function standInSteps(standIns: readonly TagStandIn[], unit: UnitKind): ChainSpec[] {
+  return standIns.map((s) => ({ kind: "first", tags: [s.tag], unit, disclose: s.disclose }));
+}
+
+/** A line item's own tags first, then its stand-ins one at a time. */
+function lineItemChain(item: Parameters<typeof tagsFor>[0], unit: UnitKind): ChainSpec {
+  const standIns = standInsFor(item);
+  const own: ChainSpec = { kind: "first", tags: tagsFor(item), unit };
+  return standIns.length === 0 ? own : { kind: "chain", unit, steps: [own, ...standInSteps(standIns, unit)] };
+}
 
 /**
  * `disclose` marks a fallback step whose figure is a stand-in for the concept,
@@ -203,20 +308,7 @@ export type ChainSpec =
  * manifest) and appended to the progress notes.
  */
 
-const REVENUE_TAGS = [
-  "RevenueFromContractWithCustomerExcludingAssessedTax",
-  "Revenues",
-  "SalesRevenueNet",
-  "RevenueFromContractWithCustomerIncludingAssessedTax",
-  "RevenuesNetOfInterestExpense",
-];
-
-const REVENUE_SPEC: ChainSpec = { kind: "first", tags: REVENUE_TAGS, unit: "money" };
-
-const INCOME_BEFORE_TAX_TAGS = [
-  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
-  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
-];
+const REVENUE_SPEC: ChainSpec = { kind: "first", tags: [...REVENUE_TAGS], unit: "money" };
 
 /**
  * `InterestExpenseOperating` is LAST among the income-statement tags: for a
@@ -228,30 +320,13 @@ const INCOME_BEFORE_TAX_TAGS = [
  *
  * Caterpillar and GE tag their income-statement interest line only by
  * extension (cat:..., ge:...), which the us-gaap namespace of companyfacts
- * never carries, yet both file the cash-flow supplement's InterestPaidNet.
- * Cash interest paid is the last resort: close to the expense for an
- * investment-grade borrower, and disclosed on every row it serves. Without it
- * the WACC had no cost of debt and the whole DCF was suppressed.
+ * never carries, yet both file the cash-flow supplement's cash interest paid.
+ * That is the last resort, and the two cash tags are SEPARATE steps because
+ * they are different figures: `InterestPaidNet` is net of interest
+ * capitalized into assets, `InterestPaid` is gross of it. Each carries its own
+ * disclosure wording (tagSynonyms.ts).
  */
-const INTEREST_EXPENSE_SPEC: ChainSpec = {
-  kind: "chain",
-  unit: "money",
-  steps: [
-    {
-      kind: "first",
-      tags: ["InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt", "InterestAndDebtExpense", "InterestExpenseOperating"],
-      unit: "money",
-    },
-    {
-      kind: "first",
-      tags: ["InterestPaidNet", "InterestPaid"],
-      unit: "money",
-      disclose:
-        "cash interest paid (cash-flow supplement, InterestPaidNet/InterestPaid) stands in for interest expense: the filer tags its " +
-        "income-statement interest line only by extension; the cash figure omits accrued but unpaid interest and includes interest capitalized into assets",
-    },
-  ],
-};
+const INTEREST_EXPENSE_SPEC: ChainSpec = lineItemChain("interestExpense", "money");
 
 /**
  * Banks tag total net revenue under Revenues / RevenuesNetOfInterestExpense, or
@@ -263,9 +338,9 @@ const BANK_REVENUE_SPEC: ChainSpec = {
   kind: "chain",
   unit: "money",
   steps: [
-    { kind: "first", tags: ["Revenues", "RevenuesNetOfInterestExpense"], unit: "money" },
-    { kind: "sum", tags: ["InterestIncomeExpenseNet", "NoninterestIncome"], unit: "money" },
-    { kind: "first", tags: REVENUE_TAGS, unit: "money" },
+    { kind: "first", tags: tagsFor("bankRevenueTotal"), unit: "money" },
+    { kind: "sum", tags: tagsFor("bankRevenueComponents"), unit: "money" },
+    { kind: "first", tags: [...REVENUE_TAGS], unit: "money" },
   ],
 };
 
@@ -275,89 +350,103 @@ const BANK_REVENUE_SPEC: ChainSpec = {
  * interest expense). On a bank-tagged filer operating income is the filed
  * line or nothing; the derivation below is for industrial filers only.
  */
-const BANK_OPERATING_INCOME_SPEC: ChainSpec = { kind: "first", tags: ["OperatingIncomeLoss"], unit: "money" };
+const BANK_OPERATING_INCOME_SPEC: ChainSpec = { kind: "first", tags: tagsFor("operatingIncome"), unit: "money" };
 
-const DEPRECIATION_SPEC: ChainSpec = {
-  kind: "first",
-  tags: ["DepreciationDepletionAndAmortization", "DepreciationAndAmortization", "DepreciationAmortizationAndAccretionNet"],
-  unit: "money",
-};
+const DEPRECIATION_SPEC: ChainSpec = { kind: "first", tags: tagsFor("depreciationAndAmortization"), unit: "money" };
 
 const INCOME_CHAINS: Record<string, ChainSpec> = {
   revenue: REVENUE_SPEC,
-  costOfRevenue: { kind: "first", tags: ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfServices"], unit: "money" },
-  grossProfit: { kind: "first", tags: ["GrossProfit"], unit: "money" },
-  researchAndDevelopmentExpenses: {
-    kind: "first",
-    tags: ["ResearchAndDevelopmentExpense", "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost"],
-    unit: "money",
-  },
+  costOfRevenue: lineItemChain("costOfRevenue", "money"),
+  grossProfit: lineItemChain("grossProfit", "money"),
+  researchAndDevelopmentExpenses: lineItemChain("researchAndDevelopmentExpenses", "money"),
   sellingGeneralAndAdministrativeExpenses: {
     kind: "chain",
     unit: "money",
     steps: [
-      { kind: "first", tags: ["SellingGeneralAndAdministrativeExpense"], unit: "money" },
-      { kind: "sum", tags: ["SellingAndMarketingExpense", "GeneralAndAdministrativeExpense"], unit: "money" },
+      lineItemChain("sellingGeneralAndAdministrativeExpenses", "money"),
+      { kind: "sum", tags: [...tagsFor("sellingAndMarketingExpenses"), ...tagsFor("generalAndAdministrativeExpenses")], unit: "money" },
     ],
   },
   /** The two SG&A components FMP also publishes on their own; Stage B's forensics read both. */
-  sellingAndMarketingExpenses: { kind: "first", tags: ["SellingAndMarketingExpense"], unit: "money" },
-  generalAndAdministrativeExpenses: { kind: "first", tags: ["GeneralAndAdministrativeExpense"], unit: "money" },
-  operatingExpenses: { kind: "first", tags: ["OperatingExpenses"], unit: "money" },
+  sellingAndMarketingExpenses: lineItemChain("sellingAndMarketingExpenses", "money"),
+  generalAndAdministrativeExpenses: lineItemChain("generalAndAdministrativeExpenses", "money"),
+  operatingExpenses: lineItemChain("operatingExpenses", "money"),
   /**
    * Pfizer files no OperatingIncomeLoss line at all (its statement runs from
    * revenue straight to income before taxes); GE Aerospace neither. Without an
    * EBIT the DCF was "not buildable". Pretax income + interest expense is the
-   * textbook EBIT for a firm that reports none, and the derivation is disclosed
-   * on every row it serves.
+   * textbook EBIT for a firm that reports none.
+   *
+   * Pretax income also contains the OTHER non-operating items, so the
+   * derivation subtracts each one the filer tags — the `NonoperatingIncomeExpense`
+   * aggregate, `InvestmentIncomeInterest` when that aggregate is absent (the
+   * taxonomy makes it a component of it, so subtracting both would double-count),
+   * and equity-method results. Whatever could not be subtracted is named in the
+   * disclosure as the error band on the figure.
    */
   operatingIncome: {
     kind: "chain",
     unit: "money",
     steps: [
-      { kind: "first", tags: ["OperatingIncomeLoss"], unit: "money" },
+      { kind: "first", tags: tagsFor("operatingIncome"), unit: "money" },
       {
         kind: "sumAll",
         unit: "money",
         parts: [
-          { label: "pretax income", spec: { kind: "first", tags: INCOME_BEFORE_TAX_TAGS, unit: "money" } },
+          { label: "pretax income", spec: { kind: "first", tags: [...INCOME_BEFORE_TAX_TAGS], unit: "money" } },
           { label: "interest expense", spec: INTEREST_EXPENSE_SPEC },
         ],
-        disclose:
-          "EBIT derived as pretax income + interest expense: the filer reports no OperatingIncomeLoss line; " +
-          "non-operating items other than interest (investment income, gains, equity-method results) stay inside the figure",
+        minusAny: EBIT_NON_OPERATING_ADJUSTMENTS.map((a) => ({
+          label: a.label,
+          tags: a.tags,
+          ...(a.componentOf === undefined ? {} : { componentOf: a.componentOf }),
+        })),
+        discloseAdjusted: describeDerivedEbit,
       },
     ],
   },
   interestExpense: INTEREST_EXPENSE_SPEC,
-  interestIncome: {
-    kind: "first",
-    tags: [
-      "InvestmentIncomeInterest",
-      "InvestmentIncomeInterestAndDividend",
-      "InterestAndDividendIncomeOperating",
-      // The bank twin of the tag above: JPM's total interest income, 193.3B.
-      "InterestIncomeOperating",
-    ],
-    unit: "money",
-  },
-  netInterestIncome: { kind: "first", tags: ["InterestIncomeExpenseNet"], unit: "money" },
-  incomeBeforeTax: { kind: "first", tags: INCOME_BEFORE_TAX_TAGS, unit: "money" },
-  incomeTaxExpense: { kind: "first", tags: ["IncomeTaxExpenseBenefit"], unit: "money" },
-  totalOtherIncomeExpensesNet: { kind: "first", tags: ["NonoperatingIncomeExpense"], unit: "money" },
-  netIncome: { kind: "first", tags: ["NetIncomeLoss", "ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"], unit: "money" },
-  netIncomeFromContinuingOperations: { kind: "first", tags: ["IncomeLossFromContinuingOperations"], unit: "money" },
-  netIncomeFromDiscontinuedOperations: {
-    kind: "first",
-    tags: ["IncomeLossFromDiscontinuedOperationsNetOfTax"],
-    unit: "money",
-  },
+  interestIncome: lineItemChain("interestIncome", "money"),
+  netInterestIncome: lineItemChain("netInterestIncome", "money"),
+  incomeBeforeTax: { kind: "first", tags: [...INCOME_BEFORE_TAX_TAGS], unit: "money" },
+  incomeTaxExpense: lineItemChain("incomeTaxExpense", "money"),
+  totalOtherIncomeExpensesNet: lineItemChain("totalOtherIncomeExpensesNet", "money"),
+  netIncome: lineItemChain("netIncome", "money"),
+  netIncomeFromContinuingOperations: lineItemChain("netIncomeFromContinuingOperations", "money"),
+  netIncomeFromDiscontinuedOperations: lineItemChain("netIncomeFromDiscontinuedOperations", "money"),
   depreciationAndAmortization: DEPRECIATION_SPEC,
-  eps: { kind: "first", tags: ["EarningsPerShareBasic"], unit: "perShare" },
-  epsDiluted: { kind: "first", tags: ["EarningsPerShareDiluted"], unit: "perShare" },
-  weightedAverageShsOut: { kind: "first", tags: ["WeightedAverageNumberOfSharesOutstandingBasic"], unit: "shares" },
-  weightedAverageShsOutDil: { kind: "first", tags: ["WeightedAverageNumberOfDilutedSharesOutstanding"], unit: "shares" },
+  eps: lineItemChain("eps", "perShare"),
+  epsDiluted: lineItemChain("epsDiluted", "perShare"),
+  weightedAverageShsOut: lineItemChain("weightedAverageShsOut", "shares"),
+  weightedAverageShsOutDil: lineItemChain("weightedAverageShsOutDil", "shares"),
 };
+
+/**
+ * The derived-EBIT disclosure, worded from what the subtraction pass could and
+ * could not remove. An adjustment the filer did not tag is an error band on the
+ * figure, so it is named rather than passed over in silence.
+ */
+function describeDerivedEbit(ctx: { subtracted: string[]; unavailable: string[]; alreadyInside: string[] }): string {
+  const head =
+    "EBIT derived as pretax income + interest expense: the filer reports no OperatingIncomeLoss line";
+  const parts: string[] = [];
+  if (ctx.subtracted.length > 0) {
+    parts.push(`non-operating items subtracted from the derivation: ${ctx.subtracted.join(", ")}`);
+  }
+  if (ctx.alreadyInside.length > 0) {
+    parts.push(
+      `not subtracted separately because the aggregate already contains them: ${ctx.alreadyInside.join(", ")}`,
+    );
+  }
+  if (ctx.unavailable.length > 0) {
+    parts.push(
+      `error band — the filer tags none of ${ctx.unavailable.join(", ")} for this period, so any such item stays inside the figure`,
+    );
+  } else if (ctx.subtracted.length === 0) {
+    parts.push("no non-operating tag was filed for this period, so any such item stays inside the figure");
+  }
+  return `${head}; ${parts.join("; ")}`;
+}
 
 /**
  * Operating and finance lease liabilities, each as "tagged total, else the
@@ -376,8 +465,8 @@ const LEASE_LIABILITY_SPEC: ChainSpec = {
         kind: "chain",
         unit: "money",
         steps: [
-          { kind: "first", tags: ["OperatingLeaseLiability"], unit: "money" },
-          { kind: "sumAny", tags: ["OperatingLeaseLiabilityCurrent", "OperatingLeaseLiabilityNoncurrent"], unit: "money" },
+          { kind: "first", tags: tagsFor("operatingLeaseLiability"), unit: "money" },
+          { kind: "sumAny", tags: tagsFor("operatingLeaseLiabilityParts"), unit: "money" },
         ],
       },
     },
@@ -387,8 +476,8 @@ const LEASE_LIABILITY_SPEC: ChainSpec = {
         kind: "chain",
         unit: "money",
         steps: [
-          { kind: "first", tags: ["FinanceLeaseLiability", "CapitalLeaseObligations"], unit: "money" },
-          { kind: "sumAny", tags: ["FinanceLeaseLiabilityCurrent", "FinanceLeaseLiabilityNoncurrent"], unit: "money" },
+          { kind: "first", tags: tagsFor("financeLeaseLiability"), unit: "money" },
+          { kind: "sumAny", tags: tagsFor("financeLeaseLiabilityParts"), unit: "money" },
         ],
       },
     },
@@ -400,16 +489,23 @@ const LEASE_LIABILITY_SPEC: ChainSpec = {
  * other retailers tag their current installments. `resolveDebtOverlaps` keeps
  * its finance-lease slice from being counted twice.
  */
-const COMBINED_CURRENT_TAG = "LongTermDebtAndCapitalLeaseObligationsCurrent";
+const COMBINED_CURRENT_TAG = COMBINED_CURRENT_DEBT_TAG;
+
 /**
- * The debt-maturity schedule's first-year principal. Caterpillar files no
- * LongTermDebtCurrent (its balance-sheet current maturities are an extension
- * tag) but files this schedule, whose first year IS the current portion; with
- * it missing, 7.1B of 43B of debt was absent from net debt and invested
- * capital. It is a disclosure figure, so beside a balance-sheet current tag
- * it is netted out again (resolveDebtOverlaps, cases 5 and 2).
+ * The four balance-sheet current-debt tags, in the order the house rule (D-13)
+ * checks them. Every one is a line ON the balance sheet; the debt-maturity
+ * schedule below is a NOTE disclosure and is only consulted when all four miss.
  */
-const MATURITIES_NEXT_YEAR_TAG = "LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths";
+const CURRENT_DEBT_TAGS = [
+  ...tagsFor("shortTermBorrowings"),
+  ...tagsFor("commercialPaper"),
+  ...tagsFor("currentMaturitiesOfLongTermDebt"),
+];
+
+/** The tags that specifically carry the CURRENT MATURITIES of long-term debt. */
+const CURRENT_MATURITY_TAGS: readonly string[] = [...tagsFor("debtCurrent"), ...tagsFor("currentMaturitiesOfLongTermDebt")];
+
+const MATURITIES_STAND_IN_SPEC = standInSteps(standInsFor("currentMaturitiesOfLongTermDebt"), "money");
 
 const BALANCE_CHAINS: Record<string, ChainSpec> = {
   /**
@@ -419,72 +515,43 @@ const BALANCE_CHAINS: Record<string, ChainSpec> = {
    * interest-bearing deposits that `shortTermInvestments` below claims, so
    * letting it win here would double-count them in cashAndShortTermInvestments.
    */
-  cashAndCashEquivalents: {
-    kind: "first",
-    tags: [
-      "CashAndCashEquivalentsAtCarryingValue",
-      "CashAndDueFromBanks",
-      "Cash",
-      "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
-    ],
-    unit: "money",
-  },
-  shortTermInvestments: {
-    kind: "first",
-    tags: [
-      "ShortTermInvestments",
-      "MarketableSecuritiesCurrent",
-      "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
-      // A bank's near-cash: JPM's 321.60B of interest-bearing deposits in banks.
-      "InterestBearingDepositsInBanks",
-    ],
-    unit: "money",
-  },
-  cashAndShortTermInvestments: { kind: "first", tags: ["CashCashEquivalentsAndShortTermInvestments"], unit: "money" },
-  netReceivables: { kind: "first", tags: ["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"], unit: "money" },
-  inventory: { kind: "first", tags: ["InventoryNet"], unit: "money" },
-  totalCurrentAssets: { kind: "first", tags: ["AssetsCurrent"], unit: "money" },
-  propertyPlantEquipmentNet: {
-    kind: "first",
-    tags: [
-      "PropertyPlantAndEquipmentNet",
-      "PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
-    ],
-    unit: "money",
-  },
-  goodwill: { kind: "first", tags: ["Goodwill"], unit: "money" },
-  intangibleAssets: { kind: "first", tags: ["IntangibleAssetsNetExcludingGoodwill", "FiniteLivedIntangibleAssetsNet"], unit: "money" },
-  totalAssets: { kind: "first", tags: ["Assets"], unit: "money" },
+  cashAndCashEquivalents: lineItemChain("cashAndCashEquivalents", "money"),
+  shortTermInvestments: lineItemChain("shortTermInvestments", "money"),
+  cashAndShortTermInvestments: lineItemChain("cashAndShortTermInvestments", "money"),
+  netReceivables: lineItemChain("netReceivables", "money"),
+  inventory: lineItemChain("inventory", "money"),
+  totalCurrentAssets: lineItemChain("totalCurrentAssets", "money"),
+  propertyPlantEquipmentNet: lineItemChain("propertyPlantEquipmentNet", "money"),
+  goodwill: lineItemChain("goodwill", "money"),
+  intangibleAssets: lineItemChain("intangibleAssets", "money"),
+  totalAssets: lineItemChain("totalAssets", "money"),
+  /**
+   * D-13 order: the filed total (`DebtCurrent`) first; then the sum of the
+   * balance-sheet current-debt lines the filer did tag (`ShortTermBorrowings`,
+   * `CommercialPaper`, `LongTermDebtCurrent`, the combined debt-and-leases
+   * current tag); and only when ALL of them miss, the debt-maturity schedule's
+   * next-twelve-months principal, which is a note disclosure rather than a
+   * balance-sheet line and is disclosed as a stand-in on every row it serves.
+   */
   shortTermDebt: {
     kind: "chain",
     unit: "money",
     steps: [
-      { kind: "first", tags: ["DebtCurrent"], unit: "money" },
-      {
-        kind: "sumAny",
-        tags: ["LongTermDebtCurrent", "ShortTermBorrowings", "CommercialPaper", COMBINED_CURRENT_TAG, MATURITIES_NEXT_YEAR_TAG],
-        unit: "money",
-      },
+      { kind: "first", tags: tagsFor("debtCurrent"), unit: "money" },
+      { kind: "sumAny", tags: CURRENT_DEBT_TAGS, unit: "money" },
+      ...MATURITIES_STAND_IN_SPEC,
     ],
   },
-  longTermDebt: {
-    kind: "first",
-    tags: ["LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations", "LongTermDebt"],
-    unit: "money",
-  },
-  totalCurrentLiabilities: { kind: "first", tags: ["LiabilitiesCurrent"], unit: "money" },
-  totalLiabilities: { kind: "first", tags: ["Liabilities"], unit: "money" },
-  deferredRevenue: { kind: "first", tags: ["ContractWithCustomerLiabilityCurrent", "DeferredRevenueCurrent"], unit: "money" },
-  taxPayables: { kind: "first", tags: ["AccruedIncomeTaxesCurrent", "TaxesPayableCurrent"], unit: "money" },
+  longTermDebt: lineItemChain("longTermDebt", "money"),
+  totalCurrentLiabilities: lineItemChain("totalCurrentLiabilities", "money"),
+  totalLiabilities: lineItemChain("totalLiabilities", "money"),
+  deferredRevenue: lineItemChain("deferredRevenue", "money"),
+  taxPayables: lineItemChain("taxPayables", "money"),
   capitalLeaseObligations: LEASE_LIABILITY_SPEC,
-  preferredStock: { kind: "first", tags: ["PreferredStockValue"], unit: "money" },
-  commonStock: { kind: "first", tags: ["CommonStockValue"], unit: "money" },
-  retainedEarnings: { kind: "first", tags: ["RetainedEarningsAccumulatedDeficit"], unit: "money" },
-  accumulatedOtherComprehensiveIncomeLoss: {
-    kind: "first",
-    tags: ["AccumulatedOtherComprehensiveIncomeLossNetOfTax"],
-    unit: "money",
-  },
+  preferredStock: lineItemChain("preferredStock", "money"),
+  commonStock: lineItemChain("commonStock", "money"),
+  retainedEarnings: lineItemChain("retainedEarnings", "money"),
+  accumulatedOtherComprehensiveIncomeLoss: lineItemChain("accumulatedOtherComprehensiveIncomeLoss", "money"),
   /**
    * Caterpillar tags no StockholdersEquity line — only the total including
    * noncontrolling interest — so invested capital, the DCF and the multiples
@@ -496,72 +563,64 @@ const BALANCE_CHAINS: Record<string, ChainSpec> = {
     kind: "chain",
     unit: "money",
     steps: [
-      { kind: "first", tags: ["StockholdersEquity"], unit: "money" },
+      { kind: "first", tags: tagsFor("totalStockholdersEquity"), unit: "money" },
       {
         kind: "diff",
-        plus: "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
-        minus: "MinorityInterest",
+        plus: tagsFor("totalEquity")[0] as string,
+        minus: tagsFor("minorityInterest")[0] as string,
         unit: "money",
         disclose:
           "stockholders' equity derived as total equity including noncontrolling interest minus the noncontrolling interest: the filer tags no StockholdersEquity line",
       },
       {
         kind: "first",
-        tags: ["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
+        tags: tagsFor("totalEquity"),
         unit: "money",
         disclose:
           "total equity including noncontrolling interest stands in for stockholders' equity: the filer tags neither a StockholdersEquity line nor a MinorityInterest to net out",
       },
     ],
   },
-  minorityInterest: { kind: "first", tags: ["MinorityInterest"], unit: "money" },
-  totalEquity: {
-    kind: "first",
-    tags: ["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
-    unit: "money",
-  },
+  minorityInterest: lineItemChain("minorityInterest", "money"),
+  totalEquity: lineItemChain("totalEquity", "money"),
   /** Extra key (banks); legal via the FmpRawRow index signature. */
-  deposits: { kind: "first", tags: ["Deposits"], unit: "money" },
+  deposits: lineItemChain("deposits", "money"),
 };
 
 const CASHFLOW_CHAINS: Record<string, ChainSpec> = {
-  netIncome: { kind: "first", tags: ["NetIncomeLoss", "ProfitLoss"], unit: "money" },
+  netIncome: lineItemChain("cashflowNetIncome", "money"),
   depreciationAndAmortization: DEPRECIATION_SPEC,
-  stockBasedCompensation: { kind: "first", tags: ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"], unit: "money" },
-  changeInWorkingCapital: { kind: "first", tags: ["IncreaseDecreaseInOperatingCapital"], unit: "money", sign: -1 },
-  operatingCashFlow: {
-    kind: "first",
-    tags: ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"],
+  stockBasedCompensation: lineItemChain("stockBasedCompensation", "money"),
+  changeInWorkingCapital: { kind: "first", tags: tagsFor("changeInWorkingCapital"), unit: "money", sign: -1 },
+  operatingCashFlow: lineItemChain("operatingCashFlow", "money"),
+  capitalExpenditure: { kind: "first", tags: tagsFor("capitalExpenditure"), unit: "money", sign: -1 },
+  acquisitionsNet: { kind: "first", tags: tagsFor("acquisitionsNet"), unit: "money", sign: -1 },
+  netDebtIssuance: {
+    kind: "diff",
+    plus: tagsFor("debtIssuance")[0] as string,
+    minus: tagsFor("debtRepayment")[0] as string,
     unit: "money",
   },
-  capitalExpenditure: {
-    kind: "first",
-    tags: ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"],
+  netStockIssuance: {
+    kind: "diff",
+    plus: tagsFor("commonStockIssuance")[0] as string,
+    minus: tagsFor("commonStockRepurchased")[0] as string,
     unit: "money",
-    sign: -1,
   },
-  acquisitionsNet: { kind: "first", tags: ["PaymentsToAcquireBusinessesNetOfCashAcquired"], unit: "money", sign: -1 },
-  netDebtIssuance: { kind: "diff", plus: "ProceedsFromIssuanceOfLongTermDebt", minus: "RepaymentsOfLongTermDebt", unit: "money" },
-  netStockIssuance: { kind: "diff", plus: "ProceedsFromIssuanceOfCommonStock", minus: "PaymentsForRepurchaseOfCommonStock", unit: "money" },
-  commonStockIssuance: { kind: "first", tags: ["ProceedsFromIssuanceOfCommonStock"], unit: "money" },
-  commonStockRepurchased: { kind: "first", tags: ["PaymentsForRepurchaseOfCommonStock"], unit: "money", sign: -1 },
-  netDividendsPaid: { kind: "first", tags: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], unit: "money", sign: -1 },
-  preferredDividendsPaid: {
-    kind: "first",
-    tags: ["PaymentsOfDividendsPreferredStockAndPreferenceStock"],
-    unit: "money",
-    sign: -1,
-  },
-  incomeTaxesPaid: { kind: "first", tags: ["IncomeTaxesPaidNet", "IncomeTaxesPaid"], unit: "money" },
-  interestPaid: { kind: "first", tags: ["InterestPaidNet", "InterestPaid"], unit: "money" },
+  commonStockIssuance: lineItemChain("commonStockIssuance", "money"),
+  commonStockRepurchased: { kind: "first", tags: tagsFor("commonStockRepurchased"), unit: "money", sign: -1 },
+  netDividendsPaid: { kind: "first", tags: tagsFor("netDividendsPaid"), unit: "money", sign: -1 },
+  preferredDividendsPaid: { kind: "first", tags: tagsFor("preferredDividendsPaid"), unit: "money", sign: -1 },
+  incomeTaxesPaid: lineItemChain("incomeTaxesPaid", "money"),
+  interestPaid: lineItemChain("interestPaid", "money"),
   /**
    * FMP's own names for the two remaining cash-flow subtotals. Stage B's
    * forensics accruals ratio reads `netCashProvidedByInvestingActivities`
    * literally, so emitting only the short `investingCashFlow` key left the
    * ratio unresolvable on the keyless path.
    */
-  netCashProvidedByInvestingActivities: { kind: "first", tags: ["NetCashProvidedByUsedInInvestingActivities"], unit: "money" },
-  netCashProvidedByFinancingActivities: { kind: "first", tags: ["NetCashProvidedByUsedInFinancingActivities"], unit: "money" },
+  netCashProvidedByInvestingActivities: lineItemChain("netCashProvidedByInvestingActivities", "money"),
+  netCashProvidedByFinancingActivities: lineItemChain("netCashProvidedByFinancingActivities", "money"),
 };
 
 /** Fields whose value is a verbatim copy of another resolved field. */
@@ -587,7 +646,7 @@ const INCOME_UNSOURCED = ["bottomLineNetIncome"];
 const BALANCE_UNSOURCED = ["treasuryStock", "totalInvestments"];
 
 /** Anchor concepts that date a fiscal year. `Assets` supplies instants. */
-const FY_ANCHOR_DURATION_TAGS = [...REVENUE_TAGS, "NetIncomeLoss", "ProfitLoss"];
+const FY_ANCHOR_DURATION_TAGS = [...REVENUE_TAGS, ...tagsFor("cashflowNetIncome")];
 
 // ---------------------------------------------------------------------------
 // Fact index
@@ -612,8 +671,26 @@ interface UnitPoints {
    * `fiscalYear: "2026"`. So: VALUE from the newest copy, LABELS from the first one.
    */
   reporters: Map<string, FactPoint>;
+  /**
+   * EVERY core-form copy of this (tag, unit), deduped by nothing: a derived
+   * quarter needs the copy of its subtrahend that belongs to the SAME filing
+   * lineage as its minuend, which the max(filed) winner is not when only one of
+   * the two was restated (see `lineagePoints`).
+   */
+  all: FactPoint[];
 }
 type FactIndex = Map<string, UnitPoints[]>;
+
+/**
+ * The copies of one concept visible to a filing made on `filedCutoff`: every
+ * core copy filed no later than that, reduced to one per period by the same
+ * last-filed rule. Subtracting a YTD fact restated AFTER the annual fact it is
+ * netted against would mix two lineages and produce a quarter neither filing
+ * ever reported.
+ */
+function lineagePoints(up: UnitPoints, filedCutoff: string): FactPoint[] {
+  return dedupByPeriod(up.all.filter((p) => p.filed <= filedCutoff));
+}
 
 /** Dedup/grouping key: durations by (start, end), instants by end. Mirrors dedupByPeriod. */
 function periodKey(p: FactPoint): string {
@@ -651,6 +728,11 @@ function collectTags(spec: ChainSpec, into: Set<string>): void {
   }
   if (spec.kind === "sumAnyOf" || spec.kind === "sumAll") {
     for (const part of spec.parts) collectTags(part.spec, into);
+    // An optional subtrahend is only ever resolved by tag, so its tags have to
+    // be parsed into the index like any other.
+    if (spec.kind === "sumAll") {
+      for (const adjustment of spec.minusAny ?? []) for (const tag of adjustment.tags) into.add(tag);
+    }
     return;
   }
   if (spec.kind === "diff") {
@@ -660,9 +742,6 @@ function collectTags(spec: ChainSpec, into: Set<string>): void {
   }
   for (const tag of spec.tags) into.add(tag);
 }
-
-/** The all-classes share count a per-class reporter files instead of the dei cover count. */
-export const BALANCE_SHEET_SHARES_TAG = "CommonStockSharesOutstanding";
 
 /** Every us-gaap tag any chain or anchor can ask for; nothing else is parsed. */
 const NEEDED_US_GAAP_TAGS: ReadonlySet<string> = (() => {
@@ -677,7 +756,10 @@ const NEEDED_US_GAAP_TAGS: ReadonlySet<string> = (() => {
   return tags;
 })();
 
-const NEEDED_DEI_TAGS = new Set(["EntityCommonStockSharesOutstanding", "EntityPublicFloat"]);
+/** Cover-page share count; stated once per class of registered common stock. */
+const DEI_SHARES_TAG = tagsFor("deiSharesOutstanding")[0] as string;
+const DEI_PUBLIC_FLOAT_TAG = tagsFor("deiPublicFloat")[0] as string;
+const NEEDED_DEI_TAGS = new Set([DEI_SHARES_TAG, DEI_PUBLIC_FLOAT_TAG]);
 
 function unitMatches(unit: string, kind: UnitKind): boolean {
   if (kind === "money") return /^[A-Z]{3}$/.test(unit);
@@ -728,7 +810,7 @@ function buildFactIndex(facts: CompanyFacts, splits: StockSplits): FactIndex {
         if (!Array.isArray(rawPoints)) continue;
         const core = filterToCoreForms(toCurrentShareBasis(parseFactPoints(rawPoints), unit, splits));
         const points = dedupByPeriod(core);
-        if (points.length > 0) entries.push({ unit, points, reporters: buildReporters(core) });
+        if (points.length > 0) entries.push({ unit, points, reporters: buildReporters(core), all: core });
       }
       if (entries.length === 0) continue;
       entries.sort((a, b) => (a.unit === "USD" ? -1 : b.unit === "USD" ? 1 : a.unit.localeCompare(b.unit)));
@@ -832,11 +914,31 @@ interface Resolved {
   parts?: Record<string, number>;
   derivation?: Derivation;
   derivedFrom?: string[];
+  /**
+   * The value the period was FIRST reported with, when a later filing changed
+   * it. Set only for a value read straight from one fact: for a sum or a
+   * derived quarter each operand has its own history and a single "original"
+   * would be an invention.
+   */
+  original?: OriginalValue;
 }
 
-/** Value and period from `point`; labels from the filing that first reported that period. */
+function filingRef(p: FactPoint): FilingRef {
+  return { accn: p.accn, filed: p.filed, form: p.form.trim() };
+}
+
+/**
+ * Value and period from `point`; labels from the filing that first reported
+ * that period. When that first filing reported a DIFFERENT number, it is kept
+ * as `original` so the row can show what was superseded.
+ */
 function resolvedPoint(tag: string, up: UnitPoints, point: FactPoint, value: number): Resolved {
-  return { value, point, reporter: reporterFor(up, point), unit: up.unit, tags: [tag] };
+  const reporter = reporterFor(up, point);
+  const out: Resolved = { value, point, reporter, unit: up.unit, tags: [tag] };
+  if (reporter.accn !== point.accn && reporter.val !== point.val && value === point.val) {
+    out.original = { value: reporter.val, ...filingRef(reporter) };
+  }
+  return out;
 }
 
 type TagResolver = (tag: string, kind: UnitKind) => Resolved | null;
@@ -960,8 +1062,45 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
         if (r === null || (present.length > 0 && present[0]!.unit !== r.unit)) return null;
         present.push(r);
       }
-      const total = present.reduce((s, r) => s + r.value, 0);
-      return disclosed(combine(tidy(total, MONEY_DECIMALS), present));
+      let total = present.reduce((s, r) => s + r.value, 0);
+      // Optional subtrahends: each one the filer tagged for this period is
+      // removed, one whose parent aggregate also resolved is skipped (the
+      // taxonomy already counts it inside that aggregate), and everything that
+      // could not be resolved is named as the error band on the result.
+      const subtracted: string[] = [];
+      const unavailable: string[] = [];
+      const alreadyInside: string[] = [];
+      if (spec.minusAny !== undefined) {
+        const resolvedByLabel = new Map<string, Resolved>();
+        for (const adjustment of spec.minusAny) {
+          const hit = adjustment.tags
+            .map((tag) => resolve(tag, spec.unit))
+            .find((r): r is Resolved => r !== null && r.unit === present[0]!.unit);
+          if (hit !== undefined) resolvedByLabel.set(adjustment.label, hit);
+        }
+        for (const adjustment of spec.minusAny) {
+          const hit = resolvedByLabel.get(adjustment.label);
+          if (hit === undefined) {
+            unavailable.push(adjustment.label);
+            continue;
+          }
+          if (adjustment.componentOf !== undefined && resolvedByLabel.has(adjustment.componentOf)) {
+            alreadyInside.push(adjustment.label);
+            continue;
+          }
+          total -= hit.value;
+          subtracted.push(adjustment.label);
+          present.push(hit);
+        }
+      }
+      const combined = combine(tidy(total, MONEY_DECIMALS), present);
+      if (spec.discloseAdjusted !== undefined) {
+        const text = spec.discloseAdjusted({ subtracted, unavailable, alreadyInside });
+        notes.add(`${label}: ${text}`);
+        if (at !== undefined) notes.substitute(at.field, at.period, text);
+        return combined;
+      }
+      return disclosed(combined);
     }
     case "sumAny": {
       const { present, absent } = resolveComponents(spec.tags, spec.unit, resolve);
@@ -1172,7 +1311,7 @@ function decimalsFor(kind: UnitKind): number {
   return kind === "perShare" ? PER_SHARE_DECIMALS : MONEY_DECIMALS;
 }
 
-/** The three 3-month points preceding an FY end, all required. */
+/** The three 3-month points preceding an FY end, all required, from one filing lineage. */
 function precedingQuarterPoints(points: FactPoint[], ctx: QuarterContext, quarterEnds: string[]): FactPoint[] | null {
   const out: FactPoint[] = [];
   let cursor = ctx.previousEnd;
@@ -1209,7 +1348,13 @@ function precedingQuarterPoints(points: FactPoint[], ctx: QuarterContext, quarte
  * flow); per-share amounts use (a) plus the FY-minus-YTD rule at Q4 only, which
  * is the FMP convention for a fourth-quarter EPS.
  */
-function quarterResolver(index: FactIndex, ctx: QuarterContext, quarterEnds: string[], ytdOnly: boolean): TagResolver {
+function quarterResolver(
+  index: FactIndex,
+  ctx: QuarterContext,
+  quarterEnds: string[],
+  ytdOnly: boolean,
+  notes: NoteSink,
+): TagResolver {
   return (tag, kind) => {
     const up = pickUnitPoints(index, tag, kind);
     if (up === null) return null;
@@ -1222,12 +1367,24 @@ function quarterResolver(index: FactIndex, ctx: QuarterContext, quarterEnds: str
     }
     if (kind === "shares") return null;
 
+    /** Every operand of a difference comes from the minuend's own filing lineage. */
+    const lineage = (minuend: FactPoint): FactPoint[] => lineagePoints(up, minuend.filed);
+    const refuse = (minuend: FactPoint, what: string): null => {
+      notes.add(
+        `${tag} ${ctx.end}: ${what} not derived — no ${
+          ctx.isFiscalYearEnd ? "year-to-date" : "prior year-to-date"
+        } fact filed on or before the ${minuend.form.trim()} of ${minuend.filed} (accession ${minuend.accn}) that reported the minuend, so the difference would mix two filing lineages`,
+      );
+      return null;
+    };
+
     if (ctx.isFiscalYearEnd) {
       const fy =
         (ctx.fyStart !== null ? findDurationExact(pts, ctx.fyStart, ctx.end) : null) ?? findAnnualDuration(pts, ctx.end);
       if (fy === null || fy.start === undefined) return null;
+      const sameLineage = lineage(fy);
       if (ctx.previousEnd !== null) {
-        const ytdPrev = findDurationExact(pts, fy.start, ctx.previousEnd);
+        const ytdPrev = findDurationExact(sameLineage, fy.start, ctx.previousEnd);
         if (ytdPrev !== null) {
           return {
             ...resolvedPoint(tag, up, fy, tidy(fy.val - ytdPrev.val, decimals)),
@@ -1235,10 +1392,18 @@ function quarterResolver(index: FactIndex, ctx: QuarterContext, quarterEnds: str
             derivedFrom: [describePoint(tag, fy), describePoint(tag, ytdPrev)],
           };
         }
+        // A year-to-date fact exists but only in a filing made AFTER the annual
+        // one this row's value came from: that is the case the lineage rule is
+        // for, and it is disclosed rather than silently mixed.
+        if (findDurationExact(pts, fy.start, ctx.previousEnd) !== null) return refuse(fy, "FY − YTD");
       }
       if (kind === "perShare") return null;
-      const quarters = precedingQuarterPoints(pts, ctx, quarterEnds);
-      if (quarters === null) return null;
+      const quarters = precedingQuarterPoints(sameLineage, ctx, quarterEnds);
+      if (quarters === null) {
+        return precedingQuarterPoints(pts, ctx, quarterEnds) === null
+          ? null
+          : refuse(fy, "FY − (Q1+Q2+Q3)");
+      }
       const sum = quarters.reduce((s, p) => s + p.val, 0);
       return {
         ...resolvedPoint(tag, up, fy, tidy(fy.val - sum, decimals)),
@@ -1253,8 +1418,10 @@ function quarterResolver(index: FactIndex, ctx: QuarterContext, quarterEnds: str
     // First quarter of the fiscal year: the year-to-date fact IS the quarter.
     if (daysBetween(ctx.fyStart, ctx.end) <= QUARTER_MAX_DAYS) return resolvedPoint(tag, up, ytd, ytd.val);
     if (ctx.previousEnd === null) return null;
-    const prior = findDurationExact(pts, ytd.start, ctx.previousEnd);
-    if (prior === null) return null;
+    const prior = findDurationExact(lineage(ytd), ytd.start, ctx.previousEnd);
+    if (prior === null) {
+      return findDurationExact(pts, ytd.start, ctx.previousEnd) === null ? null : refuse(ytd, "YTD difference");
+    }
     return {
       ...resolvedPoint(tag, up, ytd, tidy(ytd.val - prior.val, decimals)),
       derivation: "ytd-difference",
@@ -1401,20 +1568,22 @@ function resolveDebtOverlaps(
   }
 
   // Case 5: the maturity schedule's first year is the current portion of
-  // long-term debt. Beside a balance-sheet current tag (LongTermDebtCurrent or
-  // the combined current tag) it is the same amount twice, so it is dropped;
-  // alone it stands in for the current maturities the filer never tagged.
-  const maturities = shortTermTags.includes(MATURITIES_NEXT_YEAR_TAG) ? cc.money(MATURITIES_NEXT_YEAR_TAG) : null;
-  const maturitiesStand =
-    maturities !== null && !shortTermTags.includes("LongTermDebtCurrent") && combinedCurrent === null;
-  if (maturities !== null && !maturitiesStand && v.shortTermDebt != null) {
-    v.shortTermDebt = tidy(v.shortTermDebt - maturities, MONEY_DECIMALS);
+  // long-term debt. Under the house rule (D-13) the chain reaches it only when
+  // all four balance-sheet current-debt tags miss, so here it either stood in
+  // for them or was never summed at all — and the figure the filer did disclose
+  // is named either way, because a reader has to see what the row leaves out.
+  const maturitiesStand = shortTermTags.includes(MATURITIES_NEXT_YEAR_TAG);
+  const maturities = cc.money(MATURITIES_NEXT_YEAR_TAG);
+  if (maturitiesStand) {
     notes.add(
-      `shortTermDebt ${ctx}: ${MATURITIES_NEXT_YEAR_TAG} excluded — the balance sheet's own current-debt tag resolved for this period`,
+      `shortTermDebt ${ctx}: current maturities taken from the debt maturity schedule (${MATURITIES_NEXT_YEAR_TAG} ${maturities}) — no balance-sheet current-debt tag filed; the figure is CURRENT MATURITIES ONLY and, being a note disclosure rather than a balance-sheet line, is often filed annually only, so quarterly rows can lack it`,
     );
-  } else if (maturitiesStand) {
+  } else if (maturities !== null) {
+    const currentMaturityTagResolved = CURRENT_MATURITY_TAGS.some((tag) => shortTermTags.includes(tag));
     notes.add(
-      `shortTermDebt ${ctx}: current maturities taken from the debt maturity schedule (${MATURITIES_NEXT_YEAR_TAG} ${maturities}) — no balance-sheet current-debt tag filed`,
+      currentMaturityTagResolved
+        ? `shortTermDebt ${ctx}: ${MATURITIES_NEXT_YEAR_TAG} excluded — the balance sheet's own current-debt tag resolved for this period and already carries the current maturities`
+        : `shortTermDebt ${ctx}: the debt maturity schedule reports ${maturities} of long-term debt due within a year (${MATURITIES_NEXT_YEAR_TAG}); it is NOT added because the filer tagged a balance-sheet current-debt line (${shortTermTags.join(" + ")}) and the house rule takes the schedule only when every current-debt tag misses, so short-term debt here may exclude the current maturities of long-term debt`,
     );
   }
 
@@ -1545,7 +1714,9 @@ function buildStatementRows<TRow>(
   notes: NoteSink,
 ): StatementRowsResult<TRow> {
   const rows: TRow[] = [];
+  const restatements: Restatement[] = [];
   const fieldNames = [...Object.keys(def.chains), ...Object.keys(def.aliases), ...def.computed, ...def.unsourced];
+  const material = new Set(MATERIAL_FIELDS[def.statement]);
 
   for (const slot of slots) {
     const ctxLabel = slot.date;
@@ -1591,6 +1762,42 @@ function buildStatementRows<TRow>(
     };
     for (const field of fieldNames) row[field] = values[field] ?? null;
 
+    // The superseded figure of every field a later filing changed, kept beside
+    // the value the row carries; a MATERIAL line that moved by more than
+    // RESTATEMENT_THRESHOLD_PCT of its first-reported value also raises a
+    // statement-level `restatement` flag the forensics module can read.
+    const original: Record<string, OriginalValue> = {};
+    const rowFlags: Restatement[] = [];
+    for (const [field, resolved] of resolutions) {
+      const prior = resolved.original;
+      if (prior === undefined) continue;
+      original[field] = prior;
+      if (!material.has(field)) continue;
+      const changePct = prior.value === 0 ? Number.POSITIVE_INFINITY : ((resolved.value - prior.value) / Math.abs(prior.value)) * 100;
+      if (!(Math.abs(changePct) > RESTATEMENT_THRESHOLD_PCT)) continue;
+      rowFlags.push({
+        date: slot.date,
+        field,
+        original: prior.value,
+        restated: resolved.value,
+        changePct: Number.isFinite(changePct) ? tidy(changePct, 4) : changePct,
+        originalFiling: { accn: prior.accn, filed: prior.filed, form: prior.form },
+        restatedFiling: filingRef(resolved.point),
+      });
+    }
+    if (Object.keys(original).length > 0) row.original = original;
+    if (rowFlags.length > 0) {
+      row.restatement = rowFlags;
+      restatements.push(...rowFlags);
+      for (const flag of rowFlags) {
+        notes.add(
+          `${def.statement} ${ctxLabel}: ${flag.field} restated from ${flag.original} (${flag.originalFiling.form} ${flag.originalFiling.filed}) to ${flag.restated} (${flag.restatedFiling.form} ${flag.restatedFiling.filed}), ${
+            Number.isFinite(flag.changePct) ? `${flag.changePct > 0 ? "+" : ""}${flag.changePct.toFixed(2)}%` : "from zero"
+          } — the row carries the last-filed value and the superseded one as \`original\``,
+        );
+      }
+    }
+
     if (slot.quarter !== null) {
       const derivedFields = [...resolutions.entries()].filter(([, r]) => r.derivation !== undefined);
       const derivation = anchor.derivation ?? derivedFields[0]?.[1].derivation;
@@ -1606,7 +1813,7 @@ function buildStatementRows<TRow>(
 
   const gaps: ManifestEntry[] = [];
   if (rows.length === 0) gaps.push(noRowsGap(def, scope, opts, slots.length));
-  return { rows, notes: notes.notes, gaps, substitutions: notes.substitutions };
+  return { rows, notes: notes.notes, gaps, substitutions: notes.substitutions, restatements };
 }
 
 function noRowsGap(def: StatementDef, scope: Scope, opts: StatementBuildOptions, candidates: number): ManifestEntry {
@@ -1662,12 +1869,59 @@ function latestDeiPoint(index: FactIndex, tag: string, kind: UnitKind): { value:
  * combined-class figure with the basis named.
  */
 export function latestSharesOutstanding(index: FactIndex): SharesOutstandingPoint | null {
-  const cover = latestDeiPoint(index, "EntityCommonStockSharesOutstanding", "shares");
-  if (cover !== null) return { ...cover, basis: "dei cover page" };
+  const cover = latestCoverShareCount(index);
+  if (cover !== null) return cover;
   const balanceSheet = latestPoint(index, BALANCE_SHEET_SHARES_TAG, "shares", true);
   return balanceSheet === null
     ? null
     : { ...balanceSheet, basis: "balance sheet CommonStockSharesOutstanding" };
+}
+
+/**
+ * The newest cover-page share count, SUMMED across share classes.
+ *
+ * `dei:EntityCommonStockSharesOutstanding` is stated once per class of
+ * registered common stock, so a multi-class issuer's cover page produces
+ * several facts with the same period end and the same accession — one per
+ * class. Companyfacts drops the class dimension, so they are indistinguishable
+ * except by value, and the period dedup (one fact per period) kept exactly one
+ * of them: the market cap of a three-class issuer was the market cap of
+ * whichever class sorted first. Facts of one filing and one date are therefore
+ * summed, and the per-class breakdown is carried for disclosure.
+ *
+ * Byte-identical repeats of a fact (the same value in the same filing for the
+ * same date) are a companyfacts artifact, not a second class, and are counted
+ * once.
+ */
+function latestCoverShareCount(index: FactIndex): SharesOutstandingPoint | null {
+  const up = pickUnitPoints(index, `dei:${DEI_SHARES_TAG}`, "shares");
+  if (up === null) return null;
+  let best: FactPoint | null = null;
+  for (const p of up.all) {
+    if (best === null || p.end > best.end || (p.end === best.end && (p.filed > best.filed || (p.filed === best.filed && p.accn > best.accn)))) {
+      best = p;
+    }
+  }
+  if (best === null) return null;
+  const winner = best;
+  const seen = new Set<string>();
+  const classes: number[] = [];
+  for (const p of up.all) {
+    if (p.end !== winner.end || p.accn !== winner.accn || p.filed !== winner.filed) continue;
+    const key = `${p.val}|${p.form.trim()}|${p.start ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    classes.push(p.val);
+  }
+  const value = classes.reduce((s, v) => s + v, 0);
+  const point: SharesOutstandingPoint = {
+    value: classes.length === 0 ? winner.val : value,
+    asOf: winner.end,
+    basis: "dei cover page",
+    filing: filingRef(winner),
+  };
+  if (classes.length > 1) point.classes = classes;
+  return point;
 }
 
 // ---------------------------------------------------------------------------
@@ -1728,10 +1982,10 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
 
   const annualSlots = (resolverFor: (fy: FiscalYear) => TagResolver): PeriodSlot[] =>
     annualYears.map((fy) => ({ date: fy.end, resolve: resolverFor(fy), quarter: null }));
-  const quarterSlots = (ytdOnly: boolean): PeriodSlot[] =>
+  const quarterSlots = (ytdOnly: boolean, notes: NoteSink): PeriodSlot[] =>
     quarterSlotContexts.map((ctx) => ({
       date: ctx.end,
-      resolve: quarterResolver(index, ctx, quarterEnds, ytdOnly),
+      resolve: quarterResolver(index, ctx, quarterEnds, ytdOnly, notes),
       quarter: ctx,
     }));
   const balanceQuarterSlots = (): PeriodSlot[] =>
@@ -1770,7 +2024,7 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
   );
   const incomeQuarterly = buildStatementRows<FmpIncomeStatementRow>(
     incomeDef,
-    quarterSlots(false),
+    quarterSlots(false, incomeQuarterlyNotes),
     "quarter",
     opts,
     state,
@@ -1800,13 +2054,14 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
     state,
     createNoteSink(),
   );
+  const cashflowQuarterlyNotes = createNoteSink();
   const cashflowQuarterly = buildStatementRows<FmpCashFlowRow>(
     CASHFLOW_DEF,
-    quarterSlots(true),
+    quarterSlots(true, cashflowQuarterlyNotes),
     "quarter",
     opts,
     state,
-    createNoteSink(),
+    cashflowQuarterlyNotes,
   );
 
   // Trim the headroom quarter back to the requested count; a request trimmed to
@@ -1846,7 +2101,7 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
     cashflowQuarterly,
     shares: {
       outstanding: latestSharesOutstanding(index),
-      publicFloat: latestDeiPoint(index, "EntityPublicFloat", "money"),
+      publicFloat: latestDeiPoint(index, DEI_PUBLIC_FLOAT_TAG, "money"),
     },
     reportedCurrency: currency,
     filesTwentyF: state.filesTwentyF,

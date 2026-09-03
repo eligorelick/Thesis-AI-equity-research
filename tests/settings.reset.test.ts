@@ -10,7 +10,7 @@
  * directly.
  */
 
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -249,7 +249,7 @@ describe("runSettingsResetCli", () => {
     expect(scriptArgv).toContain("--conditions=react-server");
     expect(scriptArgv).toContain("scripts/settings-reset.ts");
 
-    function run(extra: readonly string[]): ReturnType<typeof spawnSync> {
+    function run(extra: readonly string[]): SpawnSyncReturns<string> {
       return spawnSync(process.execPath, [...scriptArgv, ...extra], {
         cwd: ROOT,
         encoding: "utf8",

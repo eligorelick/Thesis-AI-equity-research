@@ -67,12 +67,26 @@ against the API:
 > `X-Thesis-Token` with the contents of the `csrf-token` file that the server
 > writes into its data directory at every start.
 
-A curl example that works, if the README wants one:
+A curl example that works, if the README wants one. Do not write
+`$THESIS_DATA_DIR/csrf-token`: that variable is unset unless the user set it,
+so the path expands to `/csrf-token` and `cat` fails. The server prints the
+resolved path on every start —
 
 ```
+[security] X-Thesis-Token for non-browser clients written to <path>
+```
+
+— so take it from there, or from the platform default:
+
+```
+# Linux default. macOS: "$HOME/Library/Application Support/Thesis/csrf-token".
+# Windows: "$LOCALAPPDATA/Thesis/csrf-token".
+# THESIS_TOKEN_FILE overrides the whole path; THESIS_DATA_DIR moves the directory.
+TOKEN_FILE="${THESIS_TOKEN_FILE:-${XDG_DATA_HOME:-$HOME/.local/share}/thesis/csrf-token}"
+
 curl -X POST http://127.0.0.1:3000/api/report \
   -H "content-type: application/json" \
-  -H "X-Thesis-Token: $(cat "$THESIS_DATA_DIR/csrf-token")" \
+  -H "X-Thesis-Token: $(cat "$TOKEN_FILE")" \
   -d '{"symbol":"AAPL"}'
 ```
 

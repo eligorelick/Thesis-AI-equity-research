@@ -70,7 +70,6 @@ const ALLOWED_MARKDOWN = new Set([
   // end WS8
   // WS5
   "docs/audit/README-NOTES-WS5.md",
-  "docs/audit/ws5-methodology.md",
   "docs/METHODOLOGY.md", // WS6
   "docs/audit/README-NOTES-WS6.md", // WS6
   // WS4: the data-layer handover notes for the README rewrite.

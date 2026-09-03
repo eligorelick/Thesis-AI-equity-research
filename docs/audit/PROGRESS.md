@@ -37,7 +37,7 @@ File ownership (a workstream edits only these; anything else is a follow-up note
 - WS1: `src/providers/anthropic.ts`, `src/models/registry.ts` (new), `config/models.json` (new), `scripts/models-refresh.mjs` (new), `src/settings/contracts.ts`, `src/report/execution.ts`, `src/pipeline/stageC/passes.ts` (judge/analyst request args only), tests for those.
 - WS2/WS3: `src/pipeline/jobScheduler.ts`, `src/pipeline/jobRunner.ts`, `src/db/schema.ts` (additive), `src/config/env.ts` (lease and reservation keys), `src/providers/anthropic.ts` (retry loop, streaming), `scripts/docs-pricing.mjs`, `scripts/reconcile-presumed-costs.mjs`, tests.
 - WS4: `src/edgar/**`, `src/providers/edgar.ts`, `src/pipeline/keyless.ts`, `src/pipeline/dataBundle.ts` (fixture gating, backfill), `src/pipeline/stageB/betaEstimate.ts`, `src/providers/fmp.ts` (reserved symbols only), `src/config/env.ts` (`THESIS_STATEMENT_SOURCE` block only), `fixtures/edgar/**`, tests.
-- WS5: `src/pipeline/stageB/sectorRouting.ts`, `src/pipeline/stageB/forensics.ts`, `src/pipeline/stageB/financialMetrics.ts` (new), `src/pipeline/stageB/valuation.ts` (only `excessReturnModel`, `reitValuation`, `valueCompany` route dispatch), `src/pipeline/stageB/returns.ts` (ROTE/P-TBV only), `docs/audit/ws5-methodology.md` (folded into `docs/METHODOLOGY.md` at integration), tests.
+- WS5: `src/pipeline/stageB/sectorRouting.ts`, `src/pipeline/stageB/forensics.ts`, `src/pipeline/stageB/financialMetrics.ts` (new), `src/pipeline/stageB/valuation.ts` (only `excessReturnModel`, `reitValuation`, `valueCompany` route dispatch), `src/pipeline/stageB/returns.ts` (ROTE/P-TBV only), `docs/METHODOLOGY.md` (its sector-routing sections, folded in at integration), tests.
 - WS6: `src/pipeline/stageB/growth.ts`, `src/pipeline/stageB/valuation.ts` (DCF, terminal, bridge, multiples, labels), `src/pipeline/stageB/capital.ts`, `src/pipeline/stageB/returns.ts` (WACC disclosure, per-year history), `src/pipeline/compute.ts` (wiring only), `src/report/schema.ts` (labels, disclaimer), `docs/METHODOLOGY.md` (new), tests.
 - WS7: `src/pipeline/stageC/**` (except the request-arg builders WS1 owns), `src/report/schema.ts` (`case_strength`, metadata), `src/report/execution.ts` (shared-family note), tests.
 - WS8: `src/app/requestSecurity.ts`, `src/app/api/sameOrigin.ts`, `src/pipeline/jobSchedulerBootstrap.ts`, `src/app/api/jobs/resume` (new), `src/config/env.ts` (`THESIS_RESUME_ON_START` block only), `scripts/settings-reset.ts` (new), `docs/PRIVACY.md` and `docs/DATA-RIGHTS.md` (new; README sections in WS9 link them), tests.
@@ -62,7 +62,7 @@ gate once WS9 creates it.
 
 1. Fold the three review reports back into `main`, fixing what they find.
 2. Merge WS4, then WS7, with the full gate after each.
-3. WS9: README under 250 lines with generated config/commands/pricing blocks, `docs/METHODOLOGY.md` absorbing `ws5-methodology.md`, `CHANGELOG.md`, doc-lint test, `engines.node`.
+3. WS9: README under 250 lines with generated config/commands/pricing blocks, `CHANGELOG.md`, doc-lint test, `engines.node`.
 4. `docs/audit/REMEDIATION-REPORT.md`: every criterion, Met or Deferred with a reason.
 
 ## Open questions for the owner (asked at the end of the turn, never mid-task)

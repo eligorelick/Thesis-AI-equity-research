@@ -157,4 +157,30 @@ observations or it is a disclosed gap rather than a number. Three changes:
 The methodology entry is `profile.beta.method`; the failure entry stays
 `profile.beta`.
 
+## 11. Successor registrants keep their predecessor's history (D-14)
+
+A holding-company reorganization creates a new SEC registrant that takes over
+the listed ticker and files a Form 8-K12B. Its own `companyfacts` payload starts
+at the reorganization, and neither `submissions` nor `companyfacts` links it to
+the predecessor's CIK, so every long-window growth rate and multi-year average
+measured a few months of history — or produced nothing — with no explanation.
+
+Thesis now resolves the link. When a registrant has an 8-K12B on file **and** its
+own companyfacts carry no us-gaap concepts, two extra EDGAR requests run: the
+8-K12B's submission header, whose FILER blocks co-register the predecessor and
+are the only machine-readable connection between the two CIKs, and then the
+predecessor's companyfacts. Periods strictly older than anything the successor
+filed are appended, each row tagged `predecessor: true` with `predecessorCik`,
+and the statement's endpoint gains `[predecessor CIK …] (pre-reorganization
+periods)`. No period is ever duplicated or blended.
+
+The manifest field is `edgar.predecessor`: an expected `info` naming both
+entities, the linking accession and the span supplied, and stating that the
+older periods were filed by a different legal entity so a change of accounting
+policy or perimeter at the reorganization is not visible as a restatement. When
+the registrant is a successor and no predecessor could be resolved — a header
+with no single co-registrant, or a failed fetch — the same field is a `warn`
+saying every multi-year figure covers only the successor's own history. A CIK is
+never guessed from a company name.
+
 <!-- Sections continue as later WS4 units land. -->

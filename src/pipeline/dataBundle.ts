@@ -56,7 +56,14 @@ import {
   type ParsedDocument,
   type SectionSpec,
 } from "@/edgar/extract";
-import { latestFactEnd, looksLikeBankTagging } from "@/edgar/xbrl";
+import { latestFactEnd, looksLikeBankTagging, type CompanyFacts } from "@/edgar/xbrl";
+// WS4 (D-14): successor registrants — the predecessor CIK and its facts.
+import {
+  SUCCESSOR_FORM,
+  predecessorFromFilers,
+  usGaapConceptCount,
+  type PredecessorFacts,
+} from "@/edgar/successor";
 import {
   FINRA_MAX_TREND_PARTITIONS,
   FINRA_TTL_SECONDS,
@@ -1045,6 +1052,7 @@ async function buildEdgarBundle(
       auditorChange8Ks: dep("auditorChange8Ks", "warn"),
       nonReliance8Ks: dep("nonReliance8Ks", "warn"),
       companyFacts: dep("companyFacts", "warn"),
+      predecessor: null, // WS4 (D-14): no CIK, so no successor lookup either.
       xbrlSummary: null,
       sic: null,
       registrant: null,
@@ -1235,6 +1243,17 @@ async function buildEdgarBundle(
     };
   }
 
+  // WS4 (D-14): a successor registrant's own facts begin at the
+  // reorganization; the predecessor's CIK is only in the 8-K12B's header.
+  const predecessor = await resolvePredecessor(
+    symbol,
+    cikRes.value.data.cik10,
+    sub.ok ? sub.value.data.recentFilings : [],
+    companyFacts.ok ? companyFacts.value.data : null,
+    edgar,
+    progress,
+  );
+
   return {
     cik: cikRes,
     latestTenK,
@@ -1245,6 +1264,7 @@ async function buildEdgarBundle(
     auditorChange8Ks,
     nonReliance8Ks,
     companyFacts,
+    predecessor,
     xbrlSummary,
     // Altman's variant selection is SIC-decisive; FMP's profile has no SIC, so
     // the submissions payload is the only source and was previously discarded.
@@ -1264,6 +1284,55 @@ async function buildEdgarBundle(
           forms: [...new Set(sub.value.data.recentFilings.map((f) => f.form))],
         }
       : null,
+  };
+}
+
+/**
+ * WS4 (D-14): resolve a successor registrant's predecessor and fetch its facts.
+ *
+ * Two extra EDGAR requests, and only in the one situation that needs them: the
+ * registrant filed a Form 8-K12B AND its own companyfacts payload carries no
+ * us-gaap history. The 8-K12B's submission header co-registers the
+ * predecessor, which is the only machine-readable link between the two CIKs;
+ * from there the predecessor's companyfacts are an ordinary fetch. Any failure
+ * degrades to `null` and a disclosed gap — never a throw, and never a guess at
+ * a CIK from a company name.
+ */
+async function resolvePredecessor(
+  symbol: string,
+  successorCik10: string,
+  recentFilings: readonly EdgarFiling[],
+  facts: CompanyFacts | null,
+  edgar: EdgarClient,
+  progress: (msg: string) => void,
+): Promise<PredecessorFacts | null> {
+  const eightK = recentFilings.find((filing) => filing.form.trim() === SUCCESSOR_FORM);
+  if (eightK === undefined) return null;
+  // A successor that HAS its own history needs no second hop: the reorganized
+  // entity may have carried the XBRL forward, in which case reaching for the
+  // predecessor would double-count periods.
+  if (usGaapConceptCount(facts) > 0) return null;
+
+  progress(`EDGAR: ${symbol} is a successor issuer (${SUCCESSOR_FORM}) — resolving the predecessor CIK`);
+  const index = await settle(
+    `edgar.predecessorIndex(${symbol})`,
+    edgar.filingIndexHeaders(successorCik10, eightK.accessionNumber),
+  );
+  if (!index.ok) return null;
+  const registrant = predecessorFromFilers(index.value.data.filers, successorCik10);
+  if (registrant === null) return null;
+
+  const predecessorFacts = await settle(
+    `edgar.predecessorFacts(${symbol})`,
+    edgar.companyFacts(registrant.cik10),
+  );
+  if (!predecessorFacts.ok) return null;
+  return {
+    ...registrant,
+    facts: predecessorFacts.value.data,
+    endpoint: predecessorFacts.value.endpoint,
+    via: { accession: eightK.accessionNumber, filed: eightK.filingDate === "" ? null : eightK.filingDate },
+    fetchedAt: predecessorFacts.value.fetchedAt,
   };
 }
 
@@ -1289,6 +1358,7 @@ function reservedEdgarBundle(symbol: string): EdgarBundle {
     auditorChange8Ks: gap("auditorChange8Ks"),
     nonReliance8Ks: gap("nonReliance8Ks"),
     companyFacts: gap("companyFacts"),
+    predecessor: null, // WS4 (D-14): no request, so no predecessor lookup.
     xbrlSummary: null,
     sic: null,
     registrant: null,
@@ -1687,6 +1757,8 @@ export async function buildDataBundle(
           cik: edgarBundle.cik,
           registrant: edgarBundle.registrant,
           companyFacts: edgarBundle.companyFacts,
+          // WS4 (D-14): pre-reorganization history for a successor registrant.
+          predecessor: edgarBundle.predecessor,
         },
         yahoo,
         annualPeriods: ANNUAL_PERIODS,

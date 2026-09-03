@@ -38,6 +38,12 @@ import {
 } from "@/edgar/statements";
 import { conceptFactsSchema, dedupFactPoints, parseFactPoints, type CompanyFacts } from "@/edgar/xbrl";
 import { describeSplitRatio, discoverStockSplits, SPLIT_RATIO_TAG, type SplitEvent } from "@/edgar/splits";
+import {
+  SUCCESSOR_FORM,
+  predecessorManifestEntry,
+  predecessorUnresolvedEntry,
+  type PredecessorFacts,
+} from "@/edgar/successor";
 import { estimateBeta, type ClosePoint } from "@/pipeline/stageB/betaEstimate";
 import type { EdgarRegistrant } from "@/pipeline/types";
 import type { CikMapping } from "@/providers/edgar";
@@ -121,6 +127,12 @@ export interface KeylessInputs {
     cik: FetchResult<CikMapping>;
     registrant: EdgarRegistrant | null;
     companyFacts: FetchResult<CompanyFacts>;
+    /**
+     * WS4 (D-14): a successor registrant's predecessor and its facts, when the
+     * bundle resolved one. Optional so a caller that never looks for one (and
+     * every existing test) keeps working unchanged.
+     */
+    predecessor?: PredecessorFacts | null;
   };
   yahoo: YahooClient;
   annualPeriods: number;
@@ -725,6 +737,108 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   backfill("balanceQuarterly", built?.balanceQuarterly ?? null, STATEMENT_ENDPOINTS.balanceQuarterly);
   backfill("cashflowAnnual", built?.cashflowAnnual ?? null, STATEMENT_ENDPOINTS.cashflowAnnual);
   backfill("cashflowQuarterly", built?.cashflowQuarterly ?? null, STATEMENT_ENDPOINTS.cashflowQuarterly);
+
+  // --- Predecessor history (D-14) -------------------------------------------
+  //
+  // A successor registrant's own companyfacts begin at the reorganization, so
+  // every long-window growth rate and multi-year average measured a few months
+  // — or produced nothing — with no explanation. The predecessor's filings are
+  // the same business's history under a different CIK, so they are APPENDED as
+  // older periods, each row tagged so no consumer can mistake them for the
+  // successor's own filings, and the swap is disclosed once in the manifest.
+  const predecessor = inputs.edgar.predecessor ?? null;
+  const filedSuccessorForm = registrant?.forms.some((form) => form.trim() === SUCCESSOR_FORM) === true;
+  if (predecessor === null && filedSuccessorForm && inputs.edgarConfirmedIssuer && built !== null) {
+    // The registrant announced itself a successor and the second hop found
+    // nothing. Saying so is the difference between "this company is four
+    // months old" and "we could not reach the other ninety years".
+    gaps.push(
+      predecessorUnresolvedEntry(
+        cik10,
+        null,
+        "the Form 8-K12B's submission header named no single co-registrant, or its filing index and companyfacts could not be fetched",
+      ),
+    );
+  }
+  if (predecessor !== null && inputs.edgarConfirmedIssuer) {
+    const predecessorBuilt = buildStatementsFromCompanyFacts(predecessor.facts, {
+      symbol: inputs.symbol,
+      cik: predecessor.cik10,
+      annualPeriods: inputs.annualPeriods,
+      quarterlyPeriods: inputs.quarterlyPeriods,
+    });
+    let filledPeriods = 0;
+    let oldest: string | null = null;
+    let newest: string | null = null;
+    const fillFromPredecessor = <TRow extends FmpRawRow>(
+      member: keyof KeylessMembers,
+      result: StatementRowsResult<TRow>,
+      endpoint: string,
+    ): void => {
+      if (result.rows.length === 0) return;
+      const current = members[member] as FetchResult<FmpPayload<TRow>>;
+      const currentRows = current.ok ? current.value.data.rows : [];
+      const currentDates = currentRows
+        .map((row) => isoDay(row["date"]))
+        .filter((day): day is string => day !== null);
+      // Only periods strictly older than anything the successor filed: a
+      // period both entities reported would otherwise appear twice.
+      const cutoff = currentDates.length === 0 ? null : currentDates.reduce((a, b) => (a < b ? a : b));
+      const older = result.rows.filter((row) => {
+        const day = isoDay(row["date"]);
+        return day !== null && (cutoff === null || day < cutoff);
+      });
+      if (older.length === 0) return;
+      const tagged = older.map(
+        (row) =>
+          ({
+            ...row,
+            source: "edgar",
+            sourceEndpoint: endpoint,
+            predecessor: true,
+            predecessorCik: predecessor.cik10,
+          }) as TRow,
+      );
+      const dates = tagged.map((row) => isoDay(row["date"]) as string).sort();
+      filledPeriods += tagged.length;
+      if (oldest === null || dates[0]! < oldest) oldest = dates[0]!;
+      if (newest === null || dates[dates.length - 1]! > newest) newest = dates[dates.length - 1]!;
+      const predecessorEndpoint = `${endpoint} [predecessor CIK ${predecessor.cik10}]`;
+      if (current.ok) {
+        members[member] = {
+          ok: true,
+          value: {
+            ...current.value,
+            endpoint: `${current.value.endpoint} + ${predecessorEndpoint} (pre-reorganization periods)`,
+            data: { ...current.value.data, rows: [...currentRows, ...tagged] },
+          },
+        } as KeylessMembers[typeof member];
+      } else {
+        members[member] = sourced(
+          tagged,
+          "edgar",
+          predecessorEndpoint,
+          newestDate(tagged, predecessor.fetchedAt.slice(0, 10)),
+          predecessor.fetchedAt,
+        ) as KeylessMembers[typeof member];
+        if (!replaced.includes(member)) replaced.push(member);
+      }
+      notes.push(
+        `${member}: ${tagged.length} pre-reorganization period(s) from the predecessor registrant (CIK ${predecessor.cik10}), each row tagged \`predecessor\``,
+      );
+    };
+    fillFromPredecessor("incomeAnnual", predecessorBuilt.incomeAnnual, STATEMENT_ENDPOINTS.incomeAnnual);
+    fillFromPredecessor("incomeQuarterly", predecessorBuilt.incomeQuarterly, STATEMENT_ENDPOINTS.incomeQuarterly);
+    fillFromPredecessor("balanceAnnual", predecessorBuilt.balanceAnnual, STATEMENT_ENDPOINTS.balanceAnnual);
+    fillFromPredecessor("balanceQuarterly", predecessorBuilt.balanceQuarterly, STATEMENT_ENDPOINTS.balanceQuarterly);
+    fillFromPredecessor("cashflowAnnual", predecessorBuilt.cashflowAnnual, STATEMENT_ENDPOINTS.cashflowAnnual);
+    fillFromPredecessor("cashflowQuarterly", predecessorBuilt.cashflowQuarterly, STATEMENT_ENDPOINTS.cashflowQuarterly);
+    if (filledPeriods > 0) {
+      gaps.push(
+        predecessorManifestEntry(predecessor, cik10, filledPeriods, oldest ?? "", newest ?? ""),
+      );
+    }
+  }
 
   // --- Yahoo: every needed series and the quote in one concurrent round ------
 

@@ -503,9 +503,12 @@ describe("public release contract", () => {
       // WS4: the hand-built three-class companyfacts payload the multi-class
       // share-count tests read.
       read("tests/edgar.statements.test.ts"),
+      // WS4: the hand-built 8-K12B submission header the successor-registrant
+      // tests read.
+      read("tests/edgar.successor.test.ts"),
     ].join("\n");
 
-    expect(edgarFixtures).toHaveLength(16);
+    expect(edgarFixtures).toHaveLength(17);
     for (const fixture of edgarFixtures) {
       expect(edgarTests).toContain(path.basename(fixture));
     }

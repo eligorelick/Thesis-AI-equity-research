@@ -1,0 +1,400 @@
+/**
+ * Successor registrants (D-14).
+ *
+ * A holding-company reorganization creates a NEW SEC registrant that takes the
+ * listed ticker and files a Form 8-K12B. Its own companyfacts payload starts at
+ * the reorganization, so every long-window growth rate and multi-year average
+ * in a report measured a few months of history — or produced nothing — with no
+ * explanation. The predecessor's CIK appears in exactly one machine-readable
+ * place: the FILER blocks of that 8-K12B's submission header.
+ *
+ * The index-headers fixture here is hand-built (`synthetic-structure`), not a
+ * recorded SEC response; no test in this file makes a network request.
+ */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
+
+import {
+  SUCCESSOR_FORM,
+  predecessorFromFilers,
+  predecessorManifestEntry,
+  predecessorUnresolvedEntry,
+  usGaapConceptCount,
+  type PredecessorFacts,
+} from "@/edgar/successor";
+import {
+  EdgarClient,
+  parseFilers,
+  parseIndexHeaders,
+  type EdgarTransport,
+  type EdgarTransportResponse,
+} from "@/providers/edgar";
+import { applyKeylessFallbacks, type KeylessInputs, type KeylessMembers } from "@/pipeline/keyless";
+import { createYahooClient } from "@/providers/yahoo";
+import { makeLimiter } from "@/providers/http";
+import type { CompanyFacts } from "@/edgar/xbrl";
+import type { FetchResult } from "@/types/core";
+import type { FmpPayload, FmpRawRow } from "@/providers/fmp";
+
+const SAMPLES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "edgar");
+const sample = (name: string): string => readFileSync(path.join(SAMPLES, name), "utf8");
+const SUCCESSOR_INDEX = "successor_8k12b_index_headers.html";
+
+const SUCCESSOR_CIK = "0002115436";
+const PREDECESSOR_CIK = "0000034088";
+const NOW = new Date("2026-09-01T00:00:00Z");
+
+describe("parseFilers / parseIndexHeaders", () => {
+  it("reads both FILER blocks of a successor's 8-K12B, successor first", () => {
+    const index = parseIndexHeaders(sample(SUCCESSOR_INDEX));
+    expect(index.filers).toEqual([
+      { cik10: SUCCESSOR_CIK, name: "EXAMPLE SUCCESSOR HOLDINGS CORP" },
+      { cik10: PREDECESSOR_CIK, name: "EXAMPLE PREDECESSOR CORP" },
+    ]);
+    // The ordinary document map is unaffected by the second FILER block.
+    expect(index.typeByFilename["successor-8k12b.htm"]).toBe("8-K12B");
+    expect(index.filedAsOf).toBe("2026-07-01");
+  });
+
+  it("reads a single filer from an ordinary 10-K header", () => {
+    const index = parseIndexHeaders(sample("wfc_index_headers_excerpt.html"));
+    expect(index.filers).toEqual([{ cik10: "0000072971", name: "WELLS FARGO & COMPANY/MN" }]);
+  });
+
+  it("zero-pads short CIKs and lists each registrant once", () => {
+    const header = [
+      "COMPANY CONFORMED NAME:\tALPHA CORP",
+      "CENTRAL INDEX KEY:\t\t320193",
+      "COMPANY CONFORMED NAME:\tALPHA CORP",
+      "CENTRAL INDEX KEY:\t\t0000320193",
+      "COMPANY CONFORMED NAME:\tBETA CORP",
+      "CENTRAL INDEX KEY:\t\t34088",
+    ].join("\n");
+    expect(parseFilers(header)).toEqual([
+      { cik10: "0000320193", name: "ALPHA CORP" },
+      { cik10: "0000034088", name: "BETA CORP" },
+    ]);
+  });
+
+  it("returns no filers for a header that carries none", () => {
+    expect(parseFilers("ACCESSION NUMBER: 0000000000-26-000001\nFORM TYPE: 10-K")).toEqual([]);
+  });
+});
+
+describe("predecessorFromFilers", () => {
+  const successor = { cik10: SUCCESSOR_CIK, name: "EXAMPLE SUCCESSOR HOLDINGS CORP" };
+  const predecessor = { cik10: PREDECESSOR_CIK, name: "EXAMPLE PREDECESSOR CORP" };
+
+  it("picks the single co-registrant that is not the successor", () => {
+    expect(predecessorFromFilers([successor, predecessor], SUCCESSOR_CIK)).toEqual({
+      cik10: PREDECESSOR_CIK,
+      name: "EXAMPLE PREDECESSOR CORP",
+    });
+    // Filed order does not matter.
+    expect(predecessorFromFilers([predecessor, successor], SUCCESSOR_CIK)?.cik10).toBe(PREDECESSOR_CIK);
+  });
+
+  it("resolves nothing when the successor filed alone", () => {
+    expect(predecessorFromFilers([successor], SUCCESSOR_CIK)).toBeNull();
+    expect(predecessorFromFilers([], SUCCESSOR_CIK)).toBeNull();
+    expect(predecessorFromFilers(undefined, SUCCESSOR_CIK)).toBeNull();
+  });
+
+  it("refuses to choose between two co-registrants rather than guessing", () => {
+    const other = { cik10: "0000000123", name: "THIRD PARTY CORP" };
+    expect(predecessorFromFilers([successor, predecessor, other], SUCCESSOR_CIK)).toBeNull();
+  });
+
+  it("counts the us-gaap concepts that decide whether a second hop is needed", () => {
+    expect(usGaapConceptCount(null)).toBe(0);
+    expect(usGaapConceptCount({ cik: 1, entityName: "X", facts: {} })).toBe(0);
+    expect(usGaapConceptCount({ cik: 1, entityName: "X", facts: { "us-gaap": { Assets: {} } } })).toBe(1);
+  });
+});
+
+describe("the client surfaces the filers through filingIndexHeaders", () => {
+  it("carries both CIKs from the fetched header, without a second request", async () => {
+    let calls = 0;
+    const transport: EdgarTransport = {
+      fetchText(): Promise<EdgarTransportResponse> {
+        calls++;
+        return Promise.resolve({
+          status: 200,
+          body: sample(SUCCESSOR_INDEX),
+          fetchedAt: NOW.toISOString(),
+          fromCache: false,
+          stale: false,
+        });
+      },
+    };
+    const client = new EdgarClient({ transport });
+    const index = await client.filingIndexHeaders(SUCCESSOR_CIK, "0002115436-26-000001");
+    expect(index.ok).toBe(true);
+    if (!index.ok) return;
+    expect(calls).toBe(1);
+    expect(predecessorFromFilers(index.value.data.filers, SUCCESSOR_CIK)?.cik10).toBe(PREDECESSOR_CIK);
+  });
+});
+
+describe("the disclosure wording", () => {
+  const predecessor: PredecessorFacts = {
+    cik10: PREDECESSOR_CIK,
+    name: "EXAMPLE PREDECESSOR CORP",
+    facts: { cik: 34088, entityName: "EXAMPLE PREDECESSOR CORP", facts: {} },
+    endpoint: "companyfacts/CIK0000034088.json",
+    via: { accession: "0002115436-26-000001", filed: "2026-07-01" },
+    fetchedAt: NOW.toISOString(),
+  };
+
+  it("names both entities, the linking filing, and what the join cannot show", () => {
+    const entry = predecessorManifestEntry(predecessor, SUCCESSOR_CIK, 12, "2016-12-31", "2025-12-31");
+    expect(entry.field).toBe("edgar.predecessor");
+    expect(entry.severity).toBe("info");
+    expect(entry.expected).toBe(true);
+    expect(entry.reason).toContain(SUCCESSOR_CIK);
+    expect(entry.reason).toContain(PREDECESSOR_CIK);
+    expect(entry.reason).toContain(SUCCESSOR_FORM);
+    expect(entry.reason).toContain("0002115436-26-000001");
+    expect(entry.reason).toMatch(/12 older period\(s\), 2016-12-31 to 2025-12-31/);
+    expect(entry.reason).toMatch(/different legal entity/);
+  });
+
+  it("warns, rather than staying silent, when the predecessor could not be resolved", () => {
+    const entry = predecessorUnresolvedEntry(SUCCESSOR_CIK, "0002115436-26-000001", "the header named one filer");
+    expect(entry.severity).toBe("warn");
+    expect(entry.reason).toMatch(/only the successor's own filing history/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The keyless layer: predecessor periods appended, tagged and disclosed.
+// ---------------------------------------------------------------------------
+
+const gap = <T extends FmpRawRow>(field: string): FetchResult<FmpPayload<T>> => ({
+  ok: false,
+  gap: { field, reason: "no API key + no fixture", severity: "warn" },
+});
+
+function allGaps(): KeylessMembers {
+  return {
+    profile: gap("fmp.profile(XMPL)"),
+    quote: gap("fmp.quote(XMPL)"),
+    incomeAnnual: gap("fmp.incomeStatement(XMPL,annual)"),
+    incomeQuarterly: gap("fmp.incomeStatement(XMPL,quarter)"),
+    balanceAnnual: gap("fmp.balanceSheet(XMPL,annual)"),
+    balanceQuarterly: gap("fmp.balanceSheet(XMPL,quarter)"),
+    cashflowAnnual: gap("fmp.cashFlow(XMPL,annual)"),
+    cashflowQuarterly: gap("fmp.cashFlow(XMPL,quarter)"),
+    eodPrices: gap("fmp.historicalPriceEodFull(XMPL)"),
+    spy: gap("fmp.historicalPriceEodFull(SPY)"),
+    sectorEtf: gap("fmp.historicalPriceEodFull(XLE)"),
+    enterpriseValues: gap("fmp.enterpriseValues(XMPL,quarter)"),
+    marketCapHistory: gap("fmp.historicalMarketCap(XMPL)"),
+    sharesFloat: gap("fmp.sharesFloat(XMPL)"),
+  };
+}
+
+/** Annual us-gaap facts for the fiscal years `years`, filed the following February. */
+function annualFacts(cik: number, name: string, years: number[]): CompanyFacts {
+  const point = (year: number, val: number) => ({
+    start: `${year}-01-01`,
+    end: `${year}-12-31`,
+    val,
+    accn: `${String(cik).padStart(10, "0")}-${String(year + 1).slice(2)}-000001`,
+    fy: year,
+    fp: "FY",
+    form: "10-K",
+    filed: `${year + 1}-02-15`,
+  });
+  const instant = (year: number, val: number) => ({
+    end: `${year}-12-31`,
+    val,
+    accn: `${String(cik).padStart(10, "0")}-${String(year + 1).slice(2)}-000001`,
+    fy: year,
+    fp: "FY",
+    form: "10-K",
+    filed: `${year + 1}-02-15`,
+  });
+  const usd = (points: unknown[]) => ({ label: "x", units: { USD: points } });
+  return {
+    cik,
+    entityName: name,
+    facts: {
+      "us-gaap": {
+        Revenues: usd(years.map((y, i) => point(y, 1000 + i * 100))),
+        NetIncomeLoss: usd(years.map((y, i) => point(y, 100 + i * 10))),
+        Assets: usd(years.map((y, i) => instant(y, 5000 + i * 100))),
+        StockholdersEquity: usd(years.map((y, i) => instant(y, 2000 + i * 50))),
+        Liabilities: usd(years.map((y, i) => instant(y, 3000 + i * 50))),
+        NetCashProvidedByUsedInOperatingActivities: usd(years.map((y, i) => point(y, 200 + i * 10))),
+      },
+    },
+  };
+}
+
+function inputs(over: Partial<KeylessInputs> = {}): KeylessInputs {
+  const yahoo = createYahooClient({
+    fetchImpl: (() => Promise.resolve(new Response("no", { status: 599 }))) as unknown as typeof fetch,
+    limiter: makeLimiter(1000, 1000),
+    now: () => NOW,
+    maxRetries: 0,
+  });
+  const successorFacts = annualFacts(2115436, "EXAMPLE SUCCESSOR HOLDINGS CORP", [2026]);
+  return {
+    symbol: "XMPL",
+    today: "2026-09-01",
+    eodFrom: "2021-09-01",
+    sectorEtfSymbol: null,
+    fmp: allGaps(),
+    fmpKeyless: true,
+    statementSource: "auto",
+    edgarConfirmedIssuer: true,
+    edgar: {
+      cik: {
+        ok: true,
+        value: {
+          data: { cik10: SUCCESSOR_CIK, cik: 2115436, ticker: "XMPL", title: "Example Successor Holdings Corp" },
+          asOf: "2026-09-01",
+          source: "edgar",
+          endpoint: "company_tickers.json",
+          fetchedAt: NOW.toISOString(),
+        },
+      },
+      registrant: {
+        name: "EXAMPLE SUCCESSOR HOLDINGS CORP",
+        cik10: SUCCESSOR_CIK,
+        sic: "2911",
+        sicDescription: "PETROLEUM REFINING",
+        exchanges: ["NYSE"],
+        tickers: ["XMPL"],
+        fiscalYearEnd: "1231",
+        stateOfIncorporation: "NJ",
+        forms: ["8-K12B", "10-Q"],
+      },
+      companyFacts: {
+        ok: true,
+        value: {
+          data: successorFacts,
+          asOf: "2026-12-31",
+          source: "edgar",
+          endpoint: "companyfacts",
+          fetchedAt: NOW.toISOString(),
+        },
+      },
+      predecessor: {
+        cik10: PREDECESSOR_CIK,
+        name: "EXAMPLE PREDECESSOR CORP",
+        facts: annualFacts(34088, "EXAMPLE PREDECESSOR CORP", [2021, 2022, 2023, 2024, 2025]),
+        endpoint: "companyfacts/CIK0000034088.json",
+        via: { accession: "0002115436-26-000001", filed: "2026-07-01" },
+        fetchedAt: NOW.toISOString(),
+      },
+    },
+    yahoo,
+    annualPeriods: 10,
+    quarterlyPeriods: 24,
+    now: () => NOW,
+    resolveSectorEtf: () => null,
+    ...over,
+  };
+}
+
+describe("applyKeylessFallbacks — a successor registrant's pre-reorganization history", () => {
+  it("appends the predecessor's older years, tags every row, and leaves the successor's own untouched", async () => {
+    const out = await applyKeylessFallbacks(inputs());
+    const rows = out.members.incomeAnnual.ok ? out.members.incomeAnnual.value.data.rows : [];
+    const dates = rows.map((row) => row["date"]).sort();
+    expect(dates).toEqual(["2021-12-31", "2022-12-31", "2023-12-31", "2024-12-31", "2025-12-31", "2026-12-31"]);
+
+    const own = rows.find((row) => row["date"] === "2026-12-31")!;
+    expect(own["predecessor"]).toBeUndefined();
+    const inherited = rows.filter((row) => row["date"]! < "2026-01-01");
+    expect(inherited).toHaveLength(5);
+    for (const row of inherited) {
+      expect(row["predecessor"]).toBe(true);
+      expect(row["predecessorCik"]).toBe(PREDECESSOR_CIK);
+      expect(row["source"]).toBe("edgar");
+    }
+    expect(out.members.incomeAnnual.ok && out.members.incomeAnnual.value.endpoint).toContain(
+      `[predecessor CIK ${PREDECESSOR_CIK}]`,
+    );
+    expect(out.notes.some((n) => n.startsWith("incomeAnnual: 5 pre-reorganization period(s)"))).toBe(true);
+  });
+
+  it("files one manifest entry naming both CIKs and the span it supplied", async () => {
+    const out = await applyKeylessFallbacks(inputs());
+    const entries = out.gaps.filter((g) => g.field === "edgar.predecessor");
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.severity).toBe("info");
+    expect(entries[0]!.reason).toContain(PREDECESSOR_CIK);
+    expect(entries[0]!.reason).toMatch(/2021-12-31 to 2025-12-31/);
+  });
+
+  it("never duplicates a period both entities reported", async () => {
+    // The predecessor also filed FY2026 — the year of the reorganization.
+    const overlapping = inputs();
+    const predecessor = overlapping.edgar.predecessor!;
+    const out = await applyKeylessFallbacks(
+      inputs({
+        edgar: {
+          ...overlapping.edgar,
+          predecessor: {
+            ...predecessor,
+            facts: annualFacts(34088, "EXAMPLE PREDECESSOR CORP", [2024, 2025, 2026]),
+          },
+        },
+      }),
+    );
+    const rows = out.members.incomeAnnual.ok ? out.members.incomeAnnual.value.data.rows : [];
+    const dates = rows.map((row) => row["date"]);
+    expect(dates.filter((d) => d === "2026-12-31")).toHaveLength(1);
+    expect(rows.find((row) => row["date"] === "2026-12-31")!["predecessor"]).toBeUndefined();
+    expect(dates.sort()).toEqual(["2024-12-31", "2025-12-31", "2026-12-31"]);
+  });
+
+  it("adds no rows when no predecessor was resolved", async () => {
+    const base = inputs();
+    const out = await applyKeylessFallbacks(
+      inputs({ edgar: { ...base.edgar, predecessor: null } }),
+    );
+    const rows = out.members.incomeAnnual.ok ? out.members.incomeAnnual.value.data.rows : [];
+    expect(rows.map((row) => row["date"])).toEqual(["2026-12-31"]);
+    expect(rows.every((row) => row["predecessor"] === undefined)).toBe(true);
+    // The absence is disclosed rather than silent — asserted below.
+    expect(out.gaps.find((g) => g.field === "edgar.predecessor")?.severity).toBe("warn");
+  });
+
+  it("does not reach for a predecessor when EDGAR has not confirmed the issuer", async () => {
+    const out = await applyKeylessFallbacks(inputs({ edgarConfirmedIssuer: false }));
+    expect(out.gaps.some((g) => g.field === "edgar.predecessor")).toBe(false);
+  });
+
+  it("warns when the registrant is a successor and no predecessor was resolved", async () => {
+    // "This company is four months old" and "we could not reach the other
+    // ninety years" look identical in the numbers; only the manifest separates
+    // them.
+    const base = inputs();
+    const out = await applyKeylessFallbacks(inputs({ edgar: { ...base.edgar, predecessor: null } }));
+    const entry = out.gaps.find((g) => g.field === "edgar.predecessor")!;
+    expect(entry.severity).toBe("warn");
+    expect(entry.reason).toMatch(/successor issuer \(Form 8-K12B\)/);
+    expect(entry.reason).toMatch(/only the successor's own filing history/);
+  });
+
+  it("files no successor warning for an ordinary registrant", async () => {
+    const base = inputs();
+    const out = await applyKeylessFallbacks(
+      inputs({
+        edgar: {
+          ...base.edgar,
+          registrant: { ...base.edgar.registrant!, forms: ["10-K", "10-Q"] },
+          predecessor: null,
+        },
+      }),
+    );
+    expect(out.gaps.some((g) => g.field === "edgar.predecessor")).toBe(false);
+  });
+});

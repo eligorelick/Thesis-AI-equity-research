@@ -159,8 +159,8 @@ export function renderConfigBlock(sections, schemaKeys) {
     throw new Error(`.env.example documents no ${undocumented.join(", ")}; every validated key must appear there`);
   }
   const lines = [CONFIG_BEGIN, ""];
-  lines.push("Every key is optional. `.env.example` carries the long form of each one;");
-  lines.push("this table is generated from it, so the two cannot drift apart.");
+  lines.push("Every key is optional. This table is generated from `.env.example`, which");
+  lines.push("carries the long form of each one, so the two cannot drift apart.");
   lines.push("");
   lines.push("| Key | Default | What it does |");
   lines.push("| --- | --- | --- |");

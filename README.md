@@ -1,417 +1,250 @@
 # Thesis
 
-Thesis is a local-first equity research application. Enter a ticker to collect
-and validate market data, calculate deterministic financial metrics, optionally
-run grounded AI analysis, and save a source-traceable report with history,
-comparison, watchlist, Markdown export, and browser print-to-PDF support.
+Thesis is a local-first equity research application. Enter a ticker: it collects
+and validates market data, computes deterministic financial metrics, optionally
+runs grounded AI analysis, and saves a report in which every number carries a
+source path and an as-of date.
 
-> **Informational only — not investment advice.** Thesis does not provide
-> buy/sell/hold ratings, trade execution, or personalized financial advice.
-> Market data and AI output can be delayed, incomplete, or wrong. Verify
-> important facts independently.
+> **Informational only — not investment advice.** Reports contain A-F letter
+> grades and scenario price targets: model outputs derived from the data and
+> assumptions the report discloses, not a recommendation to buy, sell or hold
+> any security, and no price target in one is authored by a person. Market data
+> and AI output can be delayed, incomplete, or wrong.
 
 ## What it does
 
 - Fetches typed data from Financial Modeling Prep, SEC EDGAR, Yahoo Finance,
-  FINRA, FRED, and Finnhub.
-- Validates freshness, balance-sheet identities, and selected FMP figures
-  against EDGAR XBRL data.
-- Computes growth, returns, capital structure, valuation, projections,
-  scenarios, technicals, sector routing, grades, and forensic indicators in
-  deterministic TypeScript.
-- Optionally runs independent Anthropic bull and bear analyses followed by a
-  synthesis pass.
-- Requires every report number to carry a source path and as-of date, then
-  verifies citation coverage without another model call.
-- Turns missing inputs and provider outages into disclosed gaps instead of
-  fabricating values or crashing the report.
+  FINRA, FRED and Finnhub, and validates freshness, balance-sheet identities
+  and selected vendor figures against EDGAR XBRL.
+- Computes growth, returns, capital structure, valuation, scenarios,
+  technicals, grades and forensic indicators in deterministic TypeScript, on a
+  route decided by what the filer actually tags.
+- Optionally runs independent Anthropic bull and bear analyses and a judge
+  pass, verifies every cited number without another model call, and turns
+  missing inputs into disclosed gaps rather than fabricated values.
 
 ## Quick start
 
-Requirements:
-
-- Node.js 24 LTS
-- npm
-
-Node.js 20 reached end-of-life in April 2026 and is not supported: the test
-harness spawns TypeScript workers that rely on Node 24's native type stripping,
-so its former CI lane was retired rather than left permanently red.
+Node.js 22.18 or newer, and npm. CI tests Node 24, the supported
+configuration; Node 20 reached end of life in April 2026.
 
 ```powershell
 npm ci
-Copy-Item .env.example .env
+Copy-Item .env.example .env   # cp on macOS and Linux
 npm run dev
 ```
 
-On macOS or Linux, use `cp .env.example .env`. Open
-[http://127.0.0.1:3000](http://127.0.0.1:3000).
-
-A provider key is optional. With no `FMP_API_KEY`, set `EDGAR_CONTACT` in
-`.env` to a truthful "Name email" identity and real US-listed tickers are
-served from SEC EDGAR and Yahoo instead of FMP (see *Without an FMP
-subscription* below).
-
-### Synthetic demo mode
-
-No API key is needed to evaluate the interface:
-
-- `/report/sample` renders a complete fictional report without running the
-  analysis pipeline.
-- `/company/DEMO` loads the fictional general-company fixture.
-- `/company/DBNK` loads the fictional bank fixture.
-
-`DEMO` and `DBNK` resolve to fixtures **only while no `FMP_API_KEY` is
-configured**. Once a key is set, they are treated as ordinary symbols and sent
-to the live provider, which does not list them — so the pages render as
-near-empty disclosed gaps rather than the demo company. To see the fixtures
-again with a key in your `.env`, start the server with `FMP_API_KEY=""`.
-`/report/sample` is static and always renders, key or no key.
-
-Bundled FMP-compatible fixtures and the sample report are invented contract
-data, not current market data or copied provider responses. Any other symbol
-sent to `/company/SYMBOL` with no `FMP_API_KEY` is a live request: with
-`EDGAR_CONTACT` configured it returns a full report sourced from SEC EDGAR and
-Yahoo (see *Without an FMP subscription*); without it, live EDGAR is disabled
-and the page renders as disclosed gaps. Use `/report/sample` when you want a
-static demonstration with no provider request.
-
-For a production build:
-
-```powershell
-npm run build
-npm start
-```
-
-Development and production both bind to `127.0.0.1`.
+Open <http://127.0.0.1:3000>; development and production both bind to
+`127.0.0.1`. Every provider key is optional: with no `FMP_API_KEY`, set
+`EDGAR_CONTACT` to a truthful "Name email" identity and real US-listed tickers
+are served from SEC EDGAR and Yahoo. To evaluate the interface with no key at
+all, `/report/sample` renders a complete fictional report and makes no request,
+and `/company/DEMO` and `/company/DBNK` are reserved strings served from
+`fixtures/fmp` whatever keys are configured — they reach no provider, and each
+run says so in the manifest. Any other symbol is a live request.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and configure only the providers you want. Every
-credential is optional.
+<!-- BEGIN GENERATED: config -->
 
-| Variable | Purpose | Behavior when absent |
-|---|---|---|
-| `FMP_API_KEY` | Statements, prices, estimates, ownership, segments, and peers | Real tickers are served from SEC EDGAR and Yahoo (see *Without an FMP subscription*); `DEMO`/`DBNK` use the fictional fixtures |
-| `ANTHROPIC_API_KEY` | Grounded bull, bear, and synthesis passes | Produces a deterministic data-only report |
-| `FRED_API_KEY` | Macroeconomic series | Uses supported keyless CSV data where available |
-| `FINNHUB_API_KEY` | Insider sentiment | Records the source as unavailable |
-| `EDGAR_CONTACT` | Honest name and email for SEC request identification | Live EDGAR requests fail closed |
-| `ANALYSIS_MODEL` | `auto` or one priced model alias | Defaults to `auto` |
-| `ANALYSIS_EFFORT` | `low`, `medium`, `high`, `xhigh`, or `max` | Defaults to `high` |
-| `THESIS_MAX_ACTIVE_JOBS` | Durable cross-process job concurrency | Defaults to `1` |
-| `THESIS_MAX_ACTIVE_LLM_CALLS` | Durable cross-process paid-call concurrency | Defaults to `2` |
-| `THESIS_MAX_JOB_COST_USD` | Optional per-job settled-plus-reserved spend cap | No cap |
-| `THESIS_MAX_ROLLING_COST_USD` | Optional rolling settled-plus-reserved spend cap | No cap |
-| `THESIS_ROLLING_COST_WINDOW_MINUTES` | Rolling spend window, at most `52560000` minutes | Defaults to `1440` |
-| `THESIS_PAID_PASS_LEASE_SECONDS` | Paid-call lease TTL; `601`–`2147483` seconds | Defaults to `900` |
-| `THESIS_JOB_LEASE_SECONDS` | Job-claim lease TTL; at most `2147483` seconds | Defaults to `900` |
-| `THESIS_ALLOWED_HOST` | One exact non-loopback Host authority | Accepts loopback authorities only |
-| `THESIS_DB_PATH` | Exact SQLite file location | Uses the operating-system app-data directory |
-| `THESIS_DATA_DIR` | SQLite directory override | Uses the operating-system app-data directory |
-| `THESIS_IMPORT_LEGACY_DB` | Set to `1` for a one-time copy of an older in-repo `data/thesis.db` into the app-data location | The in-repo database is left untouched and unused |
+Every key is optional. This table is generated from `.env.example`, which
+carries the long form of each one, so the two cannot drift apart.
 
-### Without an FMP subscription
-
-Set only `EDGAR_CONTACT`. FMP stays the primary source for every member;
-wherever FMP cannot serve one — no key, an empty response, HTTP 402, or a
-refused symbol — the pipeline fills it from public keyless sources instead of
-leaving the report empty:
-
-| Member | Source | Provenance |
+| Key | Default | What it does |
 | --- | --- | --- |
-| Statements (income statement, balance sheet, cash flow), shares outstanding, public float | SEC EDGAR XBRL company facts | `edgar` |
-| Daily prices for the symbol, SPY, and the sector ETF; quote | Yahoo Finance chart endpoint | `yahoo` |
-| Profile (registrant name, sector and industry from SIC, exchange, listing date, price, market cap, beta), quarterly enterprise values, daily market-cap history | derived from EDGAR submissions, Yahoo's chart data and EDGAR share counts | `computed` |
+| `FMP_API_KEY` | unset | Financial Modeling Prep key — any plan. |
+| `ANTHROPIC_API_KEY` | unset | Anthropic — enables the bull/bear/judge LLM passes + web search. |
+| `FRED_API_KEY` | unset | FRED — free key from https://fred.stlouisfed.org/docs/api/api_key.html The macro dashboard. |
+| `FINNHUB_API_KEY` | unset | Finnhub — free-tier key. |
+| `EDGAR_CONTACT` | unset | SEC EDGAR is keyless but REQUIRES a declared contact in the User-Agent of every request. |
+| `THESIS_STATEMENT_SOURCE` | `auto` | Where the income statement, balance sheet and cash flow history comes from. |
+| `ANALYSIS_MODEL` | `auto` | Model used for the analysis pipeline (bull/bear/judge passes). |
+| `ANALYSIS_EFFORT` | `high` | Reasoning effort for the LLM passes: low \| medium \| high \| xhigh \| max. |
+| `THESIS_JUDGE_ORDER` | `random` | Which order the judge/synthesis pass reads the two analyst cases in. |
+| `ANTHROPIC_ADMIN_KEY` | unset | Optional Admin API key (distinct from ANTHROPIC_API_KEY). |
+| `THESIS_MAX_ACTIVE_JOBS` | `1` | Cross-process concurrency is enforced in SQLite. |
+| `THESIS_MAX_ACTIVE_LLM_CALLS` | `2` | Cross-process concurrency is enforced in SQLite. |
+| `THESIS_MAX_JOB_COST_USD` | unset | Optional exact USD caps. |
+| `THESIS_MAX_ROLLING_COST_USD` | unset | Optional exact USD caps. |
+| `THESIS_RESERVATION_MODE` | `request` | How paid work is admitted against these caps: `npm run docs:pricing` prints the current table for every model. |
+| `THESIS_STREAM_IDLE_SECONDS` | `120` | Gap with no stream event after which a paid request is abandoned. |
+| `THESIS_ROLLING_COST_WINDOW_MINUTES` | `1440` | Maximum supported window: 52,560,000 minutes (100 years). |
+| `THESIS_PAID_PASS_LEASE_SECONDS` | `900` | Anthropic requests hard-timeout after 600 seconds. |
+| `THESIS_JOB_LEASE_SECONDS` | `900` | Anthropic requests hard-timeout after 600 seconds. |
+| `THESIS_RESUME_ON_START` | `1` | Startup hold. |
+| `THESIS_EV_INCLUDE_LEASES` | `1` (opt in) | Keep the OPERATING-lease liability in enterprise value and in the DCF equity bridge. |
+| `THESIS_ALLOWED_HOST` | unset | `npm run dev` and `npm start` bind to 127.0.0.1 by default. |
+| `THESIS_TOKEN_FILE` | unset (opt in) | Mutating routes (report, retry, cancel, settings, watchlist, resume) reject a request that carries neither browser Fetch Metadata nor a matching Origin. |
+| `THESIS_DB_PATH` | unset (opt in) | The SQLite DB defaults to the OS app-data directory (so its WAL/SHM writes do not trigger Next.js dev-server rebuilds from inside the repo). |
+| `THESIS_DATA_DIR` | unset (opt in) | The SQLite DB defaults to the OS app-data directory (so its WAL/SHM writes do not trigger Next.js dev-server rebuilds from inside the repo). |
+| `THESIS_IMPORT_LEGACY_DB` | `1` (opt in) | One-time migration only. |
 
-Beta is estimated from five years of monthly returns against SPY; market cap
-is price times shares outstanding. Quarterly cash-flow figures, and any
-quarter a filer reports only year-to-date, are derived by subtraction after
-the first quarter of a fiscal year (Q1 is the year-to-date fact itself) and
-marked `derivation` on the row; a line item a filer tags with a non-standard
-extension tag yields `null`, never a guess, with three disclosed stand-ins:
-interest expense falls back to cash interest paid from the cash-flow
-supplement (`InterestPaidNet`) when no us-gaap interest line is filed;
-operating income is derived as pretax income plus interest expense when no
-`OperatingIncomeLoss` line exists (not on bank-style filers, for which
-interest is an operating cost and the sum is not EBIT); and stockholders'
-equity is derived as total equity including the noncontrolling interest minus
-that interest, or taken as that total when no `MinorityInterest` is tagged
-either. Each stand-in is recorded in the manifest as
-`keyless.<statement>.<field>` with the periods it served. When a filer tags no
-balance-sheet current-debt line, the debt maturity schedule's
-next-twelve-months figure stands in for short-term debt and the row note says
-so. SEC facts are stored as filed, so
-per-share and share-count facts filed before a stock split are restated to the
-current share basis from the filer's tagged split ratio, checked against the
-share counts later filings restated across that date; each applied or refused
-ratio is disclosed in the manifest as `keyless.stockSplits`. Every replaced
-member is recorded in the missing-data manifest as `keyless.<member>`, naming
-why FMP could not serve it. Two issuer situations leave the statements empty
-even though SEC answers, and the manifest names them: a foreign private
-issuer reporting under IFRS (its facts sit in the `ifrs-full` taxonomy, which
-the builder does not read), and a successor registrant created by a
-reorganization (a Form 8-K12B on file and no annual report yet; the
-predecessor's history sits under a CIK that EDGAR does not link, as with
-ExxonMobil Holdings Corp from July 2026).
+<!-- END GENERATED: config -->
 
-Analyst estimates and price targets, grades consensus, peers, insider trades
-and statistics, 13F institutional ownership, news and press releases,
-transcripts, executive compensation, segment revenue, the earnings calendar,
-and FMP's derived key-metrics, ratios, and financial-growth rows have no
-keyless source and stay disclosed gaps (Stage B computes its own
-growth/margin/return figures from the statements either way).
+Stored settings beat environment variables, which beat defaults; reset the
+stored ones with `npm run settings:reset -- --yes`.
 
-The Yahoo endpoint is unofficial and best-effort: requests carry a
-User-Agent, are rate-limited and cached, and any failure becomes a disclosed
-gap rather than an error. The same fallback also fills members that an
-entry-tier FMP plan refuses outright, such as sector-ETF price history, even
-when a key is configured. `DEMO` and `DBNK` remain the fictional fixtures,
-served only when no `FMP_API_KEY` is configured; they never reach the keyless
-layer, so no Yahoo request is made for them, while EDGAR is still queried for
-filings as on any run. Because keyless statements are sourced from XBRL, the FMP-versus-XBRL
-cross-check on those rows is recorded as a passing identity check rather than
-a numeric comparison.
+## Where the numbers come from
 
-Any FMP plan works. Lower tiers cap the `limit` parameter (5 periods on the
-entry plans), restrict some endpoints, and on the entry plans restrict which
-symbols are served at all (an uncovered symbol returns HTTP 402 on every
-endpoint): Thesis reads the cap from FMP's own rejection, retries within it,
-and records the truncated history depth in the missing-data manifest, while
-restricted endpoints (insider trades, institutional ownership, news,
-transcripts) become disclosed gaps rather than failures, and every statement,
-price, share or profile member an uncovered symbol loses is served the keyless
-way (EDGAR and Yahoo) once EDGAR confirms the issuer. Sector-ETF price history that an entry-tier plan refuses is instead
-served from Yahoo once a CIK resolves and the run is not in fixture mode, the
-same fallback real tickers use with no key at all (see *Without an FMP
-subscription* above).
-Five fiscal years still support the growth, returns, forensic, DCF and
-scoring modules; own-history multiple percentiles need eight quarters and are
-withheld until the plan supplies them.
+With an FMP key of any plan, FMP is the primary source. Lower tiers cap the
+`limit` parameter at five periods and restrict some endpoints and symbols;
+Thesis reads the cap from FMP's own rejection, retries within it, and fills the
+rest from keyless sources. Five fiscal years still support the growth, returns,
+forensic, DCF and scoring modules; the own-history multiple rank needs eight
+quarters and waits for them.
 
-A data-only report (no `ANTHROPIC_API_KEY`) is not empty: it carries every
-deterministic Stage B result — growth, margins, returns, capital structure,
-forensic scores, technicals, DCF, reverse DCF, multiples, scenario targets,
-projections and the aspect scores — with the score bands shown as grades and
-every block stating that no analyst pass ran. Only the narrative sections
-(catalysts, risks, outlook, executive credibility, moat sources) stay empty.
+With no key at all, set `EDGAR_CONTACT` and real US filers still produce a full
+report: statements, share counts and public float from SEC EDGAR XBRL company
+facts, prices from Yahoo's unofficial chart endpoint, and the profile and
+enterprise values derived from the two. `THESIS_STATEMENT_SOURCE` chooses
+between the vendor and EDGAR; where both serve, no period mixes sources and the
+manifest names how many each served.
 
-The DCF's terminal value assumes returns fade to the cost of capital (terminal
-ROIC = WACC) unless the issuer's ROIC exceeded its WACC in each of the last
-four or more fiscal years on record; then half the median spread, capped at
-five percentage points, is carried in perpetuity. Near-term growth anchors on
-the lower of the three- and five-year revenue CAGRs; when the two disagree in
-sign the history holds a spike or a collapse rather than a trend, and
-near-term growth is set to the terminal rate instead. The point-in-time
-balance row behind net debt, invested capital and the EV bridge is the newer
-of the latest quarterly and annual rows, unless that row lacks any of total
-debt, equity and cash while the older row carries all three; the fallback
-names the missing field in the valuation notes and is filed as an info gap.
-The assumption block states
-which rule applied and why, and the design note in
-`docs/superpowers/specs/2026-09-02-analysis-quality-design.md` gives the
-evidence behind it. On the bank, insurer and mortgage-REIT routes the
-Piotroski F-score withholds its current-ratio, gross-margin and both
-operating-cash-flow signals and is reported out of the signals that remain,
-and the unprofitable overlay (which switches the headline metrics to cash
-runway and burn) triggers on negative net income alone: a negative operating
-cash flow on those routes reflects loan, deposit, trading and reserve flows,
-not losses, and the routing note says when it was set aside.
+Where a filer uses an extension tag the field is `null` rather than a guess,
+and each stand-in is named in the manifest with the periods it served. Analyst
+estimates, price targets, peers, insider trades (SEC Form 4), institutional
+ownership, news, transcripts, executive compensation and segment revenue have
+no keyless source, as do IFRS filers' statements, and all stay disclosed gaps.
+See [License and data rights](docs/DATA-RIGHTS.md) for what each allows.
+## What the numbers mean
 
-EDGAR does not require a key, but it does require a truthful contact identity.
-Placeholder or missing identities disable live EDGAR acquisition and create a
-visible data gap.
+[`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) documents every convention and
+names its sources. In short: sector routing reads XBRL tag evidence alongside
+the SIC code and the industry label, and evidence that contradicts the declared
+classification is disclosed rather than acted on. Bank, insurer and
+mortgage-REIT routes withhold the FCFF discounted cash flow, the reverse DCF,
+EV/EBITDA, ROIC-minus-WACC, Altman Z, Beneish M and the accrual ratios — every
+estimation sample behind those excluded financial institutions — and value the
+company on excess returns to equity instead. Near-term growth is the median of
+the methods the data supports, with the range shown and every unavailable one
+named. Free cash flow is reported after stock-based compensation with the
+before figure beside it, and an own-history multiple is a rank among N quarters
+rather than a percentile, N printed beside it. Where a rule is this project's
+own choice rather than a standard, the report calls it a house convention in
+the same breath as the number.
 
-`ANALYSIS_MODEL` is not a free-form Anthropic model ID. It accepts `auto` or one
-of the five priced aliases — `claude-opus-5`, `claude-opus-4-8`,
-`claude-sonnet-5`, `claude-fable-5`, `claude-haiku-4-5` — optionally as an
-eight-digit dated snapshot such as `claude-opus-5-20260115`. The scheduler
-cannot prove a spend bound for anything else, so any other value is rejected at
-model resolution and the run degrades to a data-only report with the AI passes
-marked skipped. `auto` resolves against the models your key can reach,
-preferring `claude-opus-5`, then `claude-opus-4-8`, then `claude-sonnet-5`,
-then `claude-fable-5`.
+A report with no Anthropic key still carries every deterministic result and
+says that no analyst pass ran; only the narrative sections are empty.
+## AI analysis
 
-Selecting `claude-haiku-4-5` does not make the whole run Haiku. Haiku is not
-used for the synthesis/judge pass; that pass is raised to `claude-sonnet-5`,
-and the substitution is disclosed in the report's execution metadata as a
-`model-floor` adjustment.
+Two analysts build the bull and bear cases independently: neither sees the
+other's output, and the bear prompt forbids assuming a bull case exists. A
+judge pass then reads both and writes the report. Which case it reads first is
+drawn from the job id rather than fixed, so first position is not a standing
+advantage, and the order is printed in the report header. Both cases share one
+character cap and the judge is told both lengths, so a longer case cannot win
+on volume; each analyst scores its own side 1-5 against a stated rubric, and
+the judge may discount a side that scored itself low.
+`THESIS_JUDGE_ORDER=both` runs the judge twice with the cases swapped and
+reconciles every grade and probability, for two judge passes.
 
-A bull or bear pass whose output is received but rejected by the analyst
-schema (a malformed date, invalid JSON) gets one repair attempt: the same
-cached payload with the validation error and the rejected output fed back as
-a further turn, under its own settlement and cost row, while the sibling's
-paid output is kept. The judge pass has the same repair loop with two
-retries. A transport failure or a refusal is not retried this way; the run
-degrades to a data-only report with the failure disclosed.
+The verification pass makes no model call. It measures citation coverage — can
+each figure be traced to the record it cites — and separately checks the prose
+around those figures: a direction word must match the sign of its change, a
+period naming a year must match the cited period, a unit word must match the
+registered unit, and a claim naming a person must cite a filing or a transcript
+rather than a web search. Checked is printed beside cited and never merged into
+it: a figure can be perfectly cited by a sentence that contradicts it.
 
-The Settings page can override the analysis model and effort. Stored settings
-take precedence over environment variables, which take precedence over
-application defaults.
+`ANALYSIS_MODEL` takes `auto` or a model from `config/models.json`, which is
+also where prices and limits come from; anything else is rejected, because the
+scheduler cannot prove a spend bound for it, and the run degrades to a
+data-only report. Choosing Haiku does not make the whole run Haiku — the judge
+pass is raised to Sonnet 5, disclosed as a `model-floor` adjustment.
 
-Report requests are queued in SQLite and claimed with durable leases, so the
-limits hold across server processes and restarts. Node server startup drains
-pre-existing queued work, and a single process-local wake timer revisits future
-queue times and expired job/paid leases without making read routes mutate state.
-Spend admission atomically counts every settled attempt plus live reservations. Reservations deliberately
-use a worst-case 108-request exposure bound (SDK retries, transport retries,
-and pause resumptions), strict model/context/output/search caps, and standard
-pricing; this can be much larger than the typical final charge. The strict
-per-pass reservation is `108 * maximum cost of one capped provider request`:
+<!-- BEGIN GENERATED: pricing -->
 
-| Analysis model | Bull/bear analyst pass | Synthesize/judge pass |
-| --- | ---: | ---: |
-| Claude Haiku 4.5 | $70.20 | $373.68 |
-| Claude Sonnet 5 | $347.76 | $373.68 |
-| Claude Opus 5 | $856.44 | $934.20 |
-| Claude Opus 4.8 | $856.44 | $934.20 |
-| Claude Fable 5 | $1,704.24 | $1,868.40 |
+Registry snapshot 2026-09-02, generated by `npm run docs:pricing`
+from `config/models.json` and the reservation code. Each request is admitted
+against the spend caps before it is sent, bounded by the model's full context
+window priced as a five-minute cache write, its maximum output, and eight web
+searches at $0.01 (the judge never searches).
 
-Haiku's synthesize figure is a Sonnet 5 reservation because that pass is raised
-to Sonnet 5. Because these are worst-case bounds rather than expected charges,
-a job cap small enough to act as an everyday budget is not achievable: one
-synthesize pass alone reserves $373.68, so `THESIS_MAX_JOB_COST_USD` set near a
-typical run's actual cost rejects every job before it starts. Control routine
-spend with `ANALYSIS_MODEL` and `ANALYSIS_EFFORT`, and treat the caps as
-runaway protection. For scale, one complete Anthropic-backed run measured on
-2026-09-01 (`ANALYSIS_MODEL=claude-haiku-4-5`, one large-cap US issuer, web
-search enabled) settled at **$1.43** in total.
+| Analysis model | One analyst request | One synthesize request | Analyst pass worst case | Estimated run |
+| --- | ---: | ---: | ---: | ---: |
+| Claude Fable 5.1 | $18.98 | $18.90 | $683.28 | $4.46 |
+| Claude Fable 5 | $18.98 | $18.90 | $683.28 | $4.60 |
+| Claude Opus 5 | $9.53 | $9.45 | $343.08 | $2.34 |
+| Claude Opus 4.8 | $9.53 | $9.45 | $343.08 | $2.34 |
+| Claude Sonnet 5 | $3.86 | $3.78 | $138.96 | $0.98 |
+| Claude Haiku 4.5 | $0.65 | $3.78 | $23.40 | $0.69 |
 
-Deterministic verification reserves exactly $0. An injected provider-backed
-verification adapter must declare and reserve its own finite maximum. Use these
-strict maxima, not typical observed charges, when sizing the optional job and
-rolling caps. A provider-launched call retains its reservation until exact
-settlement or lease expiry so another process cannot spend the same budget
-prematurely; only an exit before provider launch releases a reservation as
-unbilled.
+The worst case is every request one pass could make (36: six transport attempts,
+each able to pause and resume five times); it is reported, not reserved, so a
+job cap only has to cover the requests in flight. The estimate is a
+calculation, not a measurement: the fixture run shape at registry rates, with
+Haiku's synthesize figures those of Sonnet 5 because that pass is raised to
+it. One measured Haiku run settled at $1.43 in total.
 
-## Privacy and safety
+<!-- END GENERATED: pricing -->
 
-Thesis stores its SQLite database locally, outside the repository by default.
-Reports, settings, cached provider responses, watchlist entries, job state, and
-cost records stay in that database.
+## Running it safely
 
-Local-first does not mean offline. Tickers, identifiers, query parameters,
-grounded report inputs, and credentials are sent directly to the providers you
-configure. API keys remain server-side and never enter the browser bundle.
-Thesis does not include its own telemetry service.
+Thesis sends nothing to Thesis: no telemetry, no analytics, no update check.
+The only outbound traffic goes to the providers you configure —
+[Privacy and safety](docs/PRIVACY.md) names exactly what each one receives,
+where the local database lives, and how to delete it.
 
-The application is single-user and has no authentication or multi-user access
-control. Keep it on loopback unless you add an appropriate security layer. Do
-not commit `.env`, API keys, personal EDGAR contact details, databases, cached
-provider data, or private reports.
-
-Report sensitive security problems through the repository's
-[private security advisory form](https://github.com/eligorelick/Thesis-AI-equity-research/security/advisories/new),
-not a public issue.
-
-## Using Thesis
-
-1. Enter a symbol on the dashboard or open `/company/SYMBOL`.
-2. Review the deterministic analysis, source dates, warnings, and missing-data
-   manifest.
-3. Generate an AI-assisted report if an Anthropic key is configured.
-4. Use History to compare saved reports for the same symbol.
-5. Export Markdown, or use the print view and the browser's **Save as PDF**
-   command. The server's PDF-format endpoint returns print-ready HTML rather
-   than generating a binary PDF.
-
-The report pipeline runs in this order:
-
-```text
-fetch → validate → compute → bull → bear → synthesize → verify
-```
-
-The fetch/validation and calculation stages degrade safely when data is
-missing. The AI stages are optional. The final verification stage is
-deterministic and measures source coverage, not whether an investment thesis is
-correct.
+The application is single-user and has no authentication; keep it on loopback
+unless you add a security layer of your own. Mutating routes reject a request
+carrying neither browser Fetch Metadata nor a matching `Origin`; browsers send
+those automatically, and scripts must send `X-Thesis-Token` with the contents
+of the `csrf-token` file the server writes at every start and names on stdout.
+That is a browser-CSRF boundary, not local access control: any process on the
+machine can present the same headers. Report security problems through the
+repository's [private advisory form](https://github.com/eligorelick/Thesis-AI-equity-research/security/advisories/new), not a public issue.
 
 ## Commands
 
-```powershell
-npm run dev            # local development server
-npm run build          # production build
-npm start              # serve the production build
-npm run db:push        # create/update the configured local SQLite database
-npm test               # isolated product suite; DB CLI integration excluded
-npm run test:integration       # single-worker database CLI integration
-npm run typecheck      # strict TypeScript check
-npm run lint           # ESLint
-npm run test:coverage:core     # Stage B/schema coverage contract
-npm run test:coverage:risk     # audited per-file risk coverage contract
-npm run test:coverage          # both independent coverage contracts
-npm run check:dependencies     # exact lockfile + installed-tree versions
-npm run audit:security         # dev-inclusive low-severity npm audit
-npm run verify         # all required local CI gates in release order
-```
+<!-- BEGIN GENERATED: commands -->
 
-Run `npm run verify` before contributing or publishing a change. A successful
-Next.js build alone is not the type-safety gate because strict checking runs as
-a separate command.
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Run the app on 127.0.0.1 in development. |
+| `npm run build` | Production build. |
+| `npm run start` | Serve the production build on 127.0.0.1. |
+| `npm run typecheck` | Type-check without emitting. |
+| `npm run lint` | ESLint over the repository. |
+| `npm run test` | The product test suite. Fully offline whatever .env holds. |
+| `npm run test:integration` | The database CLI suite, which runs in its own process. |
+| `npm run test:coverage` | Both coverage contracts, core and risk. |
+| `npm run test:watch` | The product suite in watch mode. |
+| `npm run export:corrected` | Write a corrected report export from a stored run. |
+| `npm run settings:reset` | Delete stored settings rows so .env takes precedence again. Needs --yes. |
+| `npm run db:push` | Apply the Drizzle schema to the configured database. |
+| `npm run check:dependencies` | Assert the dependency tree's shape. |
+| `npm run models:refresh` | Diff config/models.json against the published model list and prices. Sends no model request. |
+| `npm run costs:reconcile` | Lower presumed spend rows against the Usage and Cost API. Needs ANTHROPIC_ADMIN_KEY. |
+| `npm run docs:config` | Regenerate the README's configuration and commands tables. |
+| `npm run docs:pricing` | Regenerate the README's cost table from the model registry. |
+| `npm run audit:deltas` | Refresh the audited fixture comparison's intended-delta list. |
+| `npm run audit:security` | Dependency audit at the release threshold. |
+| `npm run verify` | Everything the release gate runs, in order. |
 
-The suite makes no network requests, whatever your `.env` contains. One live
-check against SEC EDGAR is available opt-in and is skipped otherwise:
+<!-- END GENERATED: commands -->
 
-```powershell
-$env:EDGAR_LIVE_SMOKE = "1"   # also needs a real EDGAR_CONTACT
-npm test
-```
-
-It issues exactly two keyless requests (ticker→CIK and submissions) and fails
-rather than degrading, which is the point of opting in.
-
-GitHub Actions runs the same required gates on Node.js 24 LTS and performs a
-single-worker Windows smoke run.
-Repository administrators must configure branch protection to require the
-`CI / full` check; the workflow cannot enable branch protection by itself.
-
-## Project layout
-
-```text
-src/              application, providers, pipeline, reports, database, and UI
-tests/            deterministic unit and integration tests
-fixtures/fmp/     fictional provider-contract data for the no-key demo fixtures
-fixtures/edgar/   compact SEC excerpts required by extraction tests
-fixtures/report/  fictional complete sample report
-```
+The product suite makes no network request whatever your `.env` contains; one
+live SEC check is opt-in with `EDGAR_LIVE_SMOKE=1` and a real `EDGAR_CONTACT`.
+GitHub Actions runs the same gates on Node 24; administrators must configure
+branch protection to require the `CI / full` check, which the workflow cannot
+enable itself. Issues and pull requests are welcome: keep changes focused, add
+regression tests, preserve deterministic computation and source tracing, and
+run `npm run verify` first.
 
 ## Limitations
 
-- Thesis is a research tool, not a broker, portfolio manager, discovery engine,
-  or autonomous trading system.
-- Provider coverage, freshness, entitlements, schemas, and rate limits vary.
-- A traced number can still originate from incorrect source data.
-- AI narrative can be incomplete or wrong even when its citations resolve.
-- Paid analysis cost depends on model choice, reasoning effort, cache state,
-  retries, web searches, and provider pricing.
-- This build is designed for one local user and should not be exposed publicly
-  without additional authentication and authorization.
-- Keyless statements are derived from us-gaap XBRL tags; a filer that uses
-  extension tags for a line item yields `null` for that field, never a guess,
-  apart from the three disclosed stand-ins (cash interest paid for interest
-  expense, pretax income plus interest for operating income, total equity net
-  of the noncontrolling interest for stockholders' equity). IFRS filers
-  (`ifrs-full`) and successor registrants without an annual report yet get no
-  keyless statements, and the manifest says which case applies.
-- The verification stage traces numbers only against the numeric registry. A
-  number the model lifted from filing or transcript prose is logged as
-  `text-source` and stays unverified. A period written in fiscal spelling
-  ("FY2025" or "Q2 2026" for a cell registered as 2025-12-31 or 2026-06-30)
-  and a unit with a trailing qualifier ("index (0-100)") are read as the
-  registry's spelling, with the reading noted in the log; a period naming
-  another year still fails. Macro figures render in registry units, so a
-  series FRED serves in thousands or billions is shown as the scaled count or
-  dollar amount with the conversion named in the section note.
-
-## Contributing
-
-Issues and pull requests are welcome. Keep changes focused, add regression tests
-for behavior changes, preserve deterministic computation and source tracing,
-and run `npm run verify` before submitting.
+- Thesis is a research tool for one local user, not a broker or a trading
+  system. A traced number can still come from incorrect source data, and AI
+  narrative can be wrong even when its citations resolve.
+- Verification traces numbers against the registry only: a figure lifted from
+  filing prose stays unverified, and each consistency check judges only the
+  claims whose figure it can locate. An analyst case over the length cap is
+  truncated before the judge sees it — what went is named in the manifest, but
+  the judge read less of it.
 
 ## License and data rights
 
-The source code is released under the [MIT License](LICENSE). The license does
-not grant rights to third-party market data, filings, news, model output, or
-provider services. Users are responsible for each enabled provider's terms and
-for deciding whether a generated report may be shared.
+The code is [MIT](LICENSE). The license does not cover the market data,
+filings, news or model output Thesis retrieves, and sharing a generated report
+shares that provider data with it. See
+[License and data rights](docs/DATA-RIGHTS.md).

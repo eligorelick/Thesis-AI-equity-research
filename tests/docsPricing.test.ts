@@ -52,7 +52,7 @@ describe("generated pricing block", () => {
     expect(block).toMatch(/\| Claude Haiku 4\.5 \| \$0\.65 \| \$3\.78 \|/);
     expect(block).toContain(`(${PASS_MAX_REQUESTS}: six transport`);
     expect(block).toContain("reported, not");
-    expect(block).toContain("a calculation, not a measurement");
+    expect(block).toContain("not a measurement");
   });
 
   it("prices the fixture run shape from the registry, cache reads included", async () => {

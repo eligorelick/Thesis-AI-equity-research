@@ -23,7 +23,7 @@
   "license": "MIT",
   "author": "eligorelick",
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=22.18.0"
   },
   "overrides": {
     "postcss": "$postcss",

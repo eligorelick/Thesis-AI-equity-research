@@ -59,6 +59,7 @@ const ALLOWED_MARKDOWN = new Set([
   "docs/superpowers/plans/2026-09-02-keyless-data-path.md",
   "docs/superpowers/specs/2026-09-02-keyless-data-path-design.md",
   "docs/superpowers/specs/2026-09-02-analysis-quality-design.md",
+  "CHANGELOG.md",
   "docs/audit/README-RECONCILIATION.md",
   "docs/audit/DECISIONS.md",
   "docs/audit/PROGRESS.md",
@@ -426,10 +427,17 @@ describe("public release contract", () => {
     ]);
   });
 
-  it("documents supported CI, the retired Node 20 lane, and branch protection", () => {
+  // The engines floor moved to 22.18 and the README says so, so the old
+  // "Node.js 24 LTS" requirement line is gone (WS9, D-22). The facts that
+  // matter are unchanged and still pinned: the tested version, the floor, that
+  // Node 20 is out of support, and that branch protection is a human step.
+  it("documents the supported Node versions and branch protection", () => {
     const readme = read("README.md");
-    expect(readme).toContain("Node.js 24 LTS");
-    expect(readme).toMatch(/Node\.js 20 .*end-of-life/s);
+    const pkg = JSON.parse(read("package.json")) as { engines: { node: string } };
+    expect(pkg.engines.node).toBe(">=22.18.0");
+    expect(readme).toContain("Node.js 22.18 or newer");
+    expect(readme).toMatch(/CI tests Node 24/);
+    expect(readme).toMatch(/Node 20 reached end of life/);
     expect(readme).not.toContain("compatibility lane");
     expect(readme).toMatch(/branch protection.*require.*CI \/ full/is);
   });
@@ -562,17 +570,22 @@ describe("public release contract", () => {
     const prose = readme.replace(/\s+/g, " ");
 
     for (const required of [
-      "Synthetic demo mode",
+      "/report/sample",
       "/company/DEMO",
+      "reserved strings",
       "not investment advice",
       "127.0.0.1",
-      "sent directly to the providers you configure",
-      "never enter the browser",
+      "providers you configure",
       "npm ci",
       "npm run verify",
     ]) {
       expect(prose).toContain(required);
     }
+    // The rewrite moved the egress and key-handling detail into the document
+    // that now owns it, and the README links there rather than paraphrasing.
+    // The guarantee itself is still pinned, just where it is now stated.
+    expect(prose).toContain("docs/PRIVACY.md");
+    expect(read("docs/PRIVACY.md")).toContain("never reach the browser");
 
     expect(readme).not.toMatch(
       /verify:live|verify:tickers|\.github\/|(?:^|[\s`(])research\//im,

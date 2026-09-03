@@ -1407,12 +1407,16 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
  * their own basis strings, source paths and as-of dates.
  */
 export function routeMetricsBlock(computed: ComputedMetrics): RouteMetrics | null {
-  const fm = computed.financialMetrics;
+  // The verify pass can lose its WeakMap context and fall back to a MINIMAL
+  // stand-in ({ gaps: [] } cast to ComputedMetrics), so neither member is
+  // guaranteed to exist here even though the type says so. A missing Stage B
+  // object means no route metrics, never a thrown assembly.
+  const fm = computed.financialMetrics as FinancialMetricsResult | undefined;
   const rows: RouteMetricRow[] = [];
-  const notes = [...fm.notes];
-  const val = computed.valuation;
+  const notes = [...(fm?.notes ?? [])];
+  const val = computed.valuation as ComputedMetrics["valuation"] | undefined;
 
-  if (val.kind === "excess-return") {
+  if (val !== undefined && val.kind === "excess-return") {
     const er = val.excessReturn;
     const p = er.priceToTangibleBookVsRote;
     const src = ["computed.valuation.excessReturn.priceToTangibleBookVsRote"];
@@ -1437,7 +1441,7 @@ export function routeMetricsBlock(computed: ComputedMetrics): RouteMetrics | nul
         basis:
           "net income available to common / average tangible common equity — the return the P/TBV multiple above is read against, on the SAME tangible denominator",
         sources: ["computed.returns.rote"],
-        asOf: computed.returns.rote.asOf,
+        asOf: computed.returns?.rote?.asOf ?? null,
         withheldReason:
           p.rotePct === null
             ? "return on tangible common equity unavailable — see the returns block for the reason"
@@ -1475,8 +1479,8 @@ export function routeMetricsBlock(computed: ComputedMetrics): RouteMetrics | nul
     );
   }
 
-  rows.push(...fm.metrics);
-  if (rows.length === 0) return null;
+  rows.push(...(fm?.metrics ?? []));
+  if (rows.length === 0 || fm === undefined) return null;
 
   const asOf = rows.reduce<string | null>(
     (acc, m) => (m.asOf !== null && (acc === null || m.asOf > acc) ? m.asOf : acc),

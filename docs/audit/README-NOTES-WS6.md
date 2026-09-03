@@ -60,7 +60,8 @@ multiples table:
 
 > The own-history figure is a rank among N quarters (8 to 20 observations), not
 > a percentile — that many observations cannot estimate one. N is printed
-> beside the rank, so the table reads "rank 62 of 12 quarters".
+> beside the rank: the app reads "rank 62 of 12 quarters" and the Markdown and
+> PDF exports read "rank 62/100 of 12 quarters".
 
 **R-02 — disclaimer.** The README says the app does not provide buy/sell/hold
 ratings, but does not mention the letter grades and scenario price targets it
@@ -152,7 +153,7 @@ financial-correctness review shipped it instead: the row carries
 `ownHistoryObservations`, and because the judge never authors this table (the
 pipeline replaces it wholesale) the field is stripped from the request schema
 the same way `verified` already is, leaving that budget unchanged at 20. The
-README may state plainly that the table shows "rank 62 of 12 quarters".
+README may state plainly that the table shows the rank together with N.
 
 ## 6. Later corrections from the WS6 review
 

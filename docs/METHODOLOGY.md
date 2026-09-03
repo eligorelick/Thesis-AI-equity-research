@@ -310,8 +310,9 @@ description, every rendered label, the basis strings and the missing-data
 reason all say rank.
 
 **N is rendered beside the rank**, not left in a note: the multiples row carries
-`ownHistoryObservations`, and Markdown, print HTML and the app all read "rank 62
-of 12 quarters". A report persisted before that field existed still parses and
+`ownHistoryObservations`, and every surface prints it — "rank 62/100 of 12
+quarters" in the Markdown and print-HTML exports, "rank 62 of 12 quarters" on
+the app's own-history bar. A report persisted before that field existed still parses and
 still renders, without inventing an N. The field is optional in Zod for exactly
 that reason and is stripped from the judge's request schema — the judge never
 authors this table (`applyMultiples` replaces it wholesale from computed

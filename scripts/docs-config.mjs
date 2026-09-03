@@ -137,24 +137,20 @@ export function renderConfigBlock(sections, schemaKeys) {
   if (undocumented.length > 0) {
     throw new Error(`.env.example documents no ${undocumented.join(", ")}; every validated key must appear there`);
   }
-  const validated = new Set(schemaKeys);
   const lines = [CONFIG_BEGIN, ""];
   lines.push("Every key is optional. `.env.example` carries the long form of each one;");
   lines.push("this table is generated from it, so the two cannot drift apart.");
   lines.push("");
+  lines.push("| Key | Default | What it does |");
+  lines.push("| --- | --- | --- |");
   for (const section of sections) {
-    lines.push(`**${section.title}**`);
-    lines.push("");
-    lines.push("| Key | Default | What it does |");
-    lines.push("| --- | --- | --- |");
     for (const entry of section.entries) {
       const shown = entry.value.length > 0 ? `\`${entry.value}\`` : "unset";
       const optIn = entry.optIn ? " (opt in)" : "";
-      const startup = validated.has(entry.key) ? "" : " Read where it is used, not at startup.";
-      lines.push(`| \`${entry.key}\` | ${shown}${optIn} | ${summarize(entry.comment)}${startup} |`);
+      lines.push(`| \`${entry.key}\` | ${shown}${optIn} | ${summarize(entry.comment)} |`);
     }
-    lines.push("");
   }
+  lines.push("");
   lines.push(CONFIG_END);
   return lines.join("\n");
 }

@@ -596,7 +596,7 @@ export const ExecutionMetadataEntrySchema = z
     requestedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable(),
     effectiveEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable(),
     fallbackUsed: z.boolean(),
-    adjustments: z.array(z.enum(["model-floor", "fallback", "effort-stripped"])),
+    adjustments: z.array(z.enum(["model-floor", "fallback", "effort-stripped", "model-rejected"])),
     /** Sentence(s) naming what each adjustment changed and why; absent when none. */
     note: z.string().optional(),
   })
@@ -619,6 +619,16 @@ export const MetaSchema = z
     verifyModel: z.string().optional(),
     pipelineVersion: z.string(),
     costUsd: z.number(),
+    /**
+     * How much of `costUsd` is a PRESUMED upper bound rather than a measured
+     * charge (DECISIONS D-07): a reservation whose owner died, or a stream
+     * that was accepted and then went silent, is counted at its full reserved
+     * maximum until something reconciles it downward. Absent when nothing in
+     * the run was presumed, and absent from every report written before this
+     * field existed. `appendix.missingData` carries the matching
+     * `cost.presumed` entry.
+     */
+    presumedCostUsd: z.number().optional(),
     /**
      * CITATION COVERAGE: fraction of report numbers traced to a citation or a
      * payload value; null until the pass runs. This is a provenance check, NOT
@@ -1303,7 +1313,9 @@ export const CostBreakdownEntrySchema = z
     requestedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
     effectiveEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
     fallbackUsed: z.boolean().optional(),
-    adjustments: z.array(z.enum(["model-floor", "fallback", "effort-stripped"])).optional(),
+    adjustments: z
+      .array(z.enum(["model-floor", "fallback", "effort-stripped", "model-rejected"]))
+      .optional(),
   })
   .strict();
 export type CostBreakdownEntry = z.infer<typeof CostBreakdownEntrySchema>;

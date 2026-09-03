@@ -92,7 +92,7 @@ vi.mock("@/providers/anthropic", () => ({
   webSearchTool: providerBoundaryMocks.webSearchTool,
 }));
 
-import { resolveModel } from "@/providers/anthropic";
+import { resolveModel, type RequestAdmission } from "@/providers/anthropic";
 import {
   bootstrapSchema,
   createDatabase,
@@ -102,6 +102,7 @@ import {
 } from "@/db";
 import { costLog, jobLlmLeases, jobPassArtifacts, jobs, reports } from "@/db/schema";
 import { setSetting } from "@/settings/settings";
+import { explainAnalysisModel } from "@/settings/contracts";
 import {
   ACTIVE_JOB_STALE_MS,
   BullBearPassFailure,
@@ -603,6 +604,25 @@ async function launchTestAnalystSide(
   await hooks?.beforePass?.(side);
   hooks?.onPassStart?.(side);
   await hooks?.beforeProviderLaunch?.(side);
+}
+
+/**
+ * A request admission that never resolves is the failure under test: a
+ * `capacity` refusal is transient, so the runner's reserve loop retries
+ * forever. Fail with the reason rather than the harness timeout.
+ */
+async function admittedWithin<T>(pending: Promise<T>, reason: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(reason)), 2_000);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 function testTelemetry<T>(pass: PassResultLike<T>, billable = true): TestTelemetry {
@@ -2006,6 +2026,259 @@ describe("runJob - durable paid-pass settlements", () => {
       expect.objectContaining({ jobId, pass: "bull" }),
     ]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  /**
+   * A pass lease and its OWN first request lease must never occupy a paid slot
+   * at the same time (DECISIONS D-10). The pass lease reserves one request
+   * maximum only to cover a pass that settles without ever reaching the
+   * provider; it is released the moment the first request asks for admission.
+   */
+  it("admits a pass's own first request with THESIS_MAX_ACTIVE_LLM_CALLS=1", async () => {
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 1,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 900_000,
+      jobLeaseTtlMs: 900_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "single-slot-admission", new Date(), limits)!;
+    const base = mockPasses();
+    let liveDuringRequest: Array<{ pass: string; attemptId: string; reservedCostUsd: number }> = [];
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (deps, lifecycle, settlements) => {
+        await launchTestAnalystSide(lifecycle, "bull");
+        const admission = deps.admissionFor?.("bull");
+        expect(admission, "request admission must be threaded in request mode").toBeDefined();
+        // Refused, this never resolves: `capacity` is transient, so the
+        // runner's reserve loop would retry forever and no request is sent.
+        const permit = await admittedWithin(
+          admission!.reserve({ attempt: 1, kind: "stream", maximumUsd: 0.5 }),
+          "the pass's own first request was never admitted",
+        );
+        liveDuringRequest = handle.db
+          .select()
+          .from(jobLlmLeases)
+          .all()
+          .filter((row) => row.reservedCostUsd > 0)
+          .map((row) => ({
+            pass: row.pass,
+            attemptId: row.attemptId,
+            reservedCostUsd: row.reservedCostUsd,
+          }));
+        await admission!.release(permit);
+        await settlements?.bull?.(testSuccessSettlement(testAnalystPass("bull")));
+        lifecycle?.onPassFinish?.("bull");
+        await launchTestAnalystSide(lifecycle, "bear");
+        await settlements?.bear?.(testSuccessSettlement(testAnalystPass("bear")));
+        lifecycle?.onPassFinish?.("bear");
+        return { bull: testAnalystPass("bull"), bear: testAnalystPass("bear") };
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    });
+
+    expect(result.status).toBe("done");
+    // Only the request holds money while it is in flight — never the request
+    // plus the pass lease that exists to hand off to it.
+    expect(liveDuringRequest).toEqual([
+      expect.objectContaining({ pass: "bull", attemptId: expect.stringContaining("#r1") }),
+    ]);
+  });
+
+  it("lets bull and bear hold request leases at the same time at the default of 2", async () => {
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 2,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 900_000,
+      jobLeaseTtlMs: 900_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "two-slot-admission", new Date(), limits)!;
+    const base = mockPasses();
+    let concurrentRequests: string[] = [];
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (deps, lifecycle, settlements) => {
+        // The real ordering: bear launches while bull is still streaming, so
+        // bear reads the prompt cache bull just wrote.
+        await launchTestAnalystSide(lifecycle, "bull");
+        const bullAdmission = deps.admissionFor?.("bull") as RequestAdmission;
+        const bullPermit = await admittedWithin(
+          bullAdmission.reserve({ attempt: 1, kind: "stream", maximumUsd: 0.5 }),
+          "bull's first request was never admitted",
+        );
+        await launchTestAnalystSide(lifecycle, "bear");
+        const bearAdmission = deps.admissionFor?.("bear") as RequestAdmission;
+        const bearPermit = await admittedWithin(
+          bearAdmission.reserve({ attempt: 1, kind: "stream", maximumUsd: 0.5 }),
+          "bear's first request was refused while bull was still streaming",
+        );
+        concurrentRequests = handle.db
+          .select()
+          .from(jobLlmLeases)
+          .all()
+          .filter((row) => row.reservedCostUsd > 0)
+          .map((row) => row.pass)
+          .sort();
+        await bullAdmission.release(bullPermit);
+        await bearAdmission.release(bearPermit);
+        await settlements?.bull?.(testSuccessSettlement(testAnalystPass("bull")));
+        lifecycle?.onPassFinish?.("bull");
+        await settlements?.bear?.(testSuccessSettlement(testAnalystPass("bear")));
+        lifecycle?.onPassFinish?.("bear");
+        return { bull: testAnalystPass("bull"), bear: testAnalystPass("bear") };
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    });
+
+    expect(result.status).toBe("done");
+    expect(concurrentRequests).toEqual(["bear", "bull"]);
+  });
+
+  /**
+   * D-07's disclosure clause: presumed spend is part of the total the report
+   * shows, so the report has to say which part of it is a bound.
+   */
+  it("discloses presumed spend in the manifest and in cost metadata", async () => {
+    const { jobId } = createJob("AAPL");
+    // A previous generation-0 attempt whose owner died: its whole reservation
+    // is counted until something reconciles it downward.
+    handle.db.insert(costLog).values({
+      jobId,
+      runGeneration: 0,
+      attemptId: null,
+      presumedAttemptId: "dead-attempt",
+      settlementKind: "presumed",
+      step: "bull",
+      model: "claude-sonnet-5",
+      costUsd: 3.86,
+      createdAt: NOW().toISOString(),
+    }).run();
+
+    const result = await runJob(jobId, mockPasses().passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result.status).toBe("done");
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const parsed = ReportSchema.parse(JSON.parse(row.reportJson!));
+    expect(parsed.meta.presumedCostUsd).toBe(3.86);
+    expect(parsed.appendix.missingData).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: "cost.presumed",
+        severity: "warn",
+        reason: expect.stringContaining("presumed upper bound"),
+      }),
+    ]));
+  });
+
+  it("omits the presumed-spend disclosure when nothing in the run was presumed", async () => {
+    const { jobId } = createJob("MSFT");
+
+    const result = await runJob(jobId, mockPasses().passes, {
+      bundle: fakeBundle("MSFT"),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const parsed = ReportSchema.parse(JSON.parse(row.reportJson!));
+    expect(parsed.meta.presumedCostUsd).toBeUndefined();
+    expect(parsed.appendix.missingData.some((gap) => gap.field === "cost.presumed")).toBe(false);
+  });
+
+  it("still records a late measured settlement after a request lease renewal lost authority", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T00:00:00.000Z"));
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 2,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 200,
+      jobLeaseTtlMs: 10_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "late-measurement", new Date(), limits)!;
+    const base = mockPasses();
+    const stolen = deferred();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (deps, lifecycle) => {
+        await launchTestAnalystSide(lifecycle, "bull");
+        const admission = deps.admissionFor?.("bull") as RequestAdmission;
+        const permit = await admittedWithin(
+          admission.reserve({ attempt: 1, kind: "stream", maximumUsd: 12 }),
+          "bull's first request was never admitted",
+        );
+        // Renewal loses authority for the REQUEST lease only: exactly the
+        // state in which the reservation has already expired into a presumed
+        // row at its full maximum.
+        handle.db
+          .update(jobLlmLeases)
+          .set({ leaseOwner: "stolen:owner" })
+          .where(eq(jobLlmLeases.permitId, permit.id))
+          .run();
+        stolen.resolve(undefined);
+        await new Promise<void>((resolve) => {
+          deps.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        // The provider still returned real usage for this request.
+        await admission.settle(permit, {
+          model: "claude-sonnet-5",
+          usage: {
+            input_tokens: 20_000,
+            output_tokens: 800,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          webSearches: 0,
+          costUsd: 0.12,
+          fallbackUsed: false,
+        });
+        throw new Error("bull aborted after its request lease lost authority");
+      },
+    };
+
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    });
+    await stolen.promise;
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(await running).toMatchObject({ status: "error", reportId: null });
+    // The measurement is the record, not the presumed maximum.
+    expect(handle.db.select().from(costLog).all()).toEqual([
+      expect.objectContaining({ costUsd: 0.12, settlementKind: "actual", step: "bull" }),
+    ]);
   });
 
   it("analyst finish lifecycle stays local until the durable settlement commits", async () => {
@@ -5961,6 +6234,58 @@ describe("runJob — model-resolution failure", () => {
     expect(types[types.length - 1]).toBe("done");
     const done = events.find((e): e is Extract<JobEvent, { type: "done" }> => e.type === "done");
     expect(done?.dataOnly).toBe(true);
+  });
+
+  /**
+   * D-02: a stored model id the registry refuses is a NAMED cause, not a
+   * transport accident, and the data-only report has to say so — the step
+   * detail is transient UI, the report is the durable record.
+   */
+  it("discloses a rejected analysis model as a model-rejected execution adjustment", async () => {
+    vi.stubEnv("ANALYSIS_MODEL", "claude-opus-5-20260115");
+    const { jobId } = createJob("AAPL");
+    const { passes, calls } = mockPasses();
+    resolveModelMock.mockRejectedValue(
+      new Error(explainAnalysisModel("claude-opus-5-20260115") ?? "rejected"),
+    );
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle("AAPL"),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: true });
+    expect(calls).toEqual([]);
+    const repRow = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get();
+    const parsed = ReportSchema.parse(JSON.parse(repRow?.reportJson ?? "{}"));
+    expect(parsed.meta.execution).toEqual(LLM_STEPS.map((step) => ({
+      step,
+      requestedModel: "claude-opus-5-20260115",
+      effectiveModel: "none",
+      requestedEffort: "high",
+      effectiveEffort: null,
+      fallbackUsed: false,
+      adjustments: ["model-rejected"],
+      note: expect.stringContaining("dated snapshot ids do not exist"),
+    })));
+  });
+
+  it("leaves execution metadata off a transport-failed resolution, which is not a rejection", async () => {
+    vi.stubEnv("ANALYSIS_MODEL", ""); // empty env = unset, whatever the host holds
+    const { jobId } = createJob("AAPL");
+    const { passes } = mockPasses();
+    resolveModelMock.mockRejectedValue(new Error("503 models.list() transport error"));
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle("AAPL"),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    const repRow = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get();
+    const parsed = ReportSchema.parse(JSON.parse(repRow?.reportJson ?? "{}"));
+    expect(parsed.meta.execution).toBeUndefined();
   });
 });
 

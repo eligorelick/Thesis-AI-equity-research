@@ -92,7 +92,7 @@ import {
 } from "@/pipeline/stageC/entityValidation";
 import { buildDataCompleteness } from "@/report/completeness";
 import { buildExecutionMetadataEntry } from "@/report/execution";
-import { resolveRegistryModel } from "@/models/registry";
+import { judgeFloorModelId, resolveRegistryModel } from "@/models/registry";
 import {
   SHARED_RULES_BLOCK,
   buildBullFraming,
@@ -245,10 +245,10 @@ export type RunPassStreamingFn = (args: RunPassArgs) => StreamingHandleLike;
 
 /**
  * Web-search tool factory (kept identical across passes for cache discipline).
- * Receives the pass model so the factory can pick a tool variant the model
- * actually accepts (haiku rejects `web_search_20260318`).
+ * Always receives the pass model: which tool variant is accepted is a registry
+ * fact about that model (haiku rejects `web_search_20260318`), never a default.
  */
-export type WebSearchToolFn = (maxUses: number, model?: string) => unknown;
+export type WebSearchToolFn = (maxUses: number, model: string) => unknown;
 
 /** Everything the pass runners need injected. */
 export interface PassDeps {
@@ -350,8 +350,9 @@ export const ANALYST_MAX_WEB_SEARCHES = 8;
  * case JSON only ~4–6K. A clipped pass fails typed (`max_tokens`), discarding
  * the pass's full sunk cost (cache write + searches + thinking). max_tokens is
  * a free ceiling: OTPM rate limits count actual generated tokens only, and
- * these passes already stream (> STREAMING_THRESHOLD_TOKENS). 64K is also
- * exactly Haiku 4.5's output ceiling, so the cap stays valid on every model.
+ * every paid pass streams unconditionally (DECISIONS D-09 removed the old
+ * token threshold). 64K is also exactly Haiku 4.5's output ceiling, so the cap
+ * stays valid on every model.
  */
 export const ANALYST_MAX_TOKENS = 64_000;
 /**
@@ -377,8 +378,12 @@ export const MAX_JUDGE_RETRIES = 2;
  * (that is where the web-search/token bulk is); only the judge is floored.
  * Per-pass cost logging and the pipeline UI report the ACTUAL serving model,
  * so the substitution is visible, not silent.
+ *
+ * The id itself belongs to the registry (`judgeFloorModelId`), which is also
+ * where the provider's two reservation bounds read it — the three used to
+ * spell the same literal out independently.
  */
-export const JUDGE_MODEL_FLOOR = "claude-sonnet-5";
+export const JUDGE_MODEL_FLOOR = judgeFloorModelId();
 
 /** Model the judge/synthesis pass should run on for a given analysis model. */
 export function judgeModelFor(analysisModel: string): string {

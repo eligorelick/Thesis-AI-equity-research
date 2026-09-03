@@ -185,8 +185,14 @@ const envSchema = z.object({
     MIN_JOB_LEASE_SECONDS - 1,
     MAX_NODE_TIMER_SECONDS,
   ),
-  /** Gap with no stream event that aborts a stalled paid request. */
-  THESIS_STREAM_IDLE_SECONDS: positiveIntegerEnv(DEFAULT_STREAM_IDLE_SECONDS, 0, 3_600),
+  /**
+   * Gap with no stream event that aborts a stalled paid request. This is the
+   * ONLY parser for the variable: the provider reads the validated value from
+   * this config rather than re-reading and re-parsing the environment with a
+   * second, wider range. 0 is accepted and disables the idle guard, which is
+   * why the exclusive minimum is -1.
+   */
+  THESIS_STREAM_IDLE_SECONDS: positiveIntegerEnv(DEFAULT_STREAM_IDLE_SECONDS, -1, 3_600),
   /**
    * How paid work is admitted against the spend caps (DECISIONS D-10).
    *  - "request" (default): every provider request reserves its own maximum

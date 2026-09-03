@@ -50,9 +50,9 @@ import type {
   BetaWebSearchTool20260318,
   MessageCreateParamsNonStreaming,
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
+import { getConfig } from "@/config/env";
 import {
   ANTHROPIC_REQUEST_TIMEOUT_MS as REQUEST_TIMEOUT_MS,
-  DEFAULT_STREAM_IDLE_SECONDS,
 } from "@/pipeline/leaseTiming";
 import { modelSupportsEffort } from "@/report/execution";
 import {
@@ -63,6 +63,7 @@ import {
   assertRegistryModel,
   autoPreferenceIds,
   isHighOrAboveEffort,
+  judgeFloorModelId,
   resolveRegistryModel,
   type RegistryModel,
 } from "@/models/registry";
@@ -102,40 +103,36 @@ function defaultAutoModel(): string {
   return first;
 }
 
-/** Beta header required for server-side refusal fallbacks (fable-5 only). */
-export const SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-06-01";
-
-/** Fallback target when claude-fable-5's safety classifiers decline. */
-export const FABLE_FALLBACK_MODEL = "claude-opus-4-8";
-
 /**
- * Web search tool version — switch here in one place if a newer variant
- * ships. `web_search_20260318` = dynamic filtering + `response_inclusion`
- * (the Anthropic API contract §2).
+ * The two web-search tool variants the SDK gives a type to. These are SDK
+ * DISCRIMINANTS, not policy: which variant a model gets is the registry's
+ * per-model `webSearchToolType`, and these names exist only so the typed
+ * request object can be narrowed and built. A registry value outside this set
+ * is refused by {@link webSearchTool} rather than sent.
+ *
+ * `web_search_20260318` = dynamic filtering + `response_inclusion` (the
+ * Anthropic API contract §2). `web_search_20250305` is the basic variant for
+ * models without dynamic-filtering support: Haiku 4.5 rejects the modern one
+ * with 400 "does not support programmatic tool calling" (verified live
+ * 2026-07-08).
  */
 export const WEB_SEARCH_TOOL_TYPE = "web_search_20260318" as const;
-
-/**
- * Basic web search variant for models without dynamic-filtering support.
- * Haiku 4.5 rejects `web_search_20260318` with 400 "does not support
- * programmatic tool calling" (verified live 2026-07-08); it accepts the
- * basic `web_search_20250305`.
- */
 export const WEB_SEARCH_TOOL_TYPE_BASIC = "web_search_20250305" as const;
 
 /**
- * Gap with no stream event after which a paid request is abandoned, from
- * THESIS_STREAM_IDLE_SECONDS. Every paid pass streams, so a provider that
- * accepts a request and then goes quiet would otherwise hold a durable lease
- * (and its reservation) until the 10-minute transport timeout with nothing to
- * show for it. Zero disables the idle guard.
+ * Gap with no stream event after which a paid request is abandoned. Every paid
+ * pass streams, so a provider that accepts a request and then goes quiet would
+ * otherwise hold a durable lease (and its reservation) until the 10-minute
+ * transport timeout with nothing to show for it. Zero disables the guard.
+ *
+ * THESIS_STREAM_IDLE_SECONDS has exactly ONE parser: the config schema, which
+ * validates it once at startup. This used to re-read and re-parse the raw
+ * environment variable here with a different accepted range, so an out-of-range
+ * value silently became the default in the provider while the config held
+ * something else.
  */
 export function streamIdleTimeoutMs(): number {
-  const raw = process.env.THESIS_STREAM_IDLE_SECONDS?.trim();
-  if (raw === undefined || raw.length === 0) return DEFAULT_STREAM_IDLE_SECONDS * 1_000;
-  const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) return DEFAULT_STREAM_IDLE_SECONDS * 1_000;
-  return parsed * 1_000;
+  return getConfig().streamIdleTimeoutMs;
 }
 
 /** A stream that accepted the request and then produced nothing for too long. */
@@ -283,8 +280,10 @@ function boundedInteger(value: number, label: string, maximum: number): number {
 
 /**
  * Conservative standard-price upper bound for every request that one durable
- * attempt can expose. It covers all six SDK executions, all three transport
- * executions, and all six pause/resumption executions (108 total).
+ * attempt can expose: {@link PASS_BILLING_EXPOSURE_MULTIPLIER} request maxima,
+ * which is PASS_TRANSPORT_MAX_ATTEMPTS transport executions × one pause
+ * resumption cycle each (CLIENT_MAX_RETRIES is 0 under D-10, so the SDK adds
+ * no executions of its own).
  */
 export function maximumPassCostUsd(
   selectedModel: string,
@@ -301,7 +300,7 @@ export function maximumPassCostUsd(
   const requested = registryEntryFor(selectedModel);
   const effectiveModel =
     pass === "synthesize" && requested.family === "haiku"
-      ? "claude-sonnet-5"
+      ? judgeFloorModelId()
       : selectedModel;
   const effective = registryEntryFor(effectiveModel);
   const pricing = effective.pricing;
@@ -774,20 +773,21 @@ export function buildPassParams(opts: RunPassOptions): BuiltPassRequest {
 
 /**
  * Web search server tool (identical shape on every pass — cache discipline).
- * Pass the target model to get the variant that model accepts: haiku gets
- * the basic `web_search_20250305`, everything else the dynamic-filtering
- * `web_search_20260318`. Omitting `model` keeps the modern variant.
+ * The variant comes from the target model's registry entry: haiku gets the
+ * basic `web_search_20250305`, everything else the dynamic-filtering
+ * `web_search_20260318`. `model` is required — a tool variant chosen without
+ * a model would be a second, silent policy default beside the registry's.
  */
 export function webSearchTool(
   maxUses: number,
-  model?: string,
+  model: string,
 ): BetaWebSearchTool20260318 | BetaWebSearchTool20250305 {
   if (!Number.isSafeInteger(maxUses) || maxUses <= 0 || maxUses > MAX_PROVIDER_WEB_SEARCHES) {
     throw new Error(
       `web-search max_uses must be a positive integer no greater than ${MAX_PROVIDER_WEB_SEARCHES}`,
     );
   }
-  const toolType = model === undefined ? WEB_SEARCH_TOOL_TYPE : registryEntryFor(model).webSearchToolType;
+  const toolType = registryEntryFor(model).webSearchToolType;
   if (toolType === WEB_SEARCH_TOOL_TYPE_BASIC) {
     return { type: WEB_SEARCH_TOOL_TYPE_BASIC, name: "web_search", max_uses: maxUses };
   }
@@ -929,7 +929,10 @@ export type PassErrorKind =
  */
 export const MAX_PAUSE_RESUMPTIONS = 5;
 
-/** Six SDK executions × three transport executions × six pause executions. */
+/**
+ * SDK executions × transport executions × pause executions. With
+ * CLIENT_MAX_RETRIES at 0 (D-10 owns the retry loop) this is 1 × 6 × 6 = 36.
+ */
 export const PASS_BILLING_EXPOSURE_MULTIPLIER =
   (CLIENT_MAX_RETRIES + 1) * PASS_TRANSPORT_MAX_ATTEMPTS * (MAX_PAUSE_RESUMPTIONS + 1);
 
@@ -967,7 +970,7 @@ export function maximumRequestCostUsd(
   }
   const requested = registryEntryFor(model);
   const effectiveModel =
-    pass === "synthesize" && requested.family === "haiku" ? "claude-sonnet-5" : model;
+    pass === "synthesize" && requested.family === "haiku" ? judgeFloorModelId() : model;
   const effective = registryEntryFor(effectiveModel);
   const pricing = effective.pricing;
 
@@ -1775,8 +1778,15 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
           continue;
         }
         // A programming error is not a provider failure: keep it loud rather
-        // than filing it as spend-bearing transport noise.
-        if (!(cause instanceof APIError) && !isRetryableTransportError(cause)) throw cause;
+        // than filing it as spend-bearing transport noise. It still has to
+        // settle `firstToken` first — this function's contract is that the
+        // promise "cannot hang", and a bug thrown before any stream event
+        // otherwise left `await bullHandle.firstToken` waiting forever, with
+        // bear never launched and the pass hanging until its deadline.
+        if (!(cause instanceof APIError) && !isRetryableTransportError(cause)) {
+          signalFirst("error");
+          throw cause;
+        }
         if (!(cause instanceof APIUserAbortError)) {
           console.error(
             `[anthropic] ${opts.field ?? "llm.pass"}: terminal transport failure after ${attempt} attempt(s): ${errorMessageOf(cause)}`,

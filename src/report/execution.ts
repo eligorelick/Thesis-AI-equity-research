@@ -1,7 +1,17 @@
 import { resolveRegistryModel } from "@/models/registry";
 
 export type ExecutionEffort = "low" | "medium" | "high" | "xhigh" | "max";
-export type ExecutionAdjustment = "model-floor" | "fallback" | "effort-stripped";
+export type ExecutionAdjustment =
+  | "model-floor"
+  | "fallback"
+  | "effort-stripped"
+  /**
+   * The requested model was refused before any request was sent — a stored id
+   * the registry does not accept, such as a dated snapshot for a 4.6+ family
+   * (DECISIONS D-02). The run degrades to a data-only report; the note names
+   * the value and the accepted forms.
+   */
+  | "model-rejected";
 
 export interface ExecutionMetadataEntry {
   step: string;
@@ -30,7 +40,25 @@ export function buildExecutionMetadataEntry(input: {
   effectiveModel: string;
   requestedEffort: ExecutionEffort | null;
   fallbackUsed: boolean;
+  /**
+   * Why the requested model was refused before any request was sent (D-02).
+   * When present the entry is a `model-rejected` disclosure: no model ran, so
+   * no floor, fallback or effort adjustment can apply.
+   */
+  rejectedReason?: string;
 }): ExecutionMetadataEntry {
+  if (input.rejectedReason !== undefined) {
+    return {
+      step: input.step,
+      requestedModel: input.requestedModel,
+      effectiveModel: input.effectiveModel,
+      requestedEffort: input.requestedEffort,
+      fallbackUsed: input.fallbackUsed,
+      effectiveEffort: null,
+      adjustments: ["model-rejected"],
+      note: `${input.step}: ${input.rejectedReason}`,
+    };
+  }
   const effectiveEffort = input.requestedEffort !== null && modelSupportsEffort(input.effectiveModel)
     ? input.requestedEffort
     : null;
@@ -63,7 +91,11 @@ export function buildExecutionMetadataEntry(input: {
     );
   }
   return {
-    ...input,
+    step: input.step,
+    requestedModel: input.requestedModel,
+    effectiveModel: input.effectiveModel,
+    requestedEffort: input.requestedEffort,
+    fallbackUsed: input.fallbackUsed,
     effectiveEffort,
     adjustments,
     ...(notes.length > 0 ? { note: notes.join(" ") } : {}),

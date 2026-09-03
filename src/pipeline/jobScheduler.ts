@@ -24,8 +24,10 @@ import {
   reports,
 } from "@/db/schema";
 import {
+  REQUEST_ATTEMPT_SEPARATOR,
   persistPassSettlementInTransaction,
   preparePassSettlement,
+  reconcilePresumedCostFromSettlement,
   serializeLegacyAnalystProjection,
   type DurablePass,
   type PassSettlement,
@@ -296,8 +298,8 @@ function finalizeTerminalPaidLeasesInTransaction(
  * a crash loop could spend without limit. Instead the whole reservation is
  * written to `cost_log` as a `presumed` row, which every admission path
  * already counts, and only evidence moves it down: a late settlement for the
- * same attempt ({@link reconcilePresumedCostFromSettlement}) or the Usage &
- * Cost API ({@link reconcilePresumedCostsAgainstReportedTotals}).
+ * same attempt (`reconcilePresumedCostFromSettlement` in jobArtifacts) or the
+ * Usage & Cost API ({@link reconcilePresumedCostsAgainstReportedTotals}).
  *
  * The row carries `presumedAttemptId` rather than `attemptId` so the billed
  * attempt slot stays free: a settlement that arrives after expiry can still be
@@ -374,13 +376,15 @@ function pruneExpiredPaidLeases(db: ThesisDb, nowIso: string): number {
  * Attempt id for one provider REQUEST inside a pass attempt (DECISIONS D-10).
  * The pass keeps its own id for the durable artifact; each request gets a
  * suffixed id so its reservation and its cost row are addressable on their
- * own, and the billed-attempt unique index still holds.
+ * own, and the billed-attempt unique index still holds. The resume reader
+ * pairs these rows back to their pass artifact with the same separator
+ * (`costRowBelongsToAttempt`).
  */
 export function requestAttemptId(passAttemptId: string, sequence: number): string {
   if (!Number.isSafeInteger(sequence) || sequence < 1) {
     throw new Error("jobScheduler: request sequence must be a positive integer");
   }
-  return `${passAttemptId}#r${sequence}`;
+  return `${passAttemptId}${REQUEST_ATTEMPT_SEPARATOR}${sequence}`;
 }
 
 /**
@@ -478,13 +482,34 @@ export function settleRequestCost(
         projectionError: null,
       } as unknown as SettlePaidPassResult);
     }
+    // A presumed row for this request (its lease expired earlier) is
+    // superseded by whatever is written below. Deleted BEFORE the insert
+    // because a presumed settlement now claims the same `presumedAttemptId`,
+    // which the presumed-attempt unique index would reject and which a delete
+    // afterwards would remove again.
+    reconcilePresumedCostFromSettlement(tx, {
+      jobId: lease.jobId,
+      runGeneration: lease.runGeneration,
+      attemptId: lease.attemptId,
+      pass: lease.pass,
+    });
     if (settledMicro > 0n) {
+      const presumed = settlement.presumed === true;
       tx.insert(costLog).values({
         jobId: lease.jobId,
         runGeneration: lease.runGeneration,
         attemptId: lease.attemptId,
-        presumedAttemptId: null,
-        settlementKind: settlement.presumed === true ? "presumed" : "actual",
+        // A stalled stream settles reported usage plus the worst case for the
+        // remainder. That remainder is a presumed maximum like any other, so
+        // it must carry `presumedAttemptId` too: both reconciliation entry
+        // points select on that column, and without it the row could never be
+        // listed by `npm run costs:reconcile`, never lowered by a reported
+        // total, and never subtracted from that total while its neighbours
+        // were lowered against it (DECISIONS D-07, D-09). `attemptId` stays
+        // set — the request DID bill under it — so the billed-attempt index
+        // still fences a duplicate settlement for the same request.
+        presumedAttemptId: presumed ? lease.attemptId : null,
+        settlementKind: presumed ? "presumed" : "actual",
         step: lease.pass,
         model: settlement.model,
         inputTokens: settlement.inputTokens,
@@ -498,14 +523,6 @@ export function settleRequestCost(
         createdAt: authorityAt,
       }).run();
     }
-    // A presumed row for this request (its lease expired earlier) is
-    // superseded by the measurement that just arrived.
-    tx.delete(costLog).where(and(
-      eq(costLog.jobId, lease.jobId),
-      eq(costLog.runGeneration, lease.runGeneration),
-      eq(costLog.presumedAttemptId, lease.attemptId),
-      eq(costLog.step, lease.pass),
-    )).run();
     tx.delete(jobLlmLeases).where(exactLeaseWhere(lease)).run();
     return { recorded: settledMicro > 0n, costUsd: Number(settledMicro) / MICRO_USD };
   }, { behavior: "immediate" });
@@ -540,25 +557,6 @@ export function listPresumedCosts(db: ThesisDb = getDb()): PresumedCostRow[] {
       costUsd: row.costUsd,
       createdAt: row.createdAt,
     }));
-}
-
-/**
- * Drop the presumed row for an attempt whose real settlement just landed.
- * Called inside the settlement transaction, so the exact cost replaces the
- * presumed maximum atomically and no window counts both.
- */
-export function reconcilePresumedCostFromSettlement(
-  db: Pick<ThesisDb, "delete">,
-  identity: { jobId: string; runGeneration: number; attemptId: string; pass: string },
-): number {
-  return db.delete(costLog)
-    .where(and(
-      eq(costLog.jobId, identity.jobId),
-      eq(costLog.runGeneration, identity.runGeneration),
-      eq(costLog.presumedAttemptId, identity.attemptId),
-      eq(costLog.step, identity.pass),
-    ))
-    .run().changes;
 }
 
 export interface ReportedCostBucket {

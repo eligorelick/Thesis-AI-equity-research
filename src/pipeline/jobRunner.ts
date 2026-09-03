@@ -40,6 +40,7 @@ import {
   resolveModel,
   type VerifyReservationCapability,
 } from "@/providers/anthropic";
+import { explainAnalysisModel } from "@/settings/contracts";
 import {
   getWritableSettingsAuthority,
   type EffortLevel,
@@ -101,6 +102,7 @@ import {
   authorizePaidPassLaunch,
   claimQueuedJobById,
   configuredSchedulerLimits,
+  listPresumedCosts,
   reconcileExpiredJobClaims,
   reconcileExpiredSchedulerStateInTransaction,
   releaseUnbilledPaidPassLease,
@@ -989,9 +991,18 @@ function createSettlementCheckpoint<T>(
             // A request in flight holds its own lease; renew it on the same
             // beat so a long generation cannot expire into presumed spend
             // while it is still being read.
-            for (const [permitId, requestLease] of requestLeases) {
+            for (const [, requestLease] of requestLeases) {
               if (!renewPaidPassLease(requestLease, undefined, state.schedulerLimits)) {
-                requestLeases.delete(permitId);
+                // KEEP the identity in the map. Renewal loses authority
+                // exactly when the lease has already expired into a presumed
+                // row at its full reserved maximum — and the provider may
+                // still return real usage for this very request moments
+                // later. Dropping the entry made `settle` return early, so
+                // the measurement was thrown away and the presumption stood
+                // (on Opus 5, a permanent ~$9.53 row where the truth might be
+                // $0.40). settleRequestCost is written for exactly this case:
+                // it supersedes the presumed row with the measured one and
+                // tolerates a lease row that is already gone.
                 stopRenewal();
                 controller.abort(new Error(`paid ${pass} request lease renewal lost authority`));
                 return;
@@ -1047,6 +1058,21 @@ function createSettlementCheckpoint<T>(
     for (;;) {
       signal.throwIfAborted();
       const sequence = requestSequence + 1;
+      // The pass lease's one-request headroom exists only until a real request
+      // reserves for itself. Release it BEFORE that request asks for
+      // admission, not after: while both are live the pass's own lease
+      // occupies a paid slot (and job/rolling headroom) that its own first
+      // request then has to fit beside. At THESIS_MAX_ACTIVE_LLM_CALLS=1 that
+      // refused every first request with "capacity" — a transient reason, so
+      // the loop below retried forever and no provider request was ever sent —
+      // and at the default of 2 it serialised bull and bear, which costs bear
+      // a full cache write instead of the read runBullThenBear starts it early
+      // to get. Nothing is at risk in the window: no request has been sent, so
+      // there is nothing yet to bill.
+      if (sequence === 1 && lease !== null && lease.reservedCostUsd > 0) {
+        const resized = resizePaidPassLease(lease, 0, undefined, undefined);
+        if (resized !== null) lease = resized;
+      }
       const acquired = acquirePaidPassLease(
         state.claim,
         pass,
@@ -1060,12 +1086,6 @@ function createSettlementCheckpoint<T>(
       if (acquired.acquired) {
         requestSequence = sequence;
         requestLeases.set(acquired.lease.permitId, acquired.lease);
-        // The pass lease's one-request headroom exists only until a real
-        // request reserves for itself; release it so the two do not stack.
-        if (sequence === 1 && lease !== null && lease.reservedCostUsd > 0) {
-          const resized = resizePaidPassLease(lease, 0, undefined, undefined);
-          if (resized !== null) lease = resized;
-        }
         return { id: acquired.lease.permitId, maximumUsd: acquired.lease.reservedCostUsd };
       }
       if (
@@ -2663,7 +2683,24 @@ export async function runJob<TPayload = unknown>(
           startStep(state, step);
           finishStep(state, step, "skipped", reason);
         }
-        return persistDataOnly(state, bundle, validation, computed, now, hasKey);
+        // D-02: when the stored value is one the registry refuses (a dated
+        // snapshot for a 4.6+ family, say), the run degrades with a named
+        // cause rather than a transport accident. Disclose it as the
+        // `model-rejected` execution adjustment so the data-only report says
+        // which value was refused and what is accepted instead.
+        const rejection = explainAnalysisModel(capturedSettings.state.analysisModel);
+        return persistDataOnly(state, bundle, validation, computed, now, hasKey, {
+          execution: rejection === null
+            ? undefined
+            : LLM_STEPS.map((step) => buildExecutionMetadataEntry({
+                step,
+                requestedModel: capturedSettings.state.analysisModel,
+                effectiveModel: "none",
+                requestedEffort: capturedSettings.state.analysisEffort,
+                fallbackUsed: false,
+                rejectedReason: rejection,
+              })),
+        });
       }
     }
 
@@ -3088,7 +3125,13 @@ export async function runJob<TPayload = unknown>(
 
       // Reconcile runner-owned meta onto the assembled report (cost/rate/model
       // are the runner's source of truth; the passes may not know the final cost).
-      const finalReport = reconcileMeta(report, meta, costBreakdown, verifyLog);
+      const finalReport = reconcileMeta(
+        report,
+        meta,
+        costBreakdown,
+        verifyLog,
+        presumedSpendDisclosure(state.jobId, state.runGeneration),
+      );
 
       const validated = ReportSchema.safeParse(finalReport);
       if (!validated.success) {
@@ -3722,6 +3765,8 @@ function persistDataOnly(
   computed: ComputedMetrics | null,
   now: () => Date,
   hasKey: boolean,
+  /** Requested-versus-effective disclosure for a run that never reached a model. */
+  disclosure: { execution?: ExecutionMetadataEntry[] } = {},
 ): RunJobResult {
   // No job may be persisted terminal while a step still reads as live. The
   // callers mark the steps they know about, but `markSkipped` only moves a
@@ -3749,6 +3794,8 @@ function persistDataOnly(
     validation,
     computed,
     costBreakdown: buildCostBreakdown(state),
+    presumed: presumedSpendDisclosure(state.jobId, state.runGeneration),
+    execution: disclosure.execution,
     reason: hasKey
       ? "LLM analysis could not complete — the failed pass errors are disclosed in the missing-data manifest; this is a data-only report."
       : NO_KEY_SKIP_REASON,
@@ -3778,6 +3825,10 @@ function persistDataOnly(
         severity: "critical",
         attemptedSources: ["pipeline"],
       },
+      // The presumed-spend line is generated here from durable pass names and
+      // numbers, never from provider prose, so it survives the sterile rebuild
+      // — the shell still shows a cost total that it must qualify.
+      ...(dataOnlyInput.presumed == null ? [] : [dataOnlyInput.presumed.entry]),
     ];
     validatedReport = ReportSchema.parse(fallback);
   }
@@ -3986,6 +4037,47 @@ function sumLoggedCost(jobId: string, db: ThesisDb = getDb()): number {
   return rows.reduce((acc, r) => acc + r.costUsd, 0);
 }
 
+/** What part of a run's reported cost is a bound rather than a charge. */
+interface PresumedSpendDisclosure {
+  totalUsd: number;
+  entry: ManifestEntry;
+}
+
+/**
+ * Presumed spend belonging to this run, as a disclosure (DECISIONS D-07).
+ *
+ * A reservation whose owning process died, and a stream that was accepted and
+ * then went silent, are both counted at their reserved maximum until evidence
+ * lowers them. That bound is part of the total the report shows, so the report
+ * has to say so: without this, a user whose run crashed mid-pass sees a total
+ * inflated by up to one request maximum with no sign that part of it is an
+ * upper bound rather than a charge.
+ */
+function presumedSpendDisclosure(
+  jobId: string,
+  runGeneration: number,
+): PresumedSpendDisclosure | null {
+  const rows = listPresumedCosts().filter(
+    (row) => row.jobId === jobId && row.runGeneration === runGeneration,
+  );
+  if (rows.length === 0) return null;
+  const totalUsd = round4(rows.reduce((total, row) => total + row.costUsd, 0));
+  const passes = [...new Set(rows.map((row) => row.pass))].sort().join(", ");
+  return {
+    totalUsd,
+    entry: {
+      field: "cost.presumed",
+      reason:
+        `$${totalUsd.toFixed(4)} of the reported cost is a presumed upper bound, not a measured ` +
+        `charge: ${rows.length} authorized provider request(s) (${passes}) never reported what ` +
+        "they billed, so the whole reservation is counted until it is reconciled downward " +
+        "(npm run costs:reconcile).",
+      severity: "warn",
+      attemptedSources: ["anthropic"],
+    },
+  };
+}
+
 /**
  * Reconcile the runner-owned meta + appendix cost/verification fields onto a
  * Report the passes assembled (the passes may not know the final cost or the
@@ -3997,6 +4089,7 @@ function reconcileMeta(
   meta: ReportMetaInput,
   costBreakdown: { step: string; model: string; costUsd: number }[],
   verifyLog: unknown,
+  presumed: PresumedSpendDisclosure | null = null,
 ): Report {
   const next: Report = {
     ...report,
@@ -4017,10 +4110,17 @@ function reconcileMeta(
       runId: meta.runId ?? report.meta.runId,
       startedAt: meta.startedAt ?? report.meta.startedAt,
       completedAt: meta.completedAt ?? report.meta.completedAt,
+      ...(presumed === null ? {} : { presumedCostUsd: presumed.totalUsd }),
     },
     appendix: {
       ...report.appendix,
       verificationRate: meta.verificationRate,
+      missingData: presumed === null
+        ? report.appendix.missingData
+        : [
+            ...report.appendix.missingData.filter((gap) => gap.field !== "cost.presumed"),
+            presumed.entry,
+          ],
       costBreakdown: costBreakdown.length > 0
         ? costBreakdown.map((entry) => {
             const execution = meta.execution?.find((item) => item.step === entry.step);
@@ -4121,6 +4221,7 @@ function reconcileRecoveredVerifyReport(
     },
     costBreakdown,
     report.appendix.verificationLog,
+    presumedSpendDisclosure(state.jobId, state.runGeneration),
   );
   return ReportSchema.parse({
     ...reconciled,
@@ -4180,6 +4281,14 @@ interface DataOnlyInput {
   computed: ComputedMetrics | null;
   costBreakdown: { step: string; model: string; costUsd: number }[];
   reason: string;
+  /** Part of `costUsd` that is a presumed upper bound (DECISIONS D-07). */
+  presumed?: PresumedSpendDisclosure | null;
+  /**
+   * Requested-versus-effective execution for a run that never reached a model,
+   * carrying the `model-rejected` adjustment when the stored model id was
+   * refused (DECISIONS D-02).
+   */
+  execution?: ExecutionMetadataEntry[];
 }
 
 /**
@@ -4230,6 +4339,9 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
     severity: "critical",
     attemptedSources: attemptedAnalysisSources,
   });
+  // A data-only report still shows a cost total, and a run that died mid-pass
+  // is exactly the case where part of that total is a bound, not a charge.
+  if (input.presumed != null) missingData.push(input.presumed.entry);
 
   const report: Report = {
     meta: {
@@ -4240,6 +4352,10 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
       model: input.model,
       pipelineVersion: PIPELINE_VERSION,
       costUsd: input.costUsd,
+      ...(input.presumed == null ? {} : { presumedCostUsd: input.presumed.totalUsd }),
+      ...(input.execution === undefined || input.execution.length === 0
+        ? {}
+        : { execution: input.execution }),
       verificationRate: null,
       provenanceCoverage: emptyCoverage,
       dataCompleteness: buildDataCompleteness(missingData),

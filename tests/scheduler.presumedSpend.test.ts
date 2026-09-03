@@ -33,6 +33,7 @@ import {
   reconcileExpiredJobClaims,
   reconcilePresumedCostsAgainstReportedTotals,
   settlePaidPassLease,
+  settleRequestCost,
   type ClaimedJob,
   type PaidPassLease,
   type SchedulerLimits,
@@ -337,6 +338,48 @@ describe("reconciling presumed spend downward", () => {
     }], expiry, second.db)).toEqual([]);
     expect(listPresumedCosts(second.db)).toEqual([
       expect.objectContaining({ attemptId: "attempt-h", costUsd: 4 }),
+    ]);
+  });
+
+  it("lists and lowers the presumed remainder a stalled stream settles", () => {
+    seedJob(first.db, "job-idle", "AAPL");
+    const { lease } = reserve(first.db, "job-idle", "attempt-idle", 12.5);
+
+    // A stream that was accepted and then went quiet: reported usage so far
+    // plus the worst case for the remainder, settled as presumed (D-09).
+    expect(settleRequestCost(lease, {
+      model: "claude-sonnet-5",
+      inputTokens: 20_000,
+      outputTokens: 1_000,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      webSearches: 0,
+      costUsd: 9,
+      fallbackUsed: false,
+      presumed: true,
+    }, NOW, first.db)).toEqual({ recorded: true, costUsd: 9 });
+
+    // Both reconciliation entry points must see it: `costs:reconcile` lists
+    // it, and a reported bucket total can lower it.
+    expect(listPresumedCosts(first.db)).toEqual([
+      expect.objectContaining({ attemptId: "attempt-idle", pass: "bull", costUsd: 9 }),
+    ]);
+    // The billed-attempt identity is kept, so a duplicate settlement for the
+    // same request is still fenced.
+    expect(first.db.select().from(costLog).all()).toEqual([
+      expect.objectContaining({
+        attemptId: "attempt-idle",
+        presumedAttemptId: "attempt-idle",
+        settlementKind: "presumed",
+      }),
+    ]);
+
+    expect(reconcilePresumedCostsAgainstReportedTotals([{
+      startTime: NOW.toISOString(),
+      endTime: new Date(NOW.getTime() + 60_000).toISOString(),
+      reportedUsd: 0.4,
+    }], NOW, first.db)).toEqual([
+      expect.objectContaining({ attemptId: "attempt-idle", fromUsd: 9, toUsd: 0.4 }),
     ]);
   });
 

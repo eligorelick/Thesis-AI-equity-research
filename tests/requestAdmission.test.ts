@@ -18,6 +18,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { APIError } from "@anthropic-ai/sdk";
 import type { BetaMessage, BetaUsage } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 
+import { resetConfigCache } from "@/config/env";
 import { createDatabase, setDbForTests, type DatabaseHandle, type ThesisDb } from "@/db";
 import { costLog, jobLlmLeases, jobs } from "@/db/schema";
 import { initialSteps } from "@/pipeline/jobRunner";
@@ -27,11 +28,15 @@ import {
   releaseUnbilledPaidPassLease,
   requestAttemptId,
   resizePaidPassLease,
+  settlePaidPassLease,
   settleRequestCost,
   type ClaimedJob,
   type PaidPassLease,
   type SchedulerLimits,
 } from "@/pipeline/jobScheduler";
+import { readGenerationResumeArtifacts } from "@/pipeline/jobArtifacts";
+import { readStoredJobResumeInTransaction } from "@/pipeline/jobStore";
+import type { AnalystCase } from "@/report/schema";
 import {
   MAX_PROVIDER_WEB_SEARCHES,
   PASS_MAX_REQUESTS,
@@ -87,6 +92,17 @@ function seedJob(db: ThesisDb, id: string, symbol: string, maxCostUsd: number | 
     queuedAt: now,
     maxCostUsd,
   }).run();
+}
+
+function analystCase(): AnalystCase {
+  return {
+    thesis: [{ text: "t", label: "JUDGMENT", source: "payload", asOf: null }],
+    keyDrivers: [],
+    risksToCase: [],
+    catalysts: [],
+    priceTarget: { value: 250, horizon: "12mo", assumptions: [] },
+    evidence: [],
+  };
 }
 
 function usage(over: Partial<BetaUsage> = {}): BetaUsage {
@@ -256,6 +272,99 @@ describe("what one request may cost", () => {
   });
 });
 
+describe("a paid pass settled in request mode is still resumable", () => {
+  it("pairs a `#rN` request cost row with its pass artifact instead of calling it an orphan", () => {
+    seedJob(first.db, "job-resume", "AAPL");
+    const claim = claimNextQueuedJob("owner", NOW, LIMITS, first.db)!;
+    const attemptId = "pass-attempt";
+
+    // The exact shape request mode leaves behind: a pass lease taken for one
+    // request maximum, one request settled under `<attempt>#r1`, and the pass
+    // artifact written under the bare attempt id with billable false (the
+    // request already billed it).
+    const passLease = acquirePaidPassLease(
+      claim, "bull", attemptId, maximumRequestCostUsd("claude-sonnet-5", "bull"),
+      NOW, LIMITS, first.db, "claude-sonnet-5",
+    );
+    if (!passLease.acquired) throw new Error("fixture pass lease failed");
+    const requestLease = acquirePaidPassLease(
+      claim, "bull", requestAttemptId(attemptId, 1),
+      maximumRequestCostUsd("claude-sonnet-5", "bull"), NOW, LIMITS, first.db, "claude-sonnet-5",
+    );
+    if (!requestLease.acquired) throw new Error("fixture request lease failed");
+    settleRequestCost(requestLease.lease, {
+      model: "claude-sonnet-5",
+      inputTokens: 40_000,
+      outputTokens: 6_000,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 12_000,
+      webSearches: 2,
+      costUsd: 0.21,
+      fallbackUsed: false,
+    }, NOW, first.db);
+    const settled = settlePaidPassLease(passLease.lease, {
+      settlement: {
+        outcome: "success",
+        data: analystCase(),
+        telemetry: {
+          model: "claude-sonnet-5",
+          inputTokens: 40_000,
+          outputTokens: 6_000,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 12_000,
+          webSearches: 2,
+          costUsd: 0.21,
+          fallbackUsed: false,
+          billable: false,
+          fetchedUrls: [],
+        },
+      },
+      payloadFingerprint: "1.3.0:request-mode",
+    }, first.db, NOW);
+    expect(settled.inserted).toBe(true);
+
+    // One request row, no pass row: exactly what the reader used to reject.
+    const rows = first.db.select().from(costLog).where(eq(costLog.jobId, "job-resume")).all();
+    expect(rows.map((row) => row.attemptId)).toEqual([requestAttemptId(attemptId, 1)]);
+
+    const read = readGenerationResumeArtifacts(first.db, "job-resume", 0);
+    expect(read.corruptPasses).toEqual([]);
+    expect(read.artifacts).toHaveLength(1);
+
+    first.db.update(jobs)
+      .set({ status: "error", error: "killed mid-run" })
+      .where(eq(jobs.id, "job-resume"))
+      .run();
+    const resume = readStoredJobResumeInTransaction(first.db, "job-resume")!;
+    expect(resume.plan.state.resumable).toBe(true);
+    expect(resume.plan.state.reusablePasses).toContain("bull");
+    expect(resume.plan.bull?.data).toEqual(analystCase());
+  });
+
+  it("still rejects a cost row that belongs to no artifact at all", () => {
+    seedJob(first.db, "job-orphan", "AAPL");
+    const claim = claimNextQueuedJob("owner", NOW, LIMITS, first.db)!;
+    const stray = acquirePaidPassLease(
+      claim, "bull", requestAttemptId("some-other-attempt", 1), 1, NOW, LIMITS, first.db, "claude-sonnet-5",
+    );
+    if (!stray.acquired) throw new Error("fixture lease failed");
+    settleRequestCost(stray.lease, {
+      model: "claude-sonnet-5",
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      webSearches: 0,
+      costUsd: 0.5,
+      fallbackUsed: false,
+    }, NOW, first.db);
+
+    const read = readGenerationResumeArtifacts(first.db, "job-orphan", 0);
+    expect(read.corruptPasses).toEqual(["bull"]);
+    expect(read.corruptionReasons.bull).toMatch(/cost row exists without its artifact/);
+  });
+});
+
 describe("every provider request is admitted and settled on its own", () => {
   it("reserves once per attempt and records one cost row per request", async () => {
     seedJob(first.db, "job-a", "AAPL");
@@ -306,6 +415,7 @@ describe("every provider request is admitted and settled on its own", () => {
     const claim = claimNextQueuedJob("owner", NOW, LIMITS, first.db)!;
     const { admission } = schedulerAdmission(claim, "bull", "pass-attempt", first.db);
     process.env.THESIS_STREAM_IDLE_SECONDS = "1";
+    resetConfigCache();
     try {
       _resetAnthropicForTests(fakeClient([
         // Accepted, streamed a little, then silence.
@@ -323,6 +433,7 @@ describe("every provider request is admitted and settled on its own", () => {
       expect(rows[0]!.costUsd).toBeLessThanOrEqual(maximumRequestCostUsd("claude-sonnet-5", "bull"));
     } finally {
       delete process.env.THESIS_STREAM_IDLE_SECONDS;
+      resetConfigCache();
     }
   }, 15_000);
 

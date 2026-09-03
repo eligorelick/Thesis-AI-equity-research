@@ -108,6 +108,12 @@ CREATE TABLE IF NOT EXISTS "cost_log" (
   "webSearches" INTEGER NOT NULL DEFAULT 0,
   "costUsd" REAL NOT NULL DEFAULT 0,
   "fallbackUsed" INTEGER NOT NULL DEFAULT 0,
+  -- WS2 (DECISIONS D-07). Declared here so a FRESH database matches
+  -- src/db/schema.ts column for column and db:push reports no diff; the
+  -- ensureColumn guards below still add them to an existing database.
+  "settlementKind" TEXT NOT NULL DEFAULT 'actual',
+  "presumedAttemptId" TEXT,
+  "reconciledAt" TEXT,
   "createdAt" TEXT NOT NULL
 );
 

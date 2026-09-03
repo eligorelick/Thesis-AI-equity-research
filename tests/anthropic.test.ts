@@ -14,9 +14,9 @@ import {
   RateLimitError,
 } from "@anthropic-ai/sdk";
 import type { BetaMessage, BetaUsage } from "@anthropic-ai/sdk/resources/beta/messages/messages";
+import { resetConfigCache } from "@/config/env";
 import {
   CLIENT_MAX_RETRIES,
-  FABLE_FALLBACK_MODEL,
   MAX_PROVIDER_WEB_SEARCHES,
   PASS_TRANSPORT_MAX_ATTEMPTS,
   PASS_BILLING_EXPOSURE_MULTIPLIER,
@@ -25,7 +25,6 @@ import {
   PASS_TRANSPORT_RETRY_DELAYS_MS,
   PREFERENCE_ORDER,
   PRICING,
-  SERVER_SIDE_FALLBACK_BETA,
   WEB_SEARCH_TOOL_TYPE,
   WEB_SEARCH_USD_PER_SEARCH,
   MAX_PAUSE_RESUMPTIONS,
@@ -41,6 +40,7 @@ import {
   modelContextTokenLimit,
   pickPreferredModel,
   pricedModelAlias,
+  registryEntryFor,
   resolveModel,
   resumeIfPaused,
   runPass,
@@ -364,15 +364,17 @@ describe("buildPassParams", () => {
     expect(() => buildPassParams({
       ...baseOpts,
       field: "llm.judge",
-      tools: [webSearchTool(1)] as never,
+      tools: [webSearchTool(1, "claude-opus-4-8")] as never,
     })).toThrow(/judge.*web.search|web.search.*judge/i);
   });
 
   it("adds the server-side fallback beta + fallbacks for claude-fable-5", () => {
     const { params, usesFallbackBeta } = buildPassParams({ ...baseOpts, model: "claude-fable-5" });
     expect(usesFallbackBeta).toBe(true);
-    expect(params.betas).toEqual([SERVER_SIDE_FALLBACK_BETA]);
-    expect(params.fallbacks).toEqual([{ model: FABLE_FALLBACK_MODEL }]);
+    // Both come from the registry entry, not from a literal beside it.
+    const fallback = registryEntryFor("claude-fable-5").serverSideFallback!;
+    expect(params.betas).toEqual([fallback.beta]);
+    expect(params.fallbacks).toEqual([{ model: fallback.model }]);
     // fable-5: thinking is always-on — the param must NOT be sent (400).
     expect(params).not.toHaveProperty("thinking");
   });
@@ -472,7 +474,7 @@ describe("buildPassParams", () => {
   });
 
   it("passes tools through unchanged", () => {
-    const tools = [webSearchTool(MAX_PROVIDER_WEB_SEARCHES)];
+    const tools = [webSearchTool(MAX_PROVIDER_WEB_SEARCHES, "claude-opus-4-8")];
     const { params } = buildPassParams({ ...baseOpts, tools });
     expect(params.tools).toBe(tools);
   });
@@ -480,7 +482,7 @@ describe("buildPassParams", () => {
 
 describe("webSearchTool", () => {
   it("returns the switchable tool type with name and max_uses", () => {
-    expect(webSearchTool(MAX_PROVIDER_WEB_SEARCHES)).toEqual({
+    expect(webSearchTool(MAX_PROVIDER_WEB_SEARCHES, "claude-opus-4-8")).toEqual({
       type: WEB_SEARCH_TOOL_TYPE,
       name: "web_search",
       max_uses: MAX_PROVIDER_WEB_SEARCHES,
@@ -503,9 +505,9 @@ describe("webSearchTool", () => {
   });
 
   it("enforces a positive integer search cap and a priced target model", () => {
-    expect(() => webSearchTool(MAX_PROVIDER_WEB_SEARCHES + 1)).toThrow(/max_uses.*8/i);
+    expect(() => webSearchTool(MAX_PROVIDER_WEB_SEARCHES + 1, "claude-opus-4-8")).toThrow(/max_uses.*8/i);
     for (const maxUses of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(() => webSearchTool(maxUses)).toThrow(/max_uses/i);
+      expect(() => webSearchTool(maxUses, "claude-opus-4-8")).toThrow(/max_uses/i);
     }
     expect(() => webSearchTool(1, "claude-mystery-9")).toThrow(/unsupported|priced/i);
   });
@@ -1300,6 +1302,34 @@ describe("runPass transport failures at stream construction", () => {
 
     await expect(runPass(baseOpts)).rejects.toThrow(TypeError);
   });
+
+  /**
+   * runPassStreaming documents that `firstToken` "cannot hang". The
+   * programming-bug rethrow path never signalled it, so a bug thrown before
+   * any stream event left `await bullHandle.firstToken` waiting forever — bear
+   * was never launched and the pass died at its deadline.
+   */
+  it("settles firstToken before rethrowing a programming bug", async () => {
+    _resetAnthropicForTests({
+      beta: {
+        messages: {
+          stream: () => {
+            throw new TypeError("undefined is not a function");
+          },
+        },
+      },
+    } as unknown as Anthropic);
+
+    const handle = runPassStreaming(streamingOpts);
+    handle.result.catch(() => {});
+    await expect(Promise.race([
+      handle.firstToken,
+      new Promise((_resolve, reject) => {
+        setTimeout(() => reject(new Error("firstToken hung")), 2_000).unref?.();
+      }),
+    ])).resolves.toBe("error");
+    await expect(handle.result).rejects.toThrow(TypeError);
+  });
 });
 
 /* ------------------------------------------------------------------------ *
@@ -1312,23 +1342,35 @@ describe("runPass transport failures at stream construction", () => {
 describe("stream idle timeout", () => {
   const idleOpts = { ...streamingOpts, model: "claude-sonnet-5", effort: "low" as const };
 
+  /** The provider reads the validated config, so the cache must be dropped. */
+  const setIdleSeconds = (value: string | undefined): void => {
+    if (value === undefined) delete process.env.THESIS_STREAM_IDLE_SECONDS;
+    else process.env.THESIS_STREAM_IDLE_SECONDS = value;
+    resetConfigCache();
+  };
+
   afterEach(() => {
-    delete process.env.THESIS_STREAM_IDLE_SECONDS;
+    setIdleSeconds(undefined);
   });
 
-  it("reads the idle limit from THESIS_STREAM_IDLE_SECONDS and falls back to the default", () => {
-    delete process.env.THESIS_STREAM_IDLE_SECONDS;
+  it("reads the idle limit from the validated THESIS_STREAM_IDLE_SECONDS config", () => {
+    setIdleSeconds(undefined);
     expect(streamIdleTimeoutMs()).toBe(120_000);
-    process.env.THESIS_STREAM_IDLE_SECONDS = "30";
+    setIdleSeconds("30");
     expect(streamIdleTimeoutMs()).toBe(30_000);
-    process.env.THESIS_STREAM_IDLE_SECONDS = "0";
+    // Zero still disables the guard.
+    setIdleSeconds("0");
     expect(streamIdleTimeoutMs()).toBe(0);
-    process.env.THESIS_STREAM_IDLE_SECONDS = "not-a-number";
-    expect(streamIdleTimeoutMs()).toBe(120_000);
+    // There is one parser now, and it fails loudly instead of quietly
+    // substituting a default the rest of the process does not agree with.
+    setIdleSeconds("not-a-number");
+    expect(() => streamIdleTimeoutMs()).toThrow(/THESIS_STREAM_IDLE_SECONDS/);
+    setIdleSeconds("3601");
+    expect(() => streamIdleTimeoutMs()).toThrow(/THESIS_STREAM_IDLE_SECONDS/);
   });
 
   it("abandons a silent stream and settles reported usage plus the presumed remainder", async () => {
-    process.env.THESIS_STREAM_IDLE_SECONDS = "1";
+    setIdleSeconds("1");
     const aborts: number[] = [];
     const stalled = makeFakeStream({
       events: [
@@ -1361,7 +1403,7 @@ describe("stream idle timeout", () => {
   }, 15_000);
 
   it("does not fire while the stream keeps producing events", async () => {
-    process.env.THESIS_STREAM_IDLE_SECONDS = "1";
+    setIdleSeconds("1");
     const final = syntheticMessage({
       model: "claude-sonnet-5",
       usage: syntheticUsage({ input_tokens: 1_000, output_tokens: 10 }),

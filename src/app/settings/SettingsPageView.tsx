@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { AppShell } from "@/components/shell";
 import { Badge, Panel, SectionHeading } from "@/components/ui";
+import { activeModels } from "@/models/registry";
 import {
+  explainAnalysisModel,
   isAnalysisModelOption,
   type AnalysisModelOption,
   type EffortLevel,
@@ -14,12 +16,17 @@ import {
 } from "@/settings/writeQueue";
 import { ResumeQueueControl } from "./ResumeQueueControl";
 
+/**
+ * Labels come from the model registry, which is also where the options come
+ * from — a hand-maintained map goes stale silently, and this one had: it
+ * listed neither `claude-opus-5` (the default) nor `claude-fable-5-1`, so the
+ * two newest choices rendered without a label at all.
+ */
 const MODEL_LABELS: Record<string, string> = {
   auto: "auto — best available [recommended]",
-  "claude-haiku-4-5": "claude-haiku-4-5",
-  "claude-fable-5": "claude-fable-5",
-  "claude-opus-4-8": "claude-opus-4-8",
-  "claude-sonnet-5": "claude-sonnet-5",
+  ...Object.fromEntries(
+    activeModels().map((entry) => [entry.id, `${entry.id} — ${entry.displayName}`]),
+  ),
 };
 
 const EFFORT_LABELS: Record<string, string> = {
@@ -119,7 +126,15 @@ export function SettingsPageView({
                   <span className="mono">
                     {MODEL_LABELS[option.value] ?? option.value}
                     {option.carryOnly ? " (current; carry-only)" : ""}
-                    {option.unsupported ? " (unsupported current model)" : ""}
+                    {/*
+                      D-02: say WHY the stored value is refused and what is
+                      accepted instead. explainAnalysisModel already produces
+                      that sentence; the page used to discard it for a generic
+                      "(unsupported current model)" the reader could not act on.
+                    */}
+                    {option.unsupported
+                      ? ` — ${explainAnalysisModel(option.value) ?? "unsupported current model"}`
+                      : ""}
                   </span>
                 </label>
               ))}

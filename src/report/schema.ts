@@ -543,6 +543,13 @@ export const SharedModelFamilySchema = z
  * judge read first, the seed that decided it, how long each case was, what each
  * analyst said its own case was worth, whether the judge shared a model family
  * with the analysts, and (in `both` mode) whether the mirrored run agreed.
+ *
+ * `bull`/`bear` are NULL on a report whose judge output was replayed from a
+ * durable synthesize artifact: the judge pass did not run in that process, so
+ * the per-side lengths and self-assessments are not recoverable. The order,
+ * setting and seed still are (they are deterministic in the seed), and the loss
+ * is disclosed in the note and in the missing-data manifest rather than dropping
+ * the whole block silently.
  */
 export const JudgeProtocolSchema = z
   .object({
@@ -550,8 +557,8 @@ export const JudgeProtocolSchema = z
     order: JudgeOrderSchema,
     /** Seed the order was drawn from (the job id, else the payload fingerprint). */
     seed: z.string(),
-    bull: AnalystCasePresentationSchema,
-    bear: AnalystCasePresentationSchema,
+    bull: AnalystCasePresentationSchema.nullable(),
+    bear: AnalystCasePresentationSchema.nullable(),
     sharedModelFamily: SharedModelFamilySchema,
     reconciliation: JudgeReconciliationSchema.optional(),
     /** The sentence a reader sees, in the report header and both exports. */

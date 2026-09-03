@@ -836,8 +836,8 @@ describe("analyst case length cap", () => {
       },
       GENERATED_AT,
     );
-    expect(report.meta.judgeProtocol?.bull.truncated).toBe(true);
-    expect(report.meta.judgeProtocol?.bear.truncated).toBe(false);
+    expect(report.meta.judgeProtocol?.bull?.truncated).toBe(true);
+    expect(report.meta.judgeProtocol?.bear?.truncated).toBe(false);
     expect(report.meta.judgeProtocol?.note).toContain("after truncation");
     const entry = report.appendix.missingData.find((m) => m.field === "llm.bull.length-cap");
     expect(entry?.severity).toBe("warn");
@@ -919,8 +919,8 @@ describe("analyst case_strength", () => {
       },
       GENERATED_AT,
     );
-    expect(report.meta.judgeProtocol?.bull.caseStrength).toBe(4);
-    expect(report.meta.judgeProtocol?.bear.caseStrength).toBe(2);
+    expect(report.meta.judgeProtocol?.bull?.caseStrength).toBe(4);
+    expect(report.meta.judgeProtocol?.bear?.caseStrength).toBe(2);
     expect(report.meta.judgeProtocol?.note).toContain("bull 4, bear 2");
   });
 

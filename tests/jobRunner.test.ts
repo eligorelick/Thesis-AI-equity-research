@@ -157,6 +157,12 @@ import type { DataBundle } from "@/pipeline/types";
 import { runStageB } from "@/pipeline/compute";
 import { validateBundle } from "@/pipeline/stageA/validate";
 import { pipelinePasses } from "@/pipeline/stageC";
+import {
+  completeJudgeProtocol,
+  resolveJudgeOrder,
+} from "@/pipeline/stageC/judgeProtocol";
+import { sharedModelFamilyOf } from "@/report/execution";
+import { deriveReportCompletenessPresentation } from "@/report/completeness";
 import { PIPELINE_STEPS, type StepProgress } from "@/types/core";
 
 /* ------------------------------------------------------------------------ *
@@ -3965,7 +3971,8 @@ describe("runJob - durable paid-pass settlements", () => {
     });
 
     const verified = await pipelinePasses.runVerifyPass(
-      { analysisModel: "claude-opus-4-8", payload },
+      // jobSeed as the runner threads it on every pass call (WS7 D-20).
+      { analysisModel: "claude-opus-4-8", payload, jobSeed: jobId },
       fakeJudgeOutput(),
       { fetchedUrls: [] },
       async (settlement) => {
@@ -4028,7 +4035,13 @@ describe("runJob - durable paid-pass settlements", () => {
     // (src/pipeline/compute.ts). It is a local settings read like the other
     // two; no provider or model boundary is crossed, which the assertions
     // below still pin.
-    expect(configMocks.getConfig).toHaveBeenCalledTimes(3);
+    // WS7 (D-20), 2026-09 review: 3 -> 4. The count spans this whole test, and
+    // the DIRECT pipelinePasses.runVerifyPass call above now reads
+    // THESIS_JUDGE_ORDER — once, and only because no judge pass ran in this
+    // process, so the judgement protocol has to be reconstructed from the seed
+    // and the setting instead of vanishing. Also a local settings read; the
+    // recovery run itself still crosses no provider or model boundary.
+    expect(configMocks.getConfig).toHaveBeenCalledTimes(4);
     expect(resolveModelMock).not.toHaveBeenCalled();
     expect(providerBoundaryMocks.runPass).not.toHaveBeenCalled();
     expect(providerBoundaryMocks.runPassStreaming).not.toHaveBeenCalled();
@@ -4068,6 +4081,72 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(persisted.verdict.synthesis).toBe(
       "A three-sentence synthesis with scenarios and probabilities. It avoids ratings. It is grounded.",
     );
+
+    // ---- WS7 (D-20), 2026-09 review ------------------------------------
+    // Everything below is measured on the report this REAL-FACADE production
+    // run persisted, not on a direct assembleReport call with hand-written
+    // cost entries.
+    //
+    // SHOULD-FIX 4: the judge pass did not run in this process (the synthesize
+    // artifact was replayed), so the WeakMap that held the protocol missed and
+    // the whole judgement protocol used to vanish from the resumed report — no
+    // metadata block, no reader sentence, no case-order manifest entry, no
+    // error and no gap entry. It is now reconstructed from the job seed and the
+    // setting, with the unrecoverable half disclosed.
+    const protocol = persisted.meta.judgeProtocol;
+    expect(protocol).toBeDefined();
+    expect(protocol?.order).toBe(resolveJudgeOrder("random", jobId).order);
+    expect(protocol?.seed).toBe(jobId);
+    expect(protocol?.bull).toBeNull();
+    expect(protocol?.bear).toBeNull();
+    expect(protocol?.note).toContain("reconstructed rather than recorded");
+    const recovered = persisted.appendix.missingData.find(
+      (entry) => entry.field === "llm.judge.protocol-recovered",
+    );
+    expect(recovered?.severity).toBe("warn");
+    expect(
+      persisted.appendix.missingData.some(
+        (entry) => entry.field === "llm.judge.case-order" && entry.reason === protocol?.note,
+      ),
+    ).toBe(true);
+
+    // BLOCKER 1: all three passes ran on claude-opus-4-8, so the judge graded
+    // its own family's output. Stage C assembles the report with
+    // `costEntries: []`, so this used to compute "not shared" and NOTHING lit:
+    // no metadata flag, no reader sentence, no manifest entry, no badge. The
+    // runner now re-stamps it from the execution list it owns.
+    expect(protocol?.sharedModelFamily).toEqual({
+      shared: true,
+      analystFamily: "opus",
+      judgeFamily: "opus",
+    });
+    expect(protocol?.note).toContain("grading output from its own family");
+    const familyEntry = persisted.appendix.missingData.find(
+      (entry) => entry.field === "llm.judge.model-family",
+    );
+    expect(familyEntry?.severity).toBe("warn");
+    expect(familyEntry?.reason).toContain("not independent");
+    // reconcileMeta replaces meta.execution with the runner's own list, which
+    // used to discard the appended shared-family execution note.
+    expect(
+      persisted.meta.execution?.find((entry) => entry.step === "synthesize")?.note,
+    ).toContain("rather than acting as an independent second opinion");
+
+    // BLOCKER 2, at the reconcile end: both edits above CHANGE the manifest the
+    // completeness metadata summarizes, so it is recomputed. A disagreement of
+    // one entry renders as "Completeness unknown" and blanks state, counts,
+    // EDGAR, XBRL and forensic validation in the appendix and the banner.
+    const completeness = deriveReportCompletenessPresentation(
+      persisted.meta.dataCompleteness,
+      persisted.appendix.missingData,
+    );
+    expect(completeness.metadataStatus).toBe("confirmed");
+    expect(completeness.warningCount).toBe(
+      persisted.appendix.missingData.filter(
+        (entry) => entry.severity === "warn" && entry.expected !== true,
+      ).length,
+    );
+    expect(completeness.warningCount).not.toBe(0);
   });
 
   it("keeps repeated prior-generation ledger attempts distinct from effective pass execution", async () => {
@@ -5934,6 +6013,91 @@ describe("runJob — full pipeline with mock passes", () => {
     expect(source.match(/getWritableSettingsAuthority\(/g)).toHaveLength(1);
     expect(source).not.toContain("getAnalysisModelSetting");
     expect(source).not.toContain("getAnalysisEffortSetting");
+  });
+
+  // WS7 (D-20), 2026-09 review — BLOCKER 1, on the PRIMARY (verify-succeeded)
+  // path, which is the path a normal run takes.
+  it("completes the judgement protocol's model families from the runner's own execution list", async () => {
+    const { jobId } = createJob("AAPL");
+    const { passes: base } = mockPasses();
+    const judge = fakeJudgeOutput();
+    // Exactly what Stage C's verify path stores: the protocol the judge pass
+    // recorded, completed with the families the (empty) cost entries named —
+    // i.e. "not shared", both families null, and no manifest entry for it.
+    const stored = completeJudgeProtocol(
+      {
+        setting: "random",
+        order: "bull-first",
+        seed: jobId,
+        bull: { chars: 10, originalChars: 10, capChars: 24_000, truncated: false, droppedItems: 0, caseStrength: 4 },
+        bear: { chars: 12, originalChars: 12, capChars: 24_000, truncated: false, droppedItems: 0, caseStrength: 3 },
+        disclosures: [],
+      },
+      sharedModelFamilyOf([]),
+    );
+    expect(stored.sharedModelFamily).toEqual({
+      shared: false,
+      analystFamily: null,
+      judgeFamily: null,
+    });
+    const unstamped: Report = {
+      ...fakeReport(judge),
+      meta: { ...fakeReport(judge).meta, judgeProtocol: stored },
+    };
+    const passes: PipelinePasses = {
+      ...base,
+      runVerifyPass: async (...raw: unknown[]) => {
+        const beforeProviderLaunch = raw[4] as (() => void | Promise<void>) | undefined;
+        await beforeProviderLaunch?.();
+        return {
+          verifiedReport: unstamped,
+          verificationRate: 1,
+          costUsd: 0.2,
+          model: "claude-opus-4-8",
+          fallbackUsed: false,
+          log: [],
+        };
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle("AAPL"),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+    expect(result.status).toBe("done");
+
+    const persisted = ReportSchema.parse(
+      JSON.parse(
+        handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!.reportJson!,
+      ),
+    );
+    // All three passes ran on claude-opus-4-8, so the judge graded its own
+    // family's output. Every surface has to say so.
+    expect(persisted.meta.judgeProtocol?.sharedModelFamily).toEqual({
+      shared: true,
+      analystFamily: "opus",
+      judgeFamily: "opus",
+    });
+    expect(persisted.meta.judgeProtocol?.note).toContain("grading output from its own family");
+    expect(
+      persisted.meta.execution?.find((entry) => entry.step === "synthesize")?.note,
+    ).toContain("rather than acting as an independent second opinion");
+    const warning = persisted.appendix.missingData.find(
+      (entry) => entry.field === "llm.judge.model-family",
+    );
+    expect(warning?.severity).toBe("warn");
+    expect(warning?.reason).toContain("not independent");
+    // The per-side facts the judge pass DID record survive the re-stamp.
+    expect(persisted.meta.judgeProtocol?.bull?.caseStrength).toBe(4);
+    expect(persisted.meta.judgeProtocol?.bear?.caseStrength).toBe(3);
+    // Adding that manifest entry must not leave the completeness metadata
+    // describing the manifest it had before.
+    const completeness = deriveReportCompletenessPresentation(
+      persisted.meta.dataCompleteness,
+      persisted.appendix.missingData,
+    );
+    expect(completeness.metadataStatus).toBe("confirmed");
   });
 });
 

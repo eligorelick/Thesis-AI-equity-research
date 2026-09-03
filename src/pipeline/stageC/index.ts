@@ -41,6 +41,7 @@ import type {
   VerificationLogEntry,
 } from "@/report/schema";
 import { ReportSchema } from "@/report/schema";
+import { buildDataCompleteness } from "@/report/completeness";
 import { PROJECTION_PATH_ORDER } from "@/report/surfaceManifest";
 import {
   runPass as providerRunPass,
@@ -98,7 +99,10 @@ import {
 // WS7 (D-20)
 import { getConfig } from "@/config/env";
 import type { ManifestEntry } from "@/types/core";
-import type { JudgeProtocolDraft } from "@/pipeline/stageC/judgeProtocol";
+import {
+  recoveredJudgeProtocolDraft,
+  type JudgeProtocolDraft,
+} from "@/pipeline/stageC/judgeProtocol";
 import {
   consistencyManifestEntries,
   emptyConsistencyChecks,
@@ -142,8 +146,46 @@ const assemblyContexts = new WeakMap<ContextPayload, AssemblyContext>();
  * pass metadata, so the protocol is stashed against the SAME per-job payload
  * object identity the assembly context uses. Same WeakMap discipline: collected
  * with the job's payload, never shared between concurrent jobs.
+ *
+ * Unlike the assembly-context map above, this one is written only when the JUDGE
+ * PASS RUNS — which a durable resume replaying a persisted synthesize artifact
+ * does not do. See {@link judgeProtocolFor} for what happens then.
  */
 const judgeProtocols = new WeakMap<ContextPayload, JudgeProtocolDraft>();
+
+/**
+ * The protocol for this payload, RECONSTRUCTED when the judge pass did not run
+ * in this process.
+ *
+ * A resume that replays a persisted synthesize artifact never calls
+ * `runJudgePass`, and the payload is a new object anyway, so both lookups miss.
+ * That previously returned undefined and the whole judgement protocol vanished
+ * from the resumed report — no metadata block, no reader sentence in the header
+ * or either export, no case-order manifest entry, no truncation disclosures, and
+ * no error or gap entry saying any of it had gone. Order, setting and seed are
+ * deterministic in (setting, seed) and both are still available here, so they
+ * are re-derived; the per-side lengths are not, so the reconstruction discloses
+ * that in its own warn manifest entry (recoveredJudgeProtocolDraft).
+ */
+function judgeProtocolFor(
+  payload: ContextPayload | undefined,
+  jobSeed: string | undefined,
+): JudgeProtocolDraft | undefined {
+  const recorded = payload === undefined ? undefined : judgeProtocols.get(payload);
+  if (recorded !== undefined) return recorded;
+  const seed = jobSeed ?? (payload === undefined ? undefined : payloadFingerprint(payload));
+  // Neither a payload nor a job id: nothing to reconstruct FROM, so there is no
+  // honest protocol to report. Only a caller outside the runner reaches this —
+  // the runner threads both on every path.
+  if (seed === undefined) return undefined;
+  return recoveredJudgeProtocolDraft({
+    // The one place production interprets THESIS_JUDGE_ORDER, as everywhere else
+    // in this adapter. Read only on the MISS, so the normal path (the judge ran
+    // here and recorded its own protocol) still pays nothing for it.
+    setting: getConfig().judgeOrder,
+    seed,
+  });
+}
 
 /* ------------------------------------------------------------------------ *
  * Provider-runner adapters
@@ -573,8 +615,9 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
         model: deps.analysisModel,
         pipelineVersion: PIPELINE_VERSION,
         // WS7 (D-20): the order/length/self-assessment protocol the judge pass
-        // recorded for this exact payload.
-        judgeProtocol: judgeProtocols.get(deps.payload),
+        // recorded for this exact payload, or the reconstruction a durable
+        // synthesize replay leaves recoverable (disclosed, never silent).
+        judgeProtocol: judgeProtocolFor(deps.payload, deps.jobSeed),
         // Forward the Stage A validation gaps recovered from the WeakMap so the
         // verified report's appendix discloses them (H4). reconcileMeta in the
         // runner preserves appendix.missingData, so this is the manifest the
@@ -586,6 +629,15 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
     await beforeProviderLaunch?.();
     const verify = await runVerifyPass_(passDeps, deps.payload, bound, evidence);
 
+    // WS7 (D-20): the checks run AFTER assembly (they verify the assembled
+    // object), so their manifest disclosure has to be merged here rather than
+    // inside assembleReport. Deduped by field so a re-stamp cannot double-list
+    // a family.
+    const missingData = mergeCheckDisclosures(
+      verify.verifiedReport.appendix.missingData,
+      consistencyManifestEntries(verify.checks),
+    );
+
     // Stamp the metrics produced from that full object, then parse the final
     // persisted shape once more so no post-verification mutation can bypass the
     // report contract.
@@ -596,6 +648,16 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
         verificationRate: verify.verificationRate,
         provenanceCoverage: verify.coverage,
         consistencyChecks: verify.checks, // WS7 (D-20)
+        // 2026-09 review: meta.dataCompleteness was computed inside
+        // assembleReport from the UNMERGED manifest and never recomputed, so
+        // every added verify.check.* warn left the persisted counts one short of
+        // the manifest they summarize. deriveReportCompletenessPresentation
+        // recomputes from the manifest, disagrees, and reports
+        // metadataStatus:"inconsistent" — which forces state, critical count,
+        // warning count, EDGAR, XBRL and forensic validation all to "unknown" in
+        // the appendix AND the banner. Adding one disclosure must not blank the
+        // completeness of the whole report.
+        dataCompleteness: buildDataCompleteness(missingData),
       },
       appendix: {
         ...verify.verifiedReport.appendix,
@@ -603,14 +665,7 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
         provenanceCoverage: verify.coverage,
         consistencyChecks: verify.checks, // WS7 (D-20)
         verificationLog: verify.log,
-        // WS7 (D-20): the checks run AFTER assembly (they verify the assembled
-        // object), so their manifest disclosure has to be merged here rather
-        // than inside assembleReport. Deduped by field so a re-stamp cannot
-        // double-list a family.
-        missingData: mergeCheckDisclosures(
-          verify.verifiedReport.appendix.missingData,
-          consistencyManifestEntries(verify.checks),
-        ),
+        missingData,
       },
     });
 
@@ -664,8 +719,12 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
         pipelineVersion: PIPELINE_VERSION,
         // WS7 (D-20): the unverified-fallback path still discloses how the judge
         // pass was run — a report that skipped verification is exactly the one a
-        // reader most needs the protocol for.
-        judgeProtocol: judgeProtocols.get(input.payload as ContextPayload),
+        // reader most needs the protocol for. `meta.runId` is the job id, which
+        // is the seed the runner threads as `deps.jobSeed`.
+        judgeProtocol: judgeProtocolFor(
+          input.payload as ContextPayload | undefined,
+          input.meta.runId,
+        ),
         // Forward Stage A validation gaps into the appendix manifest (H4). The
         // runner passes `input.validation`; dropping it here is what made an
         // analyzed report strictly less transparent than a data-only one.

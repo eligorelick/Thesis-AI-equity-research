@@ -196,18 +196,38 @@ because goodwill absorbs losses only after common equity is gone, and pairing a
 book-value multiple with a tangible-equity return would compare two different
 bases. A goodwill-heavy acquirer at 1.0× book can be at 2.0× tangible book.
 
-The justified multiple is the residual-income identity the forward model already
-assumes:
+The justified multiple is a **stable-growth cross-check**, in the Gordon form of
+the residual-income identity:
 
 ```
-justified P/TBV = (ROTE − g) / (CoE − g),   g = ROTE × retention
+justified P/TBV = (ROTE − g) / (CoE − g),
+g = min(ROTE × retention, terminal-growth cap 2.5%, risk-free rate)
 ```
 
-It is **withheld, never clamped**, when `CoE − g` falls below 0.5pp: the ratio
-diverges through infinity there, and any number it produced would be an artefact
-of the arithmetic rather than a valuation. When ROTE, the cost of equity or the
-payout history is missing, the multiple is still shown and the justified figure
-is withheld with its reason.
+Two things it is **not**:
+
+- It is **not the forward model read as a multiple.** §2.2 fades ROE linearly to
+  the cost of equity over ten years and adds no continuing value; this identity
+  assumes ROTE persists in perpetuity. They rest on different assumptions and
+  can legitimately disagree — the difference is the value of persistence, and
+  the basis string says so. (An earlier version of this section, and of the
+  basis string, claimed the two "cannot disagree". That was false: at ROTE 16%,
+  CoE 10% and a 50% payout the forward model reads 1.26× tangible book while the
+  uncapped identity read 4.00×.)
+- It is **not exempt from the house growth rule.** `g` obeys the same ceiling the
+  DCF terminal value obeys — nothing grows faster than the risk-free rate
+  forever. Uncapped, `g = ROTE × retention` reached 9.4% for a regional bank at
+  ROTE 14% with a one-third payout, giving a justified 7.45×, so a bank at 1.5×
+  tangible book printed a premium of −5.95× while the pipeline's own fair value
+  called it roughly fairly priced. Capped, the same bank reads 1.53×. When no
+  risk-free rate is supplied the cap is the 2.5% terminal-growth ceiling alone,
+  and the basis string says which bound applied.
+
+The multiple is **withheld, never clamped**, when `CoE − g` falls below 0.5pp:
+the ratio diverges through infinity there, and any number it produced would be an
+artefact of the arithmetic rather than a valuation. When ROTE, the cost of equity
+or the payout history is missing, the multiple is still shown and the justified
+figure is withheld with its reason.
 
 ## 3. Route metrics
 

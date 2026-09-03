@@ -1853,6 +1853,11 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
           // returns block already computes — never against plain book equity.
           tangibleCommonEquity: ctx.rote?.latestTangibleCommonEquity ?? null,
           rotePct: ctx.rote?.latestRotePct ?? null,
+          // The justified-P/TBV cross-check caps its growth rate at the same
+          // ceiling the DCF terminal value uses: nothing grows faster than the
+          // risk-free rate forever. Null leaves the house terminal-growth cap
+          // as the only bound, which the basis string discloses.
+          riskFreePct: rf.pct,
         }
       : null;
 

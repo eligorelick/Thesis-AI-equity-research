@@ -142,10 +142,14 @@ assets that typically hold or gain value.
   at the cost of equity` over an explicit 10-year horizon, with ROE faded
   linearly to the cost of equity so terminal excess is zero and **no continuing
   value is added**. The discount rate is the cost of equity, never a WACC. The
-  report also shows **P/TBV against ROTE**, both on the tangible base, with the
-  justified multiple `(ROTE − g) / (CoE − g)` from the same residual-income
-  identity — withheld rather than clamped when `g` approaches the cost of equity
-  and the ratio diverges.
+  report also shows **P/TBV against ROTE**, both on the tangible base, beside a
+  stable-growth cross-check `(ROTE − g) / (CoE − g)` with
+  `g = min(ROTE × retention, 2.5% terminal-growth cap, risk-free rate)` — the
+  same growth ceiling the DCF terminal value obeys. That cross-check assumes
+  ROTE persists in perpetuity while the forward model fades ROE to the cost of
+  equity, so the two can disagree and the report says so rather than claiming
+  they cannot. It is withheld rather than clamped when `g` approaches the cost of
+  equity and the ratio diverges.
 - **Equity REIT** — FFO and AFFO per the NAREIT definition, and P/FFO.
 
 ## 6. Route metrics are computed now, not merely listed

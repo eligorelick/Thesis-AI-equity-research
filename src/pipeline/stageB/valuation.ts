@@ -2279,6 +2279,15 @@ export interface ExcessReturnInputs {
   tangibleCommonEquity?: number | null;
   /** WS5: return on tangible common equity, percent — the return P/TBV is read against. */
   rotePct?: number | null;
+  /**
+   * Risk-free rate, percent, for the sustainable-growth cap in the justified
+   * P/TBV cross-check. The house rule (same one the DCF terminal value obeys)
+   * is that nothing grows faster than the risk-free rate forever, so
+   * g = min(ROTE x retention, TERMINAL_G_CAP_PCT, riskFree). When it is absent
+   * the cap falls back to TERMINAL_G_CAP_PCT alone and the basis says so — no
+   * rate is ever invented.
+   */
+  riskFreePct?: number | null;
 }
 
 /** WS5: the multiple a financial's price is actually read on, beside the return that justifies it. */
@@ -2288,9 +2297,13 @@ export interface PriceToTangibleBookVsRote {
   /** Return on tangible common equity, percent. */
   rotePct: number | null;
   /**
-   * The multiple the return justifies under the same residual-income identity
-   * the forward model uses: (ROTE − g) / (CoE − g), with g the sustainable
-   * growth rate ROTE × retention. Null when the identity does not hold.
+   * A STABLE-GROWTH cross-check: (ROTE − g) / (CoE − g), the Gordon-form
+   * justified multiple, with g = min(ROTE × retention, the terminal-growth cap,
+   * the risk-free rate). It is NOT the forward excess-return model read as a
+   * multiple: that model fades ROE to the cost of equity over the horizon and
+   * adds no continuing value, while this identity assumes a constant ROTE in
+   * perpetuity. The two rest on different assumptions and can disagree; the
+   * basis string says so. Null when the identity does not hold.
    */
   justifiedPTbv: number | null;
   /** pTbv − justifiedPTbv; positive = the market pays more than the return supports. */
@@ -2377,11 +2390,23 @@ function excessReturnValue(
  * and comparing that multiple against a return computed on tangible equity
  * (ROTE) would be comparing two different denominators.
  *
- * The justified multiple is the residual-income identity the forward model
- * already assumes, (ROTE − g) / (CoE − g), with g = ROTE × retention. It is
- * withheld — never clamped — when CoE − g is not comfortably positive, because
- * the ratio explodes through infinity there and any number it produced would be
- * an artefact of the arithmetic rather than a valuation.
+ * The justified multiple is a STABLE-GROWTH cross-check, (ROTE − g) / (CoE − g)
+ * — the Gordon form of the residual-income identity, which assumes a constant
+ * ROTE in perpetuity. The forward model above assumes the opposite: ROE fades
+ * to the cost of equity over the horizon and no continuing value is added. So
+ * the two readings rest on DIFFERENT assumptions and can legitimately disagree,
+ * and the basis string says which is which rather than claiming they cannot.
+ *
+ * `g` obeys the same house rule the DCF terminal value obeys — nothing grows
+ * faster than the risk-free rate forever — so it is capped at
+ * min(ROTE × retention, TERMINAL_G_CAP_PCT, risk-free). Uncapped, a bank at
+ * ROTE 14% with a one-third payout implied g = 9.4% and a justified multiple of
+ * 7.45x against a forward-model reading of 1.18x, which made every well-earning
+ * financial look grossly cheap against its own pipeline fair value.
+ *
+ * The multiple is withheld — never clamped — when CoE − g is not comfortably
+ * positive, because the ratio explodes through infinity there and any number it
+ * produced would be an artefact of the arithmetic rather than a valuation.
  */
 export const JUSTIFIED_PTBV_MIN_SPREAD_PP = 0.5;
 
@@ -2434,7 +2459,19 @@ function priceToTangibleBookVsRote(
   }
 
   const retention = 1 - payoutPct / 100;
-  const g = (rotePct / 100) * retention * 100;
+  const gSustainable = (rotePct / 100) * retention * 100;
+  // House rule, the same one the DCF terminal value obeys: nothing grows faster
+  // than the risk-free rate forever. Uncapped, g = ROTE x retention routinely
+  // lands above the cost of equity for a profitable bank, which either withheld
+  // the multiple or (just under the floor) published a very large one.
+  const rf = isNum(inputs.riskFreePct) ? inputs.riskFreePct : null;
+  const gCap = rf === null ? TERMINAL_G_CAP_PCT : Math.min(TERMINAL_G_CAP_PCT, rf);
+  const gCapBasis =
+    rf === null
+      ? `min(ROTE x retention, ${TERMINAL_G_CAP_PCT}% terminal-growth cap) — no risk-free rate supplied, so the cap rests on the house terminal-growth ceiling alone`
+      : `min(ROTE x retention, ${TERMINAL_G_CAP_PCT}% terminal-growth cap, risk-free ${fmtNum(rf)}%) — house rule: nothing grows faster than rf forever`;
+  const g = Math.min(gSustainable, gCap);
+  const gCapped = g < gSustainable;
   const spread = coePct - g;
   if (spread < JUSTIFIED_PTBV_MIN_SPREAD_PP) {
     return {
@@ -2445,8 +2482,8 @@ function priceToTangibleBookVsRote(
       basis:
         `P/TBV = market cap ${mcap} / tangible common equity ${tce} = ${fmtNum(pTbv)}x, against ROTE ${fmtNum(rotePct)}%`,
       withheldReason:
-        `sustainable growth g = ROTE ${fmtNum(rotePct)}% x retention ${fmtNum(retention * 100)}% = ${fmtNum(g)}% leaves ` +
-        `only ${fmtNum(spread)}pp below the cost of equity ${fmtNum(coePct)}% (floor ${JUSTIFIED_PTBV_MIN_SPREAD_PP}pp) — ` +
+        `growth g = ${fmtNum(g)}% (${gCapped ? `ROTE ${fmtNum(rotePct)}% x retention ${fmtNum(retention * 100)}% = ${fmtNum(gSustainable)}%, capped by ${gCapBasis}` : `ROTE ${fmtNum(rotePct)}% x retention ${fmtNum(retention * 100)}%, below ${gCapBasis}`}) ` +
+        `leaves only ${fmtNum(spread)}pp below the cost of equity ${fmtNum(coePct)}% (floor ${JUSTIFIED_PTBV_MIN_SPREAD_PP}pp) — ` +
         "the justified multiple (ROTE − g)/(CoE − g) diverges there, so it is withheld rather than reported as a very large number",
     };
   }
@@ -2459,8 +2496,10 @@ function priceToTangibleBookVsRote(
     basis:
       `P/TBV = market cap ${mcap} / tangible common equity ${tce} = ${fmtNum(pTbv)}x, against ROTE ${fmtNum(rotePct)}%. ` +
       `Justified P/TBV = (ROTE ${fmtNum(rotePct)}% − g ${fmtNum(g)}%) / (CoE ${fmtNum(coePct)}% − g ${fmtNum(g)}%) = ` +
-      `${fmtNum(justifiedPTbv)}x, where g = ROTE x retention ${fmtNum(retention * 100)}% — the same residual-income ` +
-      "identity the forward model assumes, so the two readings cannot disagree.",
+      `${fmtNum(justifiedPTbv)}x, where g = ${gCapped ? `${gCapBasis} (ROTE x retention ${fmtNum(retention * 100)}% = ${fmtNum(gSustainable)}%, capped)` : `ROTE x retention ${fmtNum(retention * 100)}% = ${fmtNum(gSustainable)}%, within ${gCapBasis}`}. ` +
+      "This is a STABLE-GROWTH cross-check: it assumes ROTE persists in perpetuity, while the forward excess-return " +
+      "model on this page fades ROE to the cost of equity over its horizon and adds no continuing value. The two rest " +
+      "on different assumptions and can disagree — read the difference as the value of persistence, not as an error.",
     withheldReason: null,
   };
 }

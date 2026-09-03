@@ -4,13 +4,14 @@
  * Settings resolve database → environment → default, so a row saved from the
  * Settings page outranks `.env` until someone deletes it. These tests pin the
  * refusal without `--yes`, the exact preview text, the delete, and the
- * bookkeeping row the reset must not touch. One test runs the real npm script
- * so the `@/` alias and the `react-server` condition in package.json stay
- * wired; everything else calls the module directly.
+ * bookkeeping row the reset must not touch. One test spawns the argv that
+ * package.json declares for `settings:reset` so the `@/` alias and the
+ * `react-server` condition stay wired; everything else calls the module
+ * directly.
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -193,25 +194,41 @@ describe("runSettingsResetCli", () => {
     expect(capture(["--yes", "--db", dbFile]).out).toContain("no database file yet");
   });
 
-  it("runs through the real npm script, alias and react-server condition included", () => {
+  it("runs the declared settings:reset argv, alias and react-server condition included", () => {
     seedSettings([["analysisModel", "claude-opus-4-8"]]);
-    const npmCli = process.env.npm_execpath;
-    expect(npmCli !== undefined && path.isAbsolute(npmCli) && existsSync(npmCli)).toBe(true);
 
-    const preview = spawnSync(
-      process.execPath,
-      [npmCli!, "run", "--silent", "settings:reset", "--", "--db", dbFile],
-      { cwd: ROOT, encoding: "utf8", timeout: 60_000 },
-    );
+    // Spawn the script exactly as package.json declares it, but without the
+    // package manager. `npm run` fires npm's update-notifier — a live
+    // pacote.manifest("npm@*") request to registry.npmjs.org from a child
+    // process that tests/setup/noLiveNetwork.ts cannot reach, since that guard
+    // only replaces globalThis.fetch inside the Vitest process. Reading the
+    // argv here pins the same alias and condition wiring without any network
+    // capability, and without depending on npm_execpath, which is unset under
+    // node_modules/.bin/vitest and under IDE runners.
+    const manifest = JSON.parse(
+      readFileSync(path.join(ROOT, "package.json"), "utf8"),
+    ) as { scripts: Record<string, string> };
+    const [runner, ...scriptArgv] = manifest.scripts["settings:reset"].split(/\s+/);
+
+    expect(runner).toBe("node");
+    expect(scriptArgv).toContain("--conditions=react-server");
+    expect(scriptArgv).toContain("scripts/settings-reset.ts");
+
+    function run(extra: readonly string[]): ReturnType<typeof spawnSync> {
+      return spawnSync(process.execPath, [...scriptArgv, ...extra], {
+        cwd: ROOT,
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+    }
+
+    const preview = run(["--db", dbFile]);
     expect(preview.status, preview.stderr).toBe(0);
     expect(preview.stdout).toContain("would delete 1 stored setting row:");
+    expect(preview.stdout).toContain("analysisModel = claude-opus-4-8");
     expect(storedSettings()).toHaveLength(1);
 
-    const applied = spawnSync(
-      process.execPath,
-      [npmCli!, "run", "--silent", "settings:reset", "--", "--yes", "--db", dbFile],
-      { cwd: ROOT, encoding: "utf8", timeout: 60_000 },
-    );
+    const applied = run(["--yes", "--db", dbFile]);
     expect(applied.status, applied.stderr).toBe(0);
     expect(applied.stdout).toContain("deleted 1 stored setting row:");
     expect(storedSettings()).toEqual([]);

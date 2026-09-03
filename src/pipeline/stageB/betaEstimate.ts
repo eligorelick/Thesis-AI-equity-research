@@ -70,8 +70,17 @@ export const BETA_MAX_MONTHS = 60;
 export const BETA_MIN_MONTHS = 24;
 
 /**
- * Blume's (1971) mean-reversion adjustment in its standard weighting: two
- * thirds of the measured slope plus one third of the market beta of 1.
+ * Mean-reversion adjustment: two thirds of the measured slope plus one third
+ * of the market beta of 1.
+ *
+ * This is the BLOOMBERG weighting, which standardises the finding in Blume
+ * (1971) that betas revert toward 1 — it is not Blume's own fitted regression,
+ * which was `0.371 + 0.635·beta`. Both shrink toward 1 and differ by a few
+ * hundredths in practice, but the two are routinely conflated and the field
+ * name should not imply a precision the number does not have. Blume's
+ * coefficients were fitted on 1960s US data; the 2/3 weighting is a convention,
+ * not an estimate for this issuer or period. See docs/RESEARCH.md §7.1.
+ *
  * Reported alongside the raw estimate; which one to use is the consumer's
  * choice, and the disclosure names both.
  */

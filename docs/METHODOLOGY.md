@@ -51,7 +51,7 @@ rate)` row) and in the report's computed-returns notes.
 | --- | --- | --- |
 | Risk-free rate | FMP treasury rates (`year10`), else **FRED `DGS10`** | The series id and the observation date are both stated. |
 | Equity risk premium | FMP market-risk-premium (US `totalEquityRiskPremium`), else the dated **Damodaran** implied-ERP fallback | The fallback carries its own publication date and is rejected once it is older than 210 days rather than used stale. A value outside [3%, 25%] is treated as implausible and falls back. |
-| Beta | Provider profile beta, **Blume-adjusted** (0.67·raw + 0.33), clamped to [0.6, 2.0] | Raw beta outside (0, 4] is unusable and the WACC fails closed rather than inventing market exposure. |
+| Beta | Provider profile beta, **mean-reversion adjusted** (0.67·raw + 0.33 — the Bloomberg weighting of Blume's finding, not his fitted 0.371 + 0.635·β; see [RESEARCH §7.1](RESEARCH.md)), clamped to [0.6, 2.0] | Raw beta outside (0, 4] is unusable and the WACC fails closed rather than inventing market exposure. |
 | Cost of equity | rf + beta × ERP | Clamped to [rf + 2.5%, 25%]. |
 | Cost of debt | `effective` (interest expense ÷ average total debt), `historical` (the issuer's last year that still disclosed interest), or `synthetic` (rf + rating spread from interest coverage, Damodaran's January 2026 table) | The method actually used is named. An effective rate outside [rf − 1, rf + 19] is rejected in favour of the synthetic rating. Debt below 2% of assets is treated as noise. |
 | Tax rate | Observed effective rate (ratios TTM, else annual ratios, else TTM tax expense ÷ pre-tax income) | Clamped to [0%, 35%]. Where it came from is named. No universal statutory rate is ever assumed. |

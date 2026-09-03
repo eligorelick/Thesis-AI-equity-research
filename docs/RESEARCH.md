@@ -407,6 +407,114 @@ are misused in practice.
 
 ---
 
+## 7. Valuation inputs
+
+The forensic models above are published in full. The discount rate is not: a
+WACC is assembled from several sources, each with its own convention, and the
+assembly is where most of the discretion lives. [`METHODOLOGY.md`](METHODOLOGY.md)
+states what the code does; this section states where each convention comes from
+and how much authority it carries.
+
+### 7.1 Beta and the mean-reversion adjustment
+
+**Published — the finding.** Marshall Blume, *On the Assessment of Risk*,
+Journal of Finance 26(1), 1971: estimated betas revert toward the market beta
+of 1 over time, so a raw historical slope is a biased forecast of the future
+one.
+
+**Resolved ambiguity — which adjustment.** Two formulas both travel under
+Blume's name and they are not the same:
+
+| | Formula | What it is |
+| --- | --- | --- |
+| Blume (1971) | 0.371 + 0.635·β | His fitted regression, on 1960s US data |
+| Bloomberg | 0.333 + 0.667·β | The standardised convention built on that finding |
+
+This project uses the **Bloomberg 2/3–1/3 weighting**, which is the industry
+convention and what practitioners mean by "adjusted beta". The two differ by a
+few hundredths across the normal range, so the choice is not material to a
+valuation — but the label is routinely used as though the convention *were*
+Blume's estimate, which implies a precision it does not have. The report prints
+the formula (`0.667·raw + 0.333`) beside the name so a reader can see exactly
+which one ran.
+
+Neither is an estimate for this issuer or this period. Blume's coefficients
+came from 1960s US data, and the 2/3 weighting is a rounded convention on top
+of them.
+
+**House rule — clamps.** The adjusted beta is clamped to [0.6, 2.0], and a raw
+beta outside (0, 4] is treated as unusable: the WACC fails closed rather than
+inventing market exposure from a broken regression. A negative or near-zero
+raw beta usually means the return series is wrong, not that the company is
+uncorrelated with the market.
+
+### 7.2 Risk-free rate and equity risk premium
+
+**Published — the ERP source.** Aswath Damodaran's implied equity risk premium,
+which is forward-looking (backed out of index prices and expected cash flows)
+rather than a historical average. The provider's own US premium is preferred
+when available; the Damodaran figure is the dated fallback.
+
+**House rule — staleness.** An implied ERP more than **210 days** old is
+rejected rather than used. An ERP is a market observation, not a constant, and
+a year-old one can be a full percentage point wrong after a repricing — which
+moves a terminal value by far more than it sounds.
+
+**House rule — plausibility band.** An ERP outside [3%, 25%] is treated as a
+data error and falls back. This is a sanity bound on the input, not a view
+about what the premium should be.
+
+### 7.3 Cost of debt
+
+**Published — the synthetic rating.** Damodaran's interest-coverage-to-spread
+table maps an issuer's coverage ratio to a credit spread over the risk-free
+rate. It is the standard approach for an issuer with no rated public debt.
+
+**House rules.** Three, all disclosed on the number: the effective rate
+(interest expense ÷ average total debt) is preferred where it is plausible;
+"plausible" is [rf − 1, rf + 19] percentage points, outside which the synthetic
+rating is used instead; and debt below **2% of assets** is treated as noise,
+because an effective rate computed on a trivial balance is arithmetic rather
+than a cost of capital. The method that actually ran is always named.
+
+### 7.4 Terminal value
+
+**Published — the constraint.** No company can grow faster than the economy in
+perpetuity, so the terminal growth rate cannot exceed the risk-free rate
+(Damodaran). This is the one part of a DCF where a small input error compounds
+without limit, and it is the most common way a discounted cash flow is made to
+say whatever its author wants.
+
+**House rule — the cap.** Terminal growth is **min(2.5%, risk-free rate)**. The
+risk-free bound is the published constraint; the 2.5% is this project's, and
+the report labels it a HOUSE CONVENTION in those words wherever it appears.
+
+**House rule — the Gordon guard.** The base case requires WACC − g ≥ 2.0
+percentage points (1.5 in the sensitivity grid, where a tighter guard would
+blank the cells the grid exists to show). As the denominator approaches zero
+the terminal value approaches infinity; the guard bounds that, and when it
+binds the report says so rather than printing the result.
+
+**House rule — terminal ROIC.** Returns fade to the cost of capital by default.
+Where ROIC exceeded WACC in each of the last four or more fiscal years, half
+the median spread is carried in perpetuity, capped at 5 percentage points. This
+is a convention about competitive advantage, not a finding, and it is labelled
+as one.
+
+### 7.5 What the clamps are and are not
+
+Every bound in this section — the beta clamp, the ERP band, the cost-of-debt
+plausibility range, the WACC clamp of [max(6%, rf + 1%), 20%] — exists to stop
+a **broken input** producing a confident number. None of them is a view about
+what a company's cost of capital should be.
+
+The distinction matters when one binds. A clamp that moves the WACC by 0.5
+percentage points or more is disclosed in the manifest, because at that point
+the discount rate is partly this project's convention rather than the issuer's
+data, and a reader is entitled to know which.
+
+---
+
 ## What would improve this
 
 Honest gaps in the evidence base, listed so they are not mistaken for settled:
@@ -422,3 +530,12 @@ Honest gaps in the evidence base, listed so they are not mistaken for settled:
 - Every red flag in §5 is a heuristic with a hand-set threshold. None has been
   validated against an outcome sample, and the report says so rather than
   implying a hit rate none of them has earned.
+- The beta (§7.1) is a historical regression with a conventional shrinkage
+  applied. A forward-looking or peer-relative beta would be better justified for
+  an issuer whose business has changed inside the estimation window, and the
+  report currently discloses the standard error and R² rather than acting on
+  them.
+- The terminal-growth cap and the terminal-ROIC fade (§7.4) are conventions
+  chosen for defensibility, not fitted to anything. They are the two inputs a
+  reader should override first if they disagree, which is why both are labelled
+  in the report rather than buried here.

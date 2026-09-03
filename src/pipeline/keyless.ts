@@ -40,6 +40,7 @@ import { describeSplitRatio, discoverStockSplits, SPLIT_RATIO_TAG, type SplitEve
 import { estimateBeta, type ClosePoint } from "@/pipeline/stageB/betaEstimate";
 import type { EdgarRegistrant } from "@/pipeline/types";
 import type { CikMapping } from "@/providers/edgar";
+import { isPlanLimited } from "@/providers/fmp";
 import type {
   FmpBalanceSheetRow,
   FmpCashFlowRow,
@@ -54,6 +55,7 @@ import type {
   FmpSharesFloatRow,
 } from "@/providers/fmp";
 import type { YahooClient, YahooMeta } from "@/providers/yahoo";
+import type { StatementSource } from "@/config/env";
 import type { DataSource, FetchResult, ManifestEntry } from "@/types/core";
 
 // ---------------------------------------------------------------------------
@@ -89,6 +91,17 @@ export interface KeylessInputs {
   fmp: KeylessMembers;
   /** No FMP key configured → the substitution gaps are `expected`. */
   fmpKeyless: boolean;
+  /**
+   * WS4 (D-12) statement-history policy, from `THESIS_STATEMENT_SOURCE`:
+   *  - `auto`: FMP first, then EDGAR companyfacts for periods older than the
+   *    oldest FMP row (a plan that caps `limit` truncates history);
+   *  - `fmp`: never backfill;
+   *  - `edgar`: ignore FMP's statement rows and build all six members from
+   *    companyfacts.
+   * No period ever mixes sources: a backfilled row is whole and carries
+   * `source: "edgar"`.
+   */
+  statementSource: StatementSource;
   /**
    * SEC independently tied this ticker to this registrant — either its own
    * ticker table made the match, or it answered for the CIK with submissions or
@@ -141,6 +154,9 @@ const STATEMENT_ENDPOINTS = {
   cashflowAnnual: "companyfacts→cash-flow(annual)",
   cashflowQuarterly: "companyfacts→cash-flow(quarter)",
 } as const;
+
+/** The members `THESIS_STATEMENT_SOURCE` governs. */
+const STATEMENT_MEMBERS = Object.keys(STATEMENT_ENDPOINTS) as (keyof typeof STATEMENT_ENDPOINTS)[];
 
 const ENTERPRISE_VALUES_ENDPOINT = "derived:enterprise-values(balance×close×shares)";
 /**
@@ -418,9 +434,18 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   const issuerBound = (member: keyof KeylessMembers): boolean =>
     member !== "spy" && member !== "sectorEtf";
 
+  /**
+   * WS4 (D-12): `THESIS_STATEMENT_SOURCE=edgar` rebuilds the six statement
+   * members from companyfacts even when FMP served rows, so a reader who
+   * distrusts the vendor's normalisation can run on filed facts alone. It never
+   * lifts the issuer gate.
+   */
+  const statementsFromEdgarOnly =
+    inputs.statementSource === "edgar" && (STATEMENT_MEMBERS as readonly string[]).length > 0;
   const needs = (member: keyof KeylessMembers): boolean =>
     (inputs.edgarConfirmedIssuer || !issuerBound(member)) &&
-    needsFallback(inputs.fmp[member] as AnyMemberResult);
+    (needsFallback(inputs.fmp[member] as AnyMemberResult) ||
+      (statementsFromEdgarOnly && (STATEMENT_MEMBERS as readonly string[]).includes(member)));
 
   if (!inputs.edgarConfirmedIssuer) {
     notes.push(
@@ -574,6 +599,70 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   if (cashflowAnnual !== null) members.cashflowAnnual = cashflowAnnual;
   const cashflowQuarterly = statementFor("cashflowQuarterly", built?.cashflowQuarterly ?? null, STATEMENT_ENDPOINTS.cashflowQuarterly);
   if (cashflowQuarterly !== null) members.cashflowQuarterly = cashflowQuarterly;
+
+  // --- Statement backfill (D-12) --------------------------------------------
+  //
+  // An entry-tier FMP plan caps `limit`, so a request for ten fiscal years
+  // comes back with five and every long-window CAGR silently measures a
+  // shorter span. The periods FMP could not serve are filed facts like any
+  // other, so they are taken from companyfacts and APPENDED — never merged
+  // into a period FMP already served, so no row mixes two sources — and each
+  // one carries `source: "edgar"` with the endpoint that produced it.
+  const backfill = <TRow extends FmpRawRow>(
+    member: keyof KeylessMembers,
+    result: StatementRowsResult<TRow> | null,
+    endpoint: string,
+  ): void => {
+    if (inputs.statementSource !== "auto") return;
+    if (replaced.includes(member) || result === null || result.rows.length === 0) return;
+    if (!inputs.edgarConfirmedIssuer) return;
+    const current = inputs.fmp[member] as FetchResult<FmpPayload<TRow>>;
+    if (!current.ok || current.value.data.rows.length === 0) return;
+    const vendorRows = current.value.data.rows;
+    const vendorDates = vendorRows.map((row) => isoDay(row["date"])).filter((day): day is string => day !== null);
+    if (vendorDates.length === 0) return;
+    const oldestVendor = vendorDates.reduce((a, b) => (a < b ? a : b));
+    const older = result.rows.filter((row) => {
+      const day = isoDay(row["date"]);
+      return day !== null && day < oldestVendor;
+    });
+    if (older.length === 0) return;
+    const olderDates = older.map((row) => isoDay(row["date"]) as string).sort();
+    const filled = older.map((row) => ({ ...row, source: "edgar", sourceEndpoint: endpoint }) as TRow);
+    const planLimit = isPlanLimited(current.value.data) ? current.value.data.planLimit : null;
+    members[member] = {
+      ok: true,
+      value: {
+        ...current.value,
+        endpoint: `${current.value.endpoint} + ${endpoint} (older periods)`,
+        data: { ...current.value.data, rows: [...vendorRows, ...filled] },
+      },
+    } as KeylessMembers[typeof member];
+    notes.push(
+      `${member}: ${filled.length} older period(s) backfilled from EDGAR companyfacts (${olderDates[0]} … ${olderDates[olderDates.length - 1]})`,
+    );
+    gaps.push({
+      field: `statements.backfill.${member}`,
+      reason:
+        `FMP served ${vendorRows.length} period(s) back to ${oldestVendor}` +
+        (planLimit === null
+          ? ""
+          : ` (its subscription caps 'limit' at ${planLimit.applied}, so ${planLimit.applied} of ${planLimit.requested} requested periods arrived)`) +
+        `; SEC EDGAR companyfacts supplied ${filled.length} older period(s), ${olderDates[0]} to ${olderDates[olderDates.length - 1]}, each row carrying source "edgar" (${endpoint}). ` +
+        "No period mixes the two sources: the vendor's rows are untouched and only periods it did not serve were added.",
+      severity: "info",
+      attemptedSources: [current.value.endpoint, endpoint],
+      // Structural on a plan whose limit is capped; an incident otherwise.
+      expected: planLimit !== null || inputs.fmpKeyless,
+    });
+    replaced.push(member);
+  };
+  backfill("incomeAnnual", built?.incomeAnnual ?? null, STATEMENT_ENDPOINTS.incomeAnnual);
+  backfill("incomeQuarterly", built?.incomeQuarterly ?? null, STATEMENT_ENDPOINTS.incomeQuarterly);
+  backfill("balanceAnnual", built?.balanceAnnual ?? null, STATEMENT_ENDPOINTS.balanceAnnual);
+  backfill("balanceQuarterly", built?.balanceQuarterly ?? null, STATEMENT_ENDPOINTS.balanceQuarterly);
+  backfill("cashflowAnnual", built?.cashflowAnnual ?? null, STATEMENT_ENDPOINTS.cashflowAnnual);
+  backfill("cashflowQuarterly", built?.cashflowQuarterly ?? null, STATEMENT_ENDPOINTS.cashflowQuarterly);
 
   // --- Yahoo: every needed series and the quote in one concurrent round ------
 

@@ -115,6 +115,28 @@ const envSchema = z.object({
     0,
     MAX_ROLLING_WINDOW_MINUTES,
   ),
+  // --- WS4 (D-12) ------------------------------------------------------------
+  /**
+   * Where statement history comes from.
+   *  - `auto` (default): FMP first; when its plan truncates history, older
+   *    periods are backfilled from SEC EDGAR companyfacts, with per-row
+   *    provenance and a manifest entry naming the depth each source served. No
+   *    period ever mixes sources.
+   *  - `fmp`: FMP only; a truncated history stays truncated.
+   *  - `edgar`: EDGAR companyfacts only; FMP's statement rows are ignored.
+   * An unrecognized value is rejected at parse, like every other key here.
+   */
+  THESIS_STATEMENT_SOURCE: z
+    .string()
+    .optional()
+    .transform((raw, ctx) => {
+      const value = blank(raw)?.toLowerCase();
+      if (value === undefined) return "auto" as const;
+      if (value === "auto" || value === "fmp" || value === "edgar") return value;
+      ctx.addIssue({ code: "custom", message: 'must be one of "auto", "fmp" or "edgar"' });
+      return z.NEVER;
+    }),
+  // --- end WS4 ---------------------------------------------------------------
   // Strictly greater than the provider's 600-second hard request timeout.
   THESIS_PAID_PASS_LEASE_SECONDS: positiveIntegerEnv(900, 600, MAX_NODE_TIMER_SECONDS),
   THESIS_JOB_LEASE_SECONDS: positiveIntegerEnv(900, 0, MAX_NODE_TIMER_SECONDS),
@@ -122,6 +144,9 @@ const envSchema = z.object({
   // numeric-source tracing and never calls a model. A leftover env var is
   // simply ignored.
 });
+
+// WS4 (D-12): the accepted values of THESIS_STATEMENT_SOURCE.
+export type StatementSource = "auto" | "fmp" | "edgar";
 
 export interface ThesisConfig {
   fmpApiKey: string | undefined;
@@ -138,6 +163,8 @@ export interface ThesisConfig {
   hasAnthropicKey: boolean;
   /** True when no FMP key is configured — FMP clients serve fixtures/gaps. */
   fixtureMode: boolean;
+  // WS4 (D-12): statement-history source policy.
+  statementSource: StatementSource;
   maxActiveJobs: number;
   maxActiveLlmCalls: number;
   maxJobCostUsd: number | null;
@@ -166,6 +193,7 @@ export function parseEnv(
     hasFredKey: parsed.FRED_API_KEY !== undefined,
     hasAnthropicKey: parsed.ANTHROPIC_API_KEY !== undefined,
     fixtureMode: parsed.FMP_API_KEY === undefined,
+    statementSource: parsed.THESIS_STATEMENT_SOURCE,
     maxActiveJobs: parsed.THESIS_MAX_ACTIVE_JOBS,
     maxActiveLlmCalls: parsed.THESIS_MAX_ACTIVE_LLM_CALLS,
     maxJobCostUsd: parsed.THESIS_MAX_JOB_COST_USD,

@@ -200,6 +200,7 @@ function inputs(over: Partial<KeylessInputs> = {}): KeylessInputs {
     sectorEtfSymbol: null,
     fmp: allGaps(),
     fmpKeyless: true,
+    statementSource: "auto",
     edgarConfirmedIssuer: true,
     edgar: {
       cik: { ok: true, value: { data: { cik10: "0000320193", cik: 320193, ticker: "AAPL", title: "Apple Inc." }, asOf: "2026-09-01", source: "edgar", endpoint: "company_tickers.json", fetchedAt: NOW.toISOString() } },
@@ -305,13 +306,79 @@ describe("applyKeylessFallbacks", () => {
   });
 
   it("never overwrites an FMP member that has rows, and marks gaps as unexpected on a keyed plan", async () => {
+    // WS4 (D-12) changed the expectation from "the member is the same object"
+    // to "the vendor's own rows are untouched": under `auto`, periods OLDER
+    // than the oldest vendor row are backfilled from companyfacts. The vendor
+    // period itself is never rebuilt or merged.
     const fmp = allGaps();
     fmp.incomeAnnual = okRows([{ date: "2025-09-27", revenue: 1 }]);
     const out = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false }));
+    const rows = out.members.incomeAnnual.ok ? out.members.incomeAnnual.value.data.rows : [];
+    expect(rows[0]).toEqual({ date: "2025-09-27", revenue: 1 });
+    expect(rows.slice(1).every((row) => row.source === "edgar")).toBe(true);
+    expect(out.gaps.filter((g) => g.field === "statements.backfill.incomeAnnual")).toHaveLength(1);
+    expect(
+      out.gaps
+        .filter((g) => !g.field.startsWith("statements.backfill."))
+        .every((g) => g.expected === undefined || g.expected === false),
+    ).toBe(true);
+    expect(out.gaps.find((g) => g.field === "keyless.sectorEtf")?.reason).toMatch(/HTTP 402/);
+  });
+
+  it("leaves the vendor member untouched under THESIS_STATEMENT_SOURCE=fmp", async () => {
+    const fmp = allGaps();
+    fmp.incomeAnnual = okRows([{ date: "2025-09-27", revenue: 1 }]);
+    const out = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false, statementSource: "fmp" }));
     expect(out.members.incomeAnnual).toBe(fmp.incomeAnnual);
     expect(out.replaced).not.toContain("incomeAnnual");
-    expect(out.gaps.every((g) => g.expected === undefined || g.expected === false)).toBe(true);
-    expect(out.gaps.find((g) => g.field === "keyless.sectorEtf")?.reason).toMatch(/HTTP 402/);
+    expect(out.gaps.some((g) => g.field.startsWith("statements.backfill."))).toBe(false);
+  });
+
+  it("backfills only periods the vendor did not serve, with per-row provenance and a depth disclosure", async () => {
+    const fmp = allGaps();
+    // A capped plan: one annual period served of ten requested.
+    fmp.incomeAnnual = {
+      ok: true,
+      value: {
+        data: { rows: [{ date: "2025-09-27", revenue: 1 }], raw: null, planLimit: { requested: 10, applied: 1 } },
+        asOf: "2025-09-27",
+        source: "fmp",
+        endpoint: "/stable/income-statement?limit=1",
+        fetchedAt: NOW.toISOString(),
+      },
+    };
+    const out = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false }));
+    expect(out.members.incomeAnnual.ok).toBe(true);
+    if (!out.members.incomeAnnual.ok) return;
+    const rows = out.members.incomeAnnual.value.data.rows;
+    expect(rows.map((row) => row.date)).toEqual(["2025-09-27", "2024-09-28"]);
+    expect(rows[0]!.source).toBeUndefined();
+    expect(rows[1]).toMatchObject({
+      source: "edgar",
+      sourceEndpoint: "companyfacts→income-statement(annual)",
+      revenue: 380,
+    });
+    expect(out.members.incomeAnnual.value.endpoint).toBe(
+      "/stable/income-statement?limit=1 + companyfacts→income-statement(annual) (older periods)",
+    );
+    const entry = out.gaps.find((g) => g.field === "statements.backfill.incomeAnnual");
+    expect(entry).toMatchObject({ severity: "info", expected: true });
+    expect(entry?.reason).toMatch(/FMP served 1 period\(s\) back to 2025-09-27/);
+    expect(entry?.reason).toMatch(/caps 'limit' at 1, so 1 of 10 requested periods arrived/);
+    expect(entry?.reason).toMatch(/supplied 1 older period\(s\), 2024-09-28 to 2024-09-28/);
+    expect(entry?.reason).toMatch(/No period mixes the two sources/);
+  });
+
+  it("rebuilds every statement member from companyfacts under THESIS_STATEMENT_SOURCE=edgar", async () => {
+    const fmp = allGaps();
+    fmp.incomeAnnual = okRows([{ date: "2025-09-27", revenue: 1 }]);
+    fmp.balanceAnnual = okRows([{ date: "2025-09-27", totalAssets: 2 }]);
+    const out = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false, statementSource: "edgar" }));
+    expect(out.members.incomeAnnual.ok && out.members.incomeAnnual.value.source).toBe("edgar");
+    expect(out.members.incomeAnnual.ok && out.members.incomeAnnual.value.data.rows[0]!.revenue).toBe(400);
+    expect(out.members.balanceAnnual.ok && out.members.balanceAnnual.value.source).toBe("edgar");
+    expect(out.replaced).toContain("incomeAnnual");
+    expect(out.gaps.some((g) => g.field.startsWith("statements.backfill."))).toBe(false);
   });
 
   it("leaves the FMP gap in place and records the keyless failure when Yahoo is unavailable", async () => {

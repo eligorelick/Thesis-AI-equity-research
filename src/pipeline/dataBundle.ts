@@ -1679,6 +1679,9 @@ export async function buildDataBundle(
           sharesFloat,
         },
         fmpKeyless: fmp.fixtureMode,
+        // WS4 (D-12): FMP first with an EDGAR backfill of older periods
+        // (`auto`), FMP alone (`fmp`), or companyfacts alone (`edgar`).
+        statementSource: cfg.statementSource,
         edgarConfirmedIssuer,
         edgar: {
           cik: edgarBundle.cik,

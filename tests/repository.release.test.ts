@@ -55,6 +55,8 @@ const ALLOWED_MARKDOWN = new Set([
   "docs/audit/README-RECONCILIATION.md",
   "docs/audit/DECISIONS.md",
   "docs/audit/PROGRESS.md",
+  // WS4: the data-layer handover notes for the README rewrite.
+  "docs/audit/README-NOTES-WS4.md",
 ]);
 const VERIFY_GATES = [
   "npm run check:dependencies",

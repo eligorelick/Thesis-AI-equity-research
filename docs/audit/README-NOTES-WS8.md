@@ -5,18 +5,22 @@ Facts WS9 needs for the README. Everything here matches the code on branch
 
 ## New README sections (link, do not duplicate)
 
+The link markdown below is quoted as literal source to paste into `README.md`,
+so its paths are written from the repository root. It is deliberately not
+clickable from this file, which lives two directories down.
+
 **Privacy and safety** → link `docs/PRIVACY.md`. Suggested sentence:
 
 > Thesis sends nothing to Thesis: no telemetry, no analytics, no update check.
 > The only outbound traffic is to the data providers you configure — see
-> [Privacy and safety](docs/PRIVACY.md) for exactly what each one receives,
+> `[Privacy and safety](docs/PRIVACY.md)` for exactly what each one receives,
 > where the local database lives, and how to delete it.
 
 **License and data rights** → link `docs/DATA-RIGHTS.md`. Suggested sentence:
 
 > The MIT license covers this code only, not the market and filing data Thesis
 > retrieves; sharing a generated report shares that provider data with it. See
-> [License and data rights](docs/DATA-RIGHTS.md).
+> `[License and data rights](docs/DATA-RIGHTS.md)`.
 
 **Settings precedence** → state it in the README itself; this one is required,
 not a suggestion. Criterion (c) of this workstream is met only when a

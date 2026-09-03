@@ -127,6 +127,57 @@ describe("the README's prose", () => {
 });
 
 /**
+ * Every relative link in every shipped document resolves.
+ *
+ * The README already had this check; the other fifteen documents did not, and
+ * two links in a handoff note pointed at paths that only resolve from the
+ * repository root — a reader clicking them from `docs/audit/` got a 404.
+ */
+describe("relative links in the documentation", () => {
+  /**
+   * Markdown link targets, ignoring fenced blocks and inline code spans.
+   * Quoted link SOURCE (`` `[text](path)` ``) is not a link a reader can click,
+   * and the handoff notes quote README markdown deliberately.
+   */
+  function relativeLinks(markdown: string): string[] {
+    const prose = markdown.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "");
+    return [...prose.matchAll(/\]\((?!https?:|#|mailto:)([^)]+)\)/g)]
+      .map((match) => match[1]!.split("#")[0]!)
+      .filter((target) => target.length > 0);
+  }
+
+  function shippedDocs(): string[] {
+    const docs = ["README.md", "CHANGELOG.md"];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+        const rel = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) walk(rel);
+        else if (entry.name.endsWith(".md")) docs.push(rel);
+      }
+    };
+    walk("docs");
+    return docs;
+  }
+
+  it("resolves from the file the link is written in", () => {
+    const docs = shippedDocs();
+    expect(docs.length).toBeGreaterThan(10);
+    for (const doc of docs) {
+      for (const link of relativeLinks(readFileSync(path.join(ROOT, doc), "utf8"))) {
+        const target = path.resolve(path.dirname(path.join(ROOT, doc)), link);
+        expect(existsSync(target), `${doc} links to ${link}, which does not resolve from there`).toBe(true);
+      }
+    }
+  });
+
+  it("hands the reader on to the evidence base from the methodology", () => {
+    // METHODOLOGY states the conventions; RESEARCH says where they come from.
+    // A reader who wants to check a coefficient should not have to guess.
+    expect(readFileSync(path.join(ROOT, "docs", "METHODOLOGY.md"), "utf8")).toContain("RESEARCH.md");
+  });
+});
+
+/**
  * The forensic code cites its evidence base by section — `research §2.5`, and
  * eighteen others. For months no such document existed in the repository, so a
  * reader auditing a coefficient had nowhere to go and the citations could say

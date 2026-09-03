@@ -220,6 +220,8 @@ describe("POST /api/jobs/resume", () => {
     }
   });
 
+  // An empty queue is the real "no rows" case: `select count(*)` still returns
+  // a row, so the route's own count has no undefined branch to cover.
   it("reports zero and still kicks when nothing is queued", async () => {
     const kickJobScheduler = vi.fn();
     vi.doMock("@/pipeline/jobScheduler", () => ({ kickJobScheduler }));
@@ -233,29 +235,6 @@ describe("POST /api/jobs/resume", () => {
       expect(kickJobScheduler).toHaveBeenCalledTimes(1);
     } finally {
       vi.doUnmock("@/pipeline/jobScheduler");
-      vi.resetModules();
-    }
-  });
-
-  it("reports zero when the count query returns no row at all", async () => {
-    const kickJobScheduler = vi.fn();
-    vi.doMock("@/pipeline/jobScheduler", () => ({ kickJobScheduler }));
-    vi.doMock("@/db", () => ({
-      getDb: () => ({
-        select: () => ({ from: () => ({ where: () => ({ get: () => undefined }) }) }),
-      }),
-    }));
-    try {
-      const { POST } = await import("@/app/api/jobs/resume/route");
-
-      const response = await POST(resumeRequest());
-
-      expect(response.status).toBe(202);
-      expect(await response.json()).toEqual({ resumed: true, queued: 0 });
-      expect(kickJobScheduler).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.doUnmock("@/pipeline/jobScheduler");
-      vi.doUnmock("@/db");
       vi.resetModules();
     }
   });

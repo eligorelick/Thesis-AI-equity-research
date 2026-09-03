@@ -14,7 +14,7 @@
  */
 
 import { NextResponse } from "next/server";
-import { count, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { assertSameOrigin } from "@/app/api/sameOrigin";
 import { getDb } from "@/db";
 import { jobs } from "@/db/schema";
@@ -29,11 +29,11 @@ export async function POST(request: Request): Promise<NextResponse> {
   const crossSite = assertSameOrigin(request);
   if (crossSite !== null) return crossSite;
 
-  const queued = getDb()
-    .select({ value: count() })
-    .from(jobs)
-    .where(eq(jobs.status, "queued"))
-    .get()?.value ?? 0;
+  // `$count` returns the number itself. The earlier
+  // `select({ value: count() }).…get()?.value ?? 0` carried a fallback for a
+  // row SQLite cannot fail to return, and nothing but a mocked `@/db` could
+  // ever reach it.
+  const queued = await getDb().$count(jobs, eq(jobs.status, "queued"));
 
   await resumeReportScheduler();
 

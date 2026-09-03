@@ -1087,7 +1087,7 @@ describe("applyKeylessFallbacks — public float measurement date", () => {
     const out = await applyKeylessFallbacks(withFacts(withFloatDate("2022-06-30")));
     const bars = out.members.eodPrices.ok ? out.members.eodPrices.value.data.rows : [];
     const onDate = bars.find((b) => b.date === "2022-06-30")!;
-    const latest = bars.reduce((a, b) => (a.date > b.date ? a : b));
+    const latest = bars.reduce((a, b) => ((a.date ?? "") > (b.date ?? "") ? a : b));
     expect(onDate.close).toBeDefined();
     expect(latest.close).not.toBeCloseTo(onDate.close!, 6); // the two dates really differ
     const row = out.members.sharesFloat.ok ? out.members.sharesFloat.value.data.rows[0]! : null;

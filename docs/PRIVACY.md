@@ -106,7 +106,14 @@ was. The server prints the resolved path at every start:
 - Start clean while keeping the old data: point `THESIS_DATA_DIR` at a fresh
   directory (or `THESIS_DB_PATH` at a new file). Nothing reads the previous
   location afterwards.
-- Stored settings only: `npm run settings:reset -- --yes`.
+- Stored settings only: `npm run settings:reset -- --yes`. Settings resolve in
+  one order — a value stored in the database beats the matching environment
+  variable, which beats the built-in default (`src/settings/settings.ts`,
+  `resolveValue`) — so a model or effort choice saved from the Settings page
+  goes on overriding `.env` until this command deletes it. Without `--yes` it
+  prints the rows it would delete and changes nothing. Two internal rows are
+  always kept, because neither is a setting: the cache-maintenance stamp and
+  the settings revision counter.
 
 ## Sharing a report
 

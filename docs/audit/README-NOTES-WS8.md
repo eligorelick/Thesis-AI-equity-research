@@ -18,6 +18,17 @@ Facts WS9 needs for the README. Everything here matches the code on branch
 > retrieves; sharing a generated report shares that provider data with it. See
 > [License and data rights](docs/DATA-RIGHTS.md).
 
+**Settings precedence** → state it in the README itself; this one is required,
+not a suggestion. Criterion (c) of this workstream is met only when a
+user-facing document says which layer wins. Until the README carries it, the
+order lives in a script header (`scripts/settings-reset.ts`), in this
+hand-off note, and in `docs/PRIVACY.md` under "Deleting local data" — none of
+which is the README. The sentence to carry:
+
+> Stored settings take precedence over environment variables, which take
+> precedence over defaults; reset the stored ones with
+> `npm run settings:reset -- --yes`.
+
 ## Settings precedence and reset (R-41)
 
 The sentence the reconciliation asked for, verbatim:
@@ -25,6 +36,10 @@ The sentence the reconciliation asked for, verbatim:
 > Stored settings take precedence over environment variables, which take
 > precedence over defaults; reset with `npm run settings:reset -- --yes` or the
 > Settings page.
+
+Carry the first clause verbatim, but drop or reword "or the Settings page":
+the page edits settings, it does not reset them, and the bullet below says the
+README would be wrong to claim a UI reset.
 
 Notes for whoever writes the surrounding paragraph:
 

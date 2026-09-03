@@ -437,6 +437,43 @@ describe("mortgage-REIT route metrics", () => {
     expect(spread.basis).toContain("unlike at a bank");
   });
 
+  it("divides period-end equity by PERIOD-END shares when the filer tags them", () => {
+    // The numerator is a period-end balance. Dividing it by the weighted-AVERAGE
+    // diluted count overstated book value per share for any REIT running a
+    // continuous at-the-market programme, and `proxy` was false while it did.
+    const r = computeFinancialMetrics(
+      "reit-mortgage",
+      mreitInputs({
+        companyFacts: okFacts({
+          InterestAndDividendIncomeOperating: [{ ...FY, val: 3_000 }],
+          InterestExpense: [{ ...FY, val: 1_800 }],
+          SecuritiesSoldUnderAgreementsToRepurchase: [{ end: "2025-12-31", val: 60_000 }],
+          CommonStockSharesOutstanding: [{ end: "2025-12-31", val: 1_000 }],
+        }),
+      }),
+    );
+    const bvps = find(r.metrics, "bookValuePerShare");
+
+    // (10,000 − 1,000) / 1,000 period-end shares = 9.0, not 10.0 on the 900
+    // weighted-average count.
+    expect(bvps.value).toBeCloseTo(9, 9);
+    expect(bvps.proxy).toBe(false);
+    expect(bvps.basis).toContain("period-end common shares outstanding");
+  });
+
+  it("marks the weighted-average share count a proxy and names the direction of the error", () => {
+    const bvps = find(
+      computeFinancialMetrics("reit-mortgage", mreitInputs()).metrics,
+      "bookValuePerShare",
+    );
+
+    expect(bvps.value).toBeCloseTo(10, 9);
+    expect(bvps.proxy).toBe(true);
+    expect(bvps.basis).toContain("PROXY denominator");
+    expect(bvps.basis).toContain("WEIGHTED-AVERAGE");
+    expect(bvps.basis).toContain("ABOVE the true book value per share");
+  });
+
   it("withholds the NAMED spread because the funding denominator is repo alone", () => {
     // The numerator is TOTAL interest expense (every borrowing) while the only
     // interest-bearing-liability balance companyfacts exposes is repo, so the

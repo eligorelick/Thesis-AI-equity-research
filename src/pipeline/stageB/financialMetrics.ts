@@ -36,6 +36,7 @@
  */
 
 import { getConcept, type ChainStep, type CompanyFacts } from "@/edgar/xbrl";
+import { tangibleCommonEquity } from "@/pipeline/stageB/returns";
 import type { FetchResult, ManifestEntry, SectorRoute } from "@/types/core";
 
 // ---------------------------------------------------------------------------
@@ -247,6 +248,14 @@ export const DEPRECIATION_AMORTIZATION_TAGS = [
   "DepreciationAndAmortization",
 ] as const;
 export const NET_INCOME_TAGS = ["NetIncomeLoss", "ProfitLoss"] as const;
+/**
+ * Period-END common shares outstanding — the count book value per share must be
+ * divided by, because the equity in the numerator is a period-end balance. The
+ * weighted-average DILUTED count the statements carry is an average over the
+ * year, so for a REIT running a continuous at-the-market programme it is below
+ * the closing count and overstates book value per share by a few percent.
+ */
+export const SHARES_OUTSTANDING_TAGS = ["CommonStockSharesOutstanding"] as const;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -329,6 +338,14 @@ function average(current: number | null, prior: number | null): { value: number 
   return { value: (current + prior) / 2, basis: "average of the current and prior period-end balances" };
 }
 
+/**
+ * Tangible common equity and tangible assets for the leverage stand-in.
+ *
+ * The equity half is `tangibleCommonEquity` from the returns module — the same
+ * definition ROTE is computed on. Re-deriving it here would let the two drift
+ * apart, and a P/TBV read against a ROTE on a different denominator is exactly
+ * the mistake the pairing exists to avoid.
+ */
 function tangible(row: FinancialMetricsBalanceRow | undefined): {
   equity: number | null;
   assets: number | null;
@@ -336,11 +353,9 @@ function tangible(row: FinancialMetricsBalanceRow | undefined): {
   if (row === undefined) return { equity: null, assets: null };
   const goodwill = isNum(row.goodwill) ? row.goodwill : 0;
   const intangibles = isNum(row.intangibleAssets) ? row.intangibleAssets : 0;
-  const preferred = isNum(row.preferredStock) ? row.preferredStock : 0;
-  const equityRaw = isNum(row.totalStockholdersEquity) ? row.totalStockholdersEquity : null;
   const assetsRaw = isNum(row.totalAssets) ? row.totalAssets : null;
   return {
-    equity: equityRaw === null ? null : equityRaw - goodwill - intangibles - preferred,
+    equity: tangibleCommonEquity(row),
     assets: assetsRaw === null ? null : assetsRaw - goodwill - intangibles,
   };
 }
@@ -832,7 +847,22 @@ function mortgageReitMetrics(
   // --- book value per share (common)
   const equity = isNum(bal0?.totalStockholdersEquity) ? bal0.totalStockholdersEquity : null;
   const preferred = isNum(bal0?.preferredStock) ? bal0.preferredStock : 0;
-  const shares = pos(inputs.shares ?? null);
+  // Period-END shares where the filer tags them: the numerator is a period-end
+  // balance, so an average denominator mismatches it. The weighted-average
+  // diluted count is the fallback, and it is marked a PROXY with the direction
+  // of the error named rather than published as though it were the closing
+  // count.
+  const sharesOutstanding = instant === null ? null : resolveTag(facts, SHARES_OUTSTANDING_TAGS, instant);
+  const periodEndShares = sharesOutstanding === null ? null : pos(sharesOutstanding.value);
+  const shares = periodEndShares ?? pos(inputs.shares ?? null);
+  const sharesLabel =
+    periodEndShares !== null
+      ? `period-end common shares outstanding (${sharesOutstanding?.tag})`
+      : (inputs.sharesBasis ?? "shares");
+  const sharesSource =
+    periodEndShares !== null
+      ? (sharesOutstanding?.sourcePath ?? tagPath(SHARES_OUTSTANDING_TAGS[0]))
+      : (inputs.sharesBasis ?? "statements:income.weightedAverageShsOutDil");
   out.push(
     equity !== null && shares !== null
       ? metric({
@@ -841,15 +871,19 @@ function mortgageReitMetrics(
           unit: "currency/share",
           value: (equity - preferred) / shares,
           basis:
-            `(total stockholders' equity ${equity} − preferred ${preferred}) / ${inputs.sharesBasis ?? "shares"} ` +
+            `(total stockholders' equity ${equity} − preferred ${preferred}) / ${sharesLabel} ` +
             `${shares}. Book value is the mortgage REIT's headline: its assets are marked securities, so equity is ` +
-            "close to liquidation value and P/B is the primary multiple.",
+            "close to liquidation value and P/B is the primary multiple." +
+            (periodEndShares !== null
+              ? ""
+              : ` PROXY denominator: the filer tags no ${SHARES_OUTSTANDING_TAGS[0]} fact at ${bal0?.date ?? "the period end"}, so the WEIGHTED-AVERAGE diluted count stands in. It is an average over the year while the equity above is a period-end balance, so for a REIT issuing through a continuous at-the-market programme this figure sits ABOVE the true book value per share.`),
           sources: [
             "statements:balance.totalStockholdersEquity",
             "statements:balance.preferredStock",
-            inputs.sharesBasis ?? "statements:income.weightedAverageShsOutDil",
+            sharesSource,
           ],
           asOf: bal0?.date ?? null,
+          proxy: periodEndShares === null,
         })
       : withheld(
           "bookValuePerShare",

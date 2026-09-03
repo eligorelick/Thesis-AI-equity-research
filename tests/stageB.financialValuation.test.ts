@@ -51,6 +51,23 @@ describe("excessReturnModel — the model's shape is stated, not implied", () =>
     expect(r.openingBookValue.basis).toContain("BV0");
   });
 
+  it("branches the horizon basis on a caller-supplied terminal ROE instead of asserting a zero excess", () => {
+    // The default fade lands on the cost of equity, so the year-N excess is
+    // zero. An override asserts persistent excess and makes it non-zero — the
+    // basis string used to claim otherwise regardless. Production supplies no
+    // override, so this was latent, not wrong in a report.
+    const overridden = excessReturnModel({ ...BASE, analystImpliedRoePct: 14 });
+
+    expect(overridden.terminalExcess).not.toBe(0);
+    expect(overridden.horizonYears.basis).toContain("caller-supplied terminal ROE of 14%");
+    expect(overridden.horizonYears.basis).toContain("NOT to the cost of equity");
+    expect(overridden.horizonYears.basis).toContain("year-N excess is NOT zero");
+    expect(overridden.horizonYears.basis).not.toContain("the year-N excess is zero");
+
+    // ...and the default keeps saying what it has always correctly said.
+    expect(excessReturnModel(BASE).horizonYears.basis).toContain("the year-N excess is zero");
+  });
+
   it("keeps the horizon assumption on a suppressed model so the reader sees what was not built", () => {
     const r = excessReturnModel({ ...BASE, costOfEquityPct: null });
 

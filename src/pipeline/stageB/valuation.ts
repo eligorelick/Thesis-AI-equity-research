@@ -2512,11 +2512,19 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
   // WS5: the horizon, the discount rate and the opening book value are printed
   // as assumptions in their own right — the model's shape was previously only
   // inferable from the ROE-path basis string.
+  // The fade target is the cost of equity ONLY when no caller overrides the
+  // terminal ROE. Stating "so the year-N excess is zero" unconditionally would
+  // contradict a non-zero `terminalExcess` whenever one did — latent today
+  // (production supplies no override) but a false sentence either way, and the
+  // adjacent note already branches.
+  const terminalOverridePct = isNum(inputs.analystImpliedRoePct) ? inputs.analystImpliedRoePct : null;
   const horizonBasis = (built: boolean): string =>
     built
       ? `explicit ${years}-year horizon: the excess return (ROE − cost of equity) x prior-year book equity is ` +
-        `discounted year by year to year ${years}. ROE is faded LINEARLY to the cost of equity over exactly that ` +
-        "horizon, so the year-N excess is zero and NO continuing value is added beyond it."
+        `discounted year by year to year ${years}. ROE is faded LINEARLY to ` +
+        (terminalOverridePct === null
+          ? "the cost of equity over exactly that horizon, so the year-N excess is zero and NO continuing value is added beyond it."
+          : `a caller-supplied terminal ROE of ${fmtNum(terminalOverridePct)}% over exactly that horizon — NOT to the cost of equity — so the year-N excess is NOT zero (it is reported as terminalExcess), and NO continuing value is added beyond it.`)
       : `explicit ${years}-year horizon (model not built)`;
   const coeSupplied = isNum(inputs.costOfEquityPct) ? inputs.costOfEquityPct : null;
   const unbuiltAssumptions = {

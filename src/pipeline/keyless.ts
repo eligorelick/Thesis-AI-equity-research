@@ -946,16 +946,30 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         ["edgar:companyfacts"],
       );
     } else {
-      // EntityPublicFloat is a DOLLAR amount; only a price turns it into shares.
+      // EntityPublicFloat is a DOLLAR amount measured on ONE cover-page date —
+      // for a 10-K, the last business day of the most recently completed second
+      // fiscal quarter, so it can be most of a year old by the time the filing
+      // is read. Only a price turns it into shares, and dividing a stale dollar
+      // float by today's price silently rescales the share count by however
+      // much the stock has moved since. The figure is therefore labelled with
+      // its own measurement date and flagged when that date is stale.
       const publicFloat = built?.shares.publicFloat ?? null;
       const floatShares = publicFloat !== null && price !== null && price > 0 ? publicFloat.value / price : null;
       const freeFloat = floatShares !== null && outstanding.value > 0 ? (floatShares / outstanding.value) * 100 : null;
+      const floatAge = describePublicFloatAge(publicFloat, price, inputs.today);
+      gaps.push(floatAge.gap);
+      if (floatAge.note !== null) notes.push(`keyless shares float: ${floatAge.note}`);
       const row: Record<string, unknown> = {
         symbol: inputs.symbol,
         date: outstanding.asOf,
         outstandingShares: outstanding.value,
         floatShares,
         freeFloat,
+        // The float's own measurement date travels WITH the value: the row's
+        // `date` is the share count's as-of, which is a different, later date.
+        publicFloatUsd: publicFloat?.value ?? null,
+        publicFloatAsOf: publicFloat?.asOf ?? null,
+        publicFloatStale: floatAge.stale,
         source: "edgar",
       };
       // The endpoint names the concept that actually served the count: a
@@ -972,6 +986,78 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   }
 
   return { members, sectorEtfSymbol, gaps, notes, replaced };
+}
+
+/** Whole months from an ISO day to the analysis date, floored at 0. */
+function monthsSince(day: string, today: string): number | null {
+  const from = Date.parse(`${day.slice(0, 10)}T00:00:00Z`);
+  const to = Date.parse(`${today.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(from) || Number.isNaN(to) || to < from) return null;
+  return Math.floor((to - from) / DAY_MS / 30.4375);
+}
+
+/** A public float older than this is disclosed as stale (D-14). */
+export const PUBLIC_FLOAT_STALE_MONTHS = 6;
+
+/**
+ * The disclosure that travels with a keyless float share count. Three cases,
+ * one manifest field so a reader always finds the answer in the same place:
+ * no float fact at all, a float converted at a price from a later date, and
+ * the same conversion where the float is more than six months old — which is
+ * the common case, because the cover-page figure is measured at the end of the
+ * second fiscal quarter and refreshed once a year.
+ */
+function describePublicFloatAge(
+  publicFloat: { value: number; asOf: string } | null,
+  price: number | null,
+  today: string,
+): { gap: ManifestEntry; note: string | null; stale: boolean } {
+  const field = "keyless.sharesFloat.publicFloat";
+  const attemptedSources = ["edgar:companyfacts(dei:EntityPublicFloat)"];
+  if (publicFloat === null) {
+    return {
+      gap: {
+        field,
+        reason:
+          "no dei:EntityPublicFloat fact in companyfacts, so the float share count and free-float percentage are absent; only the outstanding share count is reported",
+        severity: "warn",
+        attemptedSources,
+      },
+      note: null,
+      stale: false,
+    };
+  }
+  if (price === null || price <= 0) {
+    return {
+      gap: {
+        field,
+        reason: `dei:EntityPublicFloat is a dollar amount measured ${publicFloat.asOf} and no price was available to convert it, so the float share count and free-float percentage are absent`,
+        severity: "warn",
+        attemptedSources,
+      },
+      note: null,
+      stale: false,
+    };
+  }
+  const months = monthsSince(publicFloat.asOf, today);
+  const stale = months !== null && months > PUBLIC_FLOAT_STALE_MONTHS;
+  const age = months === null ? "" : ` (${months} month${months === 1 ? "" : "s"} before the analysis date)`;
+  const conversion =
+    `float shares = dei:EntityPublicFloat, a dollar amount measured ${publicFloat.asOf}${age}, ` +
+    "divided by the latest price";
+  return {
+    gap: {
+      field,
+      reason: stale
+        ? `${conversion}. The two dates differ by more than ${PUBLIC_FLOAT_STALE_MONTHS} months: the cover-page float is measured at the end of the issuer's second fiscal quarter and refreshed once a year, so this share count is rescaled by every price move since ${publicFloat.asOf} and should be read as an order of magnitude, not a current figure`
+        : `${conversion}; the two dates are within ${PUBLIC_FLOAT_STALE_MONTHS} months of each other`,
+      severity: stale ? "warn" : "info",
+      attemptedSources,
+      ...(stale ? {} : { expected: true }),
+    },
+    note: `public float ${publicFloat.value} USD measured ${publicFloat.asOf}${age}, converted to shares at the latest price${stale ? " — stale, see the manifest" : ""}`,
+    stale,
+  };
 }
 
 /**

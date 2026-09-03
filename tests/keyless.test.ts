@@ -301,7 +301,13 @@ describe("applyKeylessFallbacks", () => {
     expect(out.replaced.sort()).toEqual(Object.keys(allGaps()).sort());
     const fields = out.gaps.map((g) => g.field);
     expect(fields).toContain("keyless.incomeAnnual");
-    expect(out.gaps.every((g) => g.severity === "info" && g.expected === true)).toBe(true);
+    // WS4: narrowed from "every gap" to "every member-replacement gap". The
+    // fixture's cover-page public float is measured 2025-03-28 against an
+    // analysis date of 2026-09-01, and a stale float is now its own `warn`
+    // entry (asserted below), so the happy path is no longer info-only.
+    const replacements = out.gaps.filter((g) => /^keyless\.[a-zA-Z]+$/.test(g.field));
+    expect(replacements.length).toBeGreaterThan(0);
+    expect(replacements.every((g) => g.severity === "info" && g.expected === true)).toBe(true);
     expect(out.gaps.find((g) => g.field === "keyless.profile")?.reason).toMatch(/served by computed .* because FMP no API key \+ no fixture/);
   });
 
@@ -914,5 +920,76 @@ describe("applyKeylessFallbacks — why a parsable companyfacts yields no statem
     const out = await withFacts(facts, ["10-K", "10-Q"]);
     const entry = out.gaps.find((g) => g.field === "keyless.incomeAnnual");
     expect(entry?.reason).not.toMatch(/IFRS|successor/);
+  });
+});
+
+/**
+ * The cover-page public float is a DOLLAR amount measured on one date — the
+ * last business day of the issuer's most recently completed second fiscal
+ * quarter — and refreshed once a year. Turning it into a share count needs a
+ * price, and using the latest price rescales the count by every move since
+ * that date. The figure therefore carries its own measurement date, separate
+ * from the share count's, and is flagged when the two dates are far apart.
+ */
+describe("applyKeylessFallbacks — public float measurement date", () => {
+  /** Replace the fixture's EntityPublicFloat with one measured on `end`. */
+  function withFloatDate(end: string, val = 3_000_000): CompanyFacts {
+    const f = appleFacts();
+    const concept = f.facts["dei"]!["EntityPublicFloat"] as { units: Record<string, Record<string, unknown>[]> };
+    const unit = Object.keys(concept.units)[0]!;
+    concept.units[unit] = [{ ...concept.units[unit]![0]!, end, val }];
+    return f;
+  }
+  const withFacts = (facts: CompanyFacts): KeylessInputs =>
+    inputs({
+      edgar: {
+        ...inputs().edgar,
+        companyFacts: { ok: true, value: { data: facts, asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+      },
+    });
+
+  it("labels the float row with its own measurement date, distinct from the share count's", async () => {
+    const out = await applyKeylessFallbacks(inputs());
+    const row = out.members.sharesFloat.ok ? out.members.sharesFloat.value.data.rows[0]! : null;
+    expect(row).toMatchObject({
+      outstandingShares: 14_776,
+      date: "2025-10-17", // the cover-page SHARE COUNT date
+      publicFloatUsd: 3_000_000,
+      publicFloatAsOf: "2025-03-28", // the FLOAT's own, earlier date
+    });
+    expect(row!.floatShares).toBeGreaterThan(0);
+    expect(out.notes.some((n) => n.includes("public float 3000000 USD measured 2025-03-28"))).toBe(true);
+  });
+
+  it("flags a float measured more than six months before the analysis date", async () => {
+    const out = await applyKeylessFallbacks(inputs()); // float 2025-03-28, today 2026-09-01
+    const entry = out.gaps.find((g) => g.field === "keyless.sharesFloat.publicFloat")!;
+    expect(entry.severity).toBe("warn");
+    expect(entry.expected).toBeUndefined();
+    expect(entry.reason).toMatch(/measured 2025-03-28 \(17 months before the analysis date\)/);
+    expect(entry.reason).toMatch(/more than 6 months/);
+    expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.data.rows[0]!.publicFloatStale).toBe(true);
+  });
+
+  it("does not flag a float measured within six months, but still names the date", async () => {
+    const out = await applyKeylessFallbacks(withFacts(withFloatDate("2026-06-30")));
+    const entry = out.gaps.find((g) => g.field === "keyless.sharesFloat.publicFloat")!;
+    expect(entry.severity).toBe("info");
+    expect(entry.expected).toBe(true);
+    expect(entry.reason).toMatch(/measured 2026-06-30 \(2 months before the analysis date\)/);
+    expect(entry.reason).toMatch(/within 6 months/);
+    expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.data.rows[0]!.publicFloatStale).toBe(false);
+  });
+
+  it("says the float share count is absent when no EntityPublicFloat fact was filed", async () => {
+    const f = appleFacts();
+    delete f.facts["dei"]!["EntityPublicFloat"];
+    const out = await applyKeylessFallbacks(withFacts(f));
+    const entry = out.gaps.find((g) => g.field === "keyless.sharesFloat.publicFloat")!;
+    expect(entry.severity).toBe("warn");
+    expect(entry.reason).toMatch(/no dei:EntityPublicFloat fact/);
+    const row = out.members.sharesFloat.ok ? out.members.sharesFloat.value.data.rows[0]! : null;
+    // The outstanding count still stands on its own; only the float is absent.
+    expect(row).toMatchObject({ outstandingShares: 14_776, floatShares: null, freeFloat: null, publicFloatAsOf: null });
   });
 });

@@ -91,4 +91,25 @@ material line (revenue, net income, total assets, equity, operating cash flow) b
 more than 1%, the superseded value is retained as the `original` and the change
 is reported as a restatement with both filing references.
 
+## 8. Public float carries its own measurement date
+
+`dei:EntityPublicFloat` is a dollar amount measured on a single cover-page date
+— for a 10-K, the last business day of the most recently completed second fiscal
+quarter — and refreshed once a year. Converting it to a share count needs a
+price, and using the latest price rescales the count by every price move since
+that date.
+
+The keyless `sharesFloat` row now carries `publicFloatUsd`, `publicFloatAsOf`
+and `publicFloatStale` beside `floatShares`/`freeFloat`; `publicFloatAsOf` is
+the float's own date and is deliberately different from the row's `date`, which
+is the share count's as-of. The manifest field
+`keyless.sharesFloat.publicFloat` states the conversion in all cases and rises
+from `info` to `warn` when the float is more than six months older than the
+analysis date, which is the common case. It is also a `warn` when no float fact
+was filed or no price was available, in which case `floatShares` and
+`freeFloat` are absent rather than guessed.
+
+README should say that a keyless free-float percentage is derived, not
+reported, and is only as current as its measurement date.
+
 <!-- Sections continue as later WS4 units land. -->

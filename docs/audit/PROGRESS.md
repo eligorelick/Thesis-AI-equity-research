@@ -20,7 +20,10 @@ Read this, `DECISIONS.md`, and `git log` before resuming.
 | Fresh-context review of WS4 | done | main | — | 1 blocker (Caterpillar total debt 16% low), 7 should-fix, 9 nits, plus a pre-existing leak of the EDGAR contact into Yahoo's User-Agent |
 | Review fixes: WS8 | merged | main | e6b854f | Offline guard closed in two suites, settings CAS counter preserved, the token's reach described honestly |
 | Review fixes: WS5 | merged | main | a20d9c0 | Mortgage-REIT misrouting, the justified multiple's growth cap, four wrong-rather-than-absent numbers, route metrics wired to a reader |
-| Review fixes: WS1-3, WS4, WS6 | running (3 subagents) | `fix-ws123-review`, `fix-ws4-review`, `fix-ws6-review` | — | Each branched from main, merged with the full gate |
+| Review fixes: WS6 | merged | main | 2d4487d | Finance leases back in enterprise value, the own-history rank on one basis, SBC charged once |
+| Review fixes: WS1-3 | merged | main | 8a7cd92 | Resume no longer re-bills, a pass lease no longer blocks its own first request, presumed spend disclosed |
+| Review fixes: WS4, WS7 | running (2 subagents) | `fix-ws4-review`, `fix-ws7-review` | — | Merged with the full gate as each lands |
+| WS9 README and docs | done | main | 89f698f | D-22; 250 lines, three generated blocks, doc-lint test, CHANGELOG, engines 22.18 |
 | Audited delta contract | done | main | 57cdee7 | D-23; `npm run audit:deltas`, grouped reasons, manifest identity, escaped path keys |
 
 ## Plan
@@ -60,10 +63,10 @@ gate once WS9 creates it.
 
 ## Next
 
-1. Fold the three review reports back into `main`, fixing what they find.
-2. Merge WS4, then WS7, with the full gate after each.
-3. WS9: README under 250 lines with generated config/commands/pricing blocks, `CHANGELOG.md`, doc-lint test, `engines.node`.
-4. `docs/audit/REMEDIATION-REPORT.md`: every criterion, Met or Deferred with a reason.
+1. Merge the WS4 and WS7 review fixes, regenerating the intended-delta list if
+   either moves the Stage B projection.
+2. Run `npm run verify` end to end on the result.
+3. Ask the owner the three questions at the foot of this file.
 
 ## Open questions for the owner (asked at the end of the turn, never mid-task)
 

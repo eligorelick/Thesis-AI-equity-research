@@ -20,6 +20,11 @@ declaring that the figures are invented demonstration data.
 Code: `src/providers/reservedSymbols.ts`, `src/providers/fmp.ts`
 (`fixturesOnly()`), `src/pipeline/dataBundle.ts`.
 
+**README correction.** The current text says the demo symbols are "served only
+when no `FMP_API_KEY` is configured" and that for them "EDGAR is still queried
+for filings as on any run". Both are now false: they are served from fixtures
+whatever keys are set, and EDGAR is not queried for them at all.
+
 ## 2. Statement source policy — `THESIS_STATEMENT_SOURCE` (D-12)
 
 New optional env key, documented in `.env.example`. Values:
@@ -182,5 +187,29 @@ the registrant is a successor and no predecessor could be resolved — a header
 with no single co-registrant, or a failed fetch — the same field is a `warn`
 saying every multi-year figure covers only the successor's own history. A CIK is
 never guessed from a company name.
+
+**README correction.** The current text lists a successor registrant among the
+issuers whose statements stay empty "because the predecessor's history sits
+under a CIK that EDGAR does not link". That is now only true when the
+predecessor cannot be resolved; the ordinary case is that the history is
+present and tagged.
+
+## 12. Insider trades (Form 4) have no keyless source
+
+Assessed and not implemented. A keyless equivalent of FMP's insider-trades
+endpoint would mean listing every Form 4 a registrant's officers and directors
+filed (a separate EDGAR browse or full-text-search query, since Form 4s are
+filed by the reporting *person*, not the issuer), fetching each one's
+`ownershipDocument` XML, and parsing transaction codes, dates, prices and
+post-transaction holdings — dozens of extra requests per report against SEC's
+fair-access limit, plus a new parser and its own fixture corpus. That is well
+past the "only if modest" bar, and a partial implementation would be worse than
+none: an insider-selling signal computed from an incomplete set of Form 4s reads
+as evidence rather than as a gap.
+
+The sentence for the README, verbatim:
+
+> Insider trades (SEC Form 4) are **not implemented keylessly**: without an FMP
+> key the member stays a disclosed gap in the missing-data manifest.
 
 <!-- Sections continue as later WS4 units land. -->

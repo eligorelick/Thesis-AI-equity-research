@@ -68,11 +68,21 @@ application-data directory (`src/db/paths.ts`):
 - Linux: `$XDG_DATA_HOME/thesis/thesis.db`, else `$HOME/.local/share/thesis/thesis.db`
 
 `THESIS_DB_PATH` overrides the file; `THESIS_DATA_DIR` overrides the directory.
-SQLite writes `thesis.db-wal` and `thesis.db-shm` beside it, and the
-`csrf-token` file lives in the same directory.
+SQLite writes `thesis.db-wal` and `thesis.db-shm` beside the database file.
 
 It holds your watchlist, generated reports, job history and per-pass cost
 records, saved settings, and the `api_cache` table of provider responses.
+
+The `csrf-token` file does not follow `THESIS_DB_PATH`. It is written to
+`THESIS_TOKEN_FILE` when that is set, and otherwise to `csrf-token` in the
+application-data directory listed above — the directory `THESIS_DATA_DIR`
+overrides (`src/app/api/sameOrigin.ts`, `requestTokenPath`). Set only
+`THESIS_DB_PATH` and the database moves while the token file stays where it
+was. The server prints the resolved path at every start:
+
+```
+[security] X-Thesis-Token for non-browser clients written to <path>
+```
 
 ## Retention
 
@@ -88,8 +98,11 @@ records, saved settings, and the `api_cache` table of provider responses.
 ## Deleting local data
 
 - Everything: quit Thesis and delete the database file together with its
-  `-wal` and `-shm` siblings. The next start creates an empty database. Delete
-  the `csrf-token` file in the same directory too if you want no trace.
+  `-wal` and `-shm` siblings. The next start creates an empty database. The
+  `csrf-token` file is deleted separately, at the path the server printed at
+  startup — `THESIS_TOKEN_FILE` if you set it, otherwise `csrf-token` in the
+  application-data directory, which is not necessarily the directory the
+  database is in.
 - Start clean while keeping the old data: point `THESIS_DATA_DIR` at a fresh
   directory (or `THESIS_DB_PATH` at a new file). Nothing reads the previous
   location afterwards.

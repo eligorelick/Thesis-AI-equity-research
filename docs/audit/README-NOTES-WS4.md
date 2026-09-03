@@ -122,4 +122,17 @@ was filed or no price was available, in which case `floatShares` and
 README should say that a keyless free-float percentage is derived, not
 reported, and is only as current as its measurement date.
 
+## 9. SEC fair-access limits are pinned by tests
+
+The EDGAR client sends the declared `EDGAR_CONTACT` User-Agent on every request
+and paces itself at `EDGAR_MAX_RPS` (5) through the shared "edgar" token-bucket
+limiter, under SEC's published 10 requests/second ceiling. A 403 *or* a 429 is
+treated as SEC's rate-limit signal: the client enters a ten-minute cooldown and
+raises a retryable error, and while the cooldown is open it makes no further
+requests at all rather than retrying into the limit.
+
+Only the User-Agent and the 403 branch had tests; the rate, the burst, the
+per-request header and the 429 branch are now pinned too
+(`tests/edgar.client.test.ts`, "EDGAR fair-access limits (WS4)").
+
 <!-- Sections continue as later WS4 units land. -->

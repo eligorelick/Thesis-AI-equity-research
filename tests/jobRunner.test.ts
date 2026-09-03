@@ -53,6 +53,9 @@ const configMocks = vi.hoisted(() => ({
     rollingCostWindowMs: 86_400_000,
     paidPassLeaseTtlMs: 900_000,
     jobLeaseTtlMs: 900_000,
+    // WS8 added these two config fields; this mock returns the full ThesisConfig.
+    resumeOnStart: true,
+    tokenFile: undefined,
   })),
 }));
 

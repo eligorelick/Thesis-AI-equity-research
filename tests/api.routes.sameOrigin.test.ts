@@ -4,8 +4,9 @@
  * Unit-tests `assertSameOrigin` (src/app/api/sameOrigin.ts) directly, then
  * proves at the route level that a provably cross-site browser request is
  * rejected with 403 BEFORE any work happens — no job row, no runJob dispatch,
- * no settings/watchlist writes. Requests with no Origin/Sec-Fetch-Site header
- * (curl, scripts, the existing route-test harnesses) must keep passing.
+ * no settings/watchlist writes. A request carrying neither Fetch Metadata nor
+ * Origin now needs the startup `X-Thesis-Token` (D-21); browsers never do,
+ * because they always send one of the two.
  *
  * Route harness mirrors tests/api.routes.report.test.ts: handlers imported
  * directly, in-memory better-sqlite3 via setDbForTests, runJob stubbed.
@@ -15,6 +16,9 @@ import "next/dist/server/node-environment";
 import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Route module graphs can pull the `server-only` shim (absent under the plain
 // node runner). Stub it to a no-op.
@@ -37,10 +41,18 @@ vi.mock("@/pipeline/jobRunner", async (importOriginal) => {
 });
 
 import { createDatabase, setDbForTests, type DatabaseHandle } from "@/db";
+import { resetConfigCache } from "@/config/env";
 import { jobs, settings, watchlist } from "@/db/schema";
 import { createJob as createJobReal } from "@/pipeline/jobRunner";
 
-import { assertSameOrigin } from "@/app/api/sameOrigin";
+import {
+  assertSameOrigin,
+  ensureRequestToken,
+  requestTokenPath,
+  REQUEST_TOKEN_FILE_NAME,
+  REQUEST_TOKEN_HEADER,
+  _resetRequestTokenForTests,
+} from "@/app/api/sameOrigin";
 import { assertAllowedHost } from "@/app/requestSecurity";
 import * as requestSecurityModule from "@/app/requestSecurity";
 import { POST as reportPOST } from "@/app/api/report/route";
@@ -57,18 +69,34 @@ import {
  * ------------------------------------------------------------------------ */
 
 let handle: DatabaseHandle;
+let tokenDirectory: string;
 
 beforeEach(() => {
   handle = createDatabase(":memory:");
   setDbForTests(handle.db);
   runJobMock.mockClear();
+  // Keep the minted token file inside a temp directory: no test may write to
+  // the real app-data directory, and each test starts from a fresh token.
+  tokenDirectory = mkdtempSync(join(tmpdir(), "thesis-request-token-"));
+  process.env.THESIS_TOKEN_FILE = join(tokenDirectory, REQUEST_TOKEN_FILE_NAME);
+  resetConfigCache();
+  _resetRequestTokenForTests();
 });
 
 afterEach(() => {
   delete process.env.THESIS_ALLOWED_HOST;
+  delete process.env.THESIS_TOKEN_FILE;
+  resetConfigCache();
+  _resetRequestTokenForTests();
   setDbForTests(null);
   handle.sqlite.close();
+  rmSync(tokenDirectory, { recursive: true, force: true });
 });
+
+/** The token this process minted, as a non-browser client would send it. */
+function tokenHeader(): Record<string, string> {
+  return { [REQUEST_TOKEN_HEADER]: ensureRequestToken().token };
+}
 
 /** A bare POST Request with the given headers (no body needed for the guard). */
 function guardReq(
@@ -97,12 +125,13 @@ function jsonReq(
 
 const EVIL = { origin: "https://evil.example" };
 
-async function expect403(res: Response): Promise<void> {
+async function expect403(res: Response): Promise<string> {
   expect(res.status).toBe(403);
   expect(res.headers.get("cache-control")).toBe("no-store");
   expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   const body = (await res.json()) as { error: string };
   expect(body.error).toContain("cross-origin request rejected");
+  return body.error;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -136,11 +165,14 @@ describe("assertSameOrigin", () => {
     );
     expect(assertSameOrigin(forgedDirectHost)?.status).toBe(403);
 
+    // The token stands in for the browser headers this shape does not carry:
+    // the assertion under test is that the direct Host alone decides trust.
     const forgedForwardedHost = guardReq(
       {
         host: "localhost:3000",
         forwarded: 'host="evil.example:3000";proto=https',
         "x-forwarded-host": "evil.example:3000",
+        ...tokenHeader(),
       },
     );
     expect(assertSameOrigin(forgedForwardedHost)).toBeNull();
@@ -164,17 +196,75 @@ describe("assertSameOrigin", () => {
 
   it("accepts the canonical IPv6 loopback authority when the Host uses its full spelling", () => {
     const host = "[0:0:0:0:0:0:0:1]:3000";
-    expect(assertSameOrigin(guardReq({ host }, `http://${host}/api/report`))).toBeNull();
+    expect(
+      assertSameOrigin(guardReq({ host, ...tokenHeader() }, `http://${host}/api/report`)),
+    ).toBeNull();
   });
 
   it("accepts canonical dotted-decimal members of the IPv4 127/8 loopback range", () => {
     const host = "127.0.0.2:3000";
-    expect(assertSameOrigin(guardReq({ host }, `http://${host}/api/report`))).toBeNull();
+    expect(
+      assertSameOrigin(guardReq({ host, ...tokenHeader() }, `http://${host}/api/report`)),
+    ).toBeNull();
   });
 
-  it("allows a request with neither Origin nor Sec-Fetch-Site (curl/scripts)", () => {
-    expect(assertSameOrigin(guardReq({}))).toBeNull();
+  // Superseded by D-21: a request with neither Fetch Metadata nor Origin used
+  // to be allowed outright, which let any local process — and any browser too
+  // old to send Fetch Metadata — start a paid run. The header-free shape is
+  // now rejected, and curl/scripts present the startup token instead.
+  it("rejects a request with neither Origin, Sec-Fetch-Site, nor a token, naming the headers", async () => {
+    const res = assertSameOrigin(guardReq({}));
+    expect(res).not.toBeNull();
+    const error = await expect403(res as Response);
+    expect(error).toContain("Sec-Fetch-Site");
+    expect(error).toContain("Origin");
+    expect(error).toContain("X-Thesis-Token");
   });
+
+  it("allows a header-less request that presents the minted token (curl/scripts)", () => {
+    expect(assertSameOrigin(guardReq(tokenHeader()))).toBeNull();
+  });
+
+  it("rejects a header-less request presenting a wrong token", async () => {
+    const wrong = { [REQUEST_TOKEN_HEADER]: "f".repeat(64) };
+    const res = assertSameOrigin(guardReq(wrong));
+    expect(res).not.toBeNull();
+    expect(await expect403(res as Response)).toContain("x-thesis-token");
+  });
+
+  it.each(["", "   ", "0".repeat(63), `${"0".repeat(64)}extra`])(
+    "rejects a malformed presented token %#",
+    (presented) => {
+      expect(
+        assertSameOrigin(guardReq({ [REQUEST_TOKEN_HEADER]: presented }))?.status,
+      ).toBe(403);
+    },
+  );
+
+  it("accepts the token with surrounding whitespace, as a file read would carry", () => {
+    const token = ensureRequestToken().token;
+    expect(assertSameOrigin(guardReq({ [REQUEST_TOKEN_HEADER]: `${token}
+` }))).toBeNull();
+    expect(assertSameOrigin(guardReq({ [REQUEST_TOKEN_HEADER]: `  ${token}  ` }))).toBeNull();
+  });
+
+  it("rejects a token that is right for another process (tokens are per start)", () => {
+    const first = ensureRequestToken().token;
+    _resetRequestTokenForTests();
+    const second = ensureRequestToken().token;
+    expect(second).not.toBe(first);
+    expect(assertSameOrigin(guardReq({ [REQUEST_TOKEN_HEADER]: first }))?.status).toBe(403);
+    expect(assertSameOrigin(guardReq({ [REQUEST_TOKEN_HEADER]: second }))).toBeNull();
+  });
+
+  it.each(["cross-site", "unexpected", "SAME_ORIGIN"])(
+    "rejects Sec-Fetch-Site %s even when a valid token is presented",
+    (site) => {
+      expect(
+        assertSameOrigin(guardReq({ "sec-fetch-site": site, ...tokenHeader() }))?.status,
+      ).toBe(403);
+    },
+  );
 
   it("allows Sec-Fetch-Site: same-origin", () => {
     expect(assertSameOrigin(guardReq({ "sec-fetch-site": "same-origin" }))).toBeNull();
@@ -846,12 +936,247 @@ describe("/api/watchlist (same-origin guard)", () => {
   });
 
   it("DELETE: rejects cross-origin with 403 and removes nothing", async () => {
-    // Seed same-origin-style (no Origin header — the CLI/script path).
-    await watchlistPOST(jsonReq("http://localhost:3000/api/watchlist", "POST", { symbol: "AAPL" }));
+    // Seed the CLI/script path: no Origin, the minted token instead.
+    await watchlistPOST(
+      jsonReq("http://localhost:3000/api/watchlist", "POST", { symbol: "AAPL" }, tokenHeader()),
+    );
     const res = await watchlistDELETE(
       jsonReq("http://localhost:3000/api/watchlist", "DELETE", { symbol: "AAPL" }, EVIL),
     );
     await expect403(res);
     expect(handle.db.select().from(watchlist).all()).toHaveLength(1);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Startup token file
+ * ------------------------------------------------------------------------ */
+
+describe("ensureRequestToken", () => {
+  it("mints one 64-hex token per process and writes it to the configured file", () => {
+    const state = ensureRequestToken();
+
+    expect(state.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(state.persisted).toBe(true);
+    expect(state.path).toBe(requestTokenPath());
+    expect(readFileSync(state.path, "utf8").trim()).toBe(state.token);
+    // Same process, same token: the file is not rewritten per request.
+    expect(ensureRequestToken()).toBe(state);
+  });
+
+  it("defaults to csrf-token in the data directory and follows THESIS_TOKEN_FILE", () => {
+    const explicit = join(tokenDirectory, "elsewhere.token");
+    process.env.THESIS_TOKEN_FILE = explicit;
+    resetConfigCache();
+    expect(requestTokenPath()).toBe(explicit);
+
+    delete process.env.THESIS_TOKEN_FILE;
+    process.env.THESIS_DATA_DIR = tokenDirectory;
+    resetConfigCache();
+    try {
+      expect(requestTokenPath()).toBe(join(tokenDirectory, REQUEST_TOKEN_FILE_NAME));
+      expect(REQUEST_TOKEN_FILE_NAME).toBe("csrf-token");
+    } finally {
+      delete process.env.THESIS_DATA_DIR;
+      resetConfigCache();
+    }
+  });
+
+  it("restricts the token file to its owner where the OS enforces file modes", () => {
+    const state = ensureRequestToken();
+    if (process.platform === "win32") {
+      // Windows has no POSIX mode; the file inherits the per-user app-data ACL.
+      expect(state.persisted).toBe(true);
+      return;
+    }
+    expect(statSync(state.path).mode & 0o777).toBe(0o600);
+  });
+
+  it("keeps serving requests, without logging the token, when the file cannot be written", () => {
+    process.env.THESIS_TOKEN_FILE = join(tokenDirectory, "not-a-directory.txt", "token");
+    resetConfigCache();
+    _resetRequestTokenForTests();
+    writeFileSync(join(tokenDirectory, "not-a-directory.txt"), "blocks mkdir\n", "utf8");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const state = ensureRequestToken();
+      expect(state.persisted).toBe(false);
+      expect(state.token).toMatch(/^[0-9a-f]{64}$/);
+      // The in-memory token still authorizes a header-less client.
+      expect(assertSameOrigin(guardReq({ [REQUEST_TOKEN_HEADER]: state.token }))).toBeNull();
+      expect(warn).toHaveBeenCalled();
+      for (const call of warn.mock.calls) {
+        expect(JSON.stringify(call)).not.toContain(state.token);
+      }
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Route level — every state-changing route, both cross-site shapes
+ * ------------------------------------------------------------------------ */
+
+type RouteInvoker = (headers: Record<string, string>, body: string) => Promise<Response>;
+
+/**
+ * The two shapes a hostile page can actually produce. The form POST is the one
+ * that needs no CORS preflight, so it is the shape that reaches a route.
+ */
+const FOREIGN_FORM = {
+  origin: "https://evil.example",
+  "sec-fetch-site": "cross-site",
+  "sec-fetch-mode": "navigate",
+  "sec-fetch-dest": "document",
+  "content-type": "application/x-www-form-urlencoded",
+} as const;
+
+const FOREIGN_FETCH = {
+  origin: "https://evil.example",
+  "sec-fetch-site": "cross-site",
+  "sec-fetch-mode": "cors",
+  "sec-fetch-dest": "empty",
+  "content-type": "application/json",
+} as const;
+
+describe("state-changing routes reject both cross-site shapes", () => {
+  function invokers(jobId: string): Array<[string, RouteInvoker]> {
+    return [
+      [
+        "POST /api/report",
+        (headers, body) =>
+          reportPOST(
+            new Request("http://localhost:3000/api/report", {
+              method: "POST",
+              headers: { host: "localhost:3000", ...headers },
+              body,
+            }),
+          ),
+      ],
+      [
+        "POST /api/settings",
+        (headers, body) =>
+          settingsPOST(
+            new Request("http://localhost:3000/api/settings", {
+              method: "POST",
+              headers: { host: "localhost:3000", "if-match": '"any"', ...headers },
+              body,
+            }),
+          ),
+      ],
+      [
+        "POST /api/watchlist",
+        (headers, body) =>
+          watchlistPOST(
+            new Request("http://localhost:3000/api/watchlist", {
+              method: "POST",
+              headers: { host: "localhost:3000", ...headers },
+              body,
+            }),
+          ),
+      ],
+      [
+        "DELETE /api/watchlist",
+        (headers, body) =>
+          watchlistDELETE(
+            new Request("http://localhost:3000/api/watchlist", {
+              method: "DELETE",
+              headers: { host: "localhost:3000", ...headers },
+              body,
+            }),
+          ),
+      ],
+      [
+        "POST /api/report/[jobId]/cancel",
+        (headers, body) =>
+          cancelPOST(
+            new Request(`http://localhost:3000/api/report/${jobId}/cancel`, {
+              method: "POST",
+              headers: { host: "localhost:3000", ...headers },
+              body,
+            }),
+            { params: Promise.resolve({ jobId }) },
+          ),
+      ],
+      [
+        "POST /api/report/[jobId]/retry",
+        (headers, body) =>
+          retryPOST(
+            new Request(`http://localhost:3000/api/report/${jobId}/retry`, {
+              method: "POST",
+              headers: { host: "localhost:3000", ...headers },
+              body,
+            }),
+            { params: Promise.resolve({ jobId }) },
+          ),
+      ],
+    ];
+  }
+
+  it("rejects a foreign-origin HTML form POST before any state change", async () => {
+    const { jobId } = createJobReal("NVDA");
+    const before = handle.db.select().from(jobs).all();
+
+    for (const [label, invoke] of invokers(jobId)) {
+      const response = await invoke(FOREIGN_FORM, "symbol=AAPL&analysisEffort=max");
+      expect(response.status, label).toBe(403);
+      await expect403(response);
+    }
+
+    expect(handle.db.select().from(jobs).all()).toEqual(before);
+    expect(handle.db.select().from(settings).all()).toHaveLength(0);
+    expect(handle.db.select().from(watchlist).all()).toHaveLength(0);
+    expect(runJobMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a foreign-origin fetch before any state change", async () => {
+    const { jobId } = createJobReal("NVDA");
+    const before = handle.db.select().from(jobs).all();
+
+    for (const [label, invoke] of invokers(jobId)) {
+      const response = await invoke(
+        FOREIGN_FETCH,
+        JSON.stringify({ symbol: "AAPL", analysisModel: "auto", analysisEffort: "max" }),
+      );
+      expect(response.status, label).toBe(403);
+      await expect403(response);
+    }
+
+    expect(handle.db.select().from(jobs).all()).toEqual(before);
+    expect(handle.db.select().from(settings).all()).toHaveLength(0);
+    expect(handle.db.select().from(watchlist).all()).toHaveLength(0);
+    expect(runJobMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a header-less request with a wrong token on every route", async () => {
+    const { jobId } = createJobReal("NVDA");
+    const wrong = {
+      "content-type": "application/json",
+      [REQUEST_TOKEN_HEADER]: "0".repeat(64),
+    };
+
+    for (const [label, invoke] of invokers(jobId)) {
+      const response = await invoke(wrong, JSON.stringify({ symbol: "AAPL" }));
+      expect(response.status, label).toBe(403);
+    }
+
+    expect(handle.db.select().from(watchlist).all()).toHaveLength(0);
+    expect(runJobMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a header-less request carrying the valid token", async () => {
+    const accepted = await watchlistPOST(
+      jsonReq("http://localhost:3000/api/watchlist", "POST", { symbol: "AAPL" }, tokenHeader()),
+    );
+
+    expect(accepted.status).toBe(200);
+    expect(handle.db.select().from(watchlist).all()).toHaveLength(1);
+
+    const report = await reportPOST(
+      jsonReq("http://localhost:3000/api/report", "POST", { symbol: "MSFT" }, tokenHeader()),
+    );
+    expect(report.status).toBe(202);
+    expect(handle.db.select().from(jobs).all()).toHaveLength(1);
   });
 });

@@ -696,6 +696,70 @@ describe("runStageB wiring — reported currency routing gate", () => {
   });
 });
 
+/* ------------------------------------------------------------------------ *
+ * WS6 review nits — disclosures that never reached a reader
+ * ------------------------------------------------------------------------ */
+
+describe("runStageB wiring — WS6 review disclosures", () => {
+  it("N1: the per-fiscal-year WACC shortfall reaches the missing-data manifest", () => {
+    // This bundle supplies no FRED DGS10 observations, so no year's own WACC
+    // can be recomputed. waccByFiscalYear raised the gap all along; compute.ts
+    // deliberately did not merge it, so it reached no manifest.
+    const computed = runStageB(wiringBundle());
+    expect(computed.returns.waccHistory.gaps.length).toBeGreaterThan(0);
+    expect(computed.gaps.some((g) => g.field === "returns.wacc.history")).toBe(true);
+  });
+
+  it("N2: the SBC disclosure is dated by the free-cash-flow row, not the capital block's as-of", () => {
+    const bundle = wiringBundle();
+    if (!bundle.statements.cashflowAnnual.ok) throw new Error("expected annual cash-flow fixture");
+    // Drop the newest cash-flow year so the FCF series ends BEFORE the income
+    // statement does; capital.asOf follows the income statement.
+    const rows = bundle.statements.cashflowAnnual.value.data.rows;
+    bundle.statements.cashflowAnnual.value.data.rows = rows.slice(1);
+
+    const computed = runStageB(bundle);
+    const series = computed.capital.fcf.series;
+    const lastFcfDate = series[series.length - 1]?.date ?? null;
+    expect(lastFcfDate).not.toBeNull();
+    expect(computed.capital.asOf).not.toBe(lastFcfDate);
+    if (computed.valuation.kind !== "dcf" || computed.valuation.assumptions === null) {
+      throw new Error("expected the DCF route");
+    }
+    expect(computed.valuation.assumptions.sbc.value.asOf).toBe(lastFcfDate);
+  });
+
+  it("N8: says when the current WACC's risk-free rate comes from a different SERIES than the per-year history", () => {
+    const bundle = wiringBundle();
+    // Current rf comes from the vendor treasury endpoint (year10 4.0); the
+    // per-year WACCs are recomputed from FRED DGS10. Give the history real
+    // observations so at least one year resolves.
+    (bundle as unknown as { macro: { core: Record<string, unknown> } }).macro.core["DGS10"] = {
+      ok: true,
+      value: {
+        data: [
+          { date: "2023-12-31", value: 3.8 },
+          { date: "2024-12-31", value: 4.2 },
+          { date: "2025-12-31", value: 4.4 },
+        ],
+      },
+    };
+
+    const computed = runStageB(bundle);
+    expect(computed.returns.waccHistory.points.length).toBeGreaterThan(0);
+    expect(
+      computed.returns.notes.some((n) => n.includes("Risk-free SOURCE differs between the current WACC and its history")),
+    ).toBe(true);
+  });
+
+  it("N3: the dilution overhang reaches a reader in both states", () => {
+    const computed = runStageB(wiringBundle());
+    // Whether or not the counts resolved, the note is emitted — "unavailable"
+    // is a disclosure, not silence.
+    expect(computed.capital.notes.some((n) => n.startsWith("Dilution"))).toBe(true);
+  });
+});
+
 describe("runStageB wiring — normalized quarterly statement families", () => {
   it("uses uniquely latest whole income, cash-flow, and balance rows across every downstream consumer", () => {
     const bundle = wiringBundle();

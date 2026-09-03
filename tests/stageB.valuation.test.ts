@@ -688,6 +688,14 @@ describe("buildDcfAssumptions", () => {
   // growth carried the clamped value, and the growth-path basis interpolated
   // the clamped value under the pre-clamp label. For an NVIDIA-like history the
   // table printed a 65% anchor beside 25% year-one growth.
+  // N6: criterion (b) asks for "house convention" wherever the terminal rule
+  // prints. The terminal-ROIC basis said it; the terminal-growth basis did not.
+  it("calls the terminal-growth cap a HOUSE CONVENTION, matching the terminal-ROIC basis", () => {
+    const a = buildDcfAssumptions(baseInputs).assumptions as DcfAssumptions;
+    expect(a.terminal.gTermPct.basis).toContain("HOUSE CONVENTION");
+    expect(a.terminal.gTermPct.basis).not.toContain("house rule");
+  });
+
   it("carries the near-term clamp into the anchor, its basis and the growth-path basis", () => {
     const a = buildDcfAssumptions({
       ...baseInputs,
@@ -2083,6 +2091,23 @@ describe("terminalRoic — evidenced excess returns carried into the terminal", 
       waccBasis: "none",
       waccBasisNote: null,
     });
+  });
+
+  // N5: a history that exists but carries no computable ROIC has no
+  // ROIC-vs-WACC comparison AT ALL, so blaming a missing per-year risk-free
+  // observation misstated the cause. The reason it reports is the real one.
+  it("does not blame a missing risk-free observation when the history carries no computable ROIC", () => {
+    const t = terminalRoic(9, [year("2025-12-31", null), year("2024-12-31", null)]);
+    expect(t.waccBasis).toBe("none");
+    expect(t.waccBasisNote).toBeNull();
+    expect(t.note).toContain("0 fiscal years of ROIC on record");
+    expect(t.roicTermPct).toBe(9);
+  });
+
+  it("still names the current-WACC fallback when years DO carry a ROIC but no per-year rate", () => {
+    const t = terminalRoic(9, [year("2025-12-31", 12), year("2024-12-31", 11)]);
+    expect(t.waccBasis).toBe("current");
+    expect(t.waccBasisNote).toContain("no per-year risk-free observation");
   });
 
   it("carries half the median spread, capped at 5pp, when ROIC beat WACC in every one of the last five years", () => {

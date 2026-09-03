@@ -409,6 +409,9 @@ function balanceSheetSection(
       ),
     );
   }
+  // N3: dilution from outstanding awards is SHOWN, or its unavailability is
+  // stated — criterion (d). It reached no reader surface before.
+  allocation.push(fact(cap.dilution.note, "computed.capital.dilution", cap.dilution.asOf));
   const bb = cap.buybackPriceAnalysis;
   if (bb.totalRepurchased > 0 && currency !== null) {
     const priceNote = isNum(bb.premiumDiscountPct)

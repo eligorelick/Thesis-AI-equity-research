@@ -374,9 +374,17 @@ export function terminalRoic(waccPct: number, history: DcfRoicYear[] | null): Te
   const waccForYear = (y: DcfRoicYear): number => (isNum(y.waccPct) ? y.waccPct : waccPct);
   const perYear = years.filter((y) => isNum(y.waccPct));
   const currentOnly = years.filter((y) => !isNum(y.waccPct));
-  const waccBasis: TerminalRoic["waccBasis"] = perYear.length > 0 ? "per-year" : "current";
+  // N5: with a history supplied but NO year carrying a computable ROIC there is
+  // no ROIC-vs-WACC comparison at all, so blaming a missing per-year risk-free
+  // observation misstated the cause. Report "none" and say nothing about rates;
+  // the `n < TERMINAL_EXCESS_RETURN_MIN_YEARS` branch below already names the
+  // real reason ("0 fiscal years of ROIC on record").
+  const waccBasis: TerminalRoic["waccBasis"] =
+    n === 0 ? "none" : perYear.length > 0 ? "per-year" : "current";
   const waccBasisNote =
-    perYear.length === 0
+    n === 0
+      ? null
+      : perYear.length === 0
       ? `ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC ${fmtNum(waccPct)}% — no per-year risk-free observation was available to recompute a year-specific WACC`
       : `ROIC-vs-WACC history uses each fiscal year's own WACC, recomputed from that year end's risk-free observation (${perYear
           .map((y) => `${y.date}: ${fmtNum(waccForYear(y))}%${y.waccAsOf ? ` (rf as of ${y.waccAsOf})` : ""}`)
@@ -583,7 +591,9 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
   // Computed first: the near-term anchor falls back to it when revenue
   // history shows no trend.
   const gTerm = Math.min(TERMINAL_G_CAP_PCT, inputs.riskFreePct);
-  const gTermBasis = `min(${TERMINAL_G_CAP_PCT}%, risk-free ${fmtNum(inputs.riskFreePct)}%) — house rule: nothing grows faster than rf forever`;
+  // N6: criterion (b) asks for "house convention" wherever the terminal rule
+  // prints; the terminal ROIC basis already says it, this one said "house rule".
+  const gTermBasis = `min(${TERMINAL_G_CAP_PCT}%, risk-free ${fmtNum(inputs.riskFreePct)}%) — HOUSE CONVENTION: nothing grows faster than rf forever`;
 
   // --- Near-term growth: MEDIAN OF METHODS (WS6, D-18) ---------------------
   // Retired here: "lower of the 3Y/5Y CAGR" and the sign-disagreement rule

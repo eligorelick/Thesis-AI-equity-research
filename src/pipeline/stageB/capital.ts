@@ -97,7 +97,11 @@ export interface FcfYearRow {
   fcf: number | null;
   /** FCF as reported/derived, BEFORE the SBC deduction (the vendor convention). */
   fcfBeforeSbc: number | null;
-  /** SBC expense deducted for this year; null when undisclosed. */
+  /**
+   * SBC deducted for this year, with the filer's own sign: positive is the
+   * usual expense, NEGATIVE is a net forfeiture credit that is added back
+   * rather than charged (N4). Null when undisclosed.
+   */
   stockBasedCompensation: number | null;
   netIncome: number | null;
   /** FCF (after SBC) / net income (fraction). Null when NI ≤ 0 (denominator guard). */
@@ -353,18 +357,23 @@ export function computeCapital(
           rowNotes.push("FCF derived as operatingCashFlow + capitalExpenditure");
         }
       }
-      // WS6 (D-19): subtract SBC. The statement reports it as a positive
-      // add-back inside operating cash flow; a filer reporting the opposite
-      // sign still means the same expense, so its magnitude is used.
+      // WS6 (D-19): subtract SBC, using the SIGN THE FILER REPORTED. The
+      // us-gaap element is a positive add-back inside operating cash flow, so a
+      // NEGATIVE figure is a net credit — forfeitures reversing more expense
+      // than the period awarded. N4: `Math.abs` turned that credit into a
+      // charge and subtracted where it should add, understating free cash flow
+      // by twice the reversal.
       const sbcExpense =
         isFiniteNumber(r.stockBasedCompensation) && r.stockBasedCompensation !== 0
-          ? Math.abs(r.stockBasedCompensation)
+          ? r.stockBasedCompensation
           : null;
       let fcf = fcfBeforeSbc;
       if (fcfBeforeSbc !== null && sbcExpense !== null) {
         fcf = fcfBeforeSbc - sbcExpense;
         rowNotes.push(
-          `SBC ${fmt(sbcExpense)} subtracted from FCF (house default): ${fmt(fcfBeforeSbc)} → ${fmt(fcf)}`,
+          sbcExpense < 0
+            ? `SBC reported as a net CREDIT of ${fmt(Math.abs(sbcExpense))} (forfeiture reversals exceeded the period's awards), so it is ADDED to FCF: ${fmt(fcfBeforeSbc)} → ${fmt(fcf)}`
+            : `SBC ${fmt(sbcExpense)} subtracted from FCF (house default): ${fmt(fcfBeforeSbc)} → ${fmt(fcf)}`,
         );
       } else if (fcfBeforeSbc !== null) {
         rowNotes.push("stock-based compensation not disclosed for this year — FCF is unadjusted (before SBC)");
@@ -631,10 +640,17 @@ export function computeCapital(
       basic === null ? "weightedAverageShsOut (basic)" : null,
       diluted === null ? "weightedAverageShsOutDil (diluted)" : null,
     ].filter((v): v is string => v !== null);
-    if (missing.length > 0) {
+    if (latestInc === undefined) {
       gaps.push({
         field: "capital.dilution",
-        reason: `${missing.join(" and ")} missing on the latest annual income statement — the diluted-vs-basic award overhang is not computable`,
+        reason:
+          "no annual income statement was supplied — neither the basic nor the diluted weighted-average share count exists, so the diluted-vs-basic award overhang is not computable and is reported as unavailable, never as zero",
+        severity: "info",
+      });
+    } else if (missing.length > 0) {
+      gaps.push({
+        field: "capital.dilution",
+        reason: `${missing.join(" and ")} missing on the latest annual income statement (${latestInc.date}) — the diluted-vs-basic award overhang is not computable and is reported as unavailable, never as zero`,
         severity: "info",
       });
     }
@@ -650,7 +666,10 @@ export function computeCapital(
             `as of ${latestInc?.date ?? "?"} — a ${fmt(overhangPct)}% overhang. Options, RSUs and convertibles that are ` +
             "antidilutive in a loss year are excluded from the diluted count by the filer, so a loss-making issuer's overhang understates the award pool.",
     };
-    if (overhangPct !== null) notes.push(dilution.note);
+    // N3: the note reaches the notes channel in BOTH states. It used to be
+    // pushed only when an overhang existed, so "unavailable" was visible in the
+    // manifest but nowhere a reader or the Stage C prompt would see it.
+    notes.push(dilution.note);
   }
 
   // --- Diluted share-count 5y trend ---------------------------------------------------------

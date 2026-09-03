@@ -521,14 +521,18 @@ describe("payload determinism + provenance", () => {
       // conversion names the definition it is graded on, and the multiples
       // table publishes N beside each rank. Every one of those is extra stated
       // basis in the prompt, so promptBytes/financeHash/provenanceHash move.
-      fingerprint: "1.3.0:d7afeb75",
-      promptBytes: 89_756,
+      // The same review also wires the dilution overhang to the payload (it had
+      // no reader before), states the risk-free SOURCE split between the current
+      // WACC and its per-year history, and anchors the SBC disclosure on the
+      // free-cash-flow row's own fiscal year end.
+      fingerprint: "1.3.0:d3e596cc",
+      promptBytes: 90_194,
       provenanceCount: 308,
       provenanceHash: "52326402",
       provenanceIdsHash: "5c7fb3b4",
       citationCount: 11,
       citationHash: "7ebe5276",
-      computedFigureLabelHash: "b64caad7",
+      computedFigureLabelHash: "e8a6711a",
       projectionPathPeriodHash: "45ce96a4",
       // Changed 2026-08-31: the projections fcf series now states that its
       // HISTORICAL points are the reported levered figure while the PROJECTED
@@ -536,7 +540,7 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "cbddccd7",
+      financeHash: "cf6d97ae",
     });
   });
 

@@ -887,6 +887,18 @@ describe("computeCapital — core ratios", () => {
     expect(res.fcf.basis).toContain("would charge the same expense twice");
   });
 
+  // N4: a NEGATIVE stockBasedCompensation is a net credit — forfeiture reversals
+  // exceeding the period's awards. Taking its magnitude turned that credit into
+  // a charge and subtracted where it should add.
+  it("adds a negative (net forfeiture credit) SBC back to FCF instead of charging it", () => {
+    const cf = capCashflow.map((r, i) => (i === 0 ? { ...r, stockBasedCompensation: -10 } : r));
+    const res2 = computeCapital(capIncome, cf, capBalance, capMcapHistory, { price: 20 });
+    expect(res2.fcf.latestFcfBeforeSbc).toBe(80);
+    expect(res2.fcf.latestSbc).toBe(-10);
+    expect(res2.fcf.latestFcf).toBe(90);
+    expect(res2.fcf.series[res2.fcf.series.length - 1].note).toContain("reported as a net CREDIT of 10");
+  });
+
   it("leaves FCF unadjusted, and says so, when SBC is not disclosed", () => {
     const cf = capCashflow.map((r) => ({ ...r, stockBasedCompensation: null }));
     const res2 = computeCapital(capIncome, cf, capBalance, capMcapHistory, { price: 20 });

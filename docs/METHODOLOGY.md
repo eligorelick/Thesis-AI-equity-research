@@ -78,8 +78,23 @@ with the full range shown and each method's value named:
 
 The point estimate is the median; the range is min..max across the available
 methods. Methods that could not be computed are named in the assumption block
-and disclosed as a `valuation.dcf.growthAnchor` manifest entry. The result is
-clamped to [−10%, +25%], and a clamp that fires is annotated.
+and disclosed as a `valuation.dcf.growthAnchor` manifest entry.
+
+The median is then **clamped to [−10%, +25%]**, and the anchor the report
+prints is the clamped value — the same number the growth path fades from.
+When the clamp moves it, the anchor's basis says so, the growth-path basis
+repeats it, and the assumption row reads "25.0% (…, clamped from the 65.0%
+median)". Nothing prints the pre-clamp median as if it were the anchor.
+
+**Three of the four methods read the same series.** The regression, the 3-year
+CAGR and the 5-year CAGR are all functions of the same annual revenue history,
+so the median is weighted roughly three to one toward that history and the
+analyst-consensus case rarely moves it — it can only shift the median when it
+lands between the three history-derived values, and never sets the anchor on
+its own. That is a deliberate bias toward the filed record over sell-side
+expectations, but it means the consensus case should not be read as an equal
+fourth vote. The range printed beside the point estimate is where a large
+analyst/history disagreement becomes visible.
 
 **Two rules were retired here, and the assumption block says so.** The former
 "lower of the 3Y/5Y CAGR" rule let whichever window happened to be worse
@@ -103,7 +118,8 @@ effective rate to the company's own historical median. Cash flows are
 discounted on the **mid-year convention**.
 
 Terminal growth is **min(2.5%, risk-free rate)** — nothing grows faster than
-the risk-free rate in perpetuity (Damodaran). A Gordon guard requires
+the risk-free rate in perpetuity (Damodaran). Like the terminal-ROIC rule below
+it prints as a HOUSE CONVENTION, in those words, wherever it appears. A Gordon guard requires
 WACC − g ≥ 2.0pp in the base case (1.5pp in the sensitivity grid, where a
 tighter guard would blank cells the grid exists to show); when it binds, g is
 pulled down and the note says so.
@@ -131,8 +147,19 @@ they are modest.
 
 Each fiscal year is compared to **its own** WACC where one could be recomputed
 (see *WACC inputs* above); otherwise the current WACC is applied to every year
-and the note says exactly that. Terminal reinvestment is g ÷ ROIC_terminal,
-Damodaran's consistency rule.
+and the note says exactly that. Any year that could not be recomputed also
+reaches the missing-data manifest as `returns.wacc.history`, including the
+partial case where only some years are missing. When a history is supplied but
+no year carries a computable ROIC there is no comparison at all, and the note
+says that — not that a risk-free observation was missing.
+
+The per-year WACCs are always recomputed from **FRED `DGS10`**, while the
+current WACC prefers the provider's own 10-year treasury rate and falls back to
+`DGS10`. When those two differ, the returns notes say so explicitly: the newest
+fiscal year's own WACC can then differ from the current one because the two
+rates come from different series, not because the rate moved.
+
+Terminal reinvestment is g ÷ ROIC_terminal, Damodaran's consistency rule.
 
 ---
 
@@ -181,8 +208,16 @@ consistent, but they are not the same series, and the assumption block says so.
 
 Dilution from outstanding awards is reported as the gap between the **diluted**
 and **basic** weighted-average share counts of the latest fiscal year, with the
-as-of date and the overhang in percent. A missing count is disclosed
-(`capital.dilution`), never assumed to be zero. Awards that are antidilutive in
+as-of date and the overhang in percent. It reaches readers as a capital figure
+in the Stage C payload and as a capital-allocation note in the data-only
+report, and the note is emitted in BOTH states — the unavailable case says so
+in words rather than going silent. A missing count is disclosed
+(`capital.dilution`), never assumed to be zero.
+
+Stock-based compensation is subtracted from free cash flow **with the sign the
+filer reported**. The us-gaap element is a positive add-back inside operating
+cash flow, so a negative figure is a net credit — forfeiture reversals
+exceeding the period's awards — and it is added back rather than charged. Awards that are antidilutive in
 a loss year are excluded from the diluted count by the filer, so a loss-making
 issuer's overhang understates the award pool; the note says this.
 

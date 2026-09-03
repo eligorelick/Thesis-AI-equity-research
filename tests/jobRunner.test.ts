@@ -90,7 +90,7 @@ vi.mock("@/providers/anthropic", () => ({
   webSearchTool: providerBoundaryMocks.webSearchTool,
 }));
 
-import { resolveModel } from "@/providers/anthropic";
+import { resolveModel, type RequestAdmission } from "@/providers/anthropic";
 import {
   bootstrapSchema,
   createDatabase,
@@ -2113,13 +2113,13 @@ describe("runJob - durable paid-pass settlements", () => {
         // The real ordering: bear launches while bull is still streaming, so
         // bear reads the prompt cache bull just wrote.
         await launchTestAnalystSide(lifecycle, "bull");
-        const bullAdmission = deps.admissionFor?.("bull")!;
+        const bullAdmission = deps.admissionFor?.("bull") as RequestAdmission;
         const bullPermit = await admittedWithin(
           bullAdmission.reserve({ attempt: 1, kind: "stream", maximumUsd: 0.5 }),
           "bull's first request was never admitted",
         );
         await launchTestAnalystSide(lifecycle, "bear");
-        const bearAdmission = deps.admissionFor?.("bear")!;
+        const bearAdmission = deps.admissionFor?.("bear") as RequestAdmission;
         const bearPermit = await admittedWithin(
           bearAdmission.reserve({ attempt: 1, kind: "stream", maximumUsd: 0.5 }),
           "bear's first request was refused while bull was still streaming",
@@ -2227,7 +2227,7 @@ describe("runJob - durable paid-pass settlements", () => {
       ...base.passes,
       runBullThenBear: async (deps, lifecycle) => {
         await launchTestAnalystSide(lifecycle, "bull");
-        const admission = deps.admissionFor?.("bull")!;
+        const admission = deps.admissionFor?.("bull") as RequestAdmission;
         const permit = await admittedWithin(
           admission.reserve({ attempt: 1, kind: "stream", maximumUsd: 12 }),
           "bull's first request was never admitted",

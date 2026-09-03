@@ -109,8 +109,8 @@ a review date; derived operating income subtracts non-operating items and is
 never derived for a bank; multi-class cover shares are summed with the breakdown
 disclosed; public float carries its own measurement date; restatements are
 flagged against the value they replaced; successor registrants reach their
-predecessor's history through the 8-K12B filer list and refuse to guess between
-co-registrants; EDGAR stays inside its fair-access limits and backs off on 403
+predecessor's history through a co-registrant filer list and refuse to guess
+between co-registrants; EDGAR stays inside its fair-access limits and backs off on 403
 and 429 alike; and beta reports its basis, standard error, R-squared and Blume
 adjustment.
 
@@ -128,6 +128,28 @@ the wrong figure as correct. It also found a multi-class share sum applied to
 the spot count but not the series that feeds market-cap history, and — predating
 all of this work — the declared SEC contact identity travelling in Yahoo's
 User-Agent, where nobody asked for it and no document said it went.
+
+**The successor lookup was reading the wrong filing.** With the owner's
+approval the real SEC payloads for CIK 2115436 were recorded on 2026-09-03, and
+they disprove the mechanism the criterion names. ExxonMobil Holdings' own
+8-K12B (0001193125-26-291990) carries a single FILER block — itself. The
+co-registration is on the filings the two entities made jointly afterwards: the
+10-Q 0000034088-26-000093 and the POSASR 0001193125-26-292453 each name both
+CIKs. So the feature resolved nothing for the issuer it was built for, and no
+test caught it because the only fixture was hand-built in the shape the code
+expected — the failure mode the brief warns about, arriving through the
+criterion itself rather than around it.
+
+The 8-K12B is now the trigger only. `predecessorCandidates` ranks the
+submission headers worth reading — the 8-K12B, then periodic reports newest
+first, then filings riding on another registrant's registration statement, with
+employee-plan amendments last — and the scan reads them in order, capped at four
+requests, until one names exactly one other party that has filed history of its
+own. On the recorded data the answer arrives at the second request. Four
+recorded payloads are committed; the hand-built fixture stays, now covering the
+branch where an 8-K12B does co-register, and its header says so. The
+end-to-end scan is driven by `tests/dataBundle.successor.test.ts`, which fails
+against the old single-read behaviour.
 
 One review finding reached past the workstream's file boundary and was closed
 afterwards on the Stage B baseline: `ebit` was filled from pre-tax income plus

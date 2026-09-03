@@ -907,7 +907,7 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       predecessorUnresolvedEntry(
         cik10,
         null,
-        "the Form 8-K12B's submission header named no single co-registrant, or its filing index and companyfacts could not be fetched",
+        "none of the submission headers read for this registrant — the Form 8-K12B first, then its periodic reports and any filing riding on another registrant's registration statement — named a single co-registrant with filed history of its own, or those headers and the predecessor's companyfacts could not be fetched",
       ),
     );
   }

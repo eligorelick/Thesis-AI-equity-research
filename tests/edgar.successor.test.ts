@@ -8,8 +8,15 @@
  * explanation. The predecessor's CIK appears in exactly one machine-readable
  * place: the FILER blocks of that 8-K12B's submission header.
  *
- * The index-headers fixture here is hand-built (`synthetic-structure`), not a
- * recorded SEC response; no test in this file makes a network request.
+ * The `xom_successor_*` fixtures ARE recorded SEC responses, fetched once on
+ * 2026-09-03 with the owner's authorisation: the submissions payload for CIK
+ * 2115436 and the submission headers of its 8-K12B (0001193125-26-291990), its
+ * 10-Q (0000034088-26-000093) and its POSASR (0001193125-26-292453). They
+ * disproved this module's original premise — the 8-K12B names ONE filer, itself
+ * — which is why the predecessor is now resolved by scanning a ranked list.
+ * `successor_8k12b_index_headers.html` remains hand-built
+ * (`synthetic-structure`), covering the branch where an 8-K12B does
+ * co-register. No test in this file makes a network request.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -19,6 +26,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   SUCCESSOR_FORM,
+  hasCoRegistrantFileNumber,
+  predecessorCandidates,
   predecessorFromFilers,
   predecessorManifestEntry,
   predecessorUnresolvedEntry,
@@ -29,6 +38,7 @@ import {
   EdgarClient,
   parseFilers,
   parseIndexHeaders,
+  type EdgarSubmissions,
   type EdgarTransport,
   type EdgarTransportResponse,
 } from "@/providers/edgar";
@@ -42,6 +52,11 @@ import type { FmpPayload, FmpRawRow } from "@/providers/fmp";
 const SAMPLES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "edgar");
 const sample = (name: string): string => readFileSync(path.join(SAMPLES, name), "utf8");
 const SUCCESSOR_INDEX = "successor_8k12b_index_headers.html";
+/** Recorded 2026-09-03 from data.sec.gov and www.sec.gov. See the file docstring. */
+const REAL_8K12B = "xom_successor_8k12b_index_headers.html";
+const REAL_10Q = "xom_successor_10q_index_headers.html";
+const REAL_POSASR = "xom_successor_posasr_index_headers.html";
+const REAL_SUBMISSIONS = "xom_successor_submissions.json";
 
 const SUCCESSOR_CIK = "0002115436";
 const PREDECESSOR_CIK = "0000034088";
@@ -166,13 +181,115 @@ describe("the client surfaces the filers through filingIndexHeaders", () => {
   });
 });
 
+describe("the RECORDED ExxonMobil succession", () => {
+  const filersOf = (fixture: string): { cik10: string; name: string | null }[] =>
+    parseIndexHeaders(sample(fixture)).filers ?? [];
+
+  it("shows the 8-K12B naming ONE filer — the successor alone", () => {
+    // The premise this feature was built on. SEC serves a single FILER block
+    // for the filing whose entire purpose is the succession, so reading it and
+    // stopping resolves nothing for the issuer the feature exists to serve.
+    expect(filersOf(REAL_8K12B)).toEqual([{ cik10: SUCCESSOR_CIK, name: "ExxonMobil Holdings Corp" }]);
+    expect(predecessorFromFilers(filersOf(REAL_8K12B), SUCCESSOR_CIK)).toBeNull();
+  });
+
+  it("finds the co-registration on the jointly filed 10-Q and POSASR", () => {
+    for (const fixture of [REAL_10Q, REAL_POSASR]) {
+      expect(filersOf(fixture)).toEqual([
+        { cik10: PREDECESSOR_CIK, name: "EXXON MOBIL CORP" },
+        { cik10: SUCCESSOR_CIK, name: "ExxonMobil Holdings Corp" },
+      ]);
+      expect(predecessorFromFilers(filersOf(fixture), SUCCESSOR_CIK)).toEqual({
+        cik10: PREDECESSOR_CIK,
+        name: "EXXON MOBIL CORP",
+      });
+    }
+  });
+
+  it("reads the file number that marks a co-registered filing", () => {
+    expect(hasCoRegistrantFileNumber("333-293558-01")).toBe(true);
+    expect(hasCoRegistrantFileNumber("033-51107-01")).toBe(true);
+    expect(hasCoRegistrantFileNumber("001-43384")).toBe(false);
+    expect(hasCoRegistrantFileNumber(undefined)).toBe(false);
+  });
+
+  describe("candidate ranking against the real filing list", () => {
+    const submissions = async (): Promise<EdgarSubmissions> => {
+      const transport: EdgarTransport = {
+        fetchText(): Promise<EdgarTransportResponse> {
+          return Promise.resolve({
+            status: 200,
+            body: sample(REAL_SUBMISSIONS),
+            fetchedAt: NOW.toISOString(),
+            fromCache: false,
+            stale: false,
+          });
+        },
+      };
+      const result = await new EdgarClient({ transport }).submissions(2115436);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("submissions fixture did not parse");
+      return result.value.data;
+    };
+
+    it("carries each filing's SEC file number through the parse", async () => {
+      const sub = await submissions();
+      expect(sub.recentFilings).toHaveLength(29);
+      const posasr = sub.recentFilings.find((f) => f.form === "POSASR");
+      expect(posasr?.fileNumber).toBe("333-293558-01");
+      expect(sub.recentFilings.find((f) => f.form === "8-K12B")?.fileNumber).toBe("001-43384");
+    });
+
+    it("puts the 8-K12B first and the co-registering 10-Q second", async () => {
+      const sub = await submissions();
+      const ranked = predecessorCandidates(sub.recentFilings, 4);
+      expect(ranked.map((f) => [f.form, f.accessionNumber])).toEqual([
+        // The trigger: cheap to try, and it answers for issuers that do
+        // co-register on it. This one does not.
+        ["8-K12B", "0001193125-26-291990"],
+        // The answer, at the second request.
+        ["10-Q", "0000034088-26-000093"],
+        // Then the broad shelf amendment, which also co-registers, before the
+        // employee-plan amendments, which do not.
+        ["POSASR", "0001193125-26-292453"],
+        // Twenty-three S-8 POS amendments share a filing date; the accession
+        // breaks the tie so the order is stable across runs.
+        ["S-8 POS", "0001193125-26-292689"],
+      ]);
+    });
+
+    it("never offers a filing that has neither a periodic form nor a co-registrant file number", async () => {
+      const sub = await submissions();
+      const ranked = predecessorCandidates(sub.recentFilings, 99);
+      const plain8Ks = sub.recentFilings.filter((f) => f.form === "8-K");
+      expect(plain8Ks.length).toBeGreaterThan(0);
+      for (const filing of plain8Ks) {
+        expect(ranked.map((f) => f.accessionNumber)).not.toContain(filing.accessionNumber);
+      }
+      // Every S-8 POS is offered, but only after the two that co-register.
+      expect(ranked.slice(0, 3).map((f) => f.form)).toEqual(["8-K12B", "10-Q", "POSASR"]);
+    });
+
+    it("returns nothing when asked for nothing", async () => {
+      const sub = await submissions();
+      expect(predecessorCandidates(sub.recentFilings, 0)).toEqual([]);
+      expect(predecessorCandidates([], 4)).toEqual([]);
+    });
+  });
+});
+
 describe("the disclosure wording", () => {
   const predecessor: PredecessorFacts = {
     cik10: PREDECESSOR_CIK,
     name: "EXAMPLE PREDECESSOR CORP",
     facts: { cik: 34088, entityName: "EXAMPLE PREDECESSOR CORP", facts: {} },
     endpoint: "companyfacts/CIK0000034088.json",
-    via: { accession: "0002115436-26-000001", filed: "2026-07-01" },
+    via: {
+      accession: "0000034088-26-000093",
+      form: "10-Q",
+      filed: "2026-08-03",
+      successorFormAccession: "0002115436-26-000001",
+    },
     fetchedAt: NOW.toISOString(),
   };
 
@@ -184,7 +301,11 @@ describe("the disclosure wording", () => {
     expect(entry.reason).toContain(SUCCESSOR_CIK);
     expect(entry.reason).toContain(PREDECESSOR_CIK);
     expect(entry.reason).toContain(SUCCESSOR_FORM);
+    // Both accessions appear, and they are DIFFERENT filings: the 8-K12B made
+    // the registrant a successor, the 10-Q is what named the predecessor.
     expect(entry.reason).toContain("0002115436-26-000001");
+    expect(entry.reason).toContain("0000034088-26-000093");
+    expect(entry.reason).toMatch(/its 10-Q 0000034088-26-000093, filed 2026-08-03 co-registers/);
     expect(entry.reason).toMatch(/12 older period\(s\), 2016-12-31 to 2025-12-31/);
     expect(entry.reason).toMatch(/different legal entity/);
   });
@@ -316,7 +437,12 @@ function inputs(over: Partial<KeylessInputs> = {}): KeylessInputs {
         name: "EXAMPLE PREDECESSOR CORP",
         facts: annualFacts(34088, "EXAMPLE PREDECESSOR CORP", [2021, 2022, 2023, 2024, 2025]),
         endpoint: "companyfacts/CIK0000034088.json",
-        via: { accession: "0002115436-26-000001", filed: "2026-07-01" },
+        via: {
+          accession: "0002115436-26-000001",
+          form: SUCCESSOR_FORM,
+          filed: "2026-07-01",
+          successorFormAccession: "0002115436-26-000001",
+        },
         fetchedAt: NOW.toISOString(),
       },
     },

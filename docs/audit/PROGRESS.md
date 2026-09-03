@@ -24,6 +24,7 @@ Read this, `DECISIONS.md`, and `git log` before resuming.
 | Review fixes: WS1-3 | merged | main | 8a7cd92 | Resume no longer re-bills, a pass lease no longer blocks its own first request, presumed spend disclosed |
 | Review fixes: WS4 | merged | main | af2cef6 | Caterpillar total debt, statement-source gaps, the Yahoo User-Agent leak |
 | Review fixes: WS7 | merged | main | f94d9a4 | Shared-family disclosure live on the production path, completeness metadata recomputed, a paid primary survives a thrown mirror, four false-positive checks, `both` sized for two requests |
+| WS4 follow-up: successor lookup | done | main | — | Owner-approved live SEC recording disproved D-14's mechanism: the 8-K12B names one filer. The predecessor is found by a ranked, capped header scan |
 | WS4 follow-up: EBIT | done | main | d68ac63 | `ebit` follows operating income only; the refused figure no longer reaches the DCF under a second name |
 | WS9 README and docs | done | main | 89f698f | D-22; 250 lines, three generated blocks, doc-lint test, CHANGELOG, engines 22.18 |
 | Audited delta contract | done | main | 57cdee7 | D-23; `npm run audit:deltas`, grouped reasons, manifest identity, escaped path keys |
@@ -73,13 +74,11 @@ gate once WS9 creates it.
 All nine workstreams, their fresh-context reviews and every review fix are
 merged, and the full gate is green on the result.
 
-1. Remove the eleven `thesis-*` worktrees beside the repository (branches
-   kept) — needs the owner's word, being destructive. `git worktree list`
-   names them.
-2. Ask the owner the three questions at the foot of this file.
+1. Ask the owner which model and symbol the one authorised paid run should
+   measure. The worktrees are removed and the EDGAR recording is done.
 
 ## Open questions for the owner (asked at the end of the turn, never mid-task)
 
 1. Measured end-to-end cost figures for the README pricing table require a live paid run. Without approval the table carries a calculation from registry rates plus the one measured Haiku run of 2026-09-01 ($1.43), labeled as such.
-2. Recording the real SEC payloads for CIK 2115436 (successor registrant) requires a live EDGAR fetch; until then the test fixture is hand-built.
+2. ~~Recording the real SEC payloads for CIK 2115436 requires a live EDGAR fetch.~~ **Approved and done, 2026-09-03.** The recording disproved D-14's mechanism; see the revised decision and `fixtures/edgar/xom_successor_*`.
 3. `auto` default and default effort are unchanged (Opus 5, `high`).

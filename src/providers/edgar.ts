@@ -643,6 +643,7 @@ const recentFilingsSchema = z.looseObject({
   isXBRL: z.array(z.unknown()).optional(),
   items: z.array(z.string().nullable()).optional(),
   acceptanceDateTime: z.array(z.string().nullable()).optional(),
+  fileNumber: z.array(z.string().nullable()).optional(),
 });
 
 const ACCESSION_NUMBER = /^\d{10}-\d{2}-\d{6}$/;
@@ -1168,6 +1169,13 @@ export interface EdgarFiling {
   isInlineXBRL?: boolean;
   items?: string;
   acceptanceDateTime?: string;
+  /**
+   * The SEC file number this filing was made under, e.g. `001-43384`, or
+   * `333-293558-01` where the filing rides on ANOTHER registrant's registration
+   * statement and this filer is co-registrant 01. That suffix is one of the two
+   * free hints `predecessorCandidates` uses to find a successor's predecessor.
+   */
+  fileNumber?: string;
 }
 
 export interface EdgarSubmissions {
@@ -1508,6 +1516,7 @@ export class EdgarClient {
         isInlineXBRL: typeof ix === "number" ? ix === 1 : typeof ix === "boolean" ? ix : undefined,
         items: r.items?.[i] ?? undefined,
         acceptanceDateTime: r.acceptanceDateTime?.[i] ?? undefined,
+        fileNumber: r.fileNumber?.[i] ?? undefined,
       };
     }
     const sub: EdgarSubmissions = {

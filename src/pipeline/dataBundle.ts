@@ -58,6 +58,7 @@ import { latestFactEnd, looksLikeBankTagging, type CompanyFacts } from "@/edgar/
 // WS4 (D-14): successor registrants — the predecessor CIK and its facts.
 import {
   SUCCESSOR_FORM,
+  predecessorCandidates,
   predecessorFromFilers,
   usGaapConceptCount,
   type PredecessorFacts,
@@ -1286,15 +1287,31 @@ async function buildEdgarBundle(
 }
 
 /**
+ * How many of the successor's submission headers may be read to find the
+ * predecessor. Each is a live SEC request and the ranking puts the ones that
+ * co-register first, so the cap is reached only when the early candidates all
+ * name a single filer.
+ */
+const MAX_PREDECESSOR_HEADER_READS = 4;
+
+/**
  * WS4 (D-14): resolve a successor registrant's predecessor and fetch its facts.
  *
- * Two extra EDGAR requests, and only in the one situation that needs them: the
- * registrant filed a Form 8-K12B AND its own companyfacts payload carries no
- * us-gaap history. The 8-K12B's submission header co-registers the
- * predecessor, which is the only machine-readable link between the two CIKs;
- * from there the predecessor's companyfacts are an ordinary fetch. Any failure
- * degrades to `null` and a disclosed gap — never a throw, and never a guess at
- * a CIK from a company name.
+ * Entered only in the one situation that needs it: the registrant filed a Form
+ * 8-K12B AND its own companyfacts payload carries no us-gaap history.
+ *
+ * The 8-K12B is the trigger, not the answer. It says the registrant is a
+ * successor; it does not necessarily say whose, and for the case this was built
+ * for it does not — ExxonMobil Holdings' 8-K12B carries one FILER block, itself.
+ * `predecessorCandidates` ranks the filings whose headers are worth reading
+ * (the 8-K12B, then periodic reports, then filings riding on another
+ * registrant's registration statement) and they are read in order until one
+ * co-registers exactly one other party. Reads are capped at
+ * MAX_PREDECESSOR_HEADER_READS; a header that fails to fetch, or that names no
+ * usable co-registrant, moves on to the next rather than ending the search.
+ *
+ * Any failure degrades to `null` and a disclosed gap — never a throw, and never
+ * a guess at a CIK from a company name.
  */
 async function resolvePredecessor(
   symbol: string,
@@ -1312,26 +1329,38 @@ async function resolvePredecessor(
   if (usGaapConceptCount(facts) > 0) return null;
 
   progress(`EDGAR: ${symbol} is a successor issuer (${SUCCESSOR_FORM}) — resolving the predecessor CIK`);
-  const index = await settle(
-    `edgar.predecessorIndex(${symbol})`,
-    edgar.filingIndexHeaders(successorCik10, eightK.accessionNumber),
-  );
-  if (!index.ok) return null;
-  const registrant = predecessorFromFilers(index.value.data.filers, successorCik10);
-  if (registrant === null) return null;
+  for (const candidate of predecessorCandidates(recentFilings, MAX_PREDECESSOR_HEADER_READS)) {
+    const index = await settle(
+      `edgar.predecessorIndex(${symbol})`,
+      edgar.filingIndexHeaders(successorCik10, candidate.accessionNumber),
+    );
+    if (!index.ok) continue;
+    const registrant = predecessorFromFilers(index.value.data.filers, successorCik10);
+    if (registrant === null) continue;
 
-  const predecessorFacts = await settle(
-    `edgar.predecessorFacts(${symbol})`,
-    edgar.companyFacts(registrant.cik10),
-  );
-  if (!predecessorFacts.ok) return null;
-  return {
-    ...registrant,
-    facts: predecessorFacts.value.data,
-    endpoint: predecessorFacts.value.endpoint,
-    via: { accession: eightK.accessionNumber, filed: eightK.filingDate === "" ? null : eightK.filingDate },
-    fetchedAt: predecessorFacts.value.fetchedAt,
-  };
+    const predecessorFacts = await settle(
+      `edgar.predecessorFacts(${symbol})`,
+      edgar.companyFacts(registrant.cik10),
+    );
+    if (!predecessorFacts.ok) return null;
+    // A co-registrant with no us-gaap history of its own is not the
+    // predecessor this exists to find — a financing subsidiary, say. Keep
+    // looking rather than adopting an empty payload as the company's past.
+    if (usGaapConceptCount(predecessorFacts.value.data) === 0) continue;
+    return {
+      ...registrant,
+      facts: predecessorFacts.value.data,
+      endpoint: predecessorFacts.value.endpoint,
+      via: {
+        accession: candidate.accessionNumber,
+        form: candidate.form.trim(),
+        filed: candidate.filingDate === "" ? null : candidate.filingDate,
+        successorFormAccession: eightK.accessionNumber,
+      },
+      fetchedAt: predecessorFacts.value.fetchedAt,
+    };
+  }
+  return null;
 }
 
 /**

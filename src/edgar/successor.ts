@@ -13,10 +13,19 @@
  * rate, every multi-year average and every trend for such an issuer measured a
  * few months of history, or produced nothing at all, without saying why.
  *
- * The link exists in exactly one machine-readable place: the 8-K12B's
- * submission header co-registers the predecessor, so its FILER blocks name both
- * CIKs. This module is the pure half — pick the predecessor out of those
- * blocks, and word the disclosure. Fetching is the caller's job.
+ * The link is machine-readable, but NOT where this module first looked. The
+ * 8-K12B says the registrant is a successor; it does not necessarily say whose.
+ * ExxonMobil Holdings' own 8-K12B (0001193125-26-291990, filed 2026-07-01,
+ * recorded under `fixtures/edgar/`) carries a single FILER block — itself. The
+ * co-registration appears on the filings the two entities made JOINTLY after
+ * the reorganization: the 10-Q of 2026-08-03 and the POSASR of 2026-07-01 each
+ * name both CIKs. So the 8-K12B is the trigger, and the predecessor is resolved
+ * by scanning a short, ranked list of the successor's filings for a submission
+ * header that co-registers exactly one other party.
+ *
+ * This module is the pure half — rank the filings worth reading, pick the
+ * predecessor out of the FILER blocks, and word the disclosure. Fetching is the
+ * caller's job, and it is capped.
  */
 import type { ManifestEntry } from "@/types/core";
 import type { FilingFiler } from "@/providers/edgar";
@@ -24,6 +33,73 @@ import type { CompanyFacts } from "@/edgar/xbrl";
 
 /** The form a successor issuer files to register under the predecessor's listing. */
 export const SUCCESSOR_FORM = "8-K12B";
+
+/** Periodic reports, which a successor and its predecessor file jointly for a time. */
+const PERIODIC_FORM = /^10-[KQ](\/A)?$/;
+
+/** A post-effective amendment to an employee-plan registration. */
+const EMPLOYEE_PLAN_FORM = "S-8 POS";
+
+/**
+ * A file number of the form `333-293558-01`: this filing rides on ANOTHER
+ * registrant's registration statement and the filer is co-registrant 01. The
+ * plain form (`001-43384`) is the registrant's own.
+ */
+export function hasCoRegistrantFileNumber(fileNumber: string | undefined): boolean {
+  return fileNumber !== undefined && /^\d{3}-\d{2,6}-\d{2}$/.test(fileNumber.trim());
+}
+
+/** The filing fields candidate ranking reads; a subset of `EdgarFiling`. */
+export interface CandidateFiling {
+  accessionNumber: string;
+  form: string;
+  filingDate: string;
+  fileNumber?: string;
+}
+
+/**
+ * The successor's filings worth reading a submission header for, best first,
+ * capped at `limit`.
+ *
+ * Ranked, and each rank is evidence rather than taste:
+ *
+ *   0. the 8-K12B itself — it co-registers for some issuers, and it is the one
+ *      filing whose whole purpose is the succession;
+ *   1. periodic reports, newest first — while the two entities file jointly,
+ *      every 10-K and 10-Q names both (this is what resolves ExxonMobil);
+ *   2. anything else riding on another registrant's registration statement,
+ *      newest first — a POSASR or S-3ASR amended by the successor names the
+ *      predecessor whose shelf it is;
+ *   3. the same, but employee-plan amendments (`S-8 POS`), which in the one
+ *      recorded case name only the successor. Last, and only if the cap allows.
+ *
+ * Everything else is never fetched: a filing with no co-registrant file number
+ * that is not periodic has no reason to name a second party, and each header is
+ * a live SEC request.
+ */
+export function predecessorCandidates(
+  filings: readonly CandidateFiling[],
+  limit: number,
+): CandidateFiling[] {
+  const rank = (filing: CandidateFiling): number => {
+    const form = filing.form.trim();
+    if (form === SUCCESSOR_FORM) return 0;
+    if (PERIODIC_FORM.test(form)) return 1;
+    if (!hasCoRegistrantFileNumber(filing.fileNumber)) return Number.POSITIVE_INFINITY;
+    return form === EMPLOYEE_PLAN_FORM ? 3 : 2;
+  };
+  return filings
+    .map((filing) => ({ filing, rank: rank(filing) }))
+    .filter((entry) => Number.isFinite(entry.rank))
+    .sort(
+      (a, b) =>
+        a.rank - b.rank ||
+        b.filing.filingDate.localeCompare(a.filing.filingDate) ||
+        b.filing.accessionNumber.localeCompare(a.filing.accessionNumber),
+    )
+    .slice(0, Math.max(0, limit))
+    .map((entry) => entry.filing);
+}
 
 /** The predecessor registrant a successor's 8-K12B co-registered. */
 export interface PredecessorRegistrant {
@@ -36,16 +112,21 @@ export interface PredecessorFacts extends PredecessorRegistrant {
   facts: CompanyFacts;
   /** The companyfacts endpoint the facts came from. */
   endpoint: string;
-  /** The 8-K12B accession that named the predecessor, and when it was filed. */
-  via: { accession: string; filed: string | null };
+  /**
+   * The filing whose submission header named the predecessor — often NOT the
+   * 8-K12B, so the form is carried with it — and the 8-K12B that made the
+   * registrant a successor in the first place.
+   */
+  via: { accession: string; form: string; filed: string | null; successorFormAccession: string };
   fetchedAt: string;
 }
 
 /**
- * The predecessor among a Form 8-K12B's FILER blocks: the co-registrant that
- * is not the successor itself. A header naming only the successor yields null
- * — that is an 8-K12B filed without co-registration, and guessing a CIK from a
- * company NAME would be a fabricated identity.
+ * The predecessor among one filing's FILER blocks: the co-registrant that is
+ * not the successor itself. A header naming only the successor yields null —
+ * the common case, including ExxonMobil's own 8-K12B — and the caller moves on
+ * to the next candidate. Guessing a CIK from a company NAME would be a
+ * fabricated identity, so it is never done.
  */
 export function predecessorFromFilers(
   filers: readonly FilingFiler[] | undefined,
@@ -83,9 +164,10 @@ export function predecessorManifestEntry(
   return {
     field: "edgar.predecessor",
     reason:
-      `this registrant (CIK ${successorCik10}) is a SUCCESSOR issuer: its Form ${SUCCESSOR_FORM} ` +
-      `(${predecessor.via.accession}${predecessor.via.filed === null ? "" : `, filed ${predecessor.via.filed}`}) ` +
-      `co-registers ${name}, CIK ${predecessor.cik10}, and its own companyfacts payload begins at the reorganization. ` +
+      `this registrant (CIK ${successorCik10}) is a SUCCESSOR issuer: it filed Form ${SUCCESSOR_FORM} ` +
+      `(${predecessor.via.successorFormAccession}), and its ${predecessor.via.form} ` +
+      `${predecessor.via.accession}${predecessor.via.filed === null ? "" : `, filed ${predecessor.via.filed}`} ` +
+      `co-registers ${name}, CIK ${predecessor.cik10}. Its own companyfacts payload begins at the reorganization. ` +
       `${periods} older period(s), ${oldest} to ${newest}, were taken from the predecessor's filings and each row is ` +
       'tagged `predecessor: true` with that CIK. They were filed by a different legal entity, so a change of ' +
       "accounting policy, perimeter or fiscal calendar at the reorganization would not be visible as a restatement.",

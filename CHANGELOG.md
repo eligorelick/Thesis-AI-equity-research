@@ -57,9 +57,11 @@ made.
   and Cost API. It reaches the report and the missing-data manifest.
 - `THESIS_STATEMENT_SOURCE`, backfilling statement history from SEC EDGAR when
   an FMP plan truncates it, with per-period provenance.
-- Successor registrants reach their predecessor's history through the 8-K12B
-  filer list; multi-class share counts are summed; public float carries its own
-  measurement date; restatements are flagged against the value they replaced.
+- Successor registrants reach their predecessor's history: the 8-K12B says the
+  registrant is a successor, and the predecessor is found in the co-registrant
+  list of the filings the two entities made jointly. Multi-class share counts
+  are summed; public float carries its own measurement date; restatements are
+  flagged against the value they replaced.
 - Sector routing reads XBRL tag evidence, not only the SIC code and industry
   label. Financial routes withhold the models whose assumptions they break and
   value the company on excess returns to equity instead.
@@ -122,3 +124,11 @@ made.
   metric described correctly, a percentage coinciding with a scaled figure, a
   bare quarter read as a two-digit year, and person claims accepting any
   citation in the payload.
+- A successor registrant's predecessor is found again. The lookup read the
+  8-K12B's submission header and stopped, on the premise that it co-registers
+  the predecessor. The recorded SEC response for the case this was built for
+  names one filer, itself — so nothing resolved, and the only fixture was
+  hand-built in the shape the code expected. The predecessor is now found by
+  reading a short ranked list of the registrant's submission headers, capped at
+  four requests, and the disclosure names the filing that actually co-registered
+  rather than assuming it was the 8-K12B.

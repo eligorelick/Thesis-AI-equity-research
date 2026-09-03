@@ -533,9 +533,12 @@ describe("public release contract", () => {
       // WS4: the hand-built 8-K12B submission header the successor-registrant
       // tests read.
       read("tests/edgar.successor.test.ts"),
+      // WS4 follow-up: the four RECORDED xom_successor_* payloads, and the
+      // end-to-end scan that reads them.
+      read("tests/dataBundle.successor.test.ts"),
     ].join("\n");
 
-    expect(edgarFixtures).toHaveLength(17);
+    expect(edgarFixtures).toHaveLength(21);
     for (const fixture of edgarFixtures) {
       expect(edgarTests).toContain(path.basename(fixture));
     }

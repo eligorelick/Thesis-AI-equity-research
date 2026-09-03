@@ -1,17 +1,20 @@
 <!--
   synthetic-structure — HAND-BUILT, not a recorded SEC response.
 
-  The submission header of a Form 8-K12B filed by a successor registrant. It
-  reproduces the STRUCTURE of EDGAR's {accession}-index-headers.html: escaped
-  SGML inside a <PRE> block, with one FILER section per co-registrant. The
-  successor is CIK 2115436 and the predecessor it co-registers is CIK 34088;
-  those two numbers are real registrant identifiers, and every other value here
-  (accession, film number, addresses, document names) is invented.
+  An 8-K12B whose submission header co-registers the predecessor: escaped SGML
+  inside a <PRE> block, with one FILER section per co-registrant.
 
-  This fixture exists because the FILER blocks are the only machine-readable
-  link between a successor and its predecessor: EDGAR's submissions and
-  companyfacts endpoints do not connect the two CIKs. No live request is made
-  to obtain it.
+  This shape is NOT what SEC served for the case that motivated the feature.
+  The real ExxonMobil Holdings 8-K12B is recorded beside this file as
+  `xom_successor_8k12b_index_headers.html` and carries a single FILER block —
+  the successor alone. The co-registration is on the filings the two entities
+  made jointly afterwards (`xom_successor_10q_index_headers.html`,
+  `xom_successor_posasr_index_headers.html`).
+
+  So this fixture covers the other branch: an 8-K12B that DOES co-register,
+  which `predecessorCandidates` still ranks first because it costs nothing to
+  try and answers in one request when it holds. Every value here is invented
+  except the two CIKs, which are real registrant identifiers.
 -->
 <HTML><HEAD><TITLE>SEC EDGAR Submission 0002115436-26-000001</TITLE>
 </HEAD><BODY>

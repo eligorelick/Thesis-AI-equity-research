@@ -129,6 +129,15 @@ the spot count but not the series that feeds market-cap history, and — predati
 all of this work — the declared SEC contact identity travelling in Yahoo's
 User-Agent, where nobody asked for it and no document said it went.
 
+One review finding reached past the workstream's file boundary and was closed
+afterwards on the Stage B baseline: `ebit` was filled from pre-tax income plus
+interest expense and fell back to operating income only when that sum was
+unavailable, so the raw sum won whenever both operands existed. That bypassed
+the non-operating adjustment, the bank guard and the containment withholding all
+at once — a figure the derivation had just refused was published under the one
+name valuation reads. EBIT now follows operating income and nothing else, and is
+withheld with its reason where operating income could not be derived.
+
 ### WS5 — sector routing and financial companies (D-16, D-17)
 
 **Met, after two blockers.** Routing reads XBRL tag evidence alongside the SIC

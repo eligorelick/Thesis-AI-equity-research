@@ -12,7 +12,7 @@ Read this, `DECISIONS.md`, and `git log` before resuming.
 | WS3 per-request admission | done | main | 6d8343f | D-10; one reservation and one cost row per provider request |
 | WS5 sector routing / financials | merged | main | b058dff | D-16, D-17; subagent reported nine of nine criteria met |
 | WS6 valuation inputs / disclosure | merged | main | 8e88364 | D-18, D-19; eight of eight met, one residual (N is not a column in the multiples table) |
-| WS7 AI pipeline | running (subagent) | `ws7-pipeline` | — | D-20 |
+| WS7 AI pipeline | merged | main | 82f12b9 | D-20; shared-family disclosure, completeness metadata, judge mirroring |
 | WS8 security / privacy / compliance | merged | main | 1c5d771 | D-21; five of five met |
 | WS9 README / docs | last (me) | main | — | D-22 |
 | WS4 data layer | merged | main | 8d3b3b3 | D-11..D-15; eleven of twelve criteria met, Form 4 deferred with a disclosed gap |
@@ -22,7 +22,9 @@ Read this, `DECISIONS.md`, and `git log` before resuming.
 | Review fixes: WS5 | merged | main | a20d9c0 | Mortgage-REIT misrouting, the justified multiple's growth cap, four wrong-rather-than-absent numbers, route metrics wired to a reader |
 | Review fixes: WS6 | merged | main | 2d4487d | Finance leases back in enterprise value, the own-history rank on one basis, SBC charged once |
 | Review fixes: WS1-3 | merged | main | 8a7cd92 | Resume no longer re-bills, a pass lease no longer blocks its own first request, presumed spend disclosed |
-| Review fixes: WS4, WS7 | running (2 subagents) | `fix-ws4-review`, `fix-ws7-review` | — | Merged with the full gate as each lands |
+| Review fixes: WS4 | merged | main | af2cef6 | Caterpillar total debt, statement-source gaps, the Yahoo User-Agent leak |
+| Review fixes: WS7 | running (subagent) | `fix-ws7-review` | — | 3 blockers, 6 should-fix, 4 nits; merged with the full gate when it lands |
+| WS4 follow-up: EBIT | done | main | d68ac63 | `ebit` follows operating income only; the refused figure no longer reaches the DCF under a second name |
 | WS9 README and docs | done | main | 89f698f | D-22; 250 lines, three generated blocks, doc-lint test, CHANGELOG, engines 22.18 |
 | Audited delta contract | done | main | 57cdee7 | D-23; `npm run audit:deltas`, grouped reasons, manifest identity, escaped path keys |
 
@@ -60,13 +62,19 @@ gate once WS9 creates it.
 - 2026-09-02: WS2. Expired unsettled reservations settle as presumed spend (`cost_log.settlementKind`), reconciled downward by a late settlement or the Usage and Cost API; four lease invariants are asserted at startup; every pass streams behind an idle guard. Commit ddd30b0.
 - 2026-09-02: WS3. `THESIS_RESERVATION_MODE=request` (default) admits and settles each provider request on its own lease, the SDK's own retries are off, and the pass worst case is reported rather than reserved. Commit 6d8343f.
 - 2026-09-02: merged WS8 (1c5d771), WS5 (b058dff) and WS6 (8e88364). Full gate green after each: 3423 then 3451 product tests, 4 integration, both coverage contracts.
+- 2026-09-02: merged WS4 (8d3b3b3), the audited delta contract (57cdee7), WS7 (82f12b9) and the WS8, WS5, WS6 and WS1-3 review fixes (e6b854f, a20d9c0, 2d4487d, 8a7cd92). Full gate green after each.
+- 2026-09-02: WS9. README at 250 lines with three generated blocks, `tests/docs.lint.test.ts`, CHANGELOG, `docs/audit/ws5-methodology.md` folded into `docs/METHODOLOGY.md` (811fb74, 89f698f). Remediation report 80b2b99.
+- 2026-09-02: merged the WS4 review fixes (af2cef6). 3716 product tests.
+- 2026-09-03: the one WS4 follow-up the fix agent could not own — `ebit` bypassing the adjusted derivation — closed on the Stage B baseline (d68ac63). Two tests that encoded the retired rule changed with it; `docs/METHODOLOGY.md` states the EBIT basis. The audited projection did not move.
 
 ## Next
 
-1. Merge the WS4 and WS7 review fixes, regenerating the intended-delta list if
-   either moves the Stage B projection.
+1. Merge the WS7 review fixes when the subagent lands, regenerating the
+   intended-delta list if they move the Stage B projection.
 2. Run `npm run verify` end to end on the result.
-3. Ask the owner the three questions at the foot of this file.
+3. Remove the eleven worktrees (branches kept) — needs the owner's word, being
+   destructive.
+4. Ask the owner the three questions at the foot of this file.
 
 ## Open questions for the owner (asked at the end of the turn, never mid-task)
 

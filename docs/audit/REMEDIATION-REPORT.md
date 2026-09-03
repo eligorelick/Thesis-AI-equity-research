@@ -323,9 +323,10 @@ completed: 41 manifest entries, a 99.3% verification rate, and it settled at
 The gap is not drift in the rates. Every one of the three LLM passes — bull,
 bear and judge — was rejected as schema-invalid on its first attempt and
 succeeded on its single repair, so six requests were billed for three results.
-The three winning requests came to $2.66, within 14% of the calculation; the
-three discarded ones came to $2.65 and bought nothing. `MAX_ANALYST_REPAIRS`
-is 1, so the run was one further rejection away from a data-only report.
+The three winning requests came to $2.658, within 14% of the calculation. The
+three discarded ones came to $2.655 and bought nothing — the run paid for
+itself almost exactly twice. `MAX_ANALYST_REPAIRS` is 1, so it was one further
+rejection away from a data-only report.
 
 Two things worked exactly as the remediation intended, confirmed here on the
 production path rather than in a test: every request settled as `actual` with

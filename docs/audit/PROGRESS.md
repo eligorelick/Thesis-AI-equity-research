@@ -65,7 +65,7 @@ gate once WS9 creates it.
 - 2026-09-02: WS3. `THESIS_RESERVATION_MODE=request` (default) admits and settles each provider request on its own lease, the SDK's own retries are off, and the pass worst case is reported rather than reserved. Commit 6d8343f.
 - 2026-09-02: merged WS8 (1c5d771), WS5 (b058dff) and WS6 (8e88364). Full gate green after each: 3423 then 3451 product tests, 4 integration, both coverage contracts.
 - 2026-09-02: merged WS4 (8d3b3b3), the audited delta contract (57cdee7), WS7 (82f12b9) and the WS8, WS5, WS6 and WS1-3 review fixes (e6b854f, a20d9c0, 2d4487d, 8a7cd92). Full gate green after each.
-- 2026-09-02: WS9. README at 250 lines with three generated blocks, `tests/docs.lint.test.ts`, CHANGELOG, `docs/audit/ws5-methodology.md` folded into `docs/METHODOLOGY.md` (811fb74, 89f698f). Remediation report 80b2b99.
+- 2026-09-02: WS9. README at 250 lines with three generated blocks, `tests/docs.lint.test.ts`, CHANGELOG, WS5's separate methodology note folded into `docs/METHODOLOGY.md` and deleted (811fb74, 89f698f). Remediation report 80b2b99.
 - 2026-09-02: merged the WS4 review fixes (af2cef6). 3716 product tests.
 - 2026-09-03: merged the WS7 review fixes (f94d9a4) and regenerated the README configuration block the new `.env.example` prose moved (60b29e3). Full gate green: 3727 product tests, 4 integration, both coverage contracts, build, `audit:security` 0 vulnerabilities.
 - 2026-09-03: the one WS4 follow-up the fix agent could not own — `ebit` bypassing the adjusted derivation — closed on the Stage B baseline (d68ac63). Two tests that encoded the retired rule changed with it; `docs/METHODOLOGY.md` states the EBIT basis. The audited projection did not move.

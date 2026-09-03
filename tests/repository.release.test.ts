@@ -52,6 +52,9 @@ const ALLOWED_MARKDOWN = new Set([
   "docs/superpowers/plans/2026-09-02-keyless-data-path.md",
   "docs/superpowers/specs/2026-09-02-keyless-data-path-design.md",
   "docs/superpowers/specs/2026-09-02-analysis-quality-design.md",
+  "docs/audit/README-RECONCILIATION.md",
+  "docs/audit/DECISIONS.md",
+  "docs/audit/PROGRESS.md",
 ]);
 const VERIFY_GATES = [
   "npm run check:dependencies",

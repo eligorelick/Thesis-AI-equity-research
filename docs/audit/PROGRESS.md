@@ -17,7 +17,10 @@ Read this, `DECISIONS.md`, and `git log` before resuming.
 | WS9 README / docs | last (me) | main | — | D-22 |
 | WS4 data layer | merged | main | 8d3b3b3 | D-11..D-15; eleven of twelve criteria met, Form 4 deferred with a disclosed gap |
 | Fresh-context reviews | done (4 subagents) | main | — | WS1-3: 2 blockers, 4 should-fix, 8 nits. WS5: 2 blockers, 5 should-fix, 5 nits. WS6: 2 blockers, 5 should-fix, 9 nits. WS8: 3 should-fix, 6 nits |
-| Review fixes | running (4 subagents) | `fix-ws123-review`, `fix-ws5-review`, `fix-ws6-review`, `fix-ws8-review` | — | Each branched from main, merged with the full gate |
+| Fresh-context review of WS4 | done | main | — | 1 blocker (Caterpillar total debt 16% low), 7 should-fix, 9 nits, plus a pre-existing leak of the EDGAR contact into Yahoo's User-Agent |
+| Review fixes: WS8 | merged | main | e6b854f | Offline guard closed in two suites, settings CAS counter preserved, the token's reach described honestly |
+| Review fixes: WS5 | merged | main | a20d9c0 | Mortgage-REIT misrouting, the justified multiple's growth cap, four wrong-rather-than-absent numbers, route metrics wired to a reader |
+| Review fixes: WS1-3, WS4, WS6 | running (3 subagents) | `fix-ws123-review`, `fix-ws4-review`, `fix-ws6-review` | — | Each branched from main, merged with the full gate |
 | Audited delta contract | done | main | 57cdee7 | D-23; `npm run audit:deltas`, grouped reasons, manifest identity, escaped path keys |
 
 ## Plan

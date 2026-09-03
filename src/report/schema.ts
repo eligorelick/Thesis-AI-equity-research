@@ -1323,6 +1323,14 @@ export const CostBreakdownEntrySchema = z
     adjustments: z
       .array(z.enum(["model-floor", "fallback", "effort-stripped", "model-rejected"]))
       .optional(),
+    /**
+     * True where this request was paid for and its output thrown away — a pass
+     * whose result the schema rejected, which then ran again. Without it a
+     * reader sees two `bull` rows and no way to tell that one bought nothing.
+     */
+    discarded: z.boolean().optional(),
+    /** Why it was discarded, in the words the failure was recorded under. */
+    discardedReason: z.string().optional(),
   })
   .strict();
 export type CostBreakdownEntry = z.infer<typeof CostBreakdownEntrySchema>;

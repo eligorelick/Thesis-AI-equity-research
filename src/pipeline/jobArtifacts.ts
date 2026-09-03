@@ -42,6 +42,16 @@ export interface SerializedPassFailure {
   message: string;
   kind?: string;
   retryable?: boolean;
+  /**
+   * What actually went wrong, where the message is a category.
+   *
+   * A schema rejection settles as "schema-invalid structured output for
+   * llm.bull", which says nothing a reader or a maintainer can act on. The zod
+   * error that caused it names the field and the rejected value, and it was
+   * being dropped at the artifact boundary — so a rejection that had already
+   * been paid for could not be diagnosed afterwards from anything durable.
+   */
+  detail?: string;
 }
 
 export type PassSettlement<T> =
@@ -198,7 +208,7 @@ function boundedText(value: unknown, fallback: string, max: number): string {
 
 export function serializePassFailure(
   error: unknown,
-  details: { kind?: string; retryable?: boolean } = {},
+  details: { kind?: string; retryable?: boolean; detail?: string } = {},
 ): SerializedPassFailure {
   const candidate = error instanceof Error ? error : null;
   const failure: SerializedPassFailure = {
@@ -207,6 +217,9 @@ export function serializePassFailure(
   };
   if (details.kind !== undefined) failure.kind = boundedText(details.kind, "unknown", 128);
   if (details.retryable !== undefined) failure.retryable = details.retryable;
+  if (details.detail !== undefined && details.detail !== "") {
+    failure.detail = boundedText(details.detail, "", 4_096);
+  }
   return failure;
 }
 
@@ -233,6 +246,7 @@ function parseFailure(value: unknown): SerializedPassFailure {
   const allowed = ["name", "message"];
   if ("kind" in value) allowed.push("kind");
   if ("retryable" in value) allowed.push("retryable");
+  if ("detail" in value) allowed.push("detail");
   if (!hasExactKeys(value, allowed)) throw new Error("jobArtifacts: unexpected failure fields");
   if (
     typeof value.name !== "string" ||
@@ -243,7 +257,9 @@ function parseFailure(value: unknown): SerializedPassFailure {
     value.message.length > 2_048 ||
     (value.kind !== undefined &&
       (typeof value.kind !== "string" || value.kind.length === 0 || value.kind.length > 128)) ||
-    (value.retryable !== undefined && typeof value.retryable !== "boolean")
+    (value.retryable !== undefined && typeof value.retryable !== "boolean") ||
+    (value.detail !== undefined &&
+      (typeof value.detail !== "string" || value.detail.length === 0 || value.detail.length > 4_096))
   ) {
     throw new Error("jobArtifacts: invalid failure fields");
   }
@@ -252,6 +268,7 @@ function parseFailure(value: unknown): SerializedPassFailure {
     message: value.message,
     ...(value.kind === undefined ? {} : { kind: value.kind }),
     ...(value.retryable === undefined ? {} : { retryable: value.retryable }),
+    ...(value.detail === undefined ? {} : { detail: value.detail }),
   };
 }
 

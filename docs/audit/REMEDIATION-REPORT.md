@@ -334,17 +334,32 @@ no presumed spend, and the report's cost breakdown lists all six requests, so
 shared-model-family warning also fired for real — the judge and both analysts
 ran on the opus family and the manifest says so.
 
-Two follow-ups fall out, neither in the criteria:
+Two follow-ups fell out, neither in the criteria. The first is now fixed:
 
-- **A repaired pass is invisible to a reader.** The breakdown shows two `bull`
+- **A repaired pass was invisible to a reader.** The breakdown showed two `bull`
   rows with no indication that the first was discarded, and no manifest entry
-  records the repair. A reader can see they paid twice but not why. This is the
-  kind of thing the manifest exists for.
+  recorded the repair. A reader could see they paid twice but not why. Fixed:
+  each rejected attempt's cost row is marked `discarded` with a reason, and
+  `llm.<pass>.discardedAttempt` says in the manifest what it cost and that the
+  analysis came from the attempt that succeeded. Both are stamped in
+  `reconcileMeta`, beside the cost breakdown they explain, so the two cannot
+  disagree and `dataCompleteness` is computed over them.
+
+  What a reader is told is a fixed phrase chosen by failure kind, never the
+  recorded failure text. A schema rejection's message and its zod detail both
+  quote the value that was rejected, and that value is the model's own prose:
+  copying it into the report would carry unreviewed text past the
+  rating-language gate, where a match fails the whole report rather than the
+  sentence — so a repaired run would crash instead of disclosing. The test that
+  pins this caught exactly that leak in the first implementation.
+
 - **Three rejections out of three is not chance.** One schema rejection per
   pass, on the strongest model at the highest effort, points at the request
-  schema or the prompt rather than at the model. Diagnosing it needs the
-  rejected payloads, which are not retained, and confirming a fix needs further
-  paid runs.
+  schema or the prompt rather than at the model. It is now diagnosable: the zod
+  error naming the field and the rejected value is persisted on the pass
+  artifact (it was being dropped at that boundary), and the runner's own
+  settlement path records `kind: "schema"` so both paths classify a rejection
+  the same way. Confirming a fix still needs further paid runs.
 
 ## Open questions for the owner
 

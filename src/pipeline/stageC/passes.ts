@@ -855,6 +855,9 @@ function settlementFromPassRun<T>(
     failure: serializePassFailure(new Error(run.error.message), {
       kind: run.error.kind,
       retryable: run.validationError !== undefined,
+      // The zod error, not just its category — the one thing that makes a paid
+      // rejection diagnosable after the run is over.
+      detail: run.validationError,
     }),
     telemetry,
   };

@@ -8294,6 +8294,96 @@ describe("analyst repair attempt after schema-invalid output", () => {
     expect(result.totalCostUsd).toBeCloseTo(0.9 + 0.31 + 0.47 + 0.4 + 0.2, 6);
   });
 
+  it("marks the discarded attempt in the cost breakdown and says so in the manifest", async () => {
+    // A repaired pass bills twice for one result. Before this the report showed
+    // two `bear` rows with nothing to say which of them bought anything — the
+    // 2026-09-03 Opus 5 run paid $2.65 for three attempts it threw away and
+    // disclosed none of it.
+    const { jobId } = createJob("AAPL");
+    const { passes } = mockPasses();
+    const bull = testAnalystPass("bull");
+    const bear = testAnalystPass("bear");
+    passes.runBullThenBear = async (_deps, hooks) => {
+      await launchTestAnalystSide(hooks, "bull");
+      await launchTestAnalystSide(hooks, "bear");
+      throw schemaInvalidBear(bull, true);
+    };
+    passes.runAnalystPass = async (_deps, side, settlement, beforeProviderLaunch) => {
+      void side;
+      await beforeProviderLaunch?.();
+      await settlement?.(testSuccessSettlement(bear));
+      return bear;
+    };
+
+    const result = await runJob(jobId, passes, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW });
+    expect(result.status).toBe("done");
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const report = ReportSchema.parse(JSON.parse(row.reportJson!));
+
+    // Both bear rows are still there — the spend is real either way — but only
+    // the rejected one is marked, and the kept one is left alone.
+    const bearRows = report.appendix.costBreakdown.filter((entry) => entry.step === "bear");
+    expect(bearRows).toHaveLength(2);
+    expect(bearRows.filter((entry) => entry.discarded === true)).toHaveLength(1);
+    const wasted = bearRows.find((entry) => entry.discarded === true)!;
+    expect(wasted.costUsd).toBe(0.31);
+    // A fixed phrase for the failure KIND — never the recorded message, which
+    // quotes the model's own rejected output back.
+    expect(wasted.discardedReason).toBe("its output did not satisfy the report schema");
+    expect(bearRows.find((entry) => entry.discarded === undefined)?.costUsd).toBe(0.47);
+    // Nothing else in the run is marked.
+    expect(report.appendix.costBreakdown.filter((entry) => entry.discarded === true)).toHaveLength(1);
+
+    const disclosed = report.appendix.missingData.find((entry) => entry.field === "llm.bear.discardedAttempt");
+    expect(disclosed?.severity).toBe("info");
+    expect(disclosed?.reason).toContain("$0.3100");
+    expect(disclosed?.reason).toMatch(/included in the reported total/);
+    expect(disclosed?.reason).toMatch(/nothing from the rejected one reached this report/);
+    expect(disclosed?.reason).toContain("its output did not satisfy the report schema");
+    // And the total still counts it: disclosure is not a discount.
+    expect(report.meta.costUsd).toBeCloseTo(0.9 + 0.31 + 0.47 + 0.4 + 0.2, 6);
+  });
+
+  it("keeps the validation error on the artifact but never quotes it into the report", async () => {
+    // A zod error quotes the value it rejected, and that value is the model's
+    // own prose. Echoing it into the report would carry unreviewed text past
+    // the rating-language gate — and a match there fails the WHOLE report, so
+    // a repaired run would crash instead of disclosing. The detail stays on the
+    // durable artifact, where a maintainer reads it.
+    const { jobId } = createJob("AAPL");
+    const { passes } = mockPasses();
+    const bull = testAnalystPass("bull");
+    const bear = testAnalystPass("bear");
+    passes.runBullThenBear = async (_deps, hooks) => {
+      await launchTestAnalystSide(hooks, "bull");
+      await launchTestAnalystSide(hooks, "bear");
+      throw schemaInvalidBear(bull, true);
+    };
+    passes.runAnalystPass = async (_deps, side, settlement, beforeProviderLaunch) => {
+      void side;
+      await beforeProviderLaunch?.();
+      await settlement?.(testSuccessSettlement(bear));
+      return bear;
+    };
+
+    const result = await runJob(jobId, passes, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW });
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const serialized = row.reportJson!;
+    // The rejected VALUE reached the durable artifact and stayed out of the report.
+    expect(serialized).not.toContain("2026-Q1");
+    const artifacts = handle.db.select().from(jobPassArtifacts).where(eq(jobPassArtifacts.jobId, jobId)).all();
+    const failed = artifacts
+      .map((artifact) => artifact.outcomeJson)
+      .filter((json) => (JSON.parse(json) as { outcome: string }).outcome === "failure");
+    expect(failed).toHaveLength(1);
+    // Durable and diagnosable: the rejected value is on the artifact, and it is
+    // classified, so the reader-facing phrase is chosen rather than echoed.
+    expect(failed[0]).toContain("2026-Q1");
+    expect(JSON.parse(failed[0]!) as { failure: { kind?: string } }).toMatchObject({
+      failure: { kind: "schema", retryable: true },
+    });
+  });
+
   it("persists data-only when the repair attempt fails too, naming the second failure", async () => {
     const { jobId } = createJob("AAPL");
     const { passes } = mockPasses();

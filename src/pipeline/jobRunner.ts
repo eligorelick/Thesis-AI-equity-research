@@ -58,6 +58,7 @@ import {
   ReportSchema,
   type Report,
   type AnalystCase,
+  type CostBreakdownEntry,
   type JudgeOutput,
   type ProvenanceCoverage,
   type ExecutionMetadataEntry,
@@ -98,7 +99,9 @@ import {
 } from "@/pipeline/stageB/instrumentSupport";
 import {
   PassSettlementHookError,
+  costRowBelongsToAttempt,
   parseLegacyAnalystSnapshot,
+  readCurrentGenerationPassArtifacts,
   serializePassFailure,
   type DurablePass,
   type ComputedJobResumePlan,
@@ -3155,6 +3158,7 @@ export async function runJob<TPayload = unknown>(
         costBreakdown,
         verifyLog,
         presumedSpendDisclosure(state.jobId, state.runGeneration),
+        discardedAttemptGaps(state),
       );
 
       const validated = ReportSchema.safeParse(finalReport);
@@ -3501,7 +3505,12 @@ export async function runJob<TPayload = unknown>(
           failureSettlement(
             new Error(sideError ?? errMessage(err)),
             telemetryFromAttempt(billed ?? null, analysisModel),
-            { retryable: retryable === true },
+            // `retryable` on this path means exactly one thing: the output was
+            // RECEIVED and the schema rejected it (that is what makes a repair
+            // worth paying for). Recording the kind keeps the artifact's
+            // classification the same on both settlement paths, so a reader's
+            // disclosure does not depend on which one a run took.
+            { retryable: retryable === true, ...(retryable === true ? { kind: "schema" } : {}) },
           ),
         );
       };
@@ -3925,6 +3934,7 @@ function persistReport(
       model: costLog.model,
       costUsd: costLog.costUsd,
       fallbackUsed: costLog.fallbackUsed,
+      attemptId: costLog.attemptId,
     }).from(costLog)
       .where(eq(costLog.jobId, state.jobId))
       .orderBy(costLog.id)
@@ -4021,12 +4031,102 @@ function persistReport(
  * Report assembly helpers (data-only stub + meta reconciliation)
  * ------------------------------------------------------------------------ */
 
-function buildCostBreakdown(state: RunState): { step: string; model: string; costUsd: number }[] {
-  return readCostLedger(state.jobId).map((row) => ({
-    step: row.step,
-    model: row.model,
-    costUsd: row.costUsd,
-  }));
+/**
+ * One provider request the run paid for and threw away.
+ *
+ * A repaired pass bills twice: the rejected attempt and the one that replaced
+ * it. Both settle, both are real spend, and both belong in the breakdown — but
+ * a reader looking at two `bull` rows could not tell which of them bought
+ * anything. The pass artifact records the outcome, so the two are joinable.
+ */
+interface DiscardedAttempt {
+  pass: string;
+  attemptId: string;
+  reason: string;
+}
+
+/**
+ * What a reader is told about a discarded attempt, chosen by failure kind.
+ *
+ * Nothing recorded on the artifact is echoed. A schema rejection's message and
+ * its zod detail both quote the value that was rejected — which is the model's
+ * own prose — so copying either into the report would carry unreviewed model
+ * text past the rating-language gate. A match there fails the WHOLE report, not
+ * the sentence, so a repaired run would crash instead of disclosing. The full
+ * failure stays on the durable pass artifact, where a maintainer reads it; the
+ * report gets a fixed phrase per kind, which is what a reader needs anyway.
+ */
+const DISCARDED_REASON_BY_KIND: Readonly<Record<string, string>> = {
+  schema: "its output did not satisfy the report schema",
+  parse: "its output was not valid JSON",
+};
+const DISCARDED_REASON_DEFAULT = "the attempt did not produce a usable result";
+
+function readerSafeFailureText(failure: { kind?: string }): string {
+  const known = failure.kind === undefined ? undefined : DISCARDED_REASON_BY_KIND[failure.kind];
+  return known ?? DISCARDED_REASON_DEFAULT;
+}
+
+/**
+ * The attempts whose output was rejected, from this generation's artifacts.
+ *
+ * Never throws: a corrupt artifact/cost pair degrades to "nothing known to be
+ * discarded", which is exactly the disclosure this had before. Losing the
+ * marking is a smaller harm than failing to assemble the report over it.
+ */
+function readDiscardedAttempts(jobId: string): DiscardedAttempt[] {
+  try {
+    return readCurrentGenerationPassArtifacts(jobId).flatMap((artifact) => {
+      if (artifact.envelope.outcome !== "failure") return [];
+      return [{
+        pass: artifact.pass,
+        attemptId: artifact.attemptId,
+        reason: readerSafeFailureText(artifact.envelope.failure),
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function buildCostBreakdown(state: RunState): CostBreakdownEntry[] {
+  const discarded = readDiscardedAttempts(state.jobId);
+  return readCostLedger(state.jobId).map((row) => {
+    const match = discarded.find((attempt) => costRowBelongsToAttempt(row.attemptId, attempt.attemptId));
+    return {
+      step: row.step,
+      model: row.model,
+      costUsd: row.costUsd,
+      ...(match === undefined ? {} : { discarded: true, discardedReason: match.reason }),
+    };
+  });
+}
+
+/**
+ * The manifest entries a repaired pass owes a reader: what was rejected, what
+ * it cost, and that the figure beside it was paid twice for one result.
+ */
+function discardedAttemptGaps(state: RunState): ManifestEntry[] {
+  const discarded = readDiscardedAttempts(state.jobId);
+  if (discarded.length === 0) return [];
+  const ledger = readCostLedger(state.jobId);
+  return discarded.map((attempt) => {
+    const wasted = ledger
+      .filter((row) => costRowBelongsToAttempt(row.attemptId, attempt.attemptId))
+      .reduce((sum, row) => sum + row.costUsd, 0);
+    return {
+      field: `llm.${attempt.pass}.discardedAttempt`,
+      reason:
+        `the ${attempt.pass} pass was run more than once: an earlier attempt was billed and its output thrown ` +
+        `away because ${attempt.reason}. That attempt cost $${wasted.toFixed(4)}, which is included in the ` +
+        "reported total and appears in the cost breakdown marked `discarded`. The analysis itself comes from the " +
+        "attempt that succeeded; nothing from the rejected one reached this report, and the failure itself is " +
+        "recorded against the run rather than quoted here.",
+      severity: "info",
+      attemptedSources: ["anthropic"],
+      expected: false,
+    };
+  });
 }
 
 interface CostLedgerRow {
@@ -4034,6 +4134,7 @@ interface CostLedgerRow {
   model: string;
   costUsd: number;
   fallbackUsed: boolean;
+  attemptId: string | null;
 }
 
 /** Ordered immutable accounting rows used to rebuild persisted report metadata. */
@@ -4044,6 +4145,7 @@ function readCostLedger(jobId: string): CostLedgerRow[] {
       model: costLog.model,
       costUsd: costLog.costUsd,
       fallbackUsed: costLog.fallbackUsed,
+      attemptId: costLog.attemptId,
     })
     .from(costLog)
     .where(eq(costLog.jobId, jobId))
@@ -4110,6 +4212,13 @@ const RECONCILED_MANIFEST_FIELDS = new Set([
 ]);
 
 /**
+ * Suffix of the per-pass discarded-attempt entries, which are re-derived from
+ * the durable artifacts on every reconciliation. Matched by suffix because the
+ * field carries the pass name (`llm.bear.discardedAttempt`).
+ */
+const DISCARDED_ATTEMPT_FIELD_SUFFIX = ".discardedAttempt";
+
+/**
  * Reconcile the runner-owned meta + appendix cost/verification fields onto a
  * Report the passes assembled (the passes may not know the final cost or the
  * complete cost breakdown). Non-destructive: only overwrites meta and the
@@ -4118,9 +4227,10 @@ const RECONCILED_MANIFEST_FIELDS = new Set([
 function reconcileMeta(
   report: Report,
   meta: ReportMetaInput,
-  costBreakdown: { step: string; model: string; costUsd: number }[],
+  costBreakdown: CostBreakdownEntry[],
   verifyLog: unknown,
   presumed: PresumedSpendDisclosure | null = null,
+  discarded: ManifestEntry[] = [],
 ): Report {
   // WS7 (D-20), 2026-09 review: the shared-model-family disclosure has to be
   // computed HERE, from the runner's execution list, because this is the only
@@ -4147,9 +4257,18 @@ function reconcileMeta(
         );
 
   const missingData = [
-    ...report.appendix.missingData.filter((gap) => !RECONCILED_MANIFEST_FIELDS.has(gap.field)),
+    ...report.appendix.missingData.filter(
+      (gap) =>
+        !RECONCILED_MANIFEST_FIELDS.has(gap.field) &&
+        !gap.field.endsWith(DISCARDED_ATTEMPT_FIELD_SUFFIX),
+    ),
     ...(judgeProtocol === undefined ? [] : judgeProtocolManifestEntries(judgeProtocol)),
     ...(presumed === null ? [] : [presumed.entry]),
+    // A pass that was rejected and re-run billed twice for one result. The
+    // breakdown beside this marks the wasted row; these say so in words. They
+    // belong HERE, with the cost breakdown they explain, so the two cannot
+    // disagree — and so `dataCompleteness` below is computed over them.
+    ...discarded,
   ];
   // Both edits above CHANGE the manifest this metadata summarizes. Recomputing
   // is not optional: deriveReportCompletenessPresentation recomputes from the
@@ -4285,6 +4404,9 @@ function reconcileRecoveredVerifyReport(
     costBreakdown,
     report.appendix.verificationLog,
     presumedSpendDisclosure(state.jobId, state.runGeneration),
+    // Durable recovery reads the same artifacts, so a run whose pass was
+    // repaired before the crash still discloses the attempt it threw away.
+    discardedAttemptGaps(state),
   );
   return ReportSchema.parse({
     ...reconciled,

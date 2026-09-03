@@ -124,6 +124,14 @@ made.
   metric described correctly, a percentage coinciding with a scaled figure, a
   bare quarter read as a two-digit year, and person claims accepting any
   citation in the payload.
+- A pass that was rejected and re-run now says so. The report billed twice for
+  one result and showed two rows for the same step with nothing to distinguish
+  them; the wasted row is marked `discarded` and the manifest names what it
+  cost. The failure itself — a zod error that quotes the model's own rejected
+  output — is recorded against the run rather than copied into the report.
+- A schema rejection is diagnosable after the fact. The validation error naming
+  the field and the rejected value was dropped when the failure was written to
+  the pass artifact, leaving only the category behind.
 - A successor registrant's predecessor is found again. The lookup read the
   8-K12B's submission header and stopped, on the premise that it co-registers
   the predecessor. The recorded SEC response for the case this was built for

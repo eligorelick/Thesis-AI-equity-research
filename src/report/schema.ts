@@ -438,6 +438,16 @@ export const MetaSchema = z
     pipelineVersion: z.string(),
     costUsd: z.number(),
     /**
+     * How much of `costUsd` is a PRESUMED upper bound rather than a measured
+     * charge (DECISIONS D-07): a reservation whose owner died, or a stream
+     * that was accepted and then went silent, is counted at its full reserved
+     * maximum until something reconciles it downward. Absent when nothing in
+     * the run was presumed, and absent from every report written before this
+     * field existed. `appendix.missingData` carries the matching
+     * `cost.presumed` entry.
+     */
+    presumedCostUsd: z.number().optional(),
+    /**
      * CITATION COVERAGE: fraction of report numbers traced to a citation or a
      * payload value; null until the pass runs. This is a provenance check, NOT
      * a correctness/accuracy check — the field name is kept for backward-compat

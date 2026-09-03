@@ -2153,6 +2153,60 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(concurrentRequests).toEqual(["bear", "bull"]);
   });
 
+  /**
+   * D-07's disclosure clause: presumed spend is part of the total the report
+   * shows, so the report has to say which part of it is a bound.
+   */
+  it("discloses presumed spend in the manifest and in cost metadata", async () => {
+    const { jobId } = createJob("AAPL");
+    // A previous generation-0 attempt whose owner died: its whole reservation
+    // is counted until something reconciles it downward.
+    handle.db.insert(costLog).values({
+      jobId,
+      runGeneration: 0,
+      attemptId: null,
+      presumedAttemptId: "dead-attempt",
+      settlementKind: "presumed",
+      step: "bull",
+      model: "claude-sonnet-5",
+      costUsd: 3.86,
+      createdAt: NOW().toISOString(),
+    }).run();
+
+    const result = await runJob(jobId, mockPasses().passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result.status).toBe("done");
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const parsed = ReportSchema.parse(JSON.parse(row.reportJson!));
+    expect(parsed.meta.presumedCostUsd).toBe(3.86);
+    expect(parsed.appendix.missingData).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: "cost.presumed",
+        severity: "warn",
+        reason: expect.stringContaining("presumed upper bound"),
+      }),
+    ]));
+  });
+
+  it("omits the presumed-spend disclosure when nothing in the run was presumed", async () => {
+    const { jobId } = createJob("MSFT");
+
+    const result = await runJob(jobId, mockPasses().passes, {
+      bundle: fakeBundle("MSFT"),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const parsed = ReportSchema.parse(JSON.parse(row.reportJson!));
+    expect(parsed.meta.presumedCostUsd).toBeUndefined();
+    expect(parsed.appendix.missingData.some((gap) => gap.field === "cost.presumed")).toBe(false);
+  });
+
   it("still records a late measured settlement after a request lease renewal lost authority", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-06T00:00:00.000Z"));

@@ -101,6 +101,7 @@ import {
   authorizePaidPassLaunch,
   claimQueuedJobById,
   configuredSchedulerLimits,
+  listPresumedCosts,
   reconcileExpiredJobClaims,
   reconcileExpiredSchedulerStateInTransaction,
   releaseUnbilledPaidPassLease,
@@ -3090,7 +3091,13 @@ export async function runJob<TPayload = unknown>(
 
       // Reconcile runner-owned meta onto the assembled report (cost/rate/model
       // are the runner's source of truth; the passes may not know the final cost).
-      const finalReport = reconcileMeta(report, meta, costBreakdown, verifyLog);
+      const finalReport = reconcileMeta(
+        report,
+        meta,
+        costBreakdown,
+        verifyLog,
+        presumedSpendDisclosure(state.jobId, state.runGeneration),
+      );
 
       const validated = ReportSchema.safeParse(finalReport);
       if (!validated.success) {
@@ -3751,6 +3758,7 @@ function persistDataOnly(
     validation,
     computed,
     costBreakdown: buildCostBreakdown(state),
+    presumed: presumedSpendDisclosure(state.jobId, state.runGeneration),
     reason: hasKey
       ? "LLM analysis could not complete — the failed pass errors are disclosed in the missing-data manifest; this is a data-only report."
       : NO_KEY_SKIP_REASON,
@@ -3780,6 +3788,10 @@ function persistDataOnly(
         severity: "critical",
         attemptedSources: ["pipeline"],
       },
+      // The presumed-spend line is generated here from durable pass names and
+      // numbers, never from provider prose, so it survives the sterile rebuild
+      // — the shell still shows a cost total that it must qualify.
+      ...(dataOnlyInput.presumed == null ? [] : [dataOnlyInput.presumed.entry]),
     ];
     validatedReport = ReportSchema.parse(fallback);
   }
@@ -3988,6 +4000,47 @@ function sumLoggedCost(jobId: string, db: ThesisDb = getDb()): number {
   return rows.reduce((acc, r) => acc + r.costUsd, 0);
 }
 
+/** What part of a run's reported cost is a bound rather than a charge. */
+interface PresumedSpendDisclosure {
+  totalUsd: number;
+  entry: ManifestEntry;
+}
+
+/**
+ * Presumed spend belonging to this run, as a disclosure (DECISIONS D-07).
+ *
+ * A reservation whose owning process died, and a stream that was accepted and
+ * then went silent, are both counted at their reserved maximum until evidence
+ * lowers them. That bound is part of the total the report shows, so the report
+ * has to say so: without this, a user whose run crashed mid-pass sees a total
+ * inflated by up to one request maximum with no sign that part of it is an
+ * upper bound rather than a charge.
+ */
+function presumedSpendDisclosure(
+  jobId: string,
+  runGeneration: number,
+): PresumedSpendDisclosure | null {
+  const rows = listPresumedCosts().filter(
+    (row) => row.jobId === jobId && row.runGeneration === runGeneration,
+  );
+  if (rows.length === 0) return null;
+  const totalUsd = round4(rows.reduce((total, row) => total + row.costUsd, 0));
+  const passes = [...new Set(rows.map((row) => row.pass))].sort().join(", ");
+  return {
+    totalUsd,
+    entry: {
+      field: "cost.presumed",
+      reason:
+        `$${totalUsd.toFixed(4)} of the reported cost is a presumed upper bound, not a measured ` +
+        `charge: ${rows.length} authorized provider request(s) (${passes}) never reported what ` +
+        "they billed, so the whole reservation is counted until it is reconciled downward " +
+        "(npm run costs:reconcile).",
+      severity: "warn",
+      attemptedSources: ["anthropic"],
+    },
+  };
+}
+
 /**
  * Reconcile the runner-owned meta + appendix cost/verification fields onto a
  * Report the passes assembled (the passes may not know the final cost or the
@@ -3999,6 +4052,7 @@ function reconcileMeta(
   meta: ReportMetaInput,
   costBreakdown: { step: string; model: string; costUsd: number }[],
   verifyLog: unknown,
+  presumed: PresumedSpendDisclosure | null = null,
 ): Report {
   const next: Report = {
     ...report,
@@ -4019,10 +4073,17 @@ function reconcileMeta(
       runId: meta.runId ?? report.meta.runId,
       startedAt: meta.startedAt ?? report.meta.startedAt,
       completedAt: meta.completedAt ?? report.meta.completedAt,
+      ...(presumed === null ? {} : { presumedCostUsd: presumed.totalUsd }),
     },
     appendix: {
       ...report.appendix,
       verificationRate: meta.verificationRate,
+      missingData: presumed === null
+        ? report.appendix.missingData
+        : [
+            ...report.appendix.missingData.filter((gap) => gap.field !== "cost.presumed"),
+            presumed.entry,
+          ],
       costBreakdown: costBreakdown.length > 0
         ? costBreakdown.map((entry) => {
             const execution = meta.execution?.find((item) => item.step === entry.step);
@@ -4123,6 +4184,7 @@ function reconcileRecoveredVerifyReport(
     },
     costBreakdown,
     report.appendix.verificationLog,
+    presumedSpendDisclosure(state.jobId, state.runGeneration),
   );
   return ReportSchema.parse({
     ...reconciled,
@@ -4182,6 +4244,8 @@ interface DataOnlyInput {
   computed: ComputedMetrics | null;
   costBreakdown: { step: string; model: string; costUsd: number }[];
   reason: string;
+  /** Part of `costUsd` that is a presumed upper bound (DECISIONS D-07). */
+  presumed?: PresumedSpendDisclosure | null;
 }
 
 /**
@@ -4232,6 +4296,9 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
     severity: "critical",
     attemptedSources: attemptedAnalysisSources,
   });
+  // A data-only report still shows a cost total, and a run that died mid-pass
+  // is exactly the case where part of that total is a bound, not a charge.
+  if (input.presumed != null) missingData.push(input.presumed.entry);
 
   const report: Report = {
     meta: {
@@ -4242,6 +4309,7 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
       model: input.model,
       pipelineVersion: PIPELINE_VERSION,
       costUsd: input.costUsd,
+      ...(input.presumed == null ? {} : { presumedCostUsd: input.presumed.totalUsd }),
       verificationRate: null,
       provenanceCoverage: emptyCoverage,
       dataCompleteness: buildDataCompleteness(missingData),

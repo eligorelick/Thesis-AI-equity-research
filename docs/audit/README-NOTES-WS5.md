@@ -193,7 +193,9 @@ naming the missing one, rather than published as a complete figure.
 
 - Any claim that the Piotroski financial variant withholds *four* signals: it
   withholds four for FIN-OTHER issuers and **six** on the deposit-, float- or
-  repo-funded routes.
+  repo-funded routes. The rendered label counts and names the signals that are
+  actually withheld, so a data gap dropping a further signal shows up in the
+  count rather than hiding behind the route's own number.
 - Any claim that SIC 6798 routes to the equity-REIT map: it now routes to `reit`
   with an `undetermined` sub-map unless evidence or an explicit vendor sub-type
   decides.

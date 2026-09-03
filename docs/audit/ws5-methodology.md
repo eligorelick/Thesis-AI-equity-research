@@ -86,7 +86,9 @@ Four deliberate properties:
 
 - Neither industry nor SIC matched → evidence **decides** the base route, and
   the note names the tags, their values, their period ends, and the industry and
-  SIC inputs that failed to decide.
+  SIC inputs that failed to decide. The one exception is the mortgage-REIT rule,
+  which fires on a single tag group and must first be corroborated (§1.2);
+  uncorroborated, it is filed as `route.evidence.conflict` and changes nothing.
 - Industry/SIC matched and evidence agrees → the note records the confirmation.
 - Industry/SIC matched and evidence disagrees → **the declared classification
   stands**, and the disagreement is filed as `route.evidence.conflict` (`warn`).
@@ -374,7 +376,9 @@ inventory, receivables and a working-capital cycle.
 
 The score is reported over the signals that remain, with its own denominator,
 and the result carries a variant and a label so a reduced score is never read
-against the 9-point scale.
+against the 9-point scale. The label's withheld count is derived from the
+signals that are actually null and names them, so a data gap that drops a
+further signal is never reported as one of the route's own withholdings.
 
 | Scale | Applies to | Signals withheld |
 | --- | --- | --- |

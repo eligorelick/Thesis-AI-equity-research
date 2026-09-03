@@ -32,8 +32,10 @@ Notes for whoever writes the surrounding paragraph:
 - `npm run settings:reset` with no `--yes` prints the exact rows it would
   delete and changes nothing. `--yes` deletes them. `--db <path>` targets a
   specific database file; otherwise the configured path is used.
-- The reset keeps `cacheMaintenanceLastRunAt`, which is bookkeeping rather than
-  a setting.
+- The reset keeps two internal rows, neither of which is a setting:
+  `cacheMaintenanceLastRunAt` (the cache-sweep stamp) and
+  `__writableSettingsRevision` (the monotonic counter behind the settings
+  compare-and-swap). Neither is listed in the preview.
 - The Settings page has no reset control. It does have a **resume queued work**
   control (below). If the README claims a UI reset, it would be wrong today.
 

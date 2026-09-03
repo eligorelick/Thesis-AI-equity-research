@@ -3,8 +3,8 @@
  *
  * Settings resolve database → environment → default, so a row saved from the
  * Settings page outranks `.env` until someone deletes it. These tests pin the
- * refusal without `--yes`, the exact preview text, the delete, and the
- * bookkeeping row the reset must not touch. One test spawns the argv that
+ * refusal without `--yes`, the exact preview text, the delete, and the two
+ * bookkeeping rows the reset must not touch. One test spawns the argv that
  * package.json declares for `settings:reset` so the `@/` alias and the
  * `react-server` condition stay wired; everything else calls the module
  * directly.
@@ -17,6 +17,8 @@ import path from "node:path";
 
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { WRITABLE_SETTINGS_REVISION_KEY } from "@/settings/settings";
 
 import {
   PRESERVED_SETTING_KEYS,
@@ -116,20 +118,25 @@ describe("runSettingsReset", () => {
 
     const preview = runSettingsReset({ dbFile, confirmed: false });
     expect(preview.deleted).toBe(0);
+    // The revision counter is never offered for deletion: it is the monotonic
+    // sequence behind the settings compare-and-swap, not a setting.
     expect(preview.rows.map((row) => row.key)).toEqual([
-      "__writableSettingsRevision",
       "analysisEffort",
       "analysisModel",
     ]);
+    expect(preview.preserved).toEqual(["__writableSettingsRevision"]);
     expect(storedSettings()).toHaveLength(3);
 
     const applied = runSettingsReset({ dbFile, confirmed: true });
-    expect(applied.deleted).toBe(3);
-    expect(storedSettings()).toEqual([]);
+    expect(applied.deleted).toBe(2);
+    expect(storedSettings()).toEqual([["__writableSettingsRevision", "7"]]);
   });
 
   it("keeps the cache-maintenance stamp, which is bookkeeping and not a setting", () => {
-    expect(PRESERVED_SETTING_KEYS).toEqual(["cacheMaintenanceLastRunAt"]);
+    expect([...PRESERVED_SETTING_KEYS].sort()).toEqual([
+      "__writableSettingsRevision",
+      "cacheMaintenanceLastRunAt",
+    ]);
     seedSettings([
       ["analysisModel", "claude-sonnet-5"],
       ["cacheMaintenanceLastRunAt", "2026-09-01T00:00:00.000Z"],
@@ -142,6 +149,23 @@ describe("runSettingsReset", () => {
     expect(storedSettings()).toEqual([
       ["cacheMaintenanceLastRunAt", "2026-09-01T00:00:00.000Z"],
     ]);
+  });
+
+  it("keeps the writable-settings revision so a reset cannot replay an etag", () => {
+    expect(PRESERVED_SETTING_KEYS).toContain(WRITABLE_SETTINGS_REVISION_KEY);
+    seedSettings([
+      ["analysisModel", "claude-sonnet-5"],
+      ["analysisEffort", "max"],
+      [WRITABLE_SETTINGS_REVISION_KEY, "12"],
+    ]);
+
+    const summary = runSettingsReset({ dbFile, confirmed: true });
+
+    expect(summary.deleted).toBe(2);
+    expect(summary.preserved).toEqual([WRITABLE_SETTINGS_REVISION_KEY]);
+    // Survives at its old value: the next write advances 12 -> 13, so no etag
+    // a stale tab still holds can ever match again.
+    expect(storedSettings()).toEqual([[WRITABLE_SETTINGS_REVISION_KEY, "12"]]);
   });
 
   it("never creates a database and tolerates one without the settings table", () => {

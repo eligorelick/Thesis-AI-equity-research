@@ -8,8 +8,11 @@
  * environment, and then to the built-in defaults.
  *
  * Without `--yes` this prints exactly which rows it would delete and changes
- * nothing. The cache-maintenance stamp is bookkeeping rather than a setting, so
- * it is preserved — deleting it would force a VACUUM sweep on the next start.
+ * nothing. Two internal rows are preserved because neither is a setting: the
+ * cache-maintenance stamp (deleting it would force a VACUUM sweep on the next
+ * start) and the writable-settings revision counter (deleting it would restart
+ * the monotonic sequence behind the settings compare-and-swap, so a stale
+ * browser tab's `If-Match` etag could match again and overwrite a newer value).
  *
  * Run through npm so the `@/` path alias and the `react-server` condition
  * (which makes the `server-only` marker inert outside Next) are both applied:
@@ -25,9 +28,13 @@ import Database from "better-sqlite3";
 
 import { MAINTENANCE_LAST_RUN_KEY } from "@/cache/maintenance";
 import { defaultDbPath } from "@/db/paths";
+import { WRITABLE_SETTINGS_REVISION_KEY } from "@/settings/settings";
 
 /** Keys the reset leaves in place: internal bookkeeping, not user settings. */
-export const PRESERVED_SETTING_KEYS: readonly string[] = [MAINTENANCE_LAST_RUN_KEY];
+export const PRESERVED_SETTING_KEYS: readonly string[] = [
+  MAINTENANCE_LAST_RUN_KEY,
+  WRITABLE_SETTINGS_REVISION_KEY,
+];
 
 export interface SettingsResetArguments {
   dbFile: string;

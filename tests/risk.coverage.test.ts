@@ -27,6 +27,12 @@ const EXPECTED_RISK_SOURCES = [
   "src/edgar/extract.ts",
   "src/edgar/xbrl.ts",
   "src/edgar/statements.ts",
+  // WS4 review N3: the versioned tag table and the successor hop were carved
+  // out of statements.ts, and the reserved-symbol rule is a safety guard; all
+  // three were audited logic with no coverage floor of their own.
+  "src/edgar/tagSynonyms.ts",
+  "src/edgar/successor.ts",
+  "src/providers/reservedSymbols.ts",
   "src/edgar/splits.ts",
   "src/edgar/sic.ts",
   "src/cache/apiCache.ts",

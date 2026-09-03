@@ -49,9 +49,18 @@ export const REVENUE_TAGS: readonly string[] = [
   "RevenuesNetOfInterestExpense",
 ];
 
+/**
+ * The pretax element that, by taxonomy definition, is measured BEFORE
+ * equity-method results — its name lists what it excludes. When it serves as
+ * the base of the derived EBIT, subtracting equity-method income removes money
+ * that was never in the base, so the adjustment is gated on it.
+ */
+export const PRETAX_EXCLUDING_EQUITY_METHOD_TAG =
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments";
+
 export const INCOME_BEFORE_TAX_TAGS: readonly string[] = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
-  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+  PRETAX_EXCLUDING_EQUITY_METHOD_TAG,
 ];
 
 /**
@@ -87,24 +96,74 @@ export const INTEREST_EXPENSE_STAND_INS: readonly TagStandIn[] = [
 
 /**
  * Non-operating items subtracted from the derived EBIT (pretax income +
- * interest expense) when the filer tags them. `componentOf` names another
- * adjustment that already contains this one in the taxonomy's income-statement
- * calculation: `InvestmentIncomeInterest` is a child of
- * `NonoperatingIncomeExpense`, so it is subtracted on its own only when the
- * aggregate is absent. Equity-method results sit beside the aggregate at the
- * pretax level and are always subtracted when present.
+ * interest expense) when the filer tags them.
+ *
+ * `componentOf` names another adjustment that already contains this one in the
+ * taxonomy's income-statement calculation: `InvestmentIncomeInterest` is a
+ * child of `NonoperatingIncomeExpense`, so it is subtracted on its own only
+ * when the aggregate is absent.
+ *
+ * `notWhenBaseTag` names base tags whose OWN DEFINITION excludes this item, so
+ * subtracting it would remove money the base never held. Equity-method results
+ * are the case: they sit beside the aggregate at the pretax level under
+ * `IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest`,
+ * but the second pretax element in `INCOME_BEFORE_TAX_TAGS` is measured before
+ * them. Ungated, a filer with pretax-before-equity 5,000, equity income 300 and
+ * interest 200 published EBIT 4,900 instead of 5,200 — 5.8% low, into the DCF
+ * and every EBIT multiple.
  */
 export interface EbitNonOperatingAdjustment {
   label: string;
   tags: readonly string[];
   componentOf?: string;
+  notWhenBaseTag?: readonly string[];
 }
 
 export const EBIT_NON_OPERATING_ADJUSTMENTS: readonly EbitNonOperatingAdjustment[] = [
   { label: "NonoperatingIncomeExpense", tags: ["NonoperatingIncomeExpense"] },
   { label: "InvestmentIncomeInterest", tags: ["InvestmentIncomeInterest"], componentOf: "NonoperatingIncomeExpense" },
-  { label: "IncomeLossFromEquityMethodInvestments", tags: ["IncomeLossFromEquityMethodInvestments"] },
+  {
+    label: "IncomeLossFromEquityMethodInvestments",
+    tags: ["IncomeLossFromEquityMethodInvestments"],
+    notWhenBaseTag: [PRETAX_EXCLUDING_EQUITY_METHOD_TAG],
+  },
 ];
+
+/**
+ * The interest-expense element the taxonomy makes a CHILD of
+ * `NonoperatingIncomeExpense`. When a filer tags both, "pretax + interest −
+ * aggregate" adds back an interest expense the aggregate already removed and
+ * overstates EBIT by exactly that interest, so the derivation is withheld
+ * rather than published (see `EBIT_INTEREST_INSIDE_AGGREGATE`).
+ */
+export const INTEREST_INSIDE_NONOPERATING_TAG = "InterestExpenseNonoperating";
+
+/**
+ * The pair whose co-presence makes the derivation unsound, with the disclosure
+ * the withheld figure carries.
+ */
+export const EBIT_INTEREST_INSIDE_AGGREGATE = {
+  partTag: INTEREST_INSIDE_NONOPERATING_TAG,
+  adjustmentTag: "NonoperatingIncomeExpense",
+  disclose:
+    "operating income WITHHELD rather than derived: the filer reports no OperatingIncomeLoss line, and its interest " +
+    `expense is tagged ${INTEREST_INSIDE_NONOPERATING_TAG}, which the us-gaap calculation makes a component of the ` +
+    "NonoperatingIncomeExpense aggregate it also filed. \"Pretax income + interest expense − the aggregate\" would " +
+    "therefore add back an interest expense the aggregate has already removed and overstate EBIT by exactly that " +
+    "interest, so no figure is published for this period.",
+} as const;
+
+/**
+ * The caveat every derived EBIT carries when the non-operating aggregate was
+ * subtracted and an interest expense was added back from a tag the taxonomy
+ * does NOT place inside it. Many filers present "total other income (expense),
+ * net" as a line that already contains interest expense, and nothing in
+ * companyfacts says which presentation a filer used.
+ */
+export const EBIT_AGGREGATE_MAY_HOLD_INTEREST =
+  "caveat — the NonoperatingIncomeExpense aggregate subtracted here is frequently presented as \"total other income " +
+  "(expense), net\" and may ALREADY contain the interest expense added back; companyfacts carries no presentation " +
+  "linkbase, so this cannot be checked, and where it does the figure overstates EBIT by that interest";
 
 /** The current portion of long-term debt AND finance leases, as retailers tag their current installments. */
 export const COMBINED_CURRENT_DEBT_TAG = "LongTermDebtAndCapitalLeaseObligationsCurrent";

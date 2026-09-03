@@ -249,24 +249,62 @@ export function parseIndexHeaders(html: string): FilingIndex {
 }
 
 /**
+ * The section headings an SGML submission header uses to open a party block.
+ * `FILER` is the registrant; the rest are OTHER parties that carry a
+ * COMPANY CONFORMED NAME / CENTRAL INDEX KEY pair of their own — the subject
+ * company of a Schedule 13D or a tender offer, the reporting owner and issuer
+ * of a Form 4, and the filing agent on some submissions.
+ */
+const FILER_BLOCK_RE = /^\s*(FILER|FILED BY|SUBJECT COMPANY|REPORTING-OWNER|ISSUER|OWNER DATA)\s*:/gim;
+
+/**
+ * The text of every FILER block in a submission header, in order.
+ *
+ * A header with no block heading at all (a bare name/CIK excerpt, as some
+ * fixtures are) yields the whole text, so the parser keeps working on inputs
+ * that were never sectioned.
+ */
+function filerBlocks(headerText: string): string[] {
+  const marks: { index: number; isFiler: boolean }[] = [];
+  FILER_BLOCK_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = FILER_BLOCK_RE.exec(headerText)) !== null) {
+    marks.push({ index: m.index, isFiler: m[1]!.trim().toUpperCase() === "FILER" });
+  }
+  if (marks.length === 0) return [headerText];
+  return marks.flatMap((mark, i) =>
+    mark.isFiler ? [headerText.slice(mark.index, marks[i + 1]?.index ?? headerText.length)] : [],
+  );
+}
+
+/**
  * The FILER blocks of a submission header, deduped by CIK, in filed order.
  * Every block pairs COMPANY CONFORMED NAME with the CENTRAL INDEX KEY on the
  * following line; a header with one registrant yields one entry.
+ *
+ * Only the FILER blocks are scanned. Scanning the whole header worked for the
+ * 8-K12B this exists for, whose only parties are the co-registrants, but on
+ * other form types it would pick up the SUBJECT COMPANY of a Schedule 13D or
+ * the ISSUER of a Form 4 as though it were a co-registrant — and
+ * `predecessorFromFilers` reads "exactly one party besides the successor" as
+ * the predecessor's identity.
  */
 export function parseFilers(headerText: string): FilingFiler[] {
   const filers: FilingFiler[] = [];
   const seen = new Set<string>();
-  const re = new RegExp(
-    "COMPANY CONFORMED NAME:\\s*([^\\r\\n]*?)\\s*[\\r\\n]+\\s*CENTRAL INDEX KEY:\\s*(\\d{1,10})",
-    "gi",
-  );
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(headerText)) !== null) {
-    const cik10 = padCik(m[2]!);
-    if (seen.has(cik10)) continue;
-    seen.add(cik10);
-    const name = m[1]!.trim();
-    filers.push({ cik10, name: name === "" ? null : name });
+  for (const block of filerBlocks(headerText)) {
+    const re = new RegExp(
+      "COMPANY CONFORMED NAME:\\s*([^\\r\\n]*?)\\s*[\\r\\n]+\\s*CENTRAL INDEX KEY:\\s*(\\d{1,10})",
+      "gi",
+    );
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(block)) !== null) {
+      const cik10 = padCik(m[2]!);
+      if (seen.has(cik10)) continue;
+      seen.add(cik10);
+      const name = m[1]!.trim();
+      filers.push({ cik10, name: name === "" ? null : name });
+    }
   }
   return filers;
 }

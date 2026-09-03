@@ -31,17 +31,21 @@ import { sectorIndustryForSic } from "@/edgar/sic";
 import {
   BALANCE_SHEET_SHARES_TAG,
   buildStatementsFromCompanyFacts,
+  coverShareCountsByPeriod,
+  describeChangePct,
   RESTATEMENT_THRESHOLD_PCT,
   type BuiltStatements,
   type SharesBasis,
   type StatementRowsResult,
 } from "@/edgar/statements";
-import { conceptFactsSchema, dedupFactPoints, parseFactPoints, type CompanyFacts } from "@/edgar/xbrl";
+import { conceptFactsSchema, dedupFactPoints, parseFactPoints, type CompanyFacts, type FactPoint } from "@/edgar/xbrl";
+import { tagsFor } from "@/edgar/tagSynonyms";
 import { describeSplitRatio, discoverStockSplits, SPLIT_RATIO_TAG, type SplitEvent } from "@/edgar/splits";
 import {
   SUCCESSOR_FORM,
   predecessorManifestEntry,
   predecessorUnresolvedEntry,
+  usGaapConceptCount,
   type PredecessorFacts,
 } from "@/edgar/successor";
 import { estimateBeta, type ClosePoint } from "@/pipeline/stageB/betaEstimate";
@@ -192,7 +196,12 @@ function marketCapEndpoint(basis: SharesBasis | null): string {
 }
 const SHARES_FLOAT_ENDPOINT = "companyfacts→shares-float(dei:EntityCommonStockSharesOutstanding + dei:EntityPublicFloat)";
 
-const DEI_SHARES_TAG = "EntityCommonStockSharesOutstanding";
+/**
+ * The dei cover-page element name, from the ONE versioned module that holds
+ * every element name (criterion (b)); this file used to keep a second copy of
+ * the literal, which is exactly the drift the module exists to prevent.
+ */
+const DEI_SHARES_TAG = tagsFor("deiSharesOutstanding")[0] as string;
 
 /**
  * A cover-page share count is dated a few weeks AFTER the fiscal period it
@@ -307,20 +316,8 @@ export function isUsJurisdiction(code: string | null | undefined): boolean {
   return typeof code === "string" && US_JURISDICTIONS.has(code.trim().toUpperCase());
 }
 
-/**
- * One share-count concept as a deduped series, oldest first; empty when absent.
- * Each point is carried to the current share basis by the splits dated after
- * its own filing (`factorFor`), the same rule `src/edgar/statements.ts`
- * applies: a cover count filed before a 4-for-1 split is a quarter of today's
- * share count, and the daily market-cap history would be a quarter short.
- */
-function sharePointsForConcept(
-  facts: CompanyFacts,
-  namespaceName: string,
-  tag: string,
-  instantOnly: boolean,
-  factorFor: (filed: string) => number,
-): { value: number; asOf: string }[] {
+/** The `shares`-unit fact points of one concept, unparsed by any rule; empty when absent. */
+function sharesUnitPoints(facts: CompanyFacts, namespaceName: string, tag: string): FactPoint[] {
   const namespace = facts.facts[namespaceName];
   if (namespace === null || namespace === undefined || typeof namespace !== "object") return [];
   const raw = (namespace as Record<string, unknown>)[tag];
@@ -328,16 +325,60 @@ function sharePointsForConcept(
   const parsed = conceptFactsSchema.safeParse(raw);
   if (!parsed.success) return [];
   const unitPoints = parsed.data.units["shares"];
-  if (!Array.isArray(unitPoints)) return [];
-  return dedupFactPoints(parseFactPoints(unitPoints))
+  return Array.isArray(unitPoints) ? parseFactPoints(unitPoints) : [];
+}
+
+/**
+ * Carry one share count to the current share basis with the splits dated after
+ * its own filing (`factorFor`), the same rule `src/edgar/statements.ts` applies:
+ * a cover count filed before a 4-for-1 split is a quarter of today's share
+ * count, and the daily market-cap history would be a quarter short.
+ */
+function splitAdjusted(value: number, filed: string, factorFor: (filed: string) => number): number {
+  return Math.round(value * factorFor(filed));
+}
+
+/**
+ * The us-gaap balance-sheet share concept as a deduped series, oldest first.
+ * It is the all-classes total in ONE fact, so same-`end` duplicates are
+ * refilings and the max(`filed`) winner is the right one — never summed.
+ */
+function balanceSheetSharePoints(
+  facts: CompanyFacts,
+  factorFor: (filed: string) => number,
+): { value: number; asOf: string }[] {
+  return dedupFactPoints(sharesUnitPoints(facts, "us-gaap", BALANCE_SHEET_SHARES_TAG))
     .flatMap((point) => {
-      if (instantOnly && point.start !== undefined) return [];
+      if (point.start !== undefined) return [];
       const day = isoDay(point.end);
       return day !== null && isFiniteNumber(point.val) && point.val > 0
-        ? [{ value: Math.round(point.val * factorFor(point.filed)), asOf: day }]
+        ? [{ value: splitAdjusted(point.val, point.filed, factorFor), asOf: day }]
         : [];
     })
     .sort((a, b) => (a.asOf < b.asOf ? -1 : a.asOf > b.asOf ? 1 : 0));
+}
+
+/**
+ * The dei cover-page concept as a series, oldest first, with the per-class
+ * facts of each period's winning filing SUMMED — `coverShareCountsByPeriod`,
+ * the same rule the spot count uses.
+ *
+ * Deduplicating this series while summing the spot count made one report
+ * contradict itself: on a three-class issuer (5,000,000 + 3,000,000 +
+ * 2,000,000) at a 50 dollar close the profile showed a market cap of 500M and
+ * the same day's history point 250M, and every enterprise value in the series
+ * carried the same error.
+ */
+function coverSharePoints(
+  facts: CompanyFacts,
+  factorFor: (filed: string) => number,
+): { value: number; asOf: string }[] {
+  return coverShareCountsByPeriod(sharesUnitPoints(facts, "dei", DEI_SHARES_TAG)).flatMap((count) => {
+    const day = isoDay(count.asOf);
+    return day !== null && isFiniteNumber(count.value) && count.value > 0
+      ? [{ value: splitAdjusted(count.value, count.filing.filed, factorFor), asOf: day }]
+      : [];
+  });
 }
 
 /**
@@ -350,8 +391,12 @@ function sharePointsForConcept(
  * so the dei concept is absent for them entirely while the non-dimensional
  * balance-sheet total — all classes combined — is present. Without the fallback
  * those issuers get no market cap, enterprise value or market-cap history at
- * all. Same-`end` duplicates are refilings and stay deduped by max(`filed`);
- * they are never summed.
+ * all.
+ *
+ * Within one period the dei facts are the registrant's SHARE CLASSES and are
+ * summed (`coverShareCountsByPeriod`); ACROSS filings a repeated period is a
+ * refiling and stays deduped by max(`filed`). The us-gaap fallback is a single
+ * all-classes fact, so it is only ever deduped.
  */
 export function sharesOutstandingSeries(facts: CompanyFacts): {
   points: { value: number; asOf: string }[];
@@ -360,9 +405,9 @@ export function sharesOutstandingSeries(facts: CompanyFacts): {
   splits: SplitEvent[];
 } {
   const splits = discoverStockSplits(facts);
-  const cover = sharePointsForConcept(facts, "dei", DEI_SHARES_TAG, false, splits.factorFor);
+  const cover = coverSharePoints(facts, splits.factorFor);
   if (cover.length > 0) return { points: cover, basis: "dei cover page", splits: splits.events };
-  const balanceSheet = sharePointsForConcept(facts, "us-gaap", BALANCE_SHEET_SHARES_TAG, true, splits.factorFor);
+  const balanceSheet = balanceSheetSharePoints(facts, splits.factorFor);
   return balanceSheet.length > 0
     ? { points: balanceSheet, basis: "balance sheet CommonStockSharesOutstanding", splits: splits.events }
     : { points: [], basis: null, splits: splits.events };
@@ -577,8 +622,10 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       reason:
         `the cover page of ${filing === undefined ? "the latest filing" : `${filing.form} ${filing.accn} (filed ${filing.filed})`} ` +
         `reports dei:${DEI_SHARES_TAG} once per share class; companyfacts carries no class dimension, so the ${coverClasses.length} ` +
-        `unnamed counts (${coverClasses.join(" + ")}) are summed to ${point.value} as of ${point.asOf}. Per-class figures are not ` +
-        "recoverable from this source, so any per-class analysis is out of reach keylessly.",
+        `unnamed counts (${coverClasses.join(" + ")}) are summed to ${point.value} as of ${point.asOf}. The same rule is ` +
+        "applied to every period of the share-count series, so the market-cap history and the enterprise values rest on " +
+        "the same total as the spot figure. Per-class figures are not recoverable from this source, so any per-class " +
+        "analysis is out of reach keylessly.",
       severity: "info",
       attemptedSources: [`edgar:companyfacts dei/${DEI_SHARES_TAG}`],
       expected: true,
@@ -587,14 +634,119 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       `keyless share count: ${coverClasses.length} share classes summed (${coverClasses.join(" + ")} = ${point.value} at ${point.asOf})`,
     );
   }
+  // What the class sum could NOT establish from this source: a repeated value
+  // that may be a second class (N1), and classes so unequal that a raw sum is
+  // not economic ownership (N2). Both are `warn`: they qualify a figure the
+  // whole report's per-share arithmetic rests on.
+  for (const [i, note] of (built?.shares.outstanding?.classNotes ?? []).entries()) {
+    gaps.push({
+      field: `keyless.sharesOutstanding.classes.caveat${i + 1}`,
+      reason: note,
+      severity: "warn",
+      attemptedSources: [`edgar:companyfacts dei/${DEI_SHARES_TAG}`],
+    });
+    notes.push(`keyless share count: ${note}`);
+  }
   const factsFetchedAt = inputs.edgar.companyFacts.ok
     ? inputs.edgar.companyFacts.value.fetchedAt
     : fetchedAt;
+  /** The companyfacts payload's own as-of, for rows appended into a vendor envelope (N9). */
+  const factsAsOf = inputs.edgar.companyFacts.ok ? inputs.edgar.companyFacts.value.asOf : inputs.today;
   const factsReason = inputs.edgar.companyFacts.ok ? null : inputs.edgar.companyFacts.gap.reason;
   const emptyStatementsContext = describeEmptyStatements(
     inputs.edgar.companyFacts.ok ? inputs.edgar.companyFacts.value.data : null,
     registrant,
   );
+
+  /**
+   * Everything an EDGAR-built statement has to disclose about ITS OWN ROWS:
+   * the stand-ins that served a concept, the figures withheld because the filed
+   * tags made a derivation unsound, and the material lines a later filing
+   * restated. Split out of `statementFor` because it is needed by all THREE
+   * paths that put EDGAR rows into a member — a full substitution, a
+   * plan-limit backfill and a predecessor's pre-reorganization history — and
+   * the latter two used to append rows while discarding this entirely. On the
+   * entry-tier plan this project runs, years six to ten of every statement come
+   * from EDGAR, so a derived EBIT or a maturity-schedule debt figure could sit
+   * in a report with no manifest entry and no note at all.
+   *
+   * `scope` limits the disclosure to the periods actually appended (null = all
+   * of them) and namespaces the manifest fields so a backfill entry and a
+   * predecessor entry for the same concept cannot collide.
+   */
+  const discloseStatementRows = <TRow extends FmpRawRow>(
+    member: keyof KeylessMembers,
+    result: StatementRowsResult<TRow>,
+    scope: { periods: ReadonlySet<string>; key: string; description: string } | null,
+  ): void => {
+    const inScope = (periods: readonly string[]): string[] =>
+      scope === null ? [...periods] : periods.filter((p) => scope.periods.has(p));
+    const field = (leaf: string): string =>
+      scope === null ? `keyless.${member}.${leaf}` : `keyless.${member}.${scope.key}.${leaf}`;
+    const where = scope === null ? "" : ` — ${scope.description}`;
+
+    // A concept served by a stand-in tag (cash interest paid for interest
+    // expense, pretax income + interest for EBIT) feeds the WACC and the DCF;
+    // the report has to say so, not only the progress log.
+    for (const sub of result.substitutions) {
+      const periods = inScope(sub.periods);
+      if (periods.length === 0) continue;
+      gaps.push({
+        field: field(sub.field),
+        reason: `${sub.text} (periods: ${periods.join(", ")})${where}`,
+        severity: "info",
+        attemptedSources: ["edgar:companyfacts"],
+        expected: true,
+      });
+      if (scope !== null) notes.push(`${member}: ${sub.field} ${sub.text} (${periods.join(", ")})${where}`);
+    }
+    // A figure the builder refused to publish is a hole in the report, and a
+    // hole a reader cannot see is worse than a disclosed one.
+    for (const held of result.withheld) {
+      const periods = inScope(held.periods);
+      if (periods.length === 0) continue;
+      gaps.push({
+        field: field(`withheld.${held.field}`),
+        reason: `${held.text} (periods: ${periods.join(", ")})${where}`,
+        severity: "warn",
+        attemptedSources: ["edgar:companyfacts"],
+      });
+      notes.push(`${member}: ${held.field} withheld — ${held.text} (${periods.join(", ")})${where}`);
+    }
+    // A later filing that moved a material line by more than the threshold is
+    // the single most decision-relevant thing companyfacts can tell a reader
+    // about a period, and it was computed and then dropped: the row carried a
+    // `restatement` flag no manifest ever read.
+    const restatements = result.restatements.filter((r) => scope === null || scope.periods.has(r.date));
+    if (restatements.length > 0) {
+      const listed = restatements
+        .slice(0, MAX_LISTED_RESTATEMENTS)
+        .map(
+          (r) =>
+            `${r.date} ${r.field} ${r.original} → ${r.restated} (${describeChangePct(r.changePct, 1)}, ` +
+            `first ${r.originalFiling.form} ${r.originalFiling.accn} filed ${r.originalFiling.filed}, ` +
+            `restated in ${r.restatedFiling.form} ${r.restatedFiling.accn} filed ${r.restatedFiling.filed})`,
+        );
+      const extra = restatements.length - listed.length;
+      gaps.push({
+        field: field("restatements"),
+        reason:
+          `${restatements.length} material line(s) restated or re-presented by more than ${RESTATEMENT_THRESHOLD_PCT}% in a later filing; ` +
+          `this statement carries the LAST-FILED value and keeps the superseded one as \`original\`: ` +
+          listed.join("; ") +
+          (extra > 0 ? `; and ${extra} more` : "") +
+          where +
+          ". A comparative re-presented for discontinued operations or a change of reportable segments moves the same " +
+          "way as a correction and companyfacts cannot tell the two apart, so read this as a CHANGE between filings, " +
+          "not necessarily as an error the filer admitted.",
+        severity: "warn",
+        attemptedSources: ["edgar:companyfacts"],
+      });
+      notes.push(
+        `${member}: ${restatements.length} restated or re-presented material line(s)${where} — last-filed values shown, first-reported values kept as \`original\``,
+      );
+    }
+  };
 
   const statementFor = <TRow extends FmpRawRow>(
     member: keyof KeylessMembers,
@@ -612,46 +764,7 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       return null;
     }
     for (const note of result.notes) notes.push(`${member}: ${note}`);
-    // A concept served by a stand-in tag (cash interest paid for interest
-    // expense, pretax income + interest for EBIT) feeds the WACC and the DCF;
-    // the report has to say so, not only the progress log.
-    for (const sub of result.substitutions) {
-      gaps.push({
-        field: `keyless.${member}.${sub.field}`,
-        reason: `${sub.text} (periods: ${sub.periods.join(", ")})`,
-        severity: "info",
-        attemptedSources: ["edgar:companyfacts"],
-        expected: true,
-      });
-    }
-    // A later filing that moved a material line by more than the threshold is
-    // the single most decision-relevant thing companyfacts can tell a reader
-    // about a period, and it was computed and then dropped: the row carried a
-    // `restatement` flag no manifest ever read.
-    if (result.restatements.length > 0) {
-      const listed = result.restatements
-        .slice(0, MAX_LISTED_RESTATEMENTS)
-        .map(
-          (r) =>
-            `${r.date} ${r.field} ${r.original} → ${r.restated} (${r.changePct >= 0 ? "+" : ""}${r.changePct.toFixed(1)}%, ` +
-            `first ${r.originalFiling.form} ${r.originalFiling.accn} filed ${r.originalFiling.filed}, ` +
-            `restated in ${r.restatedFiling.form} ${r.restatedFiling.accn} filed ${r.restatedFiling.filed})`,
-        );
-      const extra = result.restatements.length - listed.length;
-      gaps.push({
-        field: `keyless.${member}.restatements`,
-        reason:
-          `${result.restatements.length} material line(s) restated by more than ${RESTATEMENT_THRESHOLD_PCT}% in a later filing; ` +
-          `this statement carries the LAST-FILED value and keeps the superseded one as \`original\`: ` +
-          listed.join("; ") +
-          (extra > 0 ? `; and ${extra} more` : ""),
-        severity: "warn",
-        attemptedSources: ["edgar:companyfacts"],
-      });
-      notes.push(
-        `${member}: ${result.restatements.length} restated material line(s) — last-filed values shown, first-reported values kept as \`original\``,
-      );
-    }
+    discloseStatementRows(member, result, null);
     if (result.rows.length === 0) {
       const why = result.gaps[0]?.reason ?? "no period resolved from the filed facts";
       failKeyless(member, `EDGAR companyfacts produced no ${member} rows: ${why}${emptyStatementsContext}`, ["edgar:companyfacts", endpoint], true);
@@ -702,7 +815,20 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     });
     if (older.length === 0) return;
     const olderDates = older.map((row) => isoDay(row["date"]) as string).sort();
-    const filled = older.map((row) => ({ ...row, source: "edgar", sourceEndpoint: endpoint }) as TRow);
+    // N9: the merged payload keeps the VENDOR's envelope (its `asOf` is still
+    // the newest datum, because only OLDER periods were appended), so each
+    // backfilled row carries the fetch that actually produced it rather than
+    // inheriting a fetched-at it was never part of.
+    const filled = older.map(
+      (row) =>
+        ({
+          ...row,
+          source: "edgar",
+          sourceEndpoint: endpoint,
+          sourceFetchedAt: factsFetchedAt,
+          sourceAsOf: factsAsOf,
+        }) as TRow,
+    );
     const planLimit = isPlanLimited(current.value.data) ? current.value.data.planLimit : null;
     members[member] = {
       ok: true,
@@ -723,11 +849,21 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
           ? ""
           : ` (its subscription caps 'limit' at ${planLimit.applied}, so ${planLimit.applied} of ${planLimit.requested} requested periods arrived)`) +
         `; SEC EDGAR companyfacts supplied ${filled.length} older period(s), ${olderDates[0]} to ${olderDates[olderDates.length - 1]}, each row carrying source "edgar" (${endpoint}). ` +
-        "No period mixes the two sources: the vendor's rows are untouched and only periods it did not serve were added.",
+        "No period mixes the two sources: the vendor's rows are untouched and only periods it did not serve were added. " +
+        `The payload's own fetched-at (${current.value.fetchedAt}) and as-of (${current.value.asOf}) describe the VENDOR's fetch; ` +
+        `the appended rows carry their own \`sourceFetchedAt\` ${factsFetchedAt} and \`sourceAsOf\` ${factsAsOf}.`,
       severity: "info",
       attemptedSources: [current.value.endpoint, endpoint],
       // Structural on a plan whose limit is capped; an incident otherwise.
       expected: planLimit !== null || inputs.fmpKeyless,
+    });
+    // A stand-in, a withheld figure or a restatement inside a BACKFILLED year is
+    // exactly as decision-relevant as one in this year's, and used to be
+    // discarded with the rest of `result`.
+    discloseStatementRows(member, result, {
+      periods: new Set(olderDates),
+      key: "backfill",
+      description: `in the ${filled.length} period(s) backfilled from EDGAR (${olderDates[0]} … ${olderDates[olderDates.length - 1]})`,
     });
     replaced.push(member);
   };
@@ -748,10 +884,25 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   // successor's own filings, and the swap is disclosed once in the manifest.
   const predecessor = inputs.edgar.predecessor ?? null;
   const filedSuccessorForm = registrant?.forms.some((form) => form.trim() === SUCCESSOR_FORM) === true;
-  if (predecessor === null && filedSuccessorForm && inputs.edgarConfirmedIssuer && built !== null) {
-    // The registrant announced itself a successor and the second hop found
-    // nothing. Saying so is the difference between "this company is four
-    // months old" and "we could not reach the other ninety years".
+  // `resolvePredecessor` returns null in TWO situations that look identical
+  // from here: the registrant is not a successor at all, and it IS a successor
+  // that already carries its own us-gaap history — in which case the second hop
+  // was never attempted and nothing was lost. Warning on the second case told a
+  // reader that every multi-year figure measures only the successor's own
+  // filing history while that history was in fact present and complete.
+  const successorCarriesOwnHistory =
+    inputs.edgar.companyFacts.ok && usGaapConceptCount(inputs.edgar.companyFacts.value.data) > 0;
+  if (
+    predecessor === null &&
+    filedSuccessorForm &&
+    inputs.edgarConfirmedIssuer &&
+    built !== null &&
+    !successorCarriesOwnHistory
+  ) {
+    // The registrant announced itself a successor, filed no us-gaap facts of
+    // its own, and the second hop found nothing. Saying so is the difference
+    // between "this company is four months old" and "we could not reach the
+    // other ninety years".
     gaps.push(
       predecessorUnresolvedEntry(
         cik10,
@@ -795,6 +946,9 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
             ...row,
             source: "edgar",
             sourceEndpoint: endpoint,
+            // N9: appended into another payload's envelope, so each row names
+            // the fetch that actually produced it.
+            sourceFetchedAt: predecessor.fetchedAt,
             predecessor: true,
             predecessorCik: predecessor.cik10,
           }) as TRow,
@@ -826,6 +980,14 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       notes.push(
         `${member}: ${tagged.length} pre-reorganization period(s) from the predecessor registrant (CIK ${predecessor.cik10}), each row tagged \`predecessor\``,
       );
+      // The predecessor's rows carry stand-ins, withheld figures and
+      // restatements of their own, and appending them while discarding that was
+      // the same silent hole as the backfill path.
+      discloseStatementRows(member, result, {
+        periods: new Set(dates),
+        key: "predecessor",
+        description: `in the ${tagged.length} pre-reorganization period(s) filed by the predecessor registrant, CIK ${predecessor.cik10} (${dates[0]} … ${dates[dates.length - 1]})`,
+      });
     };
     fillFromPredecessor("incomeAnnual", predecessorBuilt.incomeAnnual, STATEMENT_ENDPOINTS.incomeAnnual);
     fillFromPredecessor("incomeQuarterly", predecessorBuilt.incomeQuarterly, STATEMENT_ENDPOINTS.incomeQuarterly);
@@ -1144,9 +1306,24 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       // much the stock has moved since. The figure is therefore labelled with
       // its own measurement date and flagged when that date is stale.
       const publicFloat = built?.shares.publicFloat ?? null;
-      const floatShares = publicFloat !== null && price !== null && price > 0 ? publicFloat.value / price : null;
+      // The right price for that conversion is the one that ruled ON THE
+      // MEASUREMENT DATE, not today's: dividing by the latest quote rescales
+      // the share count by every price move since, so an issuer whose stock
+      // doubled reported half its float shares and a free float falling from
+      // about 90% to about 45%. The latest price is the fallback only when the
+      // history reaches no further back than the measurement date.
+      const floatPriceOnDate = publicFloat === null ? null : lastCloseOnOrBefore(eodRows, publicFloat.asOf);
+      const floatPrice = floatPriceOnDate ?? price;
+      const floatPriceBasis: PublicFloatPriceBasis =
+        publicFloat === null || floatPrice === null
+          ? "none"
+          : floatPriceOnDate !== null
+            ? "measurement date"
+            : "latest quote";
+      const floatShares =
+        publicFloat !== null && floatPrice !== null && floatPrice > 0 ? publicFloat.value / floatPrice : null;
       const freeFloat = floatShares !== null && outstanding.value > 0 ? (floatShares / outstanding.value) * 100 : null;
-      const floatAge = describePublicFloatAge(publicFloat, price, inputs.today);
+      const floatAge = describePublicFloatAge(publicFloat, floatPrice, floatPriceBasis, inputs.today);
       gaps.push(floatAge.gap);
       if (floatAge.note !== null) notes.push(`keyless shares float: ${floatAge.note}`);
       const row: Record<string, unknown> = {
@@ -1160,6 +1337,10 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         publicFloatUsd: publicFloat?.value ?? null,
         publicFloatAsOf: publicFloat?.asOf ?? null,
         publicFloatStale: floatAge.stale,
+        // Which price turned the dollar float into shares, and on which date.
+        publicFloatPrice: floatShares === null ? null : floatPrice,
+        publicFloatPriceDate: floatPriceBasis === "measurement date" ? (publicFloat?.asOf ?? null) : null,
+        publicFloatPriceBasis: floatShares === null ? null : floatPriceBasis,
         source: "edgar",
       };
       // The endpoint names the concept that actually served the count: a
@@ -1189,17 +1370,27 @@ function monthsSince(day: string, today: string): number | null {
 /** A public float older than this is disclosed as stale (D-14). */
 export const PUBLIC_FLOAT_STALE_MONTHS = 6;
 
+/** Which price turned the dollar float into a share count. */
+export type PublicFloatPriceBasis = "measurement date" | "latest quote" | "none";
+
 /**
- * The disclosure that travels with a keyless float share count. Three cases,
- * one manifest field so a reader always finds the answer in the same place:
- * no float fact at all, a float converted at a price from a later date, and
- * the same conversion where the float is more than six months old — which is
- * the common case, because the cover-page figure is measured at the end of the
- * second fiscal quarter and refreshed once a year.
+ * The disclosure that travels with a keyless float share count. One manifest
+ * field so a reader always finds the answer in the same place, covering: no
+ * float fact at all, no price to convert it, a conversion at the close of the
+ * float's own MEASUREMENT DATE (the correct case, and the usual one), and a
+ * conversion at the latest quote because the price history reaches no further
+ * back — which rescales the share count by every price move since and is
+ * therefore a `warn` in its own right.
+ *
+ * Staleness of the float itself is reported either way: the cover-page figure
+ * is measured at the end of the second fiscal quarter and refreshed once a
+ * year, so it is normally months old. That is a caveat on how CURRENT the
+ * figure is, not on the arithmetic.
  */
 function describePublicFloatAge(
   publicFloat: { value: number; asOf: string } | null,
   price: number | null,
+  priceBasis: PublicFloatPriceBasis,
   today: string,
 ): { gap: ManifestEntry; note: string | null; stale: boolean } {
   const field = "keyless.sharesFloat.publicFloat";
@@ -1232,20 +1423,31 @@ function describePublicFloatAge(
   const months = monthsSince(publicFloat.asOf, today);
   const stale = months !== null && months > PUBLIC_FLOAT_STALE_MONTHS;
   const age = months === null ? "" : ` (${months} month${months === 1 ? "" : "s"} before the analysis date)`;
+  const onMeasurementDate = priceBasis === "measurement date";
+  const priceText = onMeasurementDate
+    ? `the close of ${publicFloat.asOf}, the float's own measurement date (${price})`
+    : `the latest price (${price})`;
   const conversion =
     `float shares = dei:EntityPublicFloat, a dollar amount measured ${publicFloat.asOf}${age}, ` +
-    "divided by the latest price";
+    `divided by ${priceText}`;
+  const mismatch = onMeasurementDate
+    ? `; both sides of the division are dated ${publicFloat.asOf}, so no price move since is folded into the share count`
+    : `. NO CLOSE was available on or before ${publicFloat.asOf}, so the latest price was used instead and this share count is rescaled by every price move since that date — read it as an order of magnitude, not a count`;
+  const staleness = stale
+    ? ` The float itself is more than ${PUBLIC_FLOAT_STALE_MONTHS} months old: the cover-page figure is measured at the end of the issuer's second fiscal quarter and refreshed once a year, so the COMPANY may have issued or retired shares since ${publicFloat.asOf}.`
+    : ` The float is within ${PUBLIC_FLOAT_STALE_MONTHS} months of the analysis date.`;
+  const severity = stale || !onMeasurementDate ? "warn" : "info";
   return {
     gap: {
       field,
-      reason: stale
-        ? `${conversion}. The two dates differ by more than ${PUBLIC_FLOAT_STALE_MONTHS} months: the cover-page float is measured at the end of the issuer's second fiscal quarter and refreshed once a year, so this share count is rescaled by every price move since ${publicFloat.asOf} and should be read as an order of magnitude, not a current figure`
-        : `${conversion}; the two dates are within ${PUBLIC_FLOAT_STALE_MONTHS} months of each other`,
-      severity: stale ? "warn" : "info",
-      attemptedSources,
-      ...(stale ? {} : { expected: true }),
+      reason: `${conversion}${mismatch}.${staleness}`,
+      severity,
+      attemptedSources: [...attemptedSources, "yahoo:chart(close on the measurement date)"],
+      ...(severity === "warn" ? {} : { expected: true }),
     },
-    note: `public float ${publicFloat.value} USD measured ${publicFloat.asOf}${age}, converted to shares at the latest price${stale ? " — stale, see the manifest" : ""}`,
+    note: `public float ${publicFloat.value} USD measured ${publicFloat.asOf}${age}, converted to shares at ${priceText}${
+      severity === "warn" ? " — see the manifest" : ""
+    }`,
     stale,
   };
 }

@@ -33,6 +33,13 @@ export const RISK_SOURCE_MANIFEST = [
   "src/edgar/extract.ts",
   "src/edgar/xbrl.ts",
   "src/edgar/statements.ts",
+  // The element names and the successor hop moved OUT of the audited
+  // statements.ts, taking logic with them; the reserved-symbol rule is the
+  // guard that keeps a demo report from reaching a provider at all. All three
+  // need the same coverage floor as the module they were carved from.
+  "src/edgar/tagSynonyms.ts",
+  "src/edgar/successor.ts",
+  "src/providers/reservedSymbols.ts",
   "src/edgar/splits.ts",
   "src/edgar/sic.ts",
   "src/cache/apiCache.ts",

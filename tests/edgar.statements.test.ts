@@ -201,6 +201,60 @@ describe("buildStatementsFromCompanyFacts — annual rows", () => {
   });
 });
 
+describe("buildStatementsFromCompanyFacts — a derived quarter is never published with negative revenue", () => {
+  /** appleLike with a YTD-only revenue series whose H1 figure is BELOW its Q1 one. */
+  const shrinkingYtd = (): CompanyFacts =>
+    addTags(appleLike(), {
+      RevenueFromContractWithCustomerExcludingAssessedTax: [
+        { start: "2024-09-29", end: "2025-09-27", val: 400, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" },
+        { start: "2024-09-29", end: "2024-12-28", val: 120, form: "10-Q", fp: "Q1", fy: 2025, filed: "2025-01-31" },
+        // A re-presented year-to-date: 100 at H1 against 120 at Q1, so the
+        // difference is -20. No filer reported a negative quarter of revenue.
+        { start: "2024-09-29", end: "2025-03-29", val: 100, form: "10-Q", fp: "Q2", fy: 2025, filed: "2025-05-02" },
+        { start: "2024-09-29", end: "2025-06-28", val: 300, form: "10-Q", fp: "Q3", fy: 2025, filed: "2025-08-01" },
+        { start: "2023-10-01", end: "2024-09-28", val: 380, form: "10-K", fp: "FY", fy: 2024, filed: "2024-11-01" },
+      ],
+    });
+
+  it("withholds the figure and names the two periods it came from", () => {
+    const built = buildStatementsFromCompanyFacts(shrinkingYtd(), OPTS);
+    const q2 = built.incomeQuarterly.rows.find((r) => r.date === "2025-03-29")!;
+    // The row survives on its other anchor; only the impossible figure is gone,
+    // and it is null rather than zero.
+    expect(q2.revenue).toBeNull();
+    expect(q2.netIncome).toBe(25);
+    expect(built.incomeQuarterly.withheld).toEqual([
+      {
+        field: "revenue",
+        periods: ["2025-03-29"],
+        text: expect.stringMatching(/^revenue WITHHELD for this quarter: the YTD difference derivation produced -20/),
+      },
+    ]);
+    const [held] = built.incomeQuarterly.withheld;
+    expect(held!.text).toMatch(/2025-03-29 MINUS .*2024-12-28/);
+    expect(built.incomeQuarterly.notes.some((n) => /revenue WITHHELD for this quarter/.test(n))).toBe(true);
+  });
+
+  it("publishes an ordinary positive derived quarter untouched", () => {
+    const built = buildStatementsFromCompanyFacts(shrinkingYtd(), OPTS);
+    const q3 = built.incomeQuarterly.rows.find((r) => r.date === "2025-06-28")!;
+    expect(q3).toMatchObject({ revenue: 200, derivation: "ytd-difference" }); // 300 − 100
+    expect(built.incomeQuarterly.withheld.map((w) => w.periods).flat()).toEqual(["2025-03-29"]);
+  });
+
+  it("leaves a negative ANNUAL revenue alone — it was filed, not derived", () => {
+    // The rule is about the subtraction, not about the sign: a figure a filer
+    // actually reported is never second-guessed here.
+    const built = buildStatementsFromCompanyFacts(
+      addTags(appleLike(), {
+        Revenues: [{ start: "2024-09-29", end: "2025-09-27", val: -5, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" }],
+      }),
+      OPTS,
+    );
+    expect(built.incomeAnnual.withheld).toEqual([]);
+  });
+});
+
 describe("buildStatementsFromCompanyFacts — quarterly rows", () => {
   it("uses tagged 3-month income facts, derives the missing quarter from YTD and the fourth from FY − YTD", () => {
     const built = buildStatementsFromCompanyFacts(appleLike(), OPTS);
@@ -1328,7 +1382,7 @@ describe("buildStatementsFromCompanyFacts — income-statement fallbacks", () =>
     );
     expect(built.incomeAnnual.rows[0]).toMatchObject({ operatingIncome: 10_191, interestExpense: 2_671, incomeBeforeTax: 7_520 });
     expect(built.incomeAnnual.substitutions).toEqual([
-      { field: "operatingIncome", periods: ["2025-12-31"], text: expect.stringMatching(/^EBIT derived as pretax income \+ interest expense/) },
+      { field: "operatingIncome", periods: ["2025-12-31"], text: expect.stringMatching(/^EBIT derived as pretax income \(IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest\) \+ interest expense \(InterestExpense\)/) },
     ]);
   });
 
@@ -1412,10 +1466,10 @@ describe("buildStatementsFromCompanyFacts — Caterpillar-style balance sheets",
     expect(built.balanceAnnual.substitutions).toEqual([]);
   });
 
-  it("takes current maturities from the debt maturity schedule only when every balance-sheet current-debt tag misses", () => {
-    // House rule D-13: ShortTermBorrowings, CommercialPaper, DebtCurrent and
-    // LongTermDebtCurrent are checked first; the maturity schedule is a NOTE
-    // disclosure, so it serves only when all of them miss.
+  it("takes current maturities from the debt maturity schedule when no balance-sheet current-maturities tag was filed", () => {
+    // House rule D-13: DebtCurrent, then the balance-sheet current-debt lines;
+    // the maturity schedule is a NOTE disclosure, so it stands in only for the
+    // current-maturities component and only when that component's own tags miss.
     const built = build(catLike({
       LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
       LongTermDebtNoncurrent: at(30_696),
@@ -1435,23 +1489,79 @@ describe("buildStatementsFromCompanyFacts — Caterpillar-style balance sheets",
     ]);
   });
 
-  it("leaves the schedule figure out when another current-debt tag resolved, and says what that omits", () => {
-    // CAT FY2025 as filed: ShortTermBorrowings 5,514 beside first-year
-    // maturities of 7,120. Before D-13 the two were summed to 12,634; the
-    // house rule now takes the balance-sheet line alone and discloses that the
-    // current maturities are not inside it. (Changed deliberately: the previous
-    // test encoded the pre-D-13 sum.)
+  it("adds the schedule figure BESIDE short-term borrowings, which are a different instrument", () => {
+    // Caterpillar FY2024 as filed: short-term borrowings 5,514 AND current
+    // maturities of long-term debt 7,120, total current debt 12,634. CAT tags
+    // the current maturities only by extension, so the only us-gaap source for
+    // them is the maturity schedule. Treating that schedule as a step of the
+    // whole chain dropped them the moment ShortTermBorrowings resolved and
+    // published 5,514 — understating total debt by 7.12B (16.4%), straight
+    // into net debt, EV, invested capital, ROIC and the DCF equity bridge.
     const built = build(catLike({
       ShortTermBorrowings: at(5_514),
       LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
       LongTermDebtNoncurrent: at(30_696),
     }));
     const fy = built.balanceAnnual.rows[0]!;
-    expect(fy.shortTermDebt).toBe(5_514);
-    expect(fy.totalDebt).toBe(36_210);
+    expect(fy.shortTermDebt).toBe(12_634);
+    expect(fy.totalDebt).toBe(43_330);
     expect(
       built.balanceAnnual.notes.some((n) =>
-        /the debt maturity schedule reports 7120 of long-term debt due within a year.*NOT added.*may exclude the current maturities of long-term debt/.test(n),
+        /current maturities taken from the debt maturity schedule \(LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths 7120\).*CURRENT MATURITIES ONLY/.test(n),
+      ),
+    ).toBe(true);
+    // The stand-in is still disclosed on the field it served, per period.
+    expect(built.balanceAnnual.substitutions).toEqual([
+      {
+        field: "shortTermDebt",
+        periods: ["2025-12-31"],
+        text: expect.stringMatching(/^current maturities of long-term debt from the debt maturity schedule/),
+      },
+    ]);
+  });
+
+  it("does not double-count the schedule figure when a balance-sheet current-maturities tag resolved beside borrowings", () => {
+    // Both components tagged on the balance sheet: 5,514 + 7,000 = 12,514, and
+    // the schedule's 7,120 is named as excluded rather than added on top.
+    const built = build(catLike({
+      ShortTermBorrowings: at(5_514),
+      LongTermDebtCurrent: at(7_000),
+      LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
+      LongTermDebtNoncurrent: at(30_696),
+    }));
+    const fy = built.balanceAnnual.rows[0]!;
+    expect(fy.shortTermDebt).toBe(12_514);
+    expect(fy.totalDebt).toBe(43_210);
+    expect(built.balanceAnnual.substitutions).toEqual([]);
+    expect(
+      built.balanceAnnual.notes.some((n) =>
+        /LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths excluded — the balance sheet's own current-debt tag resolved/.test(n),
+      ),
+    ).toBe(true);
+  });
+
+  it("says the schedule figure was left out when it could not be combined with the tags that resolved", () => {
+    // The schedule filed in another currency: `sumAnyOf` drops the part rather
+    // than adding euros to dollars, and the row says what it may be missing.
+    const built = build(
+      facts(
+        {
+          Revenues: [{ start: "2025-01-01", end: "2025-12-31", val: 64_000, ...k }],
+          Assets: at(98_585),
+          CashAndCashEquivalentsAtCarryingValue: at(9_980),
+          ShortTermBorrowings: at(5_514),
+          LongTermDebtNoncurrent: at(30_696),
+          LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: at(7_120),
+        },
+        {},
+        { LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths: "EUR" },
+      ),
+    );
+    const fy = built.balanceAnnual.rows[0]!;
+    expect(fy.shortTermDebt).toBe(5_514);
+    expect(
+      built.balanceAnnual.notes.some((n) =>
+        /did NOT enter the sum.*could not be combined with the tags that did resolve \(ShortTermBorrowings\)/.test(n),
       ),
     ).toBe(true);
   });
@@ -1566,6 +1676,88 @@ describe("buildStatementsFromCompanyFacts — derived EBIT subtracts non-operati
     );
   });
 
+  it("does NOT subtract equity-method income under the pretax tag that already excludes it", () => {
+    // `...MinorityInterestAndIncomeLossFromEquityMethodInvestments` names what
+    // the element EXCLUDES: subtracting equity-method income from it removes
+    // money the base never held. 5,000 + 200 = 5,200, not 4,900.
+    const built = ebit(
+      facts({
+        Revenues: annual(64_000),
+        NetIncomeLoss: annual(6_200),
+        Assets: [{ end: "2025-12-31", val: 210_000, ...K }],
+        IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments:
+          annual(5_000),
+        InterestExpense: annual(200),
+        IncomeLossFromEquityMethodInvestments: annual(300),
+      }),
+    );
+    expect(built.rows[0]!.operatingIncome).toBe(5_200);
+    const text = built.substitutions[0]!.text;
+    // The derivation names the pretax element that served.
+    expect(text).toMatch(
+      /^EBIT derived as pretax income \(IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments\)/,
+    );
+    expect(text).toMatch(
+      /NOT subtracted because the pretax element that served is measured before them: IncomeLossFromEquityMethodInvestments/,
+    );
+  });
+
+  it("still subtracts equity-method income under the pretax tag that includes it", () => {
+    const built = ebit(pretax({ IncomeLossFromEquityMethodInvestments: annual(300) }));
+    expect(built.rows[0]!.operatingIncome).toBe(9_891); // 7,520 + 2,671 − 300
+    expect(built.substitutions[0]!.text).toMatch(
+      /non-operating items subtracted from the derivation: IncomeLossFromEquityMethodInvestments/,
+    );
+  });
+
+  it("warns that the non-operating aggregate may already hold the interest added back", () => {
+    const built = ebit(pretax({ NonoperatingIncomeExpense: annual(900) }));
+    expect(built.substitutions[0]!.text).toMatch(/caveat — the NonoperatingIncomeExpense aggregate subtracted here/);
+    expect(built.substitutions[0]!.text).toMatch(/may ALREADY contain the interest expense added back/);
+  });
+
+  it("WITHHOLDS the derived EBIT when the interest tag is a taxonomy child of the aggregate", () => {
+    // InterestExpenseNonoperating sits inside NonoperatingIncomeExpense, so
+    // "pretax + interest − aggregate" adds back interest the aggregate already
+    // removed: a true EBIT of 1,000 with interest 100 and an aggregate of −50
+    // would publish 1,100. No figure is published at all instead.
+    const built = ebit(
+      facts({
+        Revenues: annual(64_000),
+        NetIncomeLoss: annual(6_200),
+        Assets: [{ end: "2025-12-31", val: 210_000, ...K }],
+        IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest: annual(950),
+        InterestExpenseNonoperating: annual(100),
+        NonoperatingIncomeExpense: annual(-50),
+      }),
+    );
+    expect(built.rows[0]!.operatingIncome).toBeNull();
+    expect(built.substitutions).toEqual([]);
+    expect(built.withheld).toEqual([
+      {
+        field: "operatingIncome",
+        periods: ["2025-12-31"],
+        text: expect.stringMatching(/^operating income WITHHELD rather than derived/),
+      },
+    ]);
+    expect(built.withheld[0]!.text).toMatch(/overstate EBIT by exactly that interest/);
+    expect(built.notes.some((n) => /operating income WITHHELD rather than derived/.test(n))).toBe(true);
+  });
+
+  it("still derives when that interest tag serves and no aggregate was filed", () => {
+    const built = ebit(
+      facts({
+        Revenues: annual(64_000),
+        NetIncomeLoss: annual(6_200),
+        Assets: [{ end: "2025-12-31", val: 210_000, ...K }],
+        IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest: annual(950),
+        InterestExpenseNonoperating: annual(100),
+      }),
+    );
+    expect(built.rows[0]!.operatingIncome).toBe(1_050);
+    expect(built.withheld).toEqual([]);
+  });
+
   it("never derives an EBIT for a bank-style filer", () => {
     const bank = facts({
       RevenuesNetOfInterestExpense: annual(180_000),
@@ -1612,6 +1804,51 @@ describe("buildStatementsFromCompanyFacts — multi-class cover-page share count
     const built = buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "TCEH", cik: "0009900001" });
     expect(built.shares.outstanding?.value).toBe(10_000_000);
   });
+
+  it("discloses that a collapsed repeat may be a second class with the same count (N1)", () => {
+    // Companyfacts drops the class dimension, so two classes with identical
+    // counts are byte-identical facts. The repeat is still counted once — but
+    // the ambiguity is stated rather than resolved silently.
+    const f = multiClass();
+    const unit = (f.facts.dei!.EntityCommonStockSharesOutstanding as { units: { shares: unknown[] } }).units.shares;
+    unit.push(structuredClone(unit[0]));
+    const built = buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "TCEH", cik: "0009900001" });
+    const [note] = built.shares.outstanding!.classNotes!;
+    expect(note).toMatch(/carries 4 dei:EntityCommonStockSharesOutstanding facts for 2026-02-13 but only 3 distinct value/);
+    expect(note).toMatch(/indistinguishable from a SECOND SHARE CLASS/);
+    expect(note).toMatch(/understates the registered shares/);
+  });
+
+  it("adds no class caveat when every per-class count is distinct and comparable", () => {
+    const built = buildStatementsFromCompanyFacts(multiClass(), { ...OPTS, symbol: "TCEH", cik: "0009900001" });
+    expect(built.shares.outstanding?.classNotes).toBeUndefined();
+  });
+
+  it("warns when one class dwarfs another by more than a hundredfold (N2)", () => {
+    // Berkshire's shape: the B class converts 1:1500 to an A share, so a raw
+    // sum of the two counts is an order of magnitude away from economic
+    // ownership and companyfacts carries no conversion ratio.
+    const built = buildStatementsFromCompanyFacts(
+      facts(
+        {
+          Revenues: [{ start: "2025-01-01", end: "2025-12-31", val: 1_000, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20" }],
+          Assets: [{ end: "2025-12-31", val: 5_000, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20" }],
+        },
+        {
+          EntityCommonStockSharesOutstanding: [
+            { end: "2026-02-13", val: 550_000, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20", accn: "0000000000-26-000001" },
+            { end: "2026-02-13", val: 1_290_000_000, form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20", accn: "0000000000-26-000001" },
+          ],
+        },
+      ),
+      { ...OPTS, symbol: "BRKB" },
+    );
+    expect(built.shares.outstanding?.value).toBe(1_290_550_000);
+    const [note] = built.shares.outstanding!.classNotes!;
+    expect(note).toMatch(/differ by a factor of 2345/);
+    expect(note).toMatch(/SAME per-share economics/);
+    expect(note).toMatch(/must not be read as economically weighted ownership/);
+  });
 });
 
 describe("buildStatementsFromCompanyFacts — duplicate periods and restatements", () => {
@@ -1647,7 +1884,7 @@ describe("buildStatementsFromCompanyFacts — duplicate periods and restatements
       },
     ]);
     expect(row.restatement).toEqual(built.incomeAnnual.restatements);
-    expect(built.incomeAnnual.notes.some((n) => /revenue restated from 182447 .* to 190000 .*\+4\.14%/.test(n))).toBe(true);
+    expect(built.incomeAnnual.notes.some((n) => /revenue restated or re-presented from 182447 .* to 190000 .*\+4\.14%/.test(n))).toBe(true);
   });
 
   it("keeps the original value but raises no flag for a move within one percent", () => {

@@ -12,7 +12,12 @@
 import { describe, expect, it } from "vitest";
 
 import { buildDataBundle } from "@/pipeline/dataBundle";
-import { RESERVED_FIXTURE_SYMBOLS, isReservedFixtureSymbol } from "@/providers/reservedSymbols";
+import {
+  RESERVED_FIXTURE_SYMBOLS,
+  anyReservedFixtureSymbol,
+  isReservedFixtureSymbol,
+  reservedProviderGap,
+} from "@/providers/reservedSymbols";
 import { createEdgarClient, type EdgarTransport, type EdgarTransportResponse } from "@/providers/edgar";
 import { createFmpClient } from "@/providers/fmp";
 import { createYahooClient } from "@/providers/yahoo";
@@ -88,6 +93,19 @@ describe("reserved fixture symbols", () => {
     expect(isReservedFixtureSymbol(" DBNK ")).toBe(true);
     expect(isReservedFixtureSymbol("AAPL")).toBe(false);
     expect(isReservedFixtureSymbol(null)).toBe(false);
+  });
+
+  it("names the reserved rule on a short-circuited member, with or without attempted sources", () => {
+    // N3 put this module under the risk coverage floor; the no-sources branch
+    // of the gap builder had never been exercised.
+    const withSources = reservedProviderGap("macro.DGS10", " demo ", ["fred"]);
+    expect(withSources).toMatchObject({ field: "macro.DGS10", severity: "info", expected: true, attemptedSources: ["fred"] });
+    expect(withSources.reason).toMatch(/^DEMO is a reserved fixture symbol/);
+    const bare = reservedProviderGap("shortInterest", "dbnk");
+    expect(bare.attemptedSources).toBeUndefined();
+    expect(bare.reason).toMatch(/^DBNK is a reserved fixture symbol/);
+    expect(anyReservedFixtureSymbol(["AAPL", "MSFT"])).toBe(false);
+    expect(anyReservedFixtureSymbol(["AAPL", "demo"])).toBe(true);
   });
 
   for (const symbol of RESERVED_FIXTURE_SYMBOLS) {

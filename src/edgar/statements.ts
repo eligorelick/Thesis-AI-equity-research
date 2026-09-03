@@ -43,6 +43,8 @@ import { discoverStockSplits, type SplitEvent, type SplitNote, type StockSplits 
 import {
   BALANCE_SHEET_SHARES_TAG,
   COMBINED_CURRENT_DEBT_TAG,
+  EBIT_AGGREGATE_MAY_HOLD_INTEREST,
+  EBIT_INTEREST_INSIDE_AGGREGATE,
   EBIT_NON_OPERATING_ADJUSTMENTS,
   INCOME_BEFORE_TAX_TAGS,
   MATURITIES_NEXT_YEAR_TAG,
@@ -92,6 +94,12 @@ export interface StatementRowsResult<TRow> {
    * is the statement-level flag the forensics module and the manifest read.
    */
   restatements: Restatement[];
+  /**
+   * Fields left null on purpose, with the reason: the operands were present but
+   * the filed tags make the derivation unsound (a double-counted interest
+   * add-back, a negative derived quarter). Never a zero — see invariant 1.
+   */
+  withheld: Withholding[];
 }
 
 /** A filing's identity, as carried on `original` values and restatement flags. */
@@ -110,17 +118,34 @@ export interface OriginalValue extends FilingRef {
   value: number;
 }
 
-/** One material line that a later filing restated by more than the threshold. */
+/**
+ * One material line whose last-filed value differs from the first-filed one by
+ * more than the threshold. "Restatement" is the common case but not the only
+ * one: a comparative RE-PRESENTED for discontinued operations or a change of
+ * reportable segments moves identically, and companyfacts carries nothing that
+ * separates the two — the disclosures say so.
+ */
 export interface Restatement {
   /** Row date (fiscal period end). */
   date: string;
   field: string;
   original: number;
   restated: number;
-  /** Signed change as a percentage of the original value. */
-  changePct: number;
+  /**
+   * Signed change as a percentage of the original value, or `null` when the
+   * original was zero and no percentage is defined. Never Infinity: it rendered
+   * as "Infinity%" in manifest reasons and serialised to an accidental `null`.
+   */
+  changePct: number | null;
   originalFiling: FilingRef;
   restatedFiling: FilingRef;
+}
+
+/** A signed percentage, or the reason there is none. */
+export function describeChangePct(changePct: number | null, decimals = 2): string {
+  return changePct === null
+    ? "from zero — no percentage is defined against an original of 0"
+    : `${changePct > 0 ? "+" : ""}${changePct.toFixed(decimals)}%`;
 }
 
 /** A material line moving by more than this share of its prior value is a restatement flag. */
@@ -140,6 +165,18 @@ const MATERIAL_FIELDS: Record<StatementName, readonly string[]> = {
  * date it served, newest first.
  */
 export interface Substitution {
+  field: string;
+  text: string;
+  periods: string[];
+}
+
+/**
+ * A field whose operands were all present but whose derivation the filed tags
+ * make unsound, so no figure is published for the period. Same shape as
+ * `Substitution`, and the keyless layer files it in the manifest the same way —
+ * as a `warn`, because a withheld figure is a hole a reader has to see.
+ */
+export interface Withholding {
   field: string;
   text: string;
   periods: string[];
@@ -171,6 +208,12 @@ export interface SharesOutstandingPoint {
   classes?: number[];
   /** The filing the count (or the summed per-class counts) came from. */
   filing?: FilingRef;
+  /**
+   * What the class sum could not establish from this source: repeated values
+   * that may be a second class (N1), and classes so unequal that a raw sum is
+   * not economic ownership (N2). Absent when neither applies.
+   */
+  classNotes?: string[];
 }
 
 export interface BuiltStatements {
@@ -283,8 +326,33 @@ export type ChainSpec =
       parts: { label: string; spec: ChainSpec }[];
       unit: "money";
       disclose?: string;
-      minusAny?: { label: string; tags: readonly string[]; componentOf?: string }[];
-      discloseAdjusted?: (ctx: { subtracted: string[]; unavailable: string[]; alreadyInside: string[] }) => string;
+      minusAny?: {
+        label: string;
+        tags: readonly string[];
+        componentOf?: string;
+        /**
+         * Base tags whose own definition EXCLUDES this item: beside one of
+         * them the adjustment would subtract money the base never held, so it
+         * is skipped and named in the disclosure.
+         */
+        notWhenBaseTag?: readonly string[];
+      }[];
+      /**
+       * Tag pairs that make the whole derivation unsound: when `partTag` served
+       * a part AND `adjustmentTag` resolved as an adjustment, the taxonomy puts
+       * the first inside the second and the sum would double-count it. The
+       * figure is withheld with `disclose` as the reason.
+       */
+      withholdWhen?: readonly { partTag: string; adjustmentTag: string; disclose: string }[];
+      discloseAdjusted?: (ctx: {
+        subtracted: string[];
+        unavailable: string[];
+        alreadyInside: string[];
+        /** Skipped because the base tag that served excludes them by definition. */
+        notInBase: string[];
+        /** Each part's label with the tag(s) that actually served it. */
+        parts: { label: string; tags: string[] }[];
+      }) => string;
     }
   | { kind: "diff"; plus: string; minus: string; unit: "money"; disclose?: string }
   | { kind: "chain"; steps: ChainSpec[]; unit: UnitKind };
@@ -400,7 +468,9 @@ const INCOME_CHAINS: Record<string, ChainSpec> = {
           label: a.label,
           tags: a.tags,
           ...(a.componentOf === undefined ? {} : { componentOf: a.componentOf }),
+          ...(a.notWhenBaseTag === undefined ? {} : { notWhenBaseTag: a.notWhenBaseTag }),
         })),
+        withholdWhen: [EBIT_INTEREST_INSIDE_AGGREGATE],
         discloseAdjusted: describeDerivedEbit,
       },
     ],
@@ -426,9 +496,17 @@ const INCOME_CHAINS: Record<string, ChainSpec> = {
  * could not remove. An adjustment the filer did not tag is an error band on the
  * figure, so it is named rather than passed over in silence.
  */
-function describeDerivedEbit(ctx: { subtracted: string[]; unavailable: string[]; alreadyInside: string[] }): string {
-  const head =
-    "EBIT derived as pretax income + interest expense: the filer reports no OperatingIncomeLoss line";
+function describeDerivedEbit(ctx: {
+  subtracted: string[];
+  unavailable: string[];
+  alreadyInside: string[];
+  notInBase: string[];
+  parts: { label: string; tags: string[] }[];
+}): string {
+  // WHICH pretax element served decides whether the equity-method subtraction
+  // is right, so the derivation names it rather than saying "pretax income".
+  const named = ctx.parts.map((p) => `${p.label} (${p.tags.join(" + ")})`).join(" + ");
+  const head = `EBIT derived as ${named}: the filer reports no OperatingIncomeLoss line`;
   const parts: string[] = [];
   if (ctx.subtracted.length > 0) {
     parts.push(`non-operating items subtracted from the derivation: ${ctx.subtracted.join(", ")}`);
@@ -437,6 +515,14 @@ function describeDerivedEbit(ctx: { subtracted: string[]; unavailable: string[];
     parts.push(
       `not subtracted separately because the aggregate already contains them: ${ctx.alreadyInside.join(", ")}`,
     );
+  }
+  if (ctx.notInBase.length > 0) {
+    parts.push(
+      `NOT subtracted because the pretax element that served is measured before them: ${ctx.notInBase.join(", ")}`,
+    );
+  }
+  if (ctx.subtracted.includes("NonoperatingIncomeExpense")) {
+    parts.push(EBIT_AGGREGATE_MAY_HOLD_INTEREST);
   }
   if (ctx.unavailable.length > 0) {
     parts.push(
@@ -496,15 +582,14 @@ const LEASE_LIABILITY_SPEC: ChainSpec = {
 const COMBINED_CURRENT_TAG = COMBINED_CURRENT_DEBT_TAG;
 
 /**
- * The four balance-sheet current-debt tags, in the order the house rule (D-13)
- * checks them. Every one is a line ON the balance sheet; the debt-maturity
- * schedule below is a NOTE disclosure and is only consulted when all four miss.
+ * Borrowings with an initial term under a year. A DIFFERENT INSTRUMENT from the
+ * current maturities of long-term debt below, which is why the two are separate
+ * components of one sum rather than alternatives in a first-wins chain.
  */
-const CURRENT_DEBT_TAGS = [
-  ...tagsFor("shortTermBorrowings"),
-  ...tagsFor("commercialPaper"),
-  ...tagsFor("currentMaturitiesOfLongTermDebt"),
-];
+const SHORT_TERM_BORROWING_TAGS = [...tagsFor("shortTermBorrowings"), ...tagsFor("commercialPaper")];
+
+/** The balance-sheet lines that carry the current maturities of long-term debt. */
+const CURRENT_MATURITY_BALANCE_TAGS = [...tagsFor("currentMaturitiesOfLongTermDebt")];
 
 /** The tags that specifically carry the CURRENT MATURITIES of long-term debt. */
 const CURRENT_MATURITY_TAGS: readonly string[] = [...tagsFor("debtCurrent"), ...tagsFor("currentMaturitiesOfLongTermDebt")];
@@ -531,19 +616,47 @@ const BALANCE_CHAINS: Record<string, ChainSpec> = {
   totalAssets: lineItemChain("totalAssets", "money"),
   /**
    * D-13 order: the filed total (`DebtCurrent`) first; then the sum of the
-   * balance-sheet current-debt lines the filer did tag (`ShortTermBorrowings`,
-   * `CommercialPaper`, `LongTermDebtCurrent`, the combined debt-and-leases
-   * current tag); and only when ALL of them miss, the debt-maturity schedule's
-   * next-twelve-months principal, which is a note disclosure rather than a
-   * balance-sheet line and is disclosed as a stand-in on every row it serves.
+   * balance-sheet current-debt lines the filer did tag.
+   *
+   * That sum has TWO components, because short-term borrowings and the current
+   * maturities of long-term debt are different instruments and a filer can tag
+   * one without the other. The maturity schedule's next-twelve-months principal
+   * is the stand-in for the CURRENT-MATURITIES COMPONENT ALONE — a note
+   * disclosure rather than a balance-sheet line, disclosed as a stand-in on
+   * every row it serves. Making it a step of the whole chain (as this did
+   * before) meant a filer that tagged `ShortTermBorrowings` while tagging its
+   * current maturities only by extension lost the current maturities entirely:
+   * Caterpillar FY2024 published short-term debt 5,514 against a filed 12,634,
+   * understating total debt by 7.12B. `resolveDebtOverlaps` case 5 still nets
+   * the schedule figure out whenever a balance-sheet current-maturities tag
+   * did resolve, so it is never counted twice.
    */
   shortTermDebt: {
     kind: "chain",
     unit: "money",
     steps: [
       { kind: "first", tags: tagsFor("debtCurrent"), unit: "money" },
-      { kind: "sumAny", tags: CURRENT_DEBT_TAGS, unit: "money" },
-      ...MATURITIES_STAND_IN_SPEC,
+      {
+        kind: "sumAnyOf",
+        unit: "money",
+        parts: [
+          {
+            label: "short-term borrowings",
+            spec: { kind: "sumAny", tags: SHORT_TERM_BORROWING_TAGS, unit: "money" },
+          },
+          {
+            label: "current maturities of long-term debt",
+            spec: {
+              kind: "chain",
+              unit: "money",
+              steps: [
+                { kind: "sumAny", tags: CURRENT_MATURITY_BALANCE_TAGS, unit: "money" },
+                ...MATURITIES_STAND_IN_SPEC,
+              ],
+            },
+          },
+        ],
+      },
     ],
   },
   longTermDebt: lineItemChain("longTermDebt", "money"),
@@ -950,27 +1063,38 @@ type TagResolver = (tag: string, kind: UnitKind) => Resolved | null;
 interface NoteSink {
   readonly notes: string[];
   readonly substitutions: Substitution[];
+  readonly withheld: Withholding[];
   add(note: string): void;
   /** Record that `field` at row `period` was served by a stand-in described by `text`. */
   substitute(field: string, period: string, text: string): void;
+  /** Record that `field` at row `period` was left null on purpose, for the reason `text`. */
+  withhold(field: string, period: string, text: string): void;
 }
 
 function createNoteSink(): NoteSink {
   const seen = new Set<string>();
   const notes: string[] = [];
   const substitutions: Substitution[] = [];
+  const withheld: Withholding[] = [];
+  const record = (into: { field: string; text: string; periods: string[] }[], field: string, period: string, text: string): void => {
+    const existing = into.find((s) => s.field === field && s.text === text);
+    if (existing === undefined) into.push({ field, text, periods: [period] });
+    else if (!existing.periods.includes(period)) existing.periods.push(period);
+  };
   return {
     notes,
     substitutions,
+    withheld,
     add(note: string): void {
       if (seen.has(note)) return;
       seen.add(note);
       notes.push(note);
     },
     substitute(field: string, period: string, text: string): void {
-      const existing = substitutions.find((s) => s.field === field && s.text === text);
-      if (existing === undefined) substitutions.push({ field, text, periods: [period] });
-      else if (!existing.periods.includes(period)) existing.periods.push(period);
+      record(substitutions, field, period, text);
+    },
+    withhold(field: string, period: string, text: string): void {
+      record(withheld, field, period, text);
     },
   };
 }
@@ -1061,26 +1185,48 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
     }
     case "sumAll": {
       const present: Resolved[] = [];
+      const partTags: { label: string; tags: string[] }[] = [];
       for (const part of spec.parts) {
         const r = resolveSpec(part.spec, resolve, notes, `${label} (${part.label})`);
         if (r === null || (present.length > 0 && present[0]!.unit !== r.unit)) return null;
         present.push(r);
+        partTags.push({ label: part.label, tags: r.tags });
       }
+      const servedByPart = new Set(present.flatMap((r) => r.tags));
       let total = present.reduce((s, r) => s + r.value, 0);
       // Optional subtrahends: each one the filer tagged for this period is
-      // removed, one whose parent aggregate also resolved is skipped (the
-      // taxonomy already counts it inside that aggregate), and everything that
-      // could not be resolved is named as the error band on the result.
+      // removed; one whose parent aggregate also resolved is skipped (the
+      // taxonomy already counts it inside that aggregate); one the SERVING BASE
+      // TAG excludes by definition is skipped (subtracting it would remove
+      // money the base never held); and everything that could not be resolved is
+      // named as the error band on the result.
       const subtracted: string[] = [];
       const unavailable: string[] = [];
       const alreadyInside: string[] = [];
+      const notInBase: string[] = [];
       if (spec.minusAny !== undefined) {
         const resolvedByLabel = new Map<string, Resolved>();
         for (const adjustment of spec.minusAny) {
-          const hit = adjustment.tags
-            .map((tag) => resolve(tag, spec.unit))
-            .find((r): r is Resolved => r !== null && r.unit === present[0]!.unit);
-          if (hit !== undefined) resolvedByLabel.set(adjustment.label, hit);
+          // Resolve LAZILY: a TagResolver has note side effects (a derived
+          // quarter that cannot be built adds a "not derived" note), so
+          // resolving every synonym of an adjustment and then discarding all
+          // but the first hit put notes on the row about tags nothing used.
+          for (const tag of adjustment.tags) {
+            const r = resolve(tag, spec.unit);
+            if (r !== null && r.unit === present[0]!.unit) {
+              resolvedByLabel.set(adjustment.label, r);
+              break;
+            }
+          }
+        }
+        // A pair the taxonomy nests makes the whole derivation double-count, so
+        // the figure is withheld rather than published wrong.
+        for (const rule of spec.withholdWhen ?? []) {
+          const inside = [...resolvedByLabel.values()].some((r) => r.tags.includes(rule.adjustmentTag));
+          if (!servedByPart.has(rule.partTag) || !inside) continue;
+          notes.add(`${label}: ${rule.disclose}`);
+          if (at !== undefined) notes.withhold(at.field, at.period, rule.disclose);
+          return null;
         }
         for (const adjustment of spec.minusAny) {
           const hit = resolvedByLabel.get(adjustment.label);
@@ -1092,6 +1238,10 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
             alreadyInside.push(adjustment.label);
             continue;
           }
+          if (adjustment.notWhenBaseTag?.some((tag) => servedByPart.has(tag)) === true) {
+            notInBase.push(adjustment.label);
+            continue;
+          }
           total -= hit.value;
           subtracted.push(adjustment.label);
           present.push(hit);
@@ -1099,7 +1249,7 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
       }
       const combined = combine(tidy(total, MONEY_DECIMALS), present);
       if (spec.discloseAdjusted !== undefined) {
-        const text = spec.discloseAdjusted({ subtracted, unavailable, alreadyInside });
+        const text = spec.discloseAdjusted({ subtracted, unavailable, alreadyInside, notInBase, parts: partTags });
         notes.add(`${label}: ${text}`);
         if (at !== undefined) notes.substitute(at.field, at.period, text);
         return combined;
@@ -1120,10 +1270,15 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
     case "sumAnyOf": {
       // Same contract as `sumAny`, one level up: at least one part must resolve,
       // parts in a foreign currency are dropped, and every absent part is named.
+      // `at` travels INTO the parts: unlike `sumAll` (whose composite words its
+      // own disclosure), a `sumAnyOf` part that resolved through a stand-in is
+      // a stand-in for a slice of this very field, so it is that field's
+      // substitution — the debt-maturity schedule standing in for the current
+      // maturities of long-term debt is the case.
       const present: { label: string; r: Resolved }[] = [];
       const absent: string[] = [];
       for (const part of spec.parts) {
-        const r = resolveSpec(part.spec, resolve, notes, `${label} (${part.label})`);
+        const r = resolveSpec(part.spec, resolve, notes, `${label} (${part.label})`, at);
         if (r === null || (present.length > 0 && present[0]!.r.unit !== r.unit)) {
           absent.push(part.label);
           continue;
@@ -1583,22 +1738,23 @@ function resolveDebtOverlaps(
   }
 
   // Case 5: the maturity schedule's first year is the current portion of
-  // long-term debt. Under the house rule (D-13) the chain reaches it only when
-  // all four balance-sheet current-debt tags miss, so here it either stood in
-  // for them or was never summed at all — and the figure the filer did disclose
-  // is named either way, because a reader has to see what the row leaves out.
+  // long-term debt. It stands in for THAT COMPONENT of the sum only, so it is
+  // reached whenever no balance-sheet current-maturities tag resolved — beside
+  // short-term borrowings as readily as alone. When such a tag DID resolve the
+  // schedule figure never entered the sum, and it is named anyway, because a
+  // reader has to see the figure the filer disclosed either way.
   const maturitiesStand = shortTermTags.includes(MATURITIES_NEXT_YEAR_TAG);
   const maturities = cc.money(MATURITIES_NEXT_YEAR_TAG);
   if (maturitiesStand) {
     notes.add(
-      `shortTermDebt ${ctx}: current maturities taken from the debt maturity schedule (${MATURITIES_NEXT_YEAR_TAG} ${maturities}) — no balance-sheet current-debt tag filed; the figure is CURRENT MATURITIES ONLY and, being a note disclosure rather than a balance-sheet line, is often filed annually only, so quarterly rows can lack it`,
+      `shortTermDebt ${ctx}: current maturities taken from the debt maturity schedule (${MATURITIES_NEXT_YEAR_TAG} ${maturities}) — no balance-sheet current-maturities tag was filed for the period; the figure is CURRENT MATURITIES ONLY (any short-term borrowings and commercial paper the filer tagged are added beside it) and, being a note disclosure rather than a balance-sheet line, is often filed annually only, so quarterly rows can lack it`,
     );
   } else if (maturities !== null) {
     const currentMaturityTagResolved = CURRENT_MATURITY_TAGS.some((tag) => shortTermTags.includes(tag));
     notes.add(
       currentMaturityTagResolved
         ? `shortTermDebt ${ctx}: ${MATURITIES_NEXT_YEAR_TAG} excluded — the balance sheet's own current-debt tag resolved for this period and already carries the current maturities`
-        : `shortTermDebt ${ctx}: the debt maturity schedule reports ${maturities} of long-term debt due within a year (${MATURITIES_NEXT_YEAR_TAG}); it is NOT added because the filer tagged a balance-sheet current-debt line (${shortTermTags.join(" + ")}) and the house rule takes the schedule only when every current-debt tag misses, so short-term debt here may exclude the current maturities of long-term debt`,
+        : `shortTermDebt ${ctx}: the debt maturity schedule reports ${maturities} of long-term debt due within a year (${MATURITIES_NEXT_YEAR_TAG}) and it did NOT enter the sum — it could not be combined with the tags that did resolve (${shortTermTags.length === 0 ? "none" : shortTermTags.join(" + ")}), which happens when the schedule is filed in another currency, so short-term debt here may exclude the current maturities of long-term debt`,
     );
   }
 
@@ -1742,6 +1898,38 @@ function buildStatementRows<TRow>(
       values[field] = r === null ? null : tidy(r.value, decimalsFor(spec.unit));
       if (r !== null) resolutions.set(field, r);
     }
+    // A quarter derived by SUBTRACTING year-to-date figures can come out
+    // negative when the two operands do not describe the same thing — a
+    // comparative re-presented between the two filings, a perimeter change, a
+    // filer that tagged a cumulative figure as a quarter. Negative revenue for
+    // a quarter is not something any filer reported; it is an artefact of the
+    // subtraction, and publishing it puts a negative number into every growth
+    // rate, margin and multiple that reads the quarter. It becomes a disclosed
+    // gap naming the two periods it came from.
+    const derivedRevenue = resolutions.get("revenue");
+    const revenueValue = values.revenue;
+    if (
+      slot.quarter !== null &&
+      derivedRevenue !== undefined &&
+      derivedRevenue.derivation !== undefined &&
+      revenueValue !== null &&
+      revenueValue !== undefined &&
+      revenueValue < 0
+    ) {
+      const operands = derivedRevenue.derivedFrom ?? [];
+      const text =
+        `revenue WITHHELD for this quarter: the ${DERIVATION_PHRASE[derivedRevenue.derivation]} derivation produced ` +
+        `${revenueValue}, and a negative quarterly revenue is not a figure any filer reported — it is an artefact of ` +
+        `subtracting two periods that do not describe the same thing (a comparative re-presented between the filings, ` +
+        `a change of perimeter, or a cumulative figure tagged as a quarter). The operands were: ${
+          operands.length > 0 ? operands.join(" MINUS ") : "not recorded"
+        }.`;
+      notes.add(`${def.statement} ${ctxLabel}: ${text}`);
+      notes.withhold("revenue", slot.date, text);
+      values.revenue = null;
+      resolutions.delete("revenue");
+    }
+
     for (const [alias, source] of Object.entries(def.aliases)) values[alias] = values[source] ?? null;
 
     const anchorField = def.anchors.find((f) => resolutions.has(f));
@@ -1788,14 +1976,18 @@ function buildStatementRows<TRow>(
       if (prior === undefined) continue;
       original[field] = prior;
       if (!material.has(field)) continue;
-      const changePct = prior.value === 0 ? Number.POSITIVE_INFINITY : ((resolved.value - prior.value) / Math.abs(prior.value)) * 100;
-      if (!(Math.abs(changePct) > RESTATEMENT_THRESHOLD_PCT)) continue;
+      // A change against an original of zero is not a percentage. It used to be
+      // Infinity, which rendered "Infinity%" in a manifest reason and
+      // serialised to `null` in the row by accident; `null` is now the
+      // deliberate sentinel and every reader tests for it.
+      const changePct = prior.value === 0 ? null : ((resolved.value - prior.value) / Math.abs(prior.value)) * 100;
+      if (changePct !== null && !(Math.abs(changePct) > RESTATEMENT_THRESHOLD_PCT)) continue;
       rowFlags.push({
         date: slot.date,
         field,
         original: prior.value,
         restated: resolved.value,
-        changePct: Number.isFinite(changePct) ? tidy(changePct, 4) : changePct,
+        changePct: changePct === null ? null : tidy(changePct, 4),
         originalFiling: { accn: prior.accn, filed: prior.filed, form: prior.form },
         restatedFiling: filingRef(resolved.point),
       });
@@ -1806,9 +1998,7 @@ function buildStatementRows<TRow>(
       restatements.push(...rowFlags);
       for (const flag of rowFlags) {
         notes.add(
-          `${def.statement} ${ctxLabel}: ${flag.field} restated from ${flag.original} (${flag.originalFiling.form} ${flag.originalFiling.filed}) to ${flag.restated} (${flag.restatedFiling.form} ${flag.restatedFiling.filed}), ${
-            Number.isFinite(flag.changePct) ? `${flag.changePct > 0 ? "+" : ""}${flag.changePct.toFixed(2)}%` : "from zero"
-          } — the row carries the last-filed value and the superseded one as \`original\``,
+          `${def.statement} ${ctxLabel}: ${flag.field} restated or re-presented from ${flag.original} (${flag.originalFiling.form} ${flag.originalFiling.filed}) to ${flag.restated} (${flag.restatedFiling.form} ${flag.restatedFiling.filed}), ${describeChangePct(flag.changePct)} — the row carries the last-filed value and the superseded one as \`original\`; a comparative RE-PRESENTED for discontinued operations or a change of reportable segments moves the same way and companyfacts cannot tell it from a correction`,
         );
       }
     }
@@ -1828,7 +2018,7 @@ function buildStatementRows<TRow>(
 
   const gaps: ManifestEntry[] = [];
   if (rows.length === 0) gaps.push(noRowsGap(def, scope, opts, slots.length));
-  return { rows, notes: notes.notes, gaps, substitutions: notes.substitutions, restatements };
+  return { rows, notes: notes.notes, gaps, substitutions: notes.substitutions, restatements, withheld: notes.withheld };
 }
 
 function noRowsGap(def: StatementDef, scope: Scope, opts: StatementBuildOptions, candidates: number): ManifestEntry {
@@ -1893,6 +2083,29 @@ export function latestSharesOutstanding(index: FactIndex): SharesOutstandingPoin
 }
 
 /**
+ * One period's cover-page share count: the per-class facts of the filing that
+ * won that period, summed.
+ */
+export interface CoverShareCount {
+  value: number;
+  /** Period end (the cover-page "as of" date). */
+  asOf: string;
+  filing: FilingRef;
+  /** The per-class counts summed into `value`, in filed order; length 1 for a single-class filer. */
+  classes: number[];
+  /**
+   * Facts of the WINNING FILING that repeated a value another fact of the same
+   * filing already carried, and were therefore counted once. Companyfacts drops
+   * the class dimension, so a repeat is indistinguishable from a second class
+   * with an identical count — see `classAmbiguityNote`.
+   */
+  collapsedRepeats: number;
+}
+
+/** The largest class may exceed the smallest by this factor before the sum is flagged (N2). */
+export const CLASS_SIZE_RATIO_WARN = 100;
+
+/**
  * The newest cover-page share count, SUMMED across share classes.
  *
  * `dei:EntityCommonStockSharesOutstanding` is stated once per class of
@@ -1906,36 +2119,103 @@ export function latestSharesOutstanding(index: FactIndex): SharesOutstandingPoin
  *
  * Byte-identical repeats of a fact (the same value in the same filing for the
  * same date) are a companyfacts artifact, not a second class, and are counted
- * once.
+ * once — but the count of them is carried, because that assumption is exactly
+ * what cannot be verified from this source.
+ *
+ * Exported because the keyless market-cap HISTORY needs the same rule applied
+ * to every period, not only the newest one: summing the spot count while
+ * deduplicating the series made one report contradict itself.
  */
+export function coverShareCountsByPeriod(points: readonly FactPoint[]): CoverShareCount[] {
+  const byEnd = new Map<string, FactPoint[]>();
+  for (const p of filterToCoreForms([...points])) {
+    const group = byEnd.get(p.end);
+    if (group === undefined) byEnd.set(p.end, [p]);
+    else group.push(p);
+  }
+  const out: CoverShareCount[] = [];
+  for (const [end, group] of byEnd) {
+    let winner = group[0] as FactPoint;
+    for (const p of group) {
+      if (p.filed > winner.filed || (p.filed === winner.filed && p.accn > winner.accn)) winner = p;
+    }
+    const seen = new Set<string>();
+    const classes: number[] = [];
+    let collapsedRepeats = 0;
+    for (const p of group) {
+      if (p.accn !== winner.accn || p.filed !== winner.filed) continue;
+      const key = `${p.val}|${p.form.trim()}|${p.start ?? ""}`;
+      if (seen.has(key)) {
+        collapsedRepeats += 1;
+        continue;
+      }
+      seen.add(key);
+      classes.push(p.val);
+    }
+    out.push({
+      value: classes.reduce((s, v) => s + v, 0),
+      asOf: end,
+      filing: filingRef(winner),
+      classes,
+      collapsedRepeats,
+    });
+  }
+  return out.sort((a, b) => (a.asOf < b.asOf ? -1 : a.asOf > b.asOf ? 1 : 0));
+}
+
+/**
+ * N1: two classes with identical share counts are byte-identical facts in
+ * companyfacts, so the repeat is dropped and the total silently halves. The
+ * source cannot tell the two cases apart, so the ambiguity is disclosed rather
+ * than resolved by picking one.
+ */
+export function classAmbiguityNote(count: CoverShareCount): string | null {
+  if (count.collapsedRepeats === 0) return null;
+  const total = count.classes.length + count.collapsedRepeats;
+  return (
+    `the cover page of ${count.filing.form} ${count.filing.accn} (filed ${count.filing.filed}) carries ${total} ` +
+    `dei:${DEI_SHARES_TAG} facts for ${count.asOf} but only ${count.classes.length} distinct value(s): ` +
+    `${count.collapsedRepeats} repeat(s) were counted once. Companyfacts carries no class dimension, so a repeated ` +
+    "fact is indistinguishable from a SECOND SHARE CLASS with an identical count — if these are distinct classes " +
+    `the share count ${count.value} understates the registered shares, and every per-share and market-cap figure ` +
+    "derived from it is correspondingly overstated."
+  );
+}
+
+/**
+ * N2: summing raw per-class counts assumes equal per-share economics. Berkshire's
+ * B shares convert 1:1500 to an A share, so a raw sum of the two classes is off
+ * by an order of magnitude as a measure of economic ownership.
+ */
+export function classRatioNote(count: CoverShareCount): string | null {
+  if (count.classes.length < 2) return null;
+  const largest = Math.max(...count.classes);
+  const smallest = Math.min(...count.classes);
+  if (smallest <= 0 || largest / smallest <= CLASS_SIZE_RATIO_WARN) return null;
+  return (
+    `the per-class cover counts summed for ${count.asOf} differ by a factor of ${Math.round(largest / smallest)} ` +
+    `(largest ${largest}, smallest ${smallest}). A raw sum assumes every class has the SAME per-share economics; ` +
+    "for an issuer whose classes convert at a fixed ratio (Berkshire's B shares convert 1:1500 to an A share) that " +
+    "assumption fails by an order of magnitude, and companyfacts carries no conversion ratio, so the sum is a share " +
+    "COUNT and must not be read as economically weighted ownership."
+  );
+}
+
 function latestCoverShareCount(index: FactIndex): SharesOutstandingPoint | null {
   const up = pickUnitPoints(index, `dei:${DEI_SHARES_TAG}`, "shares");
   if (up === null) return null;
-  let best: FactPoint | null = null;
-  for (const p of up.all) {
-    if (best === null || p.end > best.end || (p.end === best.end && (p.filed > best.filed || (p.filed === best.filed && p.accn > best.accn)))) {
-      best = p;
-    }
-  }
-  if (best === null) return null;
-  const winner = best;
-  const seen = new Set<string>();
-  const classes: number[] = [];
-  for (const p of up.all) {
-    if (p.end !== winner.end || p.accn !== winner.accn || p.filed !== winner.filed) continue;
-    const key = `${p.val}|${p.form.trim()}|${p.start ?? ""}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    classes.push(p.val);
-  }
-  const value = classes.reduce((s, v) => s + v, 0);
+  const counts = coverShareCountsByPeriod(up.all);
+  const latest = counts[counts.length - 1];
+  if (latest === undefined || latest.classes.length === 0) return null;
   const point: SharesOutstandingPoint = {
-    value: classes.length === 0 ? winner.val : value,
-    asOf: winner.end,
+    value: latest.value,
+    asOf: latest.asOf,
     basis: "dei cover page",
-    filing: filingRef(winner),
+    filing: latest.filing,
   };
-  if (classes.length > 1) point.classes = classes;
+  if (latest.classes.length > 1) point.classes = latest.classes;
+  const notes = [classAmbiguityNote(latest), classRatioNote(latest)].filter((n): n is string => n !== null);
+  if (notes.length > 0) point.classNotes = notes;
   return point;
 }
 

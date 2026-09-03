@@ -438,8 +438,18 @@ export interface GrowthAnchorMethod {
 
 /** WS6 (D-18): median-of-methods near-term growth anchor. */
 export interface GrowthAnchor {
-  /** Median of the available methods, before the near-term clamp. */
+  /**
+   * The year-one growth the DCF actually fades from — the median of the
+   * available methods AFTER the near-term clamp (WS6 review, SHOULD-FIX 1).
+   * It used to carry the pre-clamp median, so the assumption table could print
+   * a 65% anchor beside a 25% year-one growth taken from the same anchor.
+   */
   pointPct: number;
+  /**
+   * The pre-clamp median, present ONLY when the clamp actually moved the value.
+   * Undefined means the anchor is the median untouched.
+   */
+  preClampMedianPct?: number;
   /** Min..max across the available methods; null when only one was available. */
   rangePct: [number, number] | null;
   methods: GrowthAnchorMethod[];
@@ -648,11 +658,26 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
   const lo = Math.min(...values);
   const hi = Math.max(...values);
   const rangePct: [number, number] | null = available.length > 1 ? [lo, hi] : null;
+  // WS6 review (SHOULD-FIX 1): clamp FIRST, then describe. The basis used to be
+  // built from the pre-clamp median and then attached to the clamped value, so
+  // a 65% median printed a basis sentence that said 25% and then said 65%.
+  const g1 = clampWithNote(
+    point,
+    NEAR_TERM_GROWTH_CLAMP_PP[0],
+    NEAR_TERM_GROWTH_CLAMP_PP[1],
+    "near-term growth (pct)",
+    notes,
+  );
+  const clampFired = g1 !== point;
+  const clampSentence = clampFired
+    ? ` CLAMPED to ${fmtNum(g1)}%: the near-term growth house rule bounds year-one growth to [${NEAR_TERM_GROWTH_CLAMP_PP[0]}%, ${NEAR_TERM_GROWTH_CLAMP_PP[1]}%], and the DCF fades from the clamped value, not the median.`
+    : "";
   const anchorBasis =
     `median of ${available.length} available growth method${available.length === 1 ? "" : "s"} = ${fmtNum(point)}%` +
     `${rangePct === null ? " (single method; no range)" : `, range ${fmtNum(lo)}% to ${fmtNum(hi)}%`}` +
     ` — methods: ${methods.map((m) => `${m.name} ${m.detail}`).join("; ")}` +
-    ` (house rule, WS6 D-18: median of methods; the former "lower of the 3y/5y CAGR" and sign-disagreement rules are RETIRED)`;
+    ` (house rule, WS6 D-18: median of methods; the former "lower of the 3y/5y CAGR" and sign-disagreement rules are RETIRED).` +
+    clampSentence;
   notes.push(`Near-term growth anchor: ${anchorBasis}`);
   if (unavailable.length > 0) {
     gaps.push(
@@ -669,12 +694,14 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
     );
   }
 
-  let g1 = point;
   const g1Basis =
-    `median of the available growth methods (${available.map((m) => `${m.name} ${fmtNum(m.valuePct)}%`).join(", ")})`;
-  g1 = clampWithNote(g1, NEAR_TERM_GROWTH_CLAMP_PP[0], NEAR_TERM_GROWTH_CLAMP_PP[1], "near-term growth (pct)", notes);
+    `median of the available growth methods (${available.map((m) => `${m.name} ${fmtNum(m.valuePct)}%`).join(", ")})` +
+    (clampFired
+      ? ` = ${fmtNum(point)}%, clamped to ${fmtNum(g1)}% by the near-term growth house rule range [${NEAR_TERM_GROWTH_CLAMP_PP[0]}%, ${NEAR_TERM_GROWTH_CLAMP_PP[1]}%]`
+      : "");
   const growthAnchor: GrowthAnchor = {
-    pointPct: point,
+    pointPct: g1,
+    ...(clampFired ? { preClampMedianPct: point } : {}),
     rangePct,
     methods,
     unavailable,

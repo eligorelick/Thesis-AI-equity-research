@@ -683,6 +683,42 @@ describe("buildDcfAssumptions", () => {
     expect(a.notes.some((n) => n.includes(">5pp") || n.includes("conservatism"))).toBe(false);
   });
 
+  // WS6 review (SHOULD-FIX 1): the near-term clamp used to be invisible in the
+  // assumption block — the anchor carried the PRE-clamp median while year-one
+  // growth carried the clamped value, and the growth-path basis interpolated
+  // the clamped value under the pre-clamp label. For an NVIDIA-like history the
+  // table printed a 65% anchor beside 25% year-one growth.
+  it("carries the near-term clamp into the anchor, its basis and the growth-path basis", () => {
+    const a = buildDcfAssumptions({
+      ...baseInputs,
+      revenueCagr3yPct: 65,
+      revenueCagr5yPct: 65,
+      analystEstimates: null,
+    }).assumptions as DcfAssumptions;
+    // The anchor IS the value the DCF fades from.
+    expect(a.growthAnchor.pointPct).toBeCloseTo(25, 9);
+    expect(a.growthPath.value[0]).toBeCloseTo(25, 9);
+    // ...and the pre-clamp median is kept, and named, rather than silently lost.
+    expect(a.growthAnchor.preClampMedianPct).toBeCloseTo(65, 9);
+    expect(a.growthAnchor.basis).toContain("median of 2 available growth methods = 65%");
+    expect(a.growthAnchor.basis).toContain("CLAMPED to 25%");
+    expect(a.growthPath.basis).toContain("clamped to 25%");
+    // The assumption ROW a reader sees is asserted in tests/stageB.dcfDisplay.test.ts.
+  });
+
+  it("leaves the anchor untouched, and says nothing about a clamp, when it does not fire", () => {
+    const a = buildDcfAssumptions({
+      ...baseInputs,
+      revenueCagr3yPct: 12,
+      revenueCagr5yPct: 13,
+      analystEstimates: null,
+    }).assumptions as DcfAssumptions;
+    expect(a.growthAnchor.pointPct).toBeCloseTo(12.5, 9);
+    expect(a.growthAnchor.preClampMedianPct).toBeUndefined();
+    expect(a.growthAnchor.basis).not.toContain("CLAMPED");
+    expect(a.growthPath.basis).not.toContain("clamped");
+  });
+
   it("lists every method's value and names the ones that were unavailable", () => {
     const a = buildDcfAssumptions({
       ...baseInputs,

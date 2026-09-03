@@ -499,10 +499,20 @@ describe("payload determinism + provenance", () => {
       // because the DCF assumption notes now state why the terminal ROIC was
       // held at WACC (the terminal excess-return house rule reads the ROIC
       // history and this fixture has too few years of it).
-      fingerprint: "1.3.0:63a11064",
-      promptBytes: 85_557,
+      // Changed 2026-09-02 by WS6 (D-18/D-19). The payload grows because the
+      // report now STATES its valuation inputs instead of implying them: the
+      // WACC disclosure sentence (risk-free series and observation date, ERP
+      // source and date, cost-of-debt method, tax-rate basis, market-value E/D
+      // weights), the growth anchor's methods, point estimate and range, and
+      // the sentence saying which cost of capital each ROIC year was measured
+      // against. financeHash and provenanceHash also move because the growth
+      // anchor is now the median of the available methods rather than the 3y
+      // CAGR alone, so the DCF figures themselves change. The larger prompt is
+      // the point of the change, not a side effect.
+      fingerprint: "1.3.0:327cc8ef",
+      promptBytes: 87_319,
       provenanceCount: 306,
-      provenanceHash: "b9ec901b",
+      provenanceHash: "5b3fff05",
       provenanceIdsHash: "1e316594",
       citationCount: 11,
       citationHash: "7ebe5276",
@@ -514,7 +524,7 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "2b9b8ba3",
+      financeHash: "e2259241",
     });
   });
 

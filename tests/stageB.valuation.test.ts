@@ -64,6 +64,14 @@ function explicitAssumptions(over: Partial<{
   return {
     startRevenue: { value: over.startRevenue ?? 1000, basis: "test" },
     years,
+    wacc: { value: 9, basis: "test" },
+    growthAnchor: {
+      pointPct: growthPath[0],
+      rangePct: null,
+      methods: [{ name: "test", valuePct: growthPath[0], detail: "test" }],
+      unavailable: [],
+      basis: "test",
+    },
     growthPath: { value: growthPath, basis: "test" },
     ebitMarginPath: { value: ebitMarginPath, basis: "test" },
     taxRatePath: { value: taxRatePath, basis: "test" },
@@ -498,8 +506,11 @@ describe("buildDcfAssumptions", () => {
     expect(a.years).toBe(DCF_HORIZON_YEARS);
     // gTerm = min(2.5, 4.48) = 2.5
     expect(a.terminal.gTermPct.value).toBe(2.5);
-    // growth path fades from 12% (3y CAGR, no analyst) to 2.5% over 10y
-    expect(a.growthPath.value[0]).toBeCloseTo(12, 9);
+    // WS6 (D-18): the anchor is the MEDIAN of the available methods, not the
+    // 3y CAGR alone — here median(3y 12%, 5y 13%) = 12.5%.
+    expect(a.growthAnchor.pointPct).toBeCloseTo(12.5, 9);
+    expect(a.growthAnchor.rangePct).toEqual([12, 13]);
+    expect(a.growthPath.value[0]).toBeCloseTo(12.5, 9);
     expect(a.growthPath.value[9]).toBeCloseTo(2.5, 9);
     expect(a.growthPath.value).toHaveLength(10);
   });
@@ -604,7 +615,11 @@ describe("buildDcfAssumptions", () => {
     const a = buildDcfAssumptions({ ...baseInputs, analystEstimates: est }).assumptions as DcfAssumptions;
     // avg of (10, 10) = 10 — TTM 2025-12-31 → FY1 2026-12-31 is a full 365-day
     // year, so day-count annualization is a no-op here (audit L3).
-    expect(a.growthPath.value[0]).toBeCloseTo(10, 6);
+    // WS6 (D-18): consensus is one METHOD among several, not an override, so
+    // the anchor is median(3y 12%, 5y 13%, consensus 10%) = 12%.
+    const consensus = a.growthAnchor.methods.find((m) => m.name === "analyst-consensus case")!;
+    expect(consensus.valuePct).toBeCloseTo(10, 6);
+    expect(a.growthAnchor.pointPct).toBeCloseTo(12, 6);
     expect(a.growthPath.basis).toMatch(/analyst/i);
   });
 
@@ -622,7 +637,10 @@ describe("buildDcfAssumptions", () => {
     const expected = (Math.pow(1.025, 365.25 / 91) - 1) * 100;
     expect(expected).toBeGreaterThan(10.3); // sanity band on the hand-derived value
     expect(expected).toBeLessThan(10.5);
-    expect(a.growthPath.value[0]).toBeCloseTo(expected, 6);
+    // WS6 (D-18): the annualized leg is the consensus METHOD's value; the
+    // anchor is the median across methods.
+    const consensus = a.growthAnchor.methods.find((m) => m.name === "analyst-consensus case")!;
+    expect(consensus.valuePct).toBeCloseTo(expected, 6);
     expect(a.notes.some((n) => /annualized/i.test(n))).toBe(true);
   });
 
@@ -638,19 +656,80 @@ describe("buildDcfAssumptions", () => {
       incomeTtm: { ...incomeTtm, date: "2026-11-15" },
       analystEstimates: est,
     }).assumptions as DcfAssumptions;
-    expect(a.growthPath.value[0]).toBeCloseTo(10, 9);
+    const consensus = a.growthAnchor.methods.find((m) => m.name === "analyst-consensus case")!;
+    expect(consensus.valuePct).toBeCloseTo(10, 9);
     expect(a.notes.some((n) => /skipped/i.test(n))).toBe(true);
   });
 
-  it("takes min(3y,5y) CAGR when they diverge > 5pp (conservatism)", () => {
+  // WS6 (D-18): the "lower of the 3y/5y CAGR" conservatism rule is RETIRED.
+  // Letting whichever window happened to be worse decide ten years of growth
+  // is not conservatism, it is a coin flip on the window; the replacement is
+  // the median of every method the data supports, with the range shown.
+  it("takes the MEDIAN of the available methods, not the lower CAGR (D-18)", () => {
     const a = buildDcfAssumptions({
       ...baseInputs,
       revenueCagr3yPct: 20,
       revenueCagr5yPct: 10,
       analystEstimates: null,
     }).assumptions as DcfAssumptions;
-    expect(a.growthPath.value[0]).toBeCloseTo(10, 9); // took the smaller
-    expect(a.notes.some((n) => n.includes(">5pp") || n.includes("conservatism"))).toBe(true);
+    expect(a.growthPath.value[0]).toBeCloseTo(15, 9); // median(20, 10), not min
+    expect(a.growthAnchor.rangePct).toEqual([10, 20]);
+    expect(a.growthAnchor.basis).toContain("median of 2 available growth methods");
+    expect(a.growthAnchor.basis).toContain("RETIRED");
+    expect(a.notes.some((n) => n.includes(">5pp") || n.includes("conservatism"))).toBe(false);
+  });
+
+  it("lists every method's value and names the ones that were unavailable", () => {
+    const a = buildDcfAssumptions({
+      ...baseInputs,
+      revenueLogLinear: {
+        growthPct: 11,
+        rSquared: 0.97,
+        n: 5,
+        startDate: "2021-12-31",
+        endDate: "2025-12-31",
+      },
+      analystEstimates: null,
+    }).assumptions as DcfAssumptions;
+    // median(regression 11, 3y 12, 5y 13) = 12
+    expect(a.growthAnchor.pointPct).toBeCloseTo(12, 9);
+    expect(a.growthAnchor.rangePct).toEqual([11, 13]);
+    expect(a.growthAnchor.unavailable).toEqual(["analyst-consensus case"]);
+    expect(a.growthAnchor.methods.map((m) => m.name)).toEqual([
+      "log-linear revenue regression",
+      "3y revenue CAGR",
+      "5y revenue CAGR",
+      "analyst-consensus case",
+    ]);
+    const regression = a.growthAnchor.methods[0];
+    expect(regression.detail).toContain("fitted over 5 annual years");
+    expect(regression.detail).toContain("R2 0.97");
+    expect(regression.detail).toContain("2021-12-31 to 2025-12-31");
+    // The fade horizon is stated in years in the assumption block.
+    expect(a.growthPath.basis).toContain("linear fade over the explicit 10-year horizon");
+    expect(a.growthPath.basis).toContain("in year 10");
+  });
+
+  it("discloses the unavailable methods in the missing-data manifest", () => {
+    const built = buildDcfAssumptions({ ...baseInputs, analystEstimates: null });
+    const gap = built.gaps.find((g) => g.field === "valuation.dcf.growthAnchor");
+    expect(gap?.severity).toBe("info");
+    expect(gap?.reason).toContain("log-linear revenue regression");
+    expect(gap?.reason).toContain("analyst-consensus case");
+  });
+
+  it("suppresses the DCF when no growth method is computable at all", () => {
+    const built = buildDcfAssumptions({
+      ...baseInputs,
+      revenueCagr3yPct: null,
+      revenueCagr5yPct: null,
+      revenueLogLinear: null,
+      analystEstimates: null,
+    });
+    expect(built.assumptions).toBeNull();
+    expect(
+      built.gaps.some((g) => g.field === "valuation.dcf.nearTermGrowth" && g.severity === "critical"),
+    ).toBe(true);
   });
 
   it("clamps near-term growth into [-10, +25] (spec §2.2)", () => {
@@ -1887,8 +1966,17 @@ describe("terminalRoic — evidenced excess returns carried into the terminal", 
   const fiveAbove = [year("2025-12-31", 26), year("2024-12-31", 24), year("2023-12-31", 25), year("2022-12-31", 22), year("2021-12-31", 20)];
 
   it("keeps terminal ROIC at WACC, silently, when no history is supplied", () => {
-    const t = terminalRoic(9, null);
-    expect(t).toEqual({ roicTermPct: 9, excessPp: 0, basis: "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)", note: null });
+    // WS6 (D-19): the result also reports HOW each year was compared to a cost
+    // of capital; with no history there is nothing to compare.
+    expect(terminalRoic(9, null)).toEqual({
+      roicTermPct: 9,
+      excessPp: 0,
+      basis:
+        'terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, "Terminal value house convention")',
+      note: null,
+      waccBasis: "none",
+      waccBasisNote: null,
+    });
   });
 
   it("carries half the median spread, capped at 5pp, when ROIC beat WACC in every one of the last five years", () => {
@@ -1910,15 +1998,17 @@ describe("terminalRoic — evidenced excess returns carried into the terminal", 
   it("holds the default, and says why, when one year fell to or below WACC", () => {
     const t = terminalRoic(9, [...fiveAbove.slice(0, 4), year("2021-12-31", 9)]);
     expect(t.roicTermPct).toBe(9);
+    // WS6 (D-19): the note names that year's OWN WACC and labels the rule a
+    // house convention rather than a house rule.
     expect(t.note).toBe(
-      "terminal ROIC held at WACC: ROIC was at or below WACC 9% in 1 of the last 5 fiscal years (2021-12-31) — excess returns not evidenced as durable (house rule)",
+      "terminal ROIC held at WACC: ROIC was at or below that year's WACC in 1 of the last 5 fiscal years (2021-12-31: ROIC 9% vs WACC 9%) — excess returns not evidenced as durable (house convention)",
     );
   });
 
   it("holds the default when fewer than four fiscal years carry a ROIC", () => {
     const t = terminalRoic(9, [year("2025-12-31", 30), year("2024-12-31", 28), year("2023-12-31", null), year("2022-12-31", 27)]);
     expect(t.roicTermPct).toBe(9);
-    expect(t.note).toBe("terminal ROIC held at WACC: 3 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house rule)");
+    expect(t.note).toBe("terminal ROIC held at WACC: 3 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house convention)");
   });
 
   it("holds the default when the spread is too thin to carry", () => {
@@ -1973,7 +2063,49 @@ describe("terminalRoic — evidenced excess returns carried into the terminal", 
     });
     const a = built.assumptions as DcfAssumptions;
     expect(a.terminal.roicTermPct.value).toBe(9);
-    expect(a.notes.at(-1)).toBe("terminal ROIC held at WACC: 2 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house rule)");
+    expect(a.notes).toContain(
+      "terminal ROIC held at WACC: 2 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house convention)",
+    );
+    // WS6 (D-19): with no per-year risk-free observation the note says the
+    // CURRENT WACC was applied to every year, and it is the last note written.
+    expect(a.notes.at(-1)).toBe(
+      "ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9% — no per-year risk-free observation was available to recompute a year-specific WACC",
+    );
+    expect(a.terminal.roicTermPct.basis).toContain("HOUSE CONVENTION");
+  });
+
+  it("compares each fiscal year to its OWN WACC when one was recomputed for it", () => {
+    // ROIC 12% in every year. Against the CURRENT WACC of 13% no year clears
+    // it, so the default holds; against each year's own (lower) WACC every
+    // year clears it and the evidenced excess return is carried.
+    const perYear = [
+      { date: "2025-12-31", roicPct: 12, waccPct: 8, waccAsOf: "2025-12-30" },
+      { date: "2024-12-31", roicPct: 12, waccPct: 8, waccAsOf: "2024-12-30" },
+      { date: "2023-12-31", roicPct: 12, waccPct: 8, waccAsOf: "2023-12-29" },
+      { date: "2022-12-31", roicPct: 12, waccPct: 8, waccAsOf: "2022-12-30" },
+    ];
+    const held = terminalRoic(13, perYear.map((y) => ({ date: y.date, roicPct: y.roicPct })));
+    expect(held.excessPp).toBe(0);
+    expect(held.waccBasis).toBe("current");
+
+    const evidenced = terminalRoic(13, perYear);
+    expect(evidenced.waccBasis).toBe("per-year");
+    // spreads 4pp each → median 4 → half = 2pp carried over the CURRENT WACC.
+    expect(evidenced.excessPp).toBeCloseTo(2, 9);
+    expect(evidenced.roicTermPct).toBeCloseTo(15, 9);
+    expect(evidenced.waccBasisNote).toContain("each fiscal year's own WACC");
+    expect(evidenced.waccBasisNote).toContain("2025-12-31: 8% (rf as of 2025-12-30)");
+  });
+
+  it("says which years fell back to the current WACC when only some had an observation", () => {
+    const t = terminalRoic(13, [
+      { date: "2025-12-31", roicPct: 20, waccPct: 8, waccAsOf: "2025-12-30" },
+      { date: "2024-12-31", roicPct: 20, waccPct: null, waccAsOf: null },
+      { date: "2023-12-31", roicPct: 20 },
+      { date: "2022-12-31", roicPct: 20, waccPct: 8, waccAsOf: "2022-12-30" },
+    ]);
+    expect(t.waccBasis).toBe("per-year");
+    expect(t.waccBasisNote).toContain("the current WACC 13% was applied to 2024-12-31, 2023-12-31");
   });
 });
 
@@ -1994,25 +2126,33 @@ describe("buildDcfAssumptions — revenue history with a spike or a collapse", (
     marketCap: 140_000,
   });
 
-  it("starts the growth path at the terminal rate when the 3y and 5y CAGRs disagree in sign", () => {
+  // WS6 (D-18): the sign-disagreement rule is RETIRED. Setting g1 = gTerm
+  // discarded the whole revenue history on the strength of two endpoint
+  // windows disagreeing. The median of methods keeps every method's evidence,
+  // and the log-linear regression reports an erratic history as a poor fit
+  // (low R2) instead of silently replacing the anchor.
+  it("no longer forces the terminal rate when the 3y and 5y CAGRs disagree in sign", () => {
     // Pfizer 2025: 3y −12% (post-COVID collapse) against 5y +8.5%.
     const built = buildDcfAssumptions(inputs(-12, 8.5));
     const a = built.assumptions as DcfAssumptions;
-    expect(a.growthPath.value[0]).toBe(2.5);
-    expect(a.growthPath.basis).toMatch(/^linear fade from 2\.5% \(terminal growth rate \(3y and 5y historical revenue CAGRs disagree in sign/);
-    expect(a.notes.some((n) => /disagree in sign — revenue history holds a spike or a collapse, not a trend; near-term growth set to the terminal rate 2\.5%/.test(n))).toBe(true);
+    expect(a.growthPath.value[0]).toBeCloseTo(-1.75, 9); // median(−12, 8.5)
+    expect(a.growthAnchor.rangePct).toEqual([-12, 8.5]);
+    expect(a.notes.some((n) => /disagree in sign/.test(n))).toBe(false);
+    expect(a.growthAnchor.basis).toContain("sign-disagreement rules are RETIRED");
   });
 
-  it("keeps the min(3y, 5y) conservatism rule when both windows agree in sign", () => {
+  it("takes the median, not the minimum, when both windows agree in sign", () => {
     const up = buildDcfAssumptions(inputs(12, 20)).assumptions as DcfAssumptions;
-    expect(up.growthPath.value[0]).toBeCloseTo(12, 9);
+    expect(up.growthPath.value[0]).toBeCloseTo(16, 9);
     const down = buildDcfAssumptions(inputs(-3, -9)).assumptions as DcfAssumptions;
-    expect(down.growthPath.value[0]).toBeCloseTo(-9, 9);
-    expect(down.growthPath.basis).toMatch(/min\(3y, 5y\)/);
+    expect(down.growthPath.value[0]).toBeCloseTo(-6, 9);
+    expect(down.growthPath.basis).not.toMatch(/min\(3y, 5y\)/);
   });
 
-  it("uses the 3y CAGR alone when no 5y window exists", () => {
+  it("uses the 3y CAGR alone when no 5y window exists, and shows no range", () => {
     const a = buildDcfAssumptions(inputs(-6, null)).assumptions as DcfAssumptions;
     expect(a.growthPath.value[0]).toBeCloseTo(-6, 9);
+    expect(a.growthAnchor.rangePct).toBeNull();
+    expect(a.growthAnchor.basis).toContain("single method; no range");
   });
 });

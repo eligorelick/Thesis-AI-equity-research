@@ -234,11 +234,35 @@ export interface DcfBalanceRow {
   cashAndShortTermInvestments: number | null;
 }
 
+/**
+ * WS6 (D-18): log-linear revenue trend over every annual year on record
+ * (growth.ts `logLinearGrowth`). Structural, so the DCF does not depend on the
+ * whole GrowthResult.
+ */
+export interface DcfRevenueTrend {
+  growthPct: number | null;
+  rSquared: number | null;
+  n: number;
+  startDate: string | null;
+  endDate: string | null;
+}
+
 export interface DcfAssumptionInputs {
   /** 3y revenue CAGR in percent (computed upstream from statements); null when unavailable. */
   revenueCagr3yPct: number | null;
-  /** 5y revenue CAGR in percent — used only for the conservatism cross-check. */
+  /** 5y revenue CAGR in percent — one of the growth-anchor methods (D-18). */
   revenueCagr5yPct?: number | null;
+  /**
+   * WS6 (D-18): the log-linear regression method of the growth anchor. Absent
+   * or null makes it an unavailable method, named as such in the basis.
+   */
+  revenueLogLinear?: DcfRevenueTrend | null;
+  /**
+   * WS6 (D-19): the WACC disclosure sentence (returns.ts `waccDisclosure`),
+   * printed verbatim in the assumption block so the discount rate is never an
+   * unattributed percentage.
+   */
+  waccBasis?: string | null;
   /** Forward annual analyst estimates (FMP names); null/empty when uncovered. */
   analystEstimates: AnalystEstimateRow[] | null;
   waccPct: number;
@@ -270,6 +294,14 @@ export interface DcfAssumptionInputs {
 export interface DcfRoicYear {
   date: string;
   roicPct: number | null;
+  /**
+   * WS6 (D-19): that fiscal year's OWN WACC, recomputed from the risk-free
+   * observation at its year end (returns.ts `waccByFiscalYear`). Absent or
+   * null means the current WACC is applied to that year and the note says so.
+   */
+  waccPct?: number | null;
+  /** Date of the risk-free observation behind `waccPct`. */
+  waccAsOf?: string | null;
 }
 
 export interface TerminalRoic {
@@ -279,36 +311,89 @@ export interface TerminalRoic {
   basis: string;
   /** Why the default held when history was supplied; null when none is owed. */
   note: string | null;
+  /**
+   * WS6 (D-19): how each fiscal year's ROIC was compared to a cost of capital.
+   * "per-year" when at least one year carried its own recomputed WACC,
+   * "current" when the single current WACC was applied to every year,
+   * "none" when no history was supplied.
+   */
+  waccBasis: "per-year" | "current" | "none";
+  /** The comparison sentence, so the assumption block can state it verbatim. */
+  waccBasisNote: string | null;
 }
 
-const TERMINAL_ROIC_DEFAULT_BASIS = "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)";
+const TERMINAL_ROIC_DEFAULT_BASIS =
+  "terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, \"Terminal value house convention\")";
 
-/** Apply the terminal excess-return house rule (see TERMINAL_EXCESS_RETURN_CAP_PP). */
+/**
+ * Apply the terminal excess-return HOUSE CONVENTION (see
+ * TERMINAL_EXCESS_RETURN_CAP_PP). It is not a standard: it is this app's own
+ * convention, and it is labelled as such wherever it is printed.
+ *
+ * WS6 (D-19): each fiscal year is compared to its OWN WACC when the caller
+ * supplied one (recomputed from that year end's risk-free observation); years
+ * without one fall back to the current WACC and the note says which happened.
+ */
 export function terminalRoic(waccPct: number, history: DcfRoicYear[] | null): TerminalRoic {
-  const hold = (note: string | null): TerminalRoic => ({ roicTermPct: waccPct, excessPp: 0, basis: TERMINAL_ROIC_DEFAULT_BASIS, note });
-  if (history === null) return hold(null);
+  const hold = (
+    note: string | null,
+    waccBasis: TerminalRoic["waccBasis"],
+    waccBasisNote: string | null,
+  ): TerminalRoic => ({
+    roicTermPct: waccPct,
+    excessPp: 0,
+    basis: TERMINAL_ROIC_DEFAULT_BASIS,
+    note,
+    waccBasis,
+    waccBasisNote,
+  });
+  if (history === null) return hold(null, "none", null);
   const years = history
-    .filter((y): y is { date: string; roicPct: number } => isNum(y.roicPct))
+    .filter((y): y is DcfRoicYear & { roicPct: number } => isNum(y.roicPct))
     .sort((a, b) => b.date.localeCompare(a.date))
     .slice(0, 5);
   const n = years.length;
+  // Each year against its own cost of capital when one was recomputed for it.
+  const waccForYear = (y: DcfRoicYear): number => (isNum(y.waccPct) ? y.waccPct : waccPct);
+  const perYear = years.filter((y) => isNum(y.waccPct));
+  const currentOnly = years.filter((y) => !isNum(y.waccPct));
+  const waccBasis: TerminalRoic["waccBasis"] = perYear.length > 0 ? "per-year" : "current";
+  const waccBasisNote =
+    perYear.length === 0
+      ? `ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC ${fmtNum(waccPct)}% — no per-year risk-free observation was available to recompute a year-specific WACC`
+      : `ROIC-vs-WACC history uses each fiscal year's own WACC, recomputed from that year end's risk-free observation (${perYear
+          .map((y) => `${y.date}: ${fmtNum(waccForYear(y))}%${y.waccAsOf ? ` (rf as of ${y.waccAsOf})` : ""}`)
+          .join(", ")})` +
+        (currentOnly.length > 0
+          ? `; the current WACC ${fmtNum(waccPct)}% was applied to ${currentOnly
+              .map((y) => y.date)
+              .join(", ")}, which had no usable risk-free observation`
+          : "");
   if (n < TERMINAL_EXCESS_RETURN_MIN_YEARS) {
     return hold(
-      `terminal ROIC held at WACC: ${n} fiscal year${n === 1 ? "" : "s"} of ROIC on record, ${TERMINAL_EXCESS_RETURN_MIN_YEARS} needed to evidence durable excess returns (house rule)`,
+      `terminal ROIC held at WACC: ${n} fiscal year${n === 1 ? "" : "s"} of ROIC on record, ${TERMINAL_EXCESS_RETURN_MIN_YEARS} needed to evidence durable excess returns (house convention)`,
+      waccBasis,
+      waccBasisNote,
     );
   }
-  const below = years.filter((y) => y.roicPct <= waccPct);
+  const below = years.filter((y) => y.roicPct <= waccForYear(y));
   if (below.length > 0) {
     return hold(
-      `terminal ROIC held at WACC: ROIC was at or below WACC ${fmtNum(waccPct)}% in ${below.length} of the last ${n} fiscal years (${below.map((y) => y.date).join(", ")}) — excess returns not evidenced as durable (house rule)`,
+      `terminal ROIC held at WACC: ROIC was at or below that year's WACC in ${below.length} of the last ${n} fiscal years (${below
+        .map((y) => `${y.date}: ROIC ${fmtNum(y.roicPct)}% vs WACC ${fmtNum(waccForYear(y))}%`)
+        .join("; ")}) — excess returns not evidenced as durable (house convention)`,
+      waccBasis,
+      waccBasisNote,
     );
   }
-  const spreads = years.map((y) => y.roicPct - waccPct);
+  const spreads = years.map((y) => y.roicPct - waccForYear(y));
   const median = medianOf(spreads) as number;
   const excess = Math.min(TERMINAL_EXCESS_RETURN_CAP_PP, TERMINAL_EXCESS_RETURN_CARRY * median);
   if (excess < TERMINAL_EXCESS_RETURN_MIN_PP) {
     return hold(
-      `terminal ROIC held at WACC: ROIC exceeded WACC in all ${n} fiscal years but the median spread ${fmtNum(median)}pp is too thin to carry (house rule floor ${TERMINAL_EXCESS_RETURN_MIN_PP}pp)`,
+      `terminal ROIC held at WACC: ROIC exceeded WACC in all ${n} fiscal years but the median spread ${fmtNum(median)}pp is too thin to carry (house convention floor ${TERMINAL_EXCESS_RETURN_MIN_PP}pp)`,
+      waccBasis,
+      waccBasisNote,
     );
   }
   const oldest = years[n - 1].date;
@@ -319,15 +404,41 @@ export function terminalRoic(waccPct: number, history: DcfRoicYear[] | null): Te
     basis:
       `terminal ROIC = WACC ${fmtNum(waccPct)}% + ${fmtNum(excess)}pp evidenced excess return: ROIC exceeded WACC in each of the last ${n} fiscal years ` +
       `(${oldest} to ${newest}, median spread ${fmtNum(median)}pp); half the spread is carried in perpetuity, capped at ${TERMINAL_EXCESS_RETURN_CAP_PP}pp ` +
-      "(house rule after McKinsey's RONIC guidance and Damodaran's modest-excess-return cap)",
+      "(HOUSE CONVENTION after McKinsey's RONIC guidance and Damodaran's modest-excess-return cap — not a standard; see docs/METHODOLOGY.md)",
     note: null,
+    waccBasis,
+    waccBasisNote,
   };
+}
+
+/** WS6 (D-18): one method of the growth anchor and what it produced. */
+export interface GrowthAnchorMethod {
+  name: string;
+  valuePct: number | null;
+  /** Value with its fit statistics / window, or the reason it was unavailable. */
+  detail: string;
+}
+
+/** WS6 (D-18): median-of-methods near-term growth anchor. */
+export interface GrowthAnchor {
+  /** Median of the available methods, before the near-term clamp. */
+  pointPct: number;
+  /** Min..max across the available methods; null when only one was available. */
+  rangePct: [number, number] | null;
+  methods: GrowthAnchorMethod[];
+  /** Names of the methods that could not be computed. */
+  unavailable: string[];
+  basis: string;
 }
 
 export interface DcfAssumptions {
   startRevenue: Assumption<number>;
   /** Explicit horizon (default 10). */
   years: number;
+  /** WS6 (D-19): the discount rate with every input named. */
+  wacc: Assumption<number>;
+  /** WS6 (D-18): the growth anchor's methods, point estimate and range. */
+  growthAnchor: GrowthAnchor;
   /** Revenue growth per explicit year, percent, length === years. */
   growthPath: Assumption<number[]>;
   /** EBIT margin per explicit year, percent, length === years. */
@@ -445,52 +556,111 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
   const gTerm = Math.min(TERMINAL_G_CAP_PCT, inputs.riskFreePct);
   const gTermBasis = `min(${TERMINAL_G_CAP_PCT}%, risk-free ${fmtNum(inputs.riskFreePct)}%) — house rule: nothing grows faster than rf forever`;
 
-  // --- Near-term growth: analyst 2y avg if available, else 3y CAGR ---------
+  // --- Near-term growth: MEDIAN OF METHODS (WS6, D-18) ---------------------
+  // Retired here: "lower of the 3Y/5Y CAGR" and the sign-disagreement rule
+  // that set g1 = gTerm. Both let one window decide ten years of growth: the
+  // min rule extrapolated whichever window happened to be worse, and the
+  // sign rule threw the history away entirely. The replacement runs every
+  // method the data supports — a log-linear regression over ALL annual years
+  // (reported with its R2 and n, so an erratic history shows up as a poor fit
+  // instead of moving the anchor), the 3-year and 5-year CAGRs, and the
+  // analyst-consensus case when estimates exist — and takes the MEDIAN, with
+  // the full range shown. Each method's value, and every method that was
+  // unavailable, is named in the basis.
   const analyst = analystTwoYearGrowthPct(inputs.analystEstimates, startRev, ttm?.date ?? null);
   notes.push(...analyst.notes);
-  let g1: number;
-  let g1Basis: string;
-  if (analyst.value !== null) {
-    g1 = analyst.value;
-    g1Basis = `analyst consensus revenue, avg implied growth over next 2 fiscal years (through ${analyst.asOf ?? "?"})`;
-  } else if (isNum(inputs.revenueCagr3yPct)) {
-    g1 = inputs.revenueCagr3yPct;
-    g1Basis = "3y historical revenue CAGR (no analyst estimates available)";
-    const cagr5 = isNum(inputs.revenueCagr5yPct) ? inputs.revenueCagr5yPct : null;
-    if (cagr5 !== null && inputs.revenueCagr3yPct !== 0 && cagr5 !== 0 && Math.sign(inputs.revenueCagr3yPct) !== Math.sign(cagr5)) {
-      // A spike or a collapse inside the window (Pfizer after the 2022 COVID
-      // peak: 3y −12% against 5y +8.5%) is an event, not a trend, and either
-      // window would anchor ten years of growth on it — the min rule below
-      // produced a −10% start and an $3 fair value. Damodaran's guidance for
-      // an erratic history is the stable rate, so the path starts at the
-      // terminal growth rate and the note says why.
-      notes.push(
-        `3y CAGR ${fmtNum(inputs.revenueCagr3yPct)}% and 5y CAGR ${fmtNum(cagr5)}% disagree in sign — revenue history holds a spike or a collapse, not a trend; near-term growth set to the terminal rate ${fmtNum(gTerm)}% (house rule: no trend, no extrapolation)`,
-      );
-      g1 = gTerm;
-      g1Basis = "terminal growth rate (3y and 5y historical revenue CAGRs disagree in sign — no trend to extrapolate, house rule)";
-    } else if (cagr5 !== null && Math.abs(inputs.revenueCagr3yPct - cagr5) > 5) {
-      const smaller = Math.min(inputs.revenueCagr3yPct, cagr5);
-      notes.push(
-        `3y CAGR ${fmtNum(inputs.revenueCagr3yPct)}% vs 5y CAGR ${fmtNum(cagr5)}% differ by >5pp — took smaller ${fmtNum(smaller)}% (house rule: conservatism against re-acceleration)`,
-      );
-      g1 = smaller;
-      g1Basis = "min(3y, 5y) historical revenue CAGR (>5pp divergence, conservatism house rule)";
-    }
-    gaps.push(
-      gapEntry("valuation.dcf.analystGrowth", "no usable analyst revenue estimates — fell back to historical CAGR", "info"),
-    );
+
+  const methods: GrowthAnchorMethod[] = [];
+  const trend = inputs.revenueLogLinear ?? null;
+  if (trend && isNum(trend.growthPct)) {
+    methods.push({
+      name: "log-linear revenue regression",
+      valuePct: trend.growthPct,
+      detail:
+        `${fmtNum(trend.growthPct)}%/yr fitted over ${trend.n} annual years` +
+        `${trend.startDate && trend.endDate ? ` (${trend.startDate} to ${trend.endDate})` : ""}` +
+        `${isNum(trend.rSquared) ? `, R2 ${fmtNum(trend.rSquared)}` : ", R2 unavailable"}`,
+    });
   } else {
+    methods.push({
+      name: "log-linear revenue regression",
+      valuePct: null,
+      detail: `unavailable: ${trend === null ? "no annual revenue trend supplied" : "fewer than 3 positive annual revenue observations"}`,
+    });
+  }
+  if (isNum(inputs.revenueCagr3yPct)) {
+    methods.push({ name: "3y revenue CAGR", valuePct: inputs.revenueCagr3yPct, detail: `${fmtNum(inputs.revenueCagr3yPct)}%` });
+  } else {
+    methods.push({ name: "3y revenue CAGR", valuePct: null, detail: "unavailable: no 3-year revenue CAGR" });
+  }
+  if (isNum(inputs.revenueCagr5yPct)) {
+    methods.push({ name: "5y revenue CAGR", valuePct: inputs.revenueCagr5yPct, detail: `${fmtNum(inputs.revenueCagr5yPct)}%` });
+  } else {
+    methods.push({ name: "5y revenue CAGR", valuePct: null, detail: "unavailable: no 5-year revenue CAGR" });
+  }
+  if (analyst.value !== null) {
+    methods.push({
+      name: "analyst-consensus case",
+      valuePct: analyst.value,
+      detail: `${fmtNum(analyst.value)}% (average implied growth over the next 2 fiscal years, through ${analyst.asOf ?? "?"})`,
+    });
+  } else {
+    methods.push({
+      name: "analyst-consensus case",
+      valuePct: null,
+      detail: "unavailable: no usable analyst revenue estimates",
+    });
+  }
+
+  const available = methods.filter((m): m is GrowthAnchorMethod & { valuePct: number } => isNum(m.valuePct));
+  const unavailable = methods.filter((m) => !isNum(m.valuePct)).map((m) => m.name);
+  if (available.length === 0) {
     gaps.push(
       gapEntry(
         "valuation.dcf.nearTermGrowth",
-        "neither analyst estimates nor 3y revenue CAGR available — DCF growth path not buildable",
+        `no growth-anchor method available (${unavailable.join("; ")}) — DCF growth path not buildable`,
         "critical",
       ),
     );
     return { assumptions: null, notes, gaps };
   }
+  const values = available.map((m) => m.valuePct);
+  const point = medianOf(values) as number;
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  const rangePct: [number, number] | null = available.length > 1 ? [lo, hi] : null;
+  const anchorBasis =
+    `median of ${available.length} available growth method${available.length === 1 ? "" : "s"} = ${fmtNum(point)}%` +
+    `${rangePct === null ? " (single method; no range)" : `, range ${fmtNum(lo)}% to ${fmtNum(hi)}%`}` +
+    ` — methods: ${methods.map((m) => `${m.name} ${m.detail}`).join("; ")}` +
+    ` (house rule, WS6 D-18: median of methods; the former "lower of the 3y/5y CAGR" and sign-disagreement rules are RETIRED)`;
+  notes.push(`Near-term growth anchor: ${anchorBasis}`);
+  if (unavailable.length > 0) {
+    gaps.push(
+      gapEntry(
+        "valuation.dcf.growthAnchor",
+        `growth-anchor method(s) unavailable: ${unavailable.join(", ")} — the point estimate is the median of the ${available.length} that were computable`,
+        "info",
+      ),
+    );
+  }
+  if (analyst.value === null) {
+    gaps.push(
+      gapEntry("valuation.dcf.analystGrowth", "no usable analyst revenue estimates — the consensus-anchored method was excluded from the median", "info"),
+    );
+  }
+
+  let g1 = point;
+  const g1Basis =
+    `median of the available growth methods (${available.map((m) => `${m.name} ${fmtNum(m.valuePct)}%`).join(", ")})`;
   g1 = clampWithNote(g1, NEAR_TERM_GROWTH_CLAMP_PP[0], NEAR_TERM_GROWTH_CLAMP_PP[1], "near-term growth (pct)", notes);
+  const growthAnchor: GrowthAnchor = {
+    pointPct: point,
+    rangePct,
+    methods,
+    unavailable,
+    basis: anchorBasis,
+  };
 
   const growthPath = fadePath(g1, gTerm, years);
 
@@ -621,22 +791,44 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
   // --- Terminal economics ----------------------------------------------------
   const terminal = terminalRoic(inputs.waccPct, inputs.roicHistory ?? null);
   if (terminal.note !== null) notes.push(terminal.note);
+  // WS6 (D-19): say which cost of capital each ROIC year was measured against,
+  // in the notes AND in the manifest when it was not the year's own WACC.
+  if (terminal.waccBasisNote !== null) notes.push(terminal.waccBasisNote);
+  if (terminal.waccBasis === "current") {
+    gaps.push(
+      gapEntry(
+        "valuation.dcf.terminalRoic.waccBasis",
+        "no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC",
+        "info",
+      ),
+    );
+  }
   const roicTerm = terminal.roicTermPct;
   const reinvestRate = roicTerm > 0 ? gTerm / roicTerm : 0;
 
   const assumptions: DcfAssumptions = {
     startRevenue: { value: startRev, basis: `${periodBasis} revenue as of ${ttm?.date ?? "?"}` },
     years,
+    wacc: {
+      value: inputs.waccPct,
+      basis: inputs.waccBasis ?? `WACC ${fmtNum(inputs.waccPct)}% (inputs not supplied to the assumption block)`,
+    },
+    growthAnchor,
     growthPath: {
       value: growthPath,
-      basis: `linear fade from ${fmtNum(g1)}% (${g1Basis}) to terminal ${fmtNum(gTerm)}% by year ${years}`,
+      basis:
+        `linear fade over the explicit ${years}-year horizon from ${fmtNum(g1)}% (${g1Basis}) to the terminal rate ${fmtNum(gTerm)}% in year ${years}; ` +
+        anchorBasis,
     },
     ebitMarginPath: { value: marginPath, basis: marginBasis },
     taxRatePath: { value: taxRatePath, basis: taxBasis },
     salesToCapital: { value: s2c, basis: s2cBasis },
     terminal: {
       gTermPct: { value: gTerm, basis: gTermBasis },
-      roicTermPct: { value: roicTerm, basis: terminal.basis },
+      roicTermPct: {
+        value: roicTerm,
+        basis: terminal.waccBasisNote === null ? terminal.basis : `${terminal.basis}; ${terminal.waccBasisNote}`,
+      },
       reinvestmentRate: {
         value: reinvestRate,
         basis: "terminal reinvestment = gTerm / ROICterm (Damodaran consistency rule)",

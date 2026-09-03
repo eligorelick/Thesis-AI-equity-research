@@ -199,6 +199,13 @@ export interface WaccInputs {
   quoteCurrency?: string | null;
   /** Optional provenance passthrough (as-of dates of the inputs), echoed in the result. */
   asOf?: { riskFreeRate?: string; statements?: string; marketCap?: string };
+  // WS6 (D-19) — input provenance for the WACC disclosure block.
+  /** Series the risk-free rate came from, e.g. "fred:DGS10" or "fmp:treasury.year10". */
+  riskFreeSeriesId?: string | null;
+  /** As-of date of the vendor ERP row (the fetch date; FMP publishes no observation date). */
+  erpAsOf?: string | null;
+  /** Where `effectiveTaxRate` came from, e.g. "FMP ratios-ttm effectiveTaxRateTTM". */
+  effectiveTaxRateBasis?: string | null;
 }
 
 /**
@@ -266,6 +273,15 @@ export interface WaccResult {
   clampsApplied: string[];
   gaps: ManifestEntry[];
   asOf?: { riskFreeRate?: string; statements?: string; marketCap?: string };
+  // WS6 (D-19) — provenance echoed for the disclosure block.
+  /** Series the risk-free rate came from (input passthrough; null when the caller did not say). */
+  riskFreeSeriesId: string | null;
+  /** "vendor" = the supplied ERP was used; "damodaran-fallback" = the dated static fallback. */
+  erpSource: "vendor" | "damodaran-fallback" | null;
+  /** As-of date of the ERP actually used (vendor fetch date, or the fallback's publication date). */
+  erpAsOf: string | null;
+  /** Where the tax rate came from (input passthrough). */
+  taxRateBasis: string | null;
 }
 
 function fmt(n: number): string {
@@ -317,12 +333,16 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
 
   // --- ERP: observed US value or freshness-gated Damodaran fallback -----------
   let erpPct: number | null;
+  let erpSource: WaccResult["erpSource"] = null;
+  let erpAsOf: string | null = null;
   if (
     isFiniteNumber(inputs.erpPct) &&
     inputs.erpPct >= ERP_PLAUSIBLE_PCT[0] &&
     inputs.erpPct <= ERP_PLAUSIBLE_PCT[1]
   ) {
     erpPct = inputs.erpPct;
+    erpSource = "vendor";
+    erpAsOf = inputs.erpAsOf ?? null;
   } else {
     const analysisEpoch = isoDayEpoch(inputs.analysisDate);
     const fallbackEpoch = isoDayEpoch(ERP_FALLBACK.asOf) as number;
@@ -337,6 +357,8 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
 
     if (fallbackCurrent) {
       erpPct = ERP_FALLBACK_PCT;
+      erpSource = "damodaran-fallback";
+      erpAsOf = ERP_FALLBACK.asOf;
       notes.push(
         `ERP fallback ${ERP_FALLBACK_PCT}% used (${ERP_FALLBACK.source}, as of ${ERP_FALLBACK.asOf}) — input ${inputReason}`,
       );
@@ -393,6 +415,10 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
     clampsApplied,
     gaps,
     asOf: inputs.asOf,
+    riskFreeSeriesId: inputs.riskFreeSeriesId ?? null,
+    erpSource,
+    erpAsOf,
+    taxRateBasis: taxRateUsed === null ? null : (inputs.effectiveTaxRateBasis ?? null),
   };
 
   // --- Risk-free rate is load-bearing ------------------------------------------
@@ -810,6 +836,215 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
     weightEquity,
     weightDebt,
   };
+}
+
+// ---------------------------------------------------------------------------
+// WS6 (D-19) — WACC input disclosure and per-fiscal-year WACC history
+// ---------------------------------------------------------------------------
+
+/**
+ * Every input behind the WACC, named with its source and date, so the DCF
+ * assumption block and the methodology can state them instead of a bare rate.
+ * Null members mean the input was unavailable and the WACC says so elsewhere.
+ */
+export interface WaccDisclosure {
+  waccPct: number | null;
+  riskFree: { pct: number | null; seriesId: string | null; asOf: string | null };
+  erp: { pct: number | null; source: string | null; asOf: string | null };
+  beta: { raw: number | null; adjusted: number | null; final: number | null; method: string };
+  costOfEquityPct: number | null;
+  costOfDebt: { pct: number | null; method: CostOfDebtMethod; syntheticRating: string | null };
+  /** Tax rate as a FRACTION (the WACC convention); basis names its source. */
+  taxRate: { fraction: number | null; basis: string | null };
+  weights: { equity: number | null; debt: number | null; basis: string };
+  /** One sentence naming each input — the assumption-block basis string. */
+  summary: string;
+}
+
+const BETA_METHOD_LABEL = `Blume-adjusted (${BLUME_RAW_WEIGHT}·raw + ${BLUME_MEAN_WEIGHT}), clamped [${BETA_CLAMP[0]}, ${BETA_CLAMP[1]}]`;
+const WEIGHTS_BASIS_LABEL =
+  "market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy";
+
+const pctOrNa = (v: number | null): string => (v === null ? "n/a" : `${fmt(v)}%`);
+
+/** Build the structured WACC disclosure from a computed result. */
+export function waccDisclosure(result: WaccResult): WaccDisclosure {
+  const rfAsOf = result.asOf?.riskFreeRate ?? null;
+  const erpSourceLabel =
+    result.erpSource === "vendor"
+      ? "FMP market-risk-premium (US totalEquityRiskPremium)"
+      : result.erpSource === "damodaran-fallback"
+        ? `${ERP_FALLBACK.source} (static fallback)`
+        : null;
+  const weightsText =
+    result.weightEquity !== null && result.weightDebt !== null
+      ? `E ${fmt(result.weightEquity * 100)}% / D ${fmt(result.weightDebt * 100)}%`
+      : "E/D weights unavailable";
+  const taxText =
+    result.taxRateUsed === null
+      ? "tax rate unavailable"
+      : `tax rate ${fmt(result.taxRateUsed * 100)}% (${result.taxRateBasis ?? "effective rate, source not stated"})`;
+  const rdText =
+    result.costOfDebtMethod === "none"
+      ? "no debt, so no cost of debt"
+      : result.costOfDebtPct === null
+        ? `cost of debt unavailable (${result.costOfDebtMethod})`
+        : `pre-tax cost of debt ${fmt(result.costOfDebtPct)}% (${result.costOfDebtMethod}${result.syntheticRating ? `, synthetic rating ${result.syntheticRating}` : ""})`;
+  const summary =
+    `WACC ${pctOrNa(result.waccPct)}: risk-free ${pctOrNa(result.riskFreePct)} (${result.riskFreeSeriesId ?? "series not stated"}` +
+    `${rfAsOf ? `, observation ${rfAsOf}` : ""}); ERP ${pctOrNa(result.erpPct)} (${erpSourceLabel ?? "unavailable"}` +
+    `${result.erpAsOf ? `, as of ${result.erpAsOf}` : ""}); beta ${result.betaFinal === null ? "n/a" : fmt(result.betaFinal)}` +
+    ` (${BETA_METHOD_LABEL}${result.betaRaw !== null ? `, raw ${fmt(result.betaRaw)}` : ""}); cost of equity ${pctOrNa(result.costOfEquityPct)}; ` +
+    `${rdText}; ${taxText}; ${weightsText} (${WEIGHTS_BASIS_LABEL})`;
+  return {
+    waccPct: result.waccPct,
+    riskFree: { pct: result.riskFreePct, seriesId: result.riskFreeSeriesId, asOf: rfAsOf },
+    erp: { pct: result.erpPct, source: erpSourceLabel, asOf: result.erpAsOf },
+    beta: { raw: result.betaRaw, adjusted: result.betaAdjusted, final: result.betaFinal, method: BETA_METHOD_LABEL },
+    costOfEquityPct: result.costOfEquityPct,
+    costOfDebt: { pct: result.costOfDebtPct, method: result.costOfDebtMethod, syntheticRating: result.syntheticRating },
+    taxRate: { fraction: result.taxRateUsed, basis: result.taxRateBasis },
+    weights: { equity: result.weightEquity, debt: result.weightDebt, basis: WEIGHTS_BASIS_LABEL },
+    summary,
+  };
+}
+
+export interface WaccYearPoint {
+  /** Fiscal year end the WACC applies to. */
+  date: string;
+  waccPct: number;
+  riskFreePct: number;
+  /** Date of the risk-free observation used (on or before the fiscal year end). */
+  riskFreeAsOf: string;
+  costOfEquityPct: number;
+  costOfDebtPct: number | null;
+}
+
+export interface WaccHistoryResult {
+  /** One point per fiscal year end that had a risk-free observation; oldest → newest. */
+  points: WaccYearPoint[];
+  /** Fiscal year ends that could not be recomputed, with the reason. */
+  missing: Array<{ date: string; reason: string }>;
+  /** What was held constant and what moved — the disclosure sentence. */
+  basis: string;
+  notes: string[];
+  gaps: ManifestEntry[];
+}
+
+/** A risk-free observation older than this at a fiscal year end is not "that year's" rate. */
+export const WACC_HISTORY_RF_MAX_AGE_DAYS = 14;
+
+/**
+ * WACC at each fiscal year end, holding the current beta, ERP, E/D weights,
+ * tax rate and cost-of-debt method constant and replacing only the risk-free
+ * rate with the observation on or before that year end (D-19). A synthetic
+ * cost of debt is rf + spread, so it moves with rf; an effective or
+ * historical rate is an observed ratio and is held. The same Re and WACC
+ * clamps as computeWacc apply. Years without an observation within
+ * WACC_HISTORY_RF_MAX_AGE_DAYS are reported as missing so the caller can say
+ * the current WACC was applied to them.
+ */
+export function waccByFiscalYear(
+  wacc: WaccResult,
+  fiscalYearEnds: readonly string[],
+  riskFreeObservations: ReadonlyArray<{ date: string; value: number }>,
+  options: { seriesId?: string; maxAgeDays?: number } = {},
+): WaccHistoryResult {
+  const notes: string[] = [];
+  const gaps: ManifestEntry[] = [];
+  const seriesId = options.seriesId ?? "fred:DGS10";
+  const maxAgeDays = options.maxAgeDays ?? WACC_HISTORY_RF_MAX_AGE_DAYS;
+  const years = [...new Set(fiscalYearEnds.filter((d) => /^\d{4}-\d{2}-\d{2}/.test(d)))].sort();
+  const unavailable = (reason: string): WaccHistoryResult => ({
+    points: [],
+    missing: years.map((date) => ({ date, reason })),
+    basis: `per-fiscal-year WACC unavailable: ${reason}`,
+    notes: [`per-fiscal-year WACC unavailable: ${reason}`],
+    gaps,
+  });
+  if (years.length === 0) return unavailable("no fiscal year ends supplied");
+  if (
+    wacc.waccPct === null ||
+    wacc.betaFinal === null ||
+    wacc.erpPct === null ||
+    wacc.weightEquity === null ||
+    wacc.weightDebt === null
+  ) {
+    return unavailable("current WACC or one of its components (beta, ERP, weights) is unavailable");
+  }
+  const observations = riskFreeObservations
+    .filter((o) => isFiniteNumber(o.value) && /^\d{4}-\d{2}-\d{2}/.test(o.date))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (observations.length === 0) {
+    gaps.push({
+      field: "returns.wacc.history",
+      reason: `no ${seriesId} observations supplied — ROIC-vs-WACC history compares every fiscal year to the current WACC`,
+      severity: "info",
+      attemptedSources: [seriesId],
+    });
+    return unavailable(`no ${seriesId} observations supplied`);
+  }
+  const points: WaccYearPoint[] = [];
+  const missing: Array<{ date: string; reason: string }> = [];
+  const betaFinal = wacc.betaFinal;
+  const erp = wacc.erpPct;
+  const wE = wacc.weightEquity;
+  const wD = wacc.weightDebt;
+  for (const yearEnd of years) {
+    const endEpoch = Date.parse(`${yearEnd.slice(0, 10)}T00:00:00Z`);
+    let obs: { date: string; value: number } | null = null;
+    for (const o of observations) {
+      if (o.date <= yearEnd) obs = o;
+      else break;
+    }
+    const obsEpoch = obs === null ? Number.NaN : Date.parse(`${obs.date.slice(0, 10)}T00:00:00Z`);
+    if (obs === null || !Number.isFinite(obsEpoch) || (endEpoch - obsEpoch) / 86_400_000 > maxAgeDays) {
+      missing.push({
+        date: yearEnd,
+        reason:
+          obs === null
+            ? `no ${seriesId} observation on or before ${yearEnd}`
+            : `latest ${seriesId} observation ${obs.date} is more than ${maxAgeDays} days before ${yearEnd}`,
+      });
+      continue;
+    }
+    const rf = obs.value;
+    let re = rf + betaFinal * erp;
+    re = Math.min(Math.max(re, rf + RE_FLOOR_OVER_RF_PCT), RE_CEILING_PCT);
+    let rd: number | null = wacc.costOfDebtPct;
+    if (wacc.costOfDebtMethod === "synthetic" && wacc.syntheticSpreadPct !== null) {
+      rd = rf + wacc.syntheticSpreadPct;
+    }
+    if (wD > 0 && (rd === null || wacc.taxRateUsed === null)) {
+      missing.push({ date: yearEnd, reason: "debt weight without a cost of debt or tax rate" });
+      continue;
+    }
+    const debtLeg = wD > 0 && rd !== null && wacc.taxRateUsed !== null ? wD * rd * (1 - wacc.taxRateUsed) : 0;
+    const raw = wE * re + debtLeg;
+    const floor = Math.max(WACC_FLOOR_ABS_PCT, rf + WACC_FLOOR_OVER_RF_PCT);
+    const waccPct = Math.min(Math.max(raw, floor), WACC_CEILING_PCT);
+    points.push({ date: yearEnd, waccPct, riskFreePct: rf, riskFreeAsOf: obs.date, costOfEquityPct: re, costOfDebtPct: rd });
+  }
+  const held =
+    `beta ${fmt(betaFinal)}, ERP ${fmt(erp)}%, E/D weights ${fmt(wE * 100)}%/${fmt(wD * 100)}%, ` +
+    `${wacc.taxRateUsed === null ? "no tax shield" : `tax rate ${fmt(wacc.taxRateUsed * 100)}%`} and the ${wacc.costOfDebtMethod} cost of debt ` +
+    `${wacc.costOfDebtMethod === "synthetic" ? "(rf + rating spread, so it moves with rf)" : "(held at the current rate)"}`;
+  const pointText = points.map((p) => `${p.date}: rf ${fmt(p.riskFreePct)}% (${p.riskFreeAsOf}) → WACC ${fmt(p.waccPct)}%`).join("; ");
+  const basis =
+    points.length === 0
+      ? `per-fiscal-year WACC unavailable: ${missing.map((m) => m.reason).join("; ")}`
+      : `per-fiscal-year WACC from ${seriesId} at each fiscal year end, holding ${held} constant: ${pointText}` +
+        (missing.length > 0 ? `; ${missing.map((m) => `${m.date}: ${m.reason}`).join("; ")}` : "");
+  notes.push(basis);
+  if (missing.length > 0) {
+    gaps.push({
+      field: "returns.wacc.history",
+      reason: `per-fiscal-year WACC unavailable for ${missing.map((m) => m.date).join(", ")} — the current WACC is applied to those years in the ROIC-vs-WACC history`,
+      severity: "info",
+      attemptedSources: [seriesId],
+    });
+  }
+  return { points, missing, basis, notes, gaps };
 }
 
 // ---------------------------------------------------------------------------

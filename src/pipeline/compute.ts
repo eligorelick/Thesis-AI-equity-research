@@ -53,6 +53,11 @@ import {
   type ReturnsBalanceRow,
   PRIOR_YEAR_COST_OF_DEBT_MAX_YEARS_BACK,
   type PriorYearCostOfDebt,
+  // WS6 (D-19)
+  waccByFiscalYear,
+  waccDisclosure,
+  type WaccDisclosure,
+  type WaccHistoryResult,
 } from "@/pipeline/stageB/returns";
 import {
   computeCapital,
@@ -152,6 +157,10 @@ export interface ComputedMetrics {
 
 export interface ReturnsBlock {
   wacc: WaccResult;
+  // WS6 (D-19): every WACC input named with its source and date, and the WACC
+  // recomputed at each fiscal year end from that year's risk-free observation.
+  waccInputs: WaccDisclosure;
+  waccHistory: WaccHistoryResult;
   roic: RoicResult;
   rote: RoteResult;
   dupont: DupontResult;
@@ -814,22 +823,34 @@ function ttmCashFlowFromNormalized(
 const SPREAD_DAYS = 24 * 3600 * 1000;
 
 /** Latest risk-free rate (10y): FMP treasury.year10 (pct) → FRED DGS10 (pct). */
-function riskFreePct(bundle: DataBundle): { pct: number | null; asOf: string | null } {
+// WS6: the series the rate came from travels with it, so the WACC disclosure
+// can name it instead of printing an unattributed percentage.
+function riskFreePct(
+  bundle: DataBundle,
+): { pct: number | null; asOf: string | null; seriesId: string | null } {
   const treasuryRows = rowsOf(bundle.treasury);
   const t = treasuryRows[0];
   const fromTreasury = t ? num(t.year10) : null;
   if (fromTreasury !== null) {
-    return { pct: fromTreasury, asOf: isoDay(t?.date) };
+    return { pct: fromTreasury, asOf: isoDay(t?.date), seriesId: "fmp:treasury-rates.year10" };
   }
   const dgs10 = bundle.macro.core["DGS10"];
   if (dgs10 && dgs10.ok) {
     const obs = dgs10.value.data;
     const last = obs[obs.length - 1];
     if (last && Number.isFinite(last.value)) {
-      return { pct: last.value, asOf: last.date };
+      return { pct: last.value, asOf: last.date, seriesId: "fred:DGS10" };
     }
   }
-  return { pct: null, asOf: null };
+  return { pct: null, asOf: null, seriesId: null };
+}
+
+// WS6: the full FRED DGS10 observation history the bundle fetched (five years
+// back), so a WACC can be recomputed at each fiscal year end.
+function riskFreeObservations(bundle: DataBundle): { date: string; value: number }[] {
+  const dgs10 = bundle.macro.core["DGS10"];
+  if (!dgs10 || !dgs10.ok) return [];
+  return dgs10.value.data.filter((o) => Number.isFinite(o.value));
 }
 
 /**
@@ -1091,6 +1112,9 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     ttmCf,
     growth,
     wacc: returns.wacc,
+    // WS6 wiring.
+    waccInputs: returns.waccInputs,
+    waccHistory: returns.waccHistory,
     roic: returns.roic,
     dupont: returns.dupont,
     profile,
@@ -1395,6 +1419,17 @@ function computeReturns(
     effectiveTaxRate:
       num(ratiosTtm?.effectiveTaxRateTTM ?? ratiosTtm?.effectiveTaxRate) ??
       effectiveTaxRateFromTtm(ttmInc),
+    // WS6 (D-19): name which of the three tax-rate sources actually supplied it.
+    effectiveTaxRateBasis:
+      num(ratiosTtm?.effectiveTaxRateTTM) !== null
+        ? "FMP ratios-ttm effectiveTaxRateTTM (observed effective rate)"
+        : num(ratiosTtm?.effectiveTaxRate) !== null
+          ? "FMP ratios effectiveTaxRate (observed effective rate)"
+          : effectiveTaxRateFromTtm(ttmInc) !== null
+            ? "TTM incomeTaxExpense / incomeBeforeTax from the statements (observed effective rate)"
+            : null,
+    riskFreeSeriesId: rf.seriesId,
+    erpAsOf: sourcedOf(bundle.marketRiskPremium)?.asOf ?? null,
     ebitTtm: ebitForWacc,
     analysisDate: isoDay(bundle.builtAt) ?? undefined,
     isFinancial,
@@ -1425,8 +1460,24 @@ function computeReturns(
   const dupont = computeDupont(returnsIncome, returnsBalance);
   const roicVsWacc = computeRoicVsWaccSpread(roic.latestRoicPct, wacc.waccPct);
 
+  // WS6 (D-19): recompute the WACC at each ROIC fiscal year end from that
+  // year's own FRED observation. The bundle fetches DGS10 five years back, so
+  // years outside that window (or without an observation near the year end)
+  // are reported as missing and the current WACC is applied to them instead.
+  const waccHistory = waccByFiscalYear(
+    wacc,
+    roic.series.map((y) => y.date),
+    riskFreeObservations(bundle),
+    { seriesId: "fred:DGS10" },
+  );
+  const waccInputs = waccDisclosure(wacc);
+  notes.push(waccInputs.summary);
+  notes.push(...waccHistory.notes);
+  // The per-year-WACC shortfall is disclosed by the DCF assumption block (its
+  // only consumer is the terminal excess-return rule), so it is NOT pushed here
+  // as a returns-level gap; `waccHistory.gaps` stays on the result for callers.
   gaps.push(...wacc.gaps, ...roic.gaps, ...rote.gaps, ...dupont.gaps);
-  return { wacc, roic, rote, dupont, roicVsWacc, notes, gaps };
+  return { wacc, waccInputs, waccHistory, roic, rote, dupont, roicVsWacc, notes, gaps };
 }
 
 // ---------------------------------------------------------------------------
@@ -1445,6 +1496,9 @@ interface ValuationCtx {
   ttmCf: TtmCashFlow | null;
   growth: GrowthResult;
   wacc: WaccResult;
+  // WS6 (D-19): the named WACC inputs and the per-fiscal-year WACC series.
+  waccInputs: WaccDisclosure;
+  waccHistory: WaccHistoryResult;
   /** Annual ROIC series — evidence for the DCF terminal excess-return rule. */
   roic: RoicResult;
   /** Latest fiscal-year DuPont decomposition — the excess-return ROE fallback. */
@@ -1460,6 +1514,9 @@ function cagrPctFor(growth: GrowthResult, window: number): number | null {
 
 function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResult {
   const { route, incomeAnnual, balanceAnnual, balanceQuarterly, incomeQuarterly, ttmInc, ttmCf, growth, wacc, roic, profile, quote } = ctx;
+  // WS6 (D-18/D-19): the growth-anchor regression method and the WACC
+  // disclosure travel into the DCF assumption block with the rest.
+  const waccByYear = new Map(ctx.waccHistory.points.map((point) => [point.date, point]));
 
   const bal0 = balanceAnnual[0];
   const inc0 = incomeAnnual[0];
@@ -1553,8 +1610,12 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
       ? {
           revenueCagr3yPct: cagrPctFor(growth, 3),
           revenueCagr5yPct: cagrPctFor(growth, 5),
+          // WS6 (D-18): the log-linear regression method of the growth anchor.
+          revenueLogLinear: growth.revenueLogLinear,
           analystEstimates,
           waccPct: wacc.waccPct ?? 0,
+          // WS6 (D-19): every WACC input named in the assumption block.
+          waccBasis: ctx.waccInputs.summary,
           riskFreePct: rf.pct ?? 0,
           incomeTtm: dcfIncomeTtm,
           incomeHistory: dcfIncomeHistory,
@@ -1562,7 +1623,17 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
           marketCap,
           // The terminal excess-return rule reads the same annual ROIC series
           // the returns section reports.
-          roicHistory: roic.series.map((y) => ({ date: y.date, roicPct: y.roicPct })),
+          // WS6 (D-19): each ROIC year carries the WACC recomputed from its own
+          // fiscal year end's risk-free observation, when one existed.
+          roicHistory: roic.series.map((y) => {
+            const point = waccByYear.get(y.date);
+            return {
+              date: y.date,
+              roicPct: y.roicPct,
+              waccPct: point?.waccPct ?? null,
+              waccAsOf: point?.riskFreeAsOf ?? null,
+            };
+          }),
           // ADR guard (audit H3): same currency pair the multiples framework
           // already flags — valueCompany suppresses the DCF on mismatch.
           reportedCurrency: str(inc0?.reportedCurrency),

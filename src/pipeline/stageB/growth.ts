@@ -100,11 +100,33 @@ export interface RevenueAcceleration {
   note?: string;
 }
 
+/**
+ * Log-linear trend fit: ln(value) = a + b·t over elapsed fiscal years, so the
+ * annualized growth is exp(b) − 1. Unlike a two-endpoint CAGR it uses every
+ * year on record; a spike or a collapse inside the window shows up in the fit
+ * statistic (R²) instead of moving the whole anchor (D-18 growth anchor).
+ */
+export interface LogLinearTrend {
+  /** exp(slope) − 1, percent per year. Null when the fit is unavailable. */
+  growthPct: number | null;
+  /** Least-squares slope of ln(value) on elapsed years. */
+  slopePerYear: number | null;
+  /** Coefficient of determination of the fit (0–1). */
+  rSquared: number | null;
+  /** Positive, finite observations that entered the fit. */
+  n: number;
+  startDate: string | null;
+  endDate: string | null;
+  note?: string;
+}
+
 export interface GrowthResult {
   /** Latest statement date used (fiscal period end) — provenance anchor. */
   asOf: string | null;
   period: "annual";
   revenueCagrs: CagrPoint[];
+  /** Log-linear revenue trend over every annual year on record (D-18 growth-anchor method). */
+  revenueLogLinear: LogLinearTrend;
   epsDilutedCagrs: CagrPoint[];
   fcfCagrs: CagrPoint[];
   margins: { gross: MarginTrend; operating: MarginTrend; net: MarginTrend };
@@ -164,6 +186,70 @@ export function linearRegressionSlope(
 
 function fmt(n: number): string {
   return String(Number(n.toFixed(4)));
+}
+
+/**
+ * Log-linear growth over every positive observation: OLS of ln(value) on
+ * elapsed years since the oldest observation. Needs REGRESSION_MIN_POINTS
+ * positive values; non-positive or missing values are excluded (a logarithm
+ * has no value there) and the exclusion is noted. Returns the annualized
+ * rate exp(b) − 1 together with the slope, R² and n so a reader can judge
+ * how well a single trend describes the history.
+ */
+export function logLinearGrowth(
+  points: ReadonlyArray<{ date: string; value: number | null }>,
+): LogLinearTrend {
+  const usable = points
+    .filter((p): p is { date: string; value: number } => isFiniteNumber(p.value) && p.value > 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const excluded = points.length - usable.length;
+  const n = usable.length;
+  const base: LogLinearTrend = {
+    growthPct: null,
+    slopePerYear: null,
+    rSquared: null,
+    n,
+    startDate: usable[0]?.date ?? null,
+    endDate: usable[n - 1]?.date ?? null,
+  };
+  const exclusionNote =
+    excluded > 0 ? `${excluded} non-positive or missing observation(s) excluded from the log-linear fit` : null;
+  if (n < REGRESSION_MIN_POINTS) {
+    return {
+      ...base,
+      note: [`log-linear fit needs ≥${REGRESSION_MIN_POINTS} positive annual observations (${n} available)`, exclusionNote]
+        .filter((s): s is string => s !== null)
+        .join("; "),
+    };
+  }
+  const xs = usable.map((p) => yearsBetweenDates(usable[0].date, p.date));
+  if (xs.some((x) => x === null)) {
+    return { ...base, note: "log-linear fit unavailable: unparseable fiscal dates" };
+  }
+  const x = xs as number[];
+  const y = usable.map((p) => Math.log(p.value));
+  const meanX = x.reduce((s, v) => s + v, 0) / n;
+  const meanY = y.reduce((s, v) => s + v, 0) / n;
+  let sxx = 0;
+  let sxy = 0;
+  let syy = 0;
+  for (let i = 0; i < n; i++) {
+    sxx += (x[i] - meanX) * (x[i] - meanX);
+    sxy += (x[i] - meanX) * (y[i] - meanY);
+    syy += (y[i] - meanY) * (y[i] - meanY);
+  }
+  if (sxx === 0) {
+    return { ...base, note: "log-linear fit unavailable: no elapsed time between observations" };
+  }
+  const slope = sxy / sxx;
+  const rSquared = syy === 0 ? 1 : (sxy * sxy) / (sxx * syy);
+  return {
+    ...base,
+    growthPct: (Math.exp(slope) - 1) * 100,
+    slopePerYear: slope,
+    rSquared,
+    note: exclusionNote ?? undefined,
+  };
 }
 
 export function yearsBetweenDates(olderIso: string, newerIso: string): number | null {
@@ -377,6 +463,7 @@ export function computeGrowth(
   }
 
   const revenueCagrs = CAGR_WINDOWS.map((w) => cagrForWindow(revenueSeries, w));
+  const revenueLogLinear = logLinearGrowth(revenueSeries);
   const epsDilutedCagrs = CAGR_WINDOWS.map((w) => cagrForWindow(epsSeries, w));
   const fcfCagrs = CAGR_WINDOWS.map((w) => cagrForWindow(fcfSeries, w));
 
@@ -483,6 +570,7 @@ export function computeGrowth(
     asOf,
     period: options.period,
     revenueCagrs,
+    revenueLogLinear,
     epsDilutedCagrs,
     fcfCagrs,
     margins,

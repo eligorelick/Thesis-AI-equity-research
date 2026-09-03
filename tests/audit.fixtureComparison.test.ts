@@ -81,10 +81,12 @@ const OLD_BALANCE_BASIS =
 const NEW_BALANCE_BASIS =
   "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)";
 
-const TERMINAL_ROIC_HOLD_NOTE =
-  "terminal ROIC held at WACC: 2 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house rule)";
-const NET_DEBT_NOTE =
-  "NET_DEBT_V1: net debt -1300000000 as of 2025-12-31; totalDebt 1200000000, cashAndShortTermInvestments 2500000000";
+// TERMINAL_ROIC_HOLD_NOTE and NET_DEBT_NOTE were removed on 2026-09-02: WS6
+// re-indexed the valuation notes those two entries pinned (the terminal-ROIC
+// hold note is now followed by the sentence naming which cost of capital each
+// ROIC year was measured against), and the regenerated entries carry the text
+// inline. Their values are unchanged apart from "house rule" becoming "house
+// convention" in the hold note.
 
 const INTENDED_DELTAS: readonly IntendedDelta[] = [
   // Added 2026-09-01: fixture provenance strings are built with POSIX
@@ -459,22 +461,22 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "report.appendix.missingData.44",
     beforeMissing: true,
-    after: {"field": "valuation.multiples.ownHistory", "reason": "insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)", "severity": "info"},
+    after: {"field":"valuation.dcf.terminalRoic.waccBasis","reason":"no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC","severity":"info"},
   },
   {
     path: "report.appendix.missingData.45",
     beforeMissing: true,
-    after: {"field": "valuation.multiples.peers", "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)", "severity": "info"},
+    after: {"field":"valuation.multiples.ownHistory","reason":"insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)","severity":"info"},
   },
   {
     path: "stageB.gaps.43",
     beforeMissing: true,
-    after: {"field": "valuation.multiples.ownHistory", "reason": "insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)", "severity": "info"},
+    after: {"field":"valuation.dcf.terminalRoic.waccBasis","reason":"no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC","severity":"info"},
   },
   {
     path: "stageB.gaps.44",
     beforeMissing: true,
-    after: {"field": "valuation.multiples.peers", "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)", "severity": "info"},
+    after: {"field":"valuation.multiples.ownHistory","reason":"insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)","severity":"info"},
   },
   {
     path: "stageB.valuation.gaps.0",
@@ -833,8 +835,8 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   },
   {
     path: "report.valuation.dcf.assumptions.3.basis",
-    before: OLD_BALANCE_BASIS,
-    after: NEW_BALANCE_BASIS,
+    before: "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, as of 2025-12-31)",
+    after: "linear fade over the explicit 10-year horizon from 9.11% (median of the available growth methods (log-linear revenue regression 9.1%, 3y revenue CAGR 9.11%, 5y revenue CAGR 9.11%, analyst-consensus case 7.89%)) to the terminal rate 2.5% in year 10; median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)",
   },
   {
     path: "stageB.technicals.gaps.1.reason",
@@ -936,18 +938,950 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "stageB.valuation.assumptions.notes.1",
     beforeMissing: true,
-    after: TERMINAL_ROIC_HOLD_NOTE,
+    after: "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%",
   },
   {
     path: "stageB.valuation.notes.1",
-    before: NET_DEBT_NOTE,
-    after: TERMINAL_ROIC_HOLD_NOTE,
+    before: "NET_DEBT_V1: net debt -1300000000 as of 2025-12-31; totalDebt 1200000000, cashAndShortTermInvestments 2500000000",
+    after: "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%",
   },
   {
     path: "stageB.valuation.notes.2",
     beforeMissing: true,
-    after: NET_DEBT_NOTE,
+    after: "terminal ROIC held at WACC: 2 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house convention)",
   },
+  // ---- WS6 (valuation inputs and disclosure), 2026-09-02 ---- BEGIN
+  // Added 2026-09-02 by WS6 (decisions D-18 / D-19). Every entry below follows
+  // from methodology changes that are also stated in the DCF assumption block
+  // and the missing-data manifest:
+  //
+  //  1. D-18 growth anchor: near-term growth is now the MEDIAN of the available
+  //     methods (log-linear regression over all annual revenue years, 3y CAGR,
+  //     5y CAGR, analyst-consensus case) with the range shown; "lower of the
+  //     3y/5y CAGR" and the sign-disagreement rule are retired. On this fixture
+  //     the anchor moves from the 3y CAGR alone to median(3y, 5y), so the DCF
+  //     year rows, the sensitivity grid and the per-share value move with it.
+  //     That is the point of the change, not a side effect.
+  //  2. D-19 WACC disclosure: the assumption block and the report name the
+  //     risk-free series and observation date, the ERP source and date, the
+  //     cost-of-debt method, the tax-rate basis and the market-value E/D
+  //     weights; the DCF assumption table gains a WACC row and a growth-anchor
+  //     row, shifting the rows after them.
+  //  3. D-19 per-year WACC: the ROIC-vs-WACC history recomputes the WACC at each
+  //     fiscal year end from that year's risk-free observation. This fixture has
+  //     no FRED observations, so the note says the current WACC was applied to
+  //     every year and a returns.wacc.history info gap is disclosed.
+  //  4. D-16 FCF/SBC, EV bridge and label changes carry the remaining entries;
+  //     see docs/METHODOLOGY.md for each rule.
+  //  5. Additive result fields: GrowthResult.revenueLogLinear, WaccResult
+  //     riskFreeSeriesId / erpSource / erpAsOf / taxRateBasis, DcfAssumptions
+  //     wacc / growthAnchor.
+  {
+    path: "report.appendix.missingData.46",
+    beforeMissing: true,
+    after: {"field":"valuation.multiples.peers","reason":"peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)","severity":"info"},
+  },
+  {
+    path: "report.fairValue.perShare.value",
+    before: 146.23,
+    after: 152.05,
+  },
+  {
+    path: "report.fairValue.upsidePct",
+    before: 265.575,
+    after: 280.12500000000006,
+  },
+  {
+    path: "report.scores.aspects.valuation.drivers.0.value",
+    before: 265.58,
+    after: 280.13,
+  },
+  {
+    path: "report.valuation.dcf.assumptions.1.basis",
+    before: "linear fade from 7.89% (analyst consensus revenue, avg implied growth over next 2 fiscal years (through 2027-12-31)) to terminal 2.5% by year 10",
+    after: "WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.1.name",
+    before: "revenue growth (yr1 → yrN)",
+    after: "WACC (discount rate)",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.1.value",
+    before: "7.9% → 2.5%",
+    after: "9.3%",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.2.basis",
+    before: "held flat at current 20% under improving dated-margin regime (5y median 19%, slope 1pp/year)",
+    after: "median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.2.name",
+    before: "EBIT margin (yr1 → yrN)",
+    after: "near-term growth anchor (median of methods)",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.2.value",
+    before: "20.0% → 20.0%",
+    after: "9.1% (range 7.9% – 9.1%)",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.3.name",
+    before: "sales-to-capital",
+    after: "revenue growth (yr1 → yrN)",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.3.value",
+    before: "2.66",
+    after: "9.1% → 2.5%",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.4.basis",
+    before: "min(2.5%, risk-free 4%) — house rule: nothing grows faster than rf forever",
+    after: "held flat at current 20% under improving dated-margin regime (5y median 19%, slope 1pp/year)",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.4.name",
+    before: "terminal growth",
+    after: "EBIT margin (yr1 → yrN)",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.4.value",
+    before: "2.5%",
+    after: "20.0% → 20.0%",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.5.basis",
+    before: "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)",
+    after: "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, quarter balance as of 2025-12-31)",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.5.name",
+    before: "terminal ROIC",
+    after: "sales-to-capital",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.5.value",
+    before: "9.3%",
+    after: "2.66",
+  },
+  {
+    path: "report.valuation.dcf.assumptions.6",
+    beforeMissing: true,
+    after: {"name":"terminal growth","value":"2.5%","basis":"min(2.5%, risk-free 4%) — house rule: nothing grows faster than rf forever"},
+  },
+  {
+    path: "report.valuation.dcf.assumptions.7",
+    beforeMissing: true,
+    after: {"name":"terminal ROIC","value":"9.3%","basis":"terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, \"Terminal value house convention\"); ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC"},
+  },
+  {
+    path: "report.valuation.dcf.perShare.value",
+    before: 146.23,
+    after: 152.05,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.0.perShare",
+    before: 166.376092292583,
+    after: 173.31719497414153,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.1.perShare",
+    before: 167.7149851175111,
+    after: 174.7346564277419,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.10.perShare",
+    before: 145.54397447067558,
+    after: 151.32249055005084,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.11.perShare",
+    before: 145.888476635414,
+    after: 151.6872087187548,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.12.perShare",
+    before: 146.23297880015247,
+    after: 152.05192688745873,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.13.perShare",
+    before: 146.57748096489092,
+    after: 152.4166450561627,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.14.perShare",
+    before: 146.92198312962938,
+    after: 152.78136322486668,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.15.perShare",
+    before: 137.02303327015306,
+    after: 142.33041820222823,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.16.perShare",
+    before: 137.07019569277645,
+    after: 142.38034820027016,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.17.perShare",
+    before: 137.07839478363584,
+    after: 142.3890284284642,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.18.perShare",
+    before: 137.03897964504117,
+    after: 142.34730033895167,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.19.perShare",
+    before: 136.940533723176,
+    after: 142.24307743409335,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.2.perShare",
+    before: 169.2211734983775,
+    after: 176.329230640098,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.20.perShare",
+    before: 129.477139616909,
+    after: 134.36994217687254,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.21.perShare",
+    before: 129.31120340693457,
+    after: 134.19426853293618,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.22.perShare",
+    before: 129.08313762406544,
+    after: 133.95281944150534,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.23.perShare",
+    before: 128.78009840764705,
+    after: 133.63199734118118,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.24.perShare",
+    before: 128.38543965803257,
+    after: 133.21417930937966,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.3.perShare",
+    before: 170.9424020912171,
+    after: 178.15146400916245,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.4.perShare",
+    before: 172.94649343185347,
+    after: 180.27315901861843,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.5.perShare",
+    before: 155.24133879734714,
+    after: 161.5593302903874,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.6.perShare",
+    before: 156.0003561762538,
+    after: 162.36288816834582,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.7.perShare",
+    before: 156.82318027878264,
+    after: 163.23399706273446,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.8.perShare",
+    before: 157.72643914234646,
+    after: 164.1902607739791,
+  },
+  {
+    path: "report.valuation.dcf.sensitivityGrid.9.perShare",
+    before: 158.73308812865395,
+    after: 165.25598172552236,
+  },
+  {
+    path: "report.valuation.dcf.upsidePct",
+    before: 265.575,
+    after: 280.12500000000006,
+  },
+  {
+    path: "stageB.fairValue.perShare.value",
+    before: 146.23,
+    after: 152.05,
+  },
+  {
+    path: "stageB.fairValue.upsidePct",
+    before: 265.575,
+    after: 280.12500000000006,
+  },
+  {
+    path: "stageB.gaps.45",
+    beforeMissing: true,
+    after: {"field":"valuation.multiples.peers","reason":"peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)","severity":"info"},
+  },
+  {
+    path: "stageB.growth.revenueLogLinear",
+    beforeMissing: true,
+    after: {"growthPct":9.102622070718525,"slopePerYear":0.0871187402075796,"rSquared":0.9994077381522407,"n":3,"startDate":"2023-12-31","endDate":"2025-12-31","note":{"$auditUndefined":true}},
+  },
+  {
+    path: "stageB.returns.notes.0",
+    beforeMissing: true,
+    after: "WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)",
+  },
+  {
+    path: "stageB.returns.notes.1",
+    beforeMissing: true,
+    after: "per-fiscal-year WACC unavailable: no fred:DGS10 observations supplied",
+  },
+  {
+    path: "stageB.returns.wacc.erpAsOf",
+    beforeMissing: true,
+    after: "2026-07-06",
+  },
+  {
+    path: "stageB.returns.wacc.erpSource",
+    beforeMissing: true,
+    after: "vendor",
+  },
+  {
+    path: "stageB.returns.wacc.riskFreeSeriesId",
+    beforeMissing: true,
+    after: "fmp:treasury-rates.year10",
+  },
+  {
+    path: "stageB.returns.wacc.taxRateBasis",
+    beforeMissing: true,
+    after: "FMP ratios effectiveTaxRate (observed effective rate)",
+  },
+  {
+    path: "stageB.returns.waccHistory",
+    beforeMissing: true,
+    after: {"points":[],"missing":[{"date":"2023-12-31","reason":"no fred:DGS10 observations supplied"},{"date":"2024-12-31","reason":"no fred:DGS10 observations supplied"},{"date":"2025-12-31","reason":"no fred:DGS10 observations supplied"}],"basis":"per-fiscal-year WACC unavailable: no fred:DGS10 observations supplied","notes":["per-fiscal-year WACC unavailable: no fred:DGS10 observations supplied"],"gaps":[{"field":"returns.wacc.history","reason":"no fred:DGS10 observations supplied — ROIC-vs-WACC history compares every fiscal year to the current WACC","severity":"info","attemptedSources":["fred:DGS10"]}]},
+  },
+  {
+    path: "stageB.returns.waccInputs",
+    beforeMissing: true,
+    after: {"waccPct":9.255946000000002,"riskFree":{"pct":4,"seriesId":"fmp:treasury-rates.year10","asOf":"2025-12-31"},"erp":{"pct":5,"source":"FMP market-risk-premium (US totalEquityRiskPremium)","asOf":"2026-07-06"},"beta":{"raw":1.1,"adjusted":1.0670000000000002,"final":1.0670000000000002,"method":"Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2]"},"costOfEquityPct":9.335,"costOfDebt":{"pct":12,"method":"effective","syntheticRating":null},"taxRate":{"fraction":0.2708333,"basis":"FMP ratios effectiveTaxRate (observed effective rate)"},"weights":{"equity":0.8648648648648649,"debt":0.13513513513513514,"basis":"market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy"},"summary":"WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)"},
+  },
+  {
+    path: "stageB.scores.aspects.valuation.drivers.0.value",
+    before: 265.58,
+    after: 280.13,
+  },
+  {
+    path: "stageB.valuation.assumptions.growthAnchor",
+    beforeMissing: true,
+    after: {"pointPct":9.105783594357353,"rangePct":[7.888888888888889,9.108945117996182],"methods":[{"name":"log-linear revenue regression","valuePct":9.102622070718525,"detail":"9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1"},{"name":"3y revenue CAGR","valuePct":9.108945117996182,"detail":"9.11%"},{"name":"5y revenue CAGR","valuePct":9.108945117996182,"detail":"9.11%"},{"name":"analyst-consensus case","valuePct":7.888888888888889,"detail":"7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31)"}],"unavailable":[],"basis":"median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)"},
+  },
+  {
+    path: "stageB.valuation.assumptions.growthPath.basis",
+    before: "linear fade from 7.89% (analyst consensus revenue, avg implied growth over next 2 fiscal years (through 2027-12-31)) to terminal 2.5% by year 10",
+    after: "linear fade over the explicit 10-year horizon from 9.11% (median of the available growth methods (log-linear revenue regression 9.1%, 3y revenue CAGR 9.11%, 5y revenue CAGR 9.11%, analyst-consensus case 7.89%)) to the terminal rate 2.5% in year 10; median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)",
+  },
+  {
+    path: "stageB.valuation.assumptions.growthPath.value.0",
+    before: 7.888888888888889,
+    after: 9.105783594357353,
+  },
+  {
+    path: "stageB.valuation.assumptions.growthPath.value.1",
+    before: 7.290123456790123,
+    after: 8.37180763942876,
+  },
+  {
+    path: "stageB.valuation.assumptions.growthPath.value.2",
+    before: 6.691358024691358,
+    after: 7.6378316845001635,
+  },
+  {
+    path: "stageB.valuation.assumptions.growthPath.value.3",
+    before: 6.092592592592593,
+    after: 6.9038557295715695,
+  },
+  {
+    path: "stageB.valuation.assumptions.growthPath.value.4",
+    before: 5.493827160493828,
+    after: 6.169879774642974,
+  },
+  {
+    path: "stageB.valuation.assumptions.growthPath.value.5",
+    before: 4.895061728395062,
+    after: 5.43590381971438,
+  },
+  {
+    path: "stageB.valuation.assumptions.growthPath.value.6",
+    before: 4.296296296296296,
+    after: 4.701927864785785,
+  },
+  {
+    path: "stageB.valuation.assumptions.growthPath.value.7",
+    before: 3.697530864197531,
+    after: 3.96795190985719,
+  },
+  {
+    path: "stageB.valuation.assumptions.growthPath.value.8",
+    before: 3.098765432098766,
+    after: 3.233975954928595,
+  },
+  {
+    path: "stageB.valuation.assumptions.notes.0",
+    before: "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%",
+    after: "Near-term growth anchor: median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)",
+  },
+  {
+    path: "stageB.valuation.assumptions.notes.2",
+    beforeMissing: true,
+    after: "terminal ROIC held at WACC: 2 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house convention)",
+  },
+  {
+    path: "stageB.valuation.assumptions.notes.3",
+    beforeMissing: true,
+    after: "ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC",
+  },
+  {
+    path: "stageB.valuation.assumptions.terminal.roicTermPct.basis",
+    before: "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)",
+    after: "terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, \"Terminal value house convention\"); ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC",
+  },
+  {
+    path: "stageB.valuation.assumptions.wacc",
+    beforeMissing: true,
+    after: {"value":9.255946000000002,"basis":"WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)"},
+  },
+  {
+    path: "stageB.valuation.dcf.enterpriseValue",
+    before: 28677760654.031258,
+    after: 29870645011.92904,
+  },
+  {
+    path: "stageB.valuation.dcf.equityValue",
+    before: 29977760654.031258,
+    after: 31170645011.92904,
+  },
+  {
+    path: "stageB.valuation.dcf.perShare",
+    before: 146.23297880015247,
+    after: 152.05192688745873,
+  },
+  {
+    path: "stageB.valuation.dcf.pvExplicit",
+    before: 14200057180.89785,
+    after: 14543363972.145136,
+  },
+  {
+    path: "stageB.valuation.dcf.pvTerminal",
+    before: 14477703473.133406,
+    after: 15327281039.783903,
+  },
+  {
+    path: "stageB.valuation.dcf.terminalShare",
+    before: 0.5048407945024906,
+    after: 0.5131218637449192,
+  },
+  {
+    path: "stageB.valuation.dcf.terminalValue",
+    before: 33568192262.428688,
+    after: 35538033898.713974,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.0.ebit",
+    before: 2697222222.2222223,
+    after: 2727644589.8589344,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.0.fcff",
+    before: 1595946759.2592597,
+    after: 1560935684.5040107,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.0.growthPct",
+    before: 7.888888888888889,
+    after: 9.105783594357353,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.0.nopat",
+    before: 1966724537.0370374,
+    after: 1988907513.4388065,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.0.pv",
+    before: 1526848189.0941052,
+    after: 1493352963.9068303,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.0.reinvestment",
+    before: 370777777.7777776,
+    after: 427971828.934796,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.0.revenue",
+    before: 13486111111.11111,
+    after: 13638222949.29467,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.1.ebit",
+    before: 2893853052.1262,
+    after: 2955997748.0092096,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.1.fcff",
+    before: 1741252142.392903,
+    after: 1726945549.1430979,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.1.growthPct",
+    before: 7.290123456790123,
+    after: 8.37180763942876,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.1.nopat",
+    before: 2110918102.6123817,
+    after: 2156249486.4656157,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.1.pv",
+    before: 1524733847.0201824,
+    after: 1512206225.9867628,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.1.reinvestment",
+    before: 369665960.2194786,
+    after: 429303937.3225178,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.1.revenue",
+    before: 14469265260.631,
+    after: 14779988740.046047,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.2.ebit",
+    before: 3087491120.5524225,
+    after: 3181771880.599768,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.2.fcff",
+    before: 1888999203.554957,
+    after: 1897383020.3386025,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.2.growthPct",
+    before: 6.691358024691358,
+    after: 7.6378316845001635,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.2.nopat",
+    before: 2253038772.1962547,
+    after: 2321838389.608853,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.2.pv",
+    before: 1513976278.1400638,
+    after: 1520695656.1614122,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.2.reinvestment",
+    before: 364039568.6412978,
+    after: 424455369.2702502,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.2.revenue",
+    before: 15437455602.762112,
+    after: 15908859402.99884,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.3.ebit",
+    before: 3275599375.860153,
+    after: 3401436820.8804526,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.3.fcff",
+    before: 2037588409.2147698,
+    after: 2070124881.4448662,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.3.growthPct",
+    before: 6.092592592592593,
+    after: 6.9038557295715695,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.3.nopat",
+    before: 2391231929.193303,
+    after: 2483094969.1725526,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.3.pv",
+    before: 1494715972.3478506,
+    after: 1518583788.0981958,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.3.reinvestment",
+    before: 353643519.9785333,
+    after: 412970087.72768646,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.3.revenue",
+    before: 16377996879.300764,
+    after: 17007184104.402262,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.4.ebit",
+    before: 3455555144.040124,
+    after: 3611301383.3392143,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.4.fcff",
+    before: 2185260718.3870907,
+    after: 2242773016.519078,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.4.growthPct",
+    before: 5.493827160493828,
+    after: 6.169879774642974,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.4.nopat",
+    before: 2523577562.565436,
+    after: 2637318393.9415503,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.4.pv",
+    before: 1467237408.5221174,
+    after: 1505852569.8890462,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.4.reinvestment",
+    before: 338316844.1783454,
+    after: 394545377.42247254,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.4.revenue",
+    before: 17277775720.20062,
+    after: 18056506916.69607,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.5.ebit",
+    before: 3624706701.3996186,
+    after: 3807608253.1775494,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.5.fcff",
+    before: 2330126548.909354,
+    after: 2412698436.7882514,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.5.growthPct",
+    before: 4.895061728395062,
+    after: 5.43590381971438,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.5.nopat",
+    before: 2648131476.7452044,
+    after: 2781755352.0843205,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.5.pv",
+    before: 1431962215.2504165,
+    after: 1482706164.5607312,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.5.reinvestment",
+    before: 318004927.8358502,
+    after: 369056915.29606915,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.5.revenue",
+    before: 18123533506.998093,
+    after: 19038041265.887745,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.6.ebit",
+    before: 3780434841.163454,
+    after: 3986639246.6155877,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.6.fcff",
+    before: 2470201344.469651,
+    after: 2577098620.742019,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.6.growthPct",
+    before: 4.296296296296296,
+    after: 4.701927864785785,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.6.nopat",
+    before: 2762970247.2256613,
+    after: 2913676888.405532,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.6.pv",
+    before: 1389438480.1567645,
+    after: 1449566044.012765,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.6.reinvestment",
+    before: 292768902.75601006,
+    after: 336578267.66351265,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.6.revenue",
+    before: 18902174205.81727,
+    after: 19933196233.077938,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.7.ebit",
+    before: 3920217586.216349,
+    after: 4144827174.7407875,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.7.fcff",
+    before: 2603447020.008648,
+    after: 2733066943.142533,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.7.growthPct",
+    before: 3.697530864197531,
+    after: 3.96795190985719,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.7.nopat",
+    before: 2866238580.7080913,
+    after: 3030460248.0179086,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.7.pv",
+    before: 1340326582.9243398,
+    after: 1407058506.9150107,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.7.reinvestment",
+    before: 262791560.69944328,
+    after: 297393304.8753758,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.7.revenue",
+    before: 19601087931.081745,
+    after: 20724135873.703938,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.8.ebit",
+    before: 4041695933.6410785,
+    after: 4278869888.9452515,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.8.fcff",
+    before: 2727818246.380814,
+    after: 2877672202.449499,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.8.growthPct",
+    before: 3.098765432098766,
+    after: 3.233975954928595,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.8.nopat",
+    before: 2956197539.5393047,
+    after: 3129672505.1538916,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.8.pv",
+    before: 1285382062.9140253,
+    after: 1355995120.5995789,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.8.reinvestment",
+    before: 228379293.1584908,
+    after: 252000302.70439225,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.8.revenue",
+    before: 20208479668.20539,
+    after: 21394349444.726257,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.9.ebit",
+    before: 4142738331.982105,
+    after: 4385841636.168883,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.9.fcff",
+    before: 2841312241.349679,
+    after: 3008045531.928512,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.9.nopat",
+    before: 3031271950.2308083,
+    after: 3209152416.708939,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.9.pv",
+    before: 1225436144.5279837,
+    after: 1297346932.014801,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.9.reinvestment",
+    before: 189959708.88112947,
+    after: 201106884.78042683,
+  },
+  {
+    path: "stageB.valuation.dcf.yearRows.9.revenue",
+    before: 20713691659.910522,
+    after: 21929208180.844414,
+  },
+  {
+    path: "stageB.valuation.gaps.2",
+    beforeMissing: true,
+    after: {"field":"valuation.dcf.terminalRoic.waccBasis","reason":"no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC","severity":"info"},
+  },
+  {
+    path: "stageB.valuation.notes.0",
+    before: "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%",
+    after: "Near-term growth anchor: median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)",
+  },
+  {
+    path: "stageB.valuation.notes.3",
+    beforeMissing: true,
+    after: "ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC",
+  },
+  {
+    path: "stageB.valuation.notes.4",
+    beforeMissing: true,
+    after: "NET_DEBT_V1: net debt -1300000000 as of 2025-12-31; totalDebt 1200000000, cashAndShortTermInvestments 2500000000",
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.0.0",
+    before: 166.376092292583,
+    after: 173.31719497414153,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.0.1",
+    before: 167.7149851175111,
+    after: 174.7346564277419,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.0.2",
+    before: 169.2211734983775,
+    after: 176.329230640098,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.0.3",
+    before: 170.9424020912171,
+    after: 178.15146400916245,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.0.4",
+    before: 172.94649343185347,
+    after: 180.27315901861843,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.1.0",
+    before: 155.24133879734714,
+    after: 161.5593302903874,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.1.1",
+    before: 156.0003561762538,
+    after: 162.36288816834582,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.1.2",
+    before: 156.82318027878264,
+    after: 163.23399706273446,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.1.3",
+    before: 157.72643914234646,
+    after: 164.1902607739791,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.1.4",
+    before: 158.73308812865395,
+    after: 165.25598172552236,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.2.0",
+    before: 145.54397447067558,
+    after: 151.32249055005084,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.2.1",
+    before: 145.888476635414,
+    after: 151.6872087187548,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.2.2",
+    before: 146.23297880015247,
+    after: 152.05192688745873,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.2.3",
+    before: 146.57748096489092,
+    after: 152.4166450561627,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.2.4",
+    before: 146.92198312962938,
+    after: 152.78136322486668,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.3.0",
+    before: 137.02303327015306,
+    after: 142.33041820222823,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.3.1",
+    before: 137.07019569277645,
+    after: 142.38034820027016,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.3.2",
+    before: 137.07839478363584,
+    after: 142.3890284284642,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.3.3",
+    before: 137.03897964504117,
+    after: 142.34730033895167,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.3.4",
+    before: 136.940533723176,
+    after: 142.24307743409335,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.4.0",
+    before: 129.477139616909,
+    after: 134.36994217687254,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.4.1",
+    before: 129.31120340693457,
+    after: 134.19426853293618,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.4.2",
+    before: 129.08313762406544,
+    after: 133.95281944150534,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.4.3",
+    before: 128.78009840764705,
+    after: 133.63199734118118,
+  },
+  {
+    path: "stageB.valuation.sensitivity.perShare.4.4",
+    before: 128.38543965803257,
+    after: 133.21417930937966,
+  },
+  // ---- WS6 (valuation inputs and disclosure) ---- END
 ];
 
 const PROVIDER_ENV_KEYS = [

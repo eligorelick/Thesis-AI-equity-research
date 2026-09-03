@@ -70,10 +70,17 @@ afterEach(() => {
   handle.sqlite.close();
 });
 
+/**
+ * Requests here model the app's own browser calls: a same-origin fetch carries
+ * `Sec-Fetch-Site: same-origin`, which the CSRF guard requires when no Origin
+ * or X-Thesis-Token is present (tests/api.routes.sameOrigin.test.ts).
+ */
+const SAME_ORIGIN = { "sec-fetch-site": "same-origin" } as const;
+
 function jsonReq(url: string, method: string, body: unknown): Request {
   return new Request(url, {
     method,
-    headers: { host: new URL(url).host, "content-type": "application/json" },
+    headers: { host: new URL(url).host, "content-type": "application/json", ...SAME_ORIGIN },
     body: JSON.stringify(body),
   });
 }
@@ -82,6 +89,7 @@ function settingsReq(body: unknown, ifMatch?: string): Request {
   const headers: Record<string, string> = {
     host: "localhost",
     "content-type": "application/json",
+    ...SAME_ORIGIN,
   };
   if (ifMatch !== undefined) headers["if-match"] = ifMatch;
   return new Request("http://localhost/api/settings", {
@@ -329,6 +337,7 @@ describe("POST /api/settings", () => {
     const headers: Record<string, string> = {
       host: "localhost",
       "content-type": "application/json",
+      ...SAME_ORIGIN,
     };
     if (tag !== undefined) headers["if-match"] = tag;
     const response = await settingsPOST(new Request("http://localhost/api/settings", {
@@ -372,6 +381,7 @@ describe("POST /api/settings", () => {
         host: "localhost",
         "content-type": "application/json",
         "if-match": etag,
+        ...SAME_ORIGIN,
       },
       body: "oops{",
     }));
@@ -1025,7 +1035,7 @@ describe("POST /api/watchlist", () => {
     const res = await watchlistPOST(
       new Request("http://localhost/api/watchlist", {
         method: "POST",
-        headers: { host: "localhost" },
+        headers: { host: "localhost", ...SAME_ORIGIN },
         body: "bad{",
       }),
     );
@@ -1060,7 +1070,7 @@ describe("DELETE /api/watchlist", () => {
     const res = await watchlistDELETE(
       new Request("http://localhost/api/watchlist", {
         method: "DELETE",
-        headers: { host: "localhost" },
+        headers: { host: "localhost", ...SAME_ORIGIN },
         body: "x{",
       }),
     );

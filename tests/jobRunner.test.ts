@@ -56,6 +56,9 @@ const configMocks = vi.hoisted(() => ({
     jobLeaseTtlMs: 900_000,
     streamIdleTimeoutMs: 120_000,
     reservationMode: "request" as const,
+    // WS8 added these two config fields; this mock returns the full ThesisConfig.
+    resumeOnStart: true,
+    tokenFile: undefined,
   })),
 }));
 

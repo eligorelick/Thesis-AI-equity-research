@@ -147,11 +147,18 @@ afterEach(() => {
   handle.sqlite.close();
 });
 
+/**
+ * Requests here model the app's own browser calls: a same-origin fetch carries
+ * `Sec-Fetch-Site: same-origin`, which the CSRF guard requires when no Origin
+ * or X-Thesis-Token is present (tests/api.routes.sameOrigin.test.ts).
+ */
+const SAME_ORIGIN = { "sec-fetch-site": "same-origin" } as const;
+
 /** POST /api/report with a JSON body. */
 function reportRequest(body: unknown): Request {
   return new Request("http://localhost/api/report", {
     method: "POST",
-    headers: { host: "localhost", "content-type": "application/json" },
+    headers: { host: "localhost", "content-type": "application/json", ...SAME_ORIGIN },
     body: JSON.stringify(body),
   });
 }
@@ -211,7 +218,7 @@ describe("POST /api/report", () => {
   it("rejects a non-JSON body with 400", async () => {
     const req = new Request("http://localhost/api/report", {
       method: "POST",
-      headers: { host: "localhost" },
+      headers: { host: "localhost", ...SAME_ORIGIN },
       body: "not json{",
     });
     const res = await reportPOST(req);
@@ -553,7 +560,7 @@ describe("GET /api/report/[jobId]", () => {
       const retry = await retryPOST(
         new Request(`http://localhost/api/report/${jobId}/retry`, {
           method: "POST",
-          headers: { host: "localhost" },
+          headers: { host: "localhost", ...SAME_ORIGIN },
         }),
         { params: Promise.resolve({ jobId }) },
       );
@@ -576,7 +583,7 @@ describe("POST /api/report/[jobId]/retry", () => {
     return [
       new Request(`http://localhost/api/report/${jobId}/retry`, {
         method: "POST",
-        headers: { host: "localhost" },
+        headers: { host: "localhost", ...SAME_ORIGIN },
       }),
       { params: Promise.resolve({ jobId }) },
     ];
@@ -798,7 +805,7 @@ describe("POST /api/report/[jobId]/cancel", () => {
   const cancelReq = (jobId: string): [Request, { params: Promise<{ jobId: string }> }] => [
     new Request(`http://localhost/api/report/${jobId}/cancel`, {
       method: "POST",
-      headers: { host: "localhost" },
+      headers: { host: "localhost", ...SAME_ORIGIN },
     }),
     { params: Promise.resolve({ jobId }) },
   ];

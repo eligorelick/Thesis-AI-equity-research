@@ -74,6 +74,7 @@ const EXPECTED_RISK_SOURCES = [
   "src/app/requestSecurity.ts",
   "src/app/api/sameOrigin.ts",
   "src/app/api/export/[reportId]/route.ts",
+  "src/app/api/jobs/resume/route.ts",
   "src/app/api/report/route.ts",
   "src/app/api/report/resolvePasses.ts",
   "src/app/api/report/[jobId]/route.ts",

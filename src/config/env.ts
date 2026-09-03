@@ -102,6 +102,22 @@ function optionalUsdCapEnv() {
   });
 }
 
+// WS8: startup hold and the non-browser request token (docs/PRIVACY.md).
+function binaryFlagEnv(defaultValue: boolean) {
+  return z.string().optional().transform((raw, ctx) => {
+    const value = blank(raw);
+    if (value === undefined) return defaultValue;
+    if (value === "1") return true;
+    if (value === "0") return false;
+    ctx.addIssue({ code: "custom", message: "must be 1 or 0" });
+    return z.NEVER;
+  });
+}
+
+/** Blank -> undefined; otherwise the trimmed path exactly as written. */
+const optionalPath = z.string().optional().transform((raw) => blank(raw));
+// end WS8
+
 const envSchema = z.object({
   FMP_API_KEY: optionalSecret,
   FINNHUB_API_KEY: optionalSecret,
@@ -165,6 +181,12 @@ const envSchema = z.object({
       }
       return value;
     }),
+  // WS8
+  /** "1" (default) kicks the scheduler at startup; "0" holds queued paid work for an explicit resume. */
+  THESIS_RESUME_ON_START: binaryFlagEnv(true),
+  /** Full path of the X-Thesis-Token file; blank means `<data dir>/csrf-token`. */
+  THESIS_TOKEN_FILE: optionalPath,
+  // end WS8
   // VERIFY_MODEL was removed (SPEC §12): verification is deterministic
   // numeric-source tracing and never calls a model. A leftover env var is
   // simply ignored.
@@ -230,6 +252,12 @@ export interface ThesisConfig {
   jobLeaseTtlMs: number;
   streamIdleTimeoutMs: number;
   reservationMode: "request" | "pass";
+  // WS8
+  /** False only when THESIS_RESUME_ON_START=0: startup does not kick the scheduler. */
+  resumeOnStart: boolean;
+  /** THESIS_TOKEN_FILE override; undefined means `<data dir>/csrf-token`. */
+  tokenFile: string | undefined;
+  // end WS8
 }
 
 /**
@@ -261,6 +289,10 @@ export function parseEnv(
     jobLeaseTtlMs: parsed.THESIS_JOB_LEASE_SECONDS * 1_000,
     streamIdleTimeoutMs: parsed.THESIS_STREAM_IDLE_SECONDS * 1_000,
     reservationMode: parsed.THESIS_RESERVATION_MODE,
+    // WS8
+    resumeOnStart: parsed.THESIS_RESUME_ON_START,
+    tokenFile: parsed.THESIS_TOKEN_FILE,
+    // end WS8
   };
   return Object.freeze(config);
 }

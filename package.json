@@ -51,6 +51,7 @@
     "test:coverage": "npm run test:coverage:core && npm run test:coverage:risk",
     "test:watch": "vitest --config vitest.config.ts",
     "export:corrected": "tsx src/report/export/correctedCli.ts",
+    "settings:reset": "node --conditions=react-server --import tsx scripts/settings-reset.ts",
     "db:push": "node --conditions=react-server node_modules/drizzle-kit/bin.cjs push",
     "check:dependencies": "node scripts/check-dependency-shape.mjs",
     "models:refresh": "node scripts/models-refresh.mjs",

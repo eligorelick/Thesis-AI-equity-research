@@ -58,6 +58,8 @@ import {
   buildJudgeFraming,
   CASE_STRENGTH_RUBRIC,
 } from "@/pipeline/stageC/prompts";
+import { reportToMarkdown } from "@/report/export/markdown";
+import { reportToPrintHtml } from "@/report/export/printHtml";
 import {
   assembleReport,
   buildJudgeRunPassArgs,
@@ -886,6 +888,63 @@ describe("shared judge/analyst model family", () => {
       floored.appendix.missingData.some((m) => m.field === "llm.judge.model-family"),
     ).toBe(false);
     expect(floored.meta.judgeProtocol?.note).toContain("the analysts on haiku");
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * The reader actually sees it
+ * ------------------------------------------------------------------------ */
+
+describe("judgement protocol reaches the rendered report", () => {
+  it("prints the protocol sentence and the checks table in both exports", () => {
+    const { bundle, computed } = buildInputs();
+    const checks = {
+      direction: { checked: 4, passed: 3, failed: 1, rate: 0.75 },
+      period: { checked: 2, passed: 2, failed: 0, rate: 1 },
+      unit: { checked: 0, passed: 0, failed: 0, rate: null },
+      namedIndividual: { checked: 1, passed: 1, failed: 0, rate: 1 },
+    };
+    const report = assembleReport(
+      {
+        symbol: "AAPL",
+        bundle,
+        computed,
+        judgeOutput: fakeJudgeOutput(),
+        verify: { verificationRate: 0.9, checks, log: [] },
+        costEntries: [
+          { step: "bull", model: "claude-opus-4-8", costUsd: 0.5 },
+          { step: "bear", model: "claude-opus-4-8", costUsd: 0.5 },
+          { step: "synthesize", model: "claude-opus-4-8", costUsd: 0.5 },
+        ],
+        model: "claude-opus-4-8",
+        judgeProtocol: buildJudgeProtocolDraft(
+          buildJudgePresentation({
+            setting: "random",
+            seed: "job-seed-a",
+            bull: analystCase("bull"),
+            bear: analystCase("bear"),
+          }),
+        ),
+      },
+      GENERATED_AT,
+    );
+
+    const note = report.meta.judgeProtocol?.note ?? "";
+    expect(note).not.toBe("");
+
+    const markdown = reportToMarkdown(report);
+    expect(markdown).toContain("Judgement protocol");
+    expect(markdown).toContain("read the");
+    expect(markdown).toContain("Deterministic checks");
+    expect(markdown).toContain("3/4"); // direction: passed / checked
+    expect(markdown).toContain("n/a — nothing eligible"); // unit: nothing to check
+
+    const html = reportToPrintHtml(report);
+    expect(html).toContain("Judgement protocol");
+    expect(html).toContain("Deterministic checks");
+    expect(html).toContain("3/4");
+    // "checked" is a separate table from citation coverage, never merged in.
+    expect(html).toContain("Citation coverage");
   });
 });
 

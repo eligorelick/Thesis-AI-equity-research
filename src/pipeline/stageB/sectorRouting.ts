@@ -892,19 +892,18 @@ export interface MetricPolicy {
    * Metric ids the report would lead with for this route — DISPLAY INTENT ONLY.
    *
    * Nothing consumes this field today (no reader, no exporter, no scorer), and
-   * the ids are NOT a guarantee that the metric is computed: across the routes
-   * below, `combinedRatio`, `lossRatio`, `reserveDevelopment`, `nimApprox`,
-   * `efficiencyRatio`, `provisionForCreditLosses` and `impliedCapRate` have no
-   * implementation. They are retained as a record of the intended per-route
-   * emphasis, not as a claim about what exists.
+   * the ids are NOT a guarantee that the metric carries a VALUE: on the bank,
+   * insurer and mortgage-REIT routes `src/pipeline/stageB/financialMetrics.ts`
+   * emits each of them, but a metric whose definition the filer's tags cannot
+   * satisfy is emitted WITHHELD with its reason (a true net interest margin
+   * needs EARNING assets, which us-gaap has no standard concept for; the
+   * efficiency ratio needs the noninterest income/expense split). `impliedCapRate`
+   * on the equity-REIT route is the one id here with no implementation of its
+   * own — it is produced inside the REIT valuation block instead.
    *
-   * Before relying on an id here, grep for it. Several of them cannot be
-   * derived from the current provider data at all: a true net interest margin
-   * needs EARNING assets, which FMP does not expose (total assets would
-   * overstate the denominator and understate NIM), and the efficiency ratio
-   * needs the noninterest income/expense split, which FMP does not break out.
-   * Approximating either one under its real name would misstate a named bank
-   * metric, which is worse than leaving it unbuilt.
+   * The ids on the financial routes match the metric keys
+   * `computeFinancialMetrics` emits, which is what `RouteMetricSchema.key`
+   * documents. Before relying on an id here, grep for it.
    */
   lead: string[];
 }
@@ -944,11 +943,15 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
       "pTbv",
       "tangibleCommonEquity",
       "rote",
-      "nimApprox",
+      // These three used to read `nimApprox`, `provisionForCreditLosses` and
+      // `depositMix`, none of which is a key any metric emits. The schema's
+      // RouteMetricSchema documents `key` as "matching the route policy's lead
+      // ids", so the ids and the keys have to be the same string.
+      "nim",
       "efficiencyRatio",
-      "provisionForCreditLosses",
+      "provisionsToLoans",
       "cet1Reported",
-      "depositMix",
+      "depositCost",
       "pe",
     ],
   },

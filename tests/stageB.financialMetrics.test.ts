@@ -22,6 +22,7 @@ import {
   type FinancialMetricsInputs,
   type RouteMetric,
 } from "@/pipeline/stageB/financialMetrics";
+import { metricPolicy } from "@/pipeline/stageB/sectorRouting";
 import { RouteMetricsSchema } from "@/report/schema";
 import type { CompanyFacts } from "@/edgar/xbrl";
 import type { FetchResult } from "@/types/core";
@@ -675,5 +676,41 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
     expect(r.ffo).toBeNull();
     expect(r.affo).toBeNull();
     expect(r.gaps.some((g) => g.field === "valuation.reit.ffo" && g.severity === "warn")).toBe(true);
+  });
+});
+
+describe("route-metric keys match the lead ids the schema says they match", () => {
+  // RouteMetricSchema documents `key` as "matching the route policy's lead
+  // ids". The bank route listed `nimApprox`, `provisionForCreditLosses` and
+  // `depositMix` while the metrics emit `nim`, `provisionsToLoans` and
+  // `depositCost`, so three of the ids named nothing at all.
+  const ROUTE_METRIC_LEAD_IDS: Record<string, string[]> = {
+    bank: ["nim", "efficiencyRatio", "provisionsToLoans", "cet1Reported", "depositCost"],
+    insurer: ["combinedRatio", "lossRatio", "expenseRatio", "reserveDevelopment"],
+    "reit-mortgage": ["bookValuePerShare", "netInterestSpread", "leverageAssetsToEquity"],
+  };
+
+  for (const [route, ids] of Object.entries(ROUTE_METRIC_LEAD_IDS)) {
+    it(`emits every route-metric lead id on the ${route} route`, () => {
+      const lead = metricPolicy(route as "bank" | "insurer" | "reit-mortgage").lead;
+      const emitted = computeFinancialMetrics(route as "bank" | "insurer" | "reit-mortgage", {
+        companyFacts: null,
+        balance: [{ date: "2025-12-31", totalAssets: 100, totalStockholdersEquity: 10 }],
+        income: [{ date: "2025-12-31", revenue: 10, netIncome: 1 }],
+        shares: 10,
+      }).metrics.map((m) => m.key);
+
+      for (const id of ids) {
+        expect(lead, `${route} lead is missing ${id}`).toContain(id);
+        expect(emitted, `${route} emits no metric keyed ${id}`).toContain(id);
+      }
+    });
+  }
+
+  it("no longer carries lead ids that name no metric", () => {
+    const lead = metricPolicy("bank").lead;
+    for (const stale of ["nimApprox", "provisionForCreditLosses", "depositMix"]) {
+      expect(lead, stale).not.toContain(stale);
+    }
   });
 });

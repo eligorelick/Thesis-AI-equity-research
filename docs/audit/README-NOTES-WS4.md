@@ -84,12 +84,22 @@ accession and date, so a multi-class filer's total is the sum of its classes
 rather than whichever class the parser happened to see last. The count carries
 the number of classes summed and the accession it came from.
 
+The sum is disclosed: the info manifest entry
+`keyless.sharesOutstanding.classes` names the filing, lists the unnamed
+per-class counts and their total, and states that companyfacts carries no class
+dimension, so per-class analysis is out of reach keylessly.
+
 ## 7. Restatements
 
 Statement periods are deduplicated last-filed-wins; when a later filing changes a
 material line (revenue, net income, total assets, equity, operating cash flow) by
 more than 1%, the superseded value is retained as the `original` and the change
 is reported as a restatement with both filing references.
+
+Restatements now reach the report: the manifest field
+`keyless.<member>.restatements` is a `warn` naming each restated line, the
+first-reported and last-filed values, the signed change, and both accession
+numbers with their filing dates. The statement shows the last-filed value.
 
 ## 8. Public float carries its own measurement date
 

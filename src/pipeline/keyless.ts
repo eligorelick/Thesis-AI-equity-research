@@ -31,6 +31,7 @@ import { sectorIndustryForSic } from "@/edgar/sic";
 import {
   BALANCE_SHEET_SHARES_TAG,
   buildStatementsFromCompanyFacts,
+  RESTATEMENT_THRESHOLD_PCT,
   type BuiltStatements,
   type SharesBasis,
   type StatementRowsResult,
@@ -165,6 +166,9 @@ const ENTERPRISE_VALUES_ENDPOINT = "derived:enterprise-values(balance×close×sh
  * claiming `dei:shares` there would be a false provenance string in the
  * sources appendix — the same rule the shares-float endpoint follows.
  */
+/** A manifest reason lists at most this many restated lines before summarising. */
+const MAX_LISTED_RESTATEMENTS = 6;
+
 function sharesConcept(basis: SharesBasis | null): string {
   return basis === "balance sheet CommonStockSharesOutstanding" ? `us-gaap:${BALANCE_SHEET_SHARES_TAG}` : "dei:shares";
 }
@@ -541,6 +545,30 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       });
     }
   }
+  // A multi-class filer reports the cover-page count ONCE PER CLASS in the same
+  // filing; companyfacts drops the class dimension, so the classes arrive as
+  // several unnamed facts sharing an accession and a date. They are summed —
+  // taking any single one would understate the count, and understating shares
+  // overstates every per-share figure — and the sum is disclosed with its parts.
+  const coverClasses = built?.shares.outstanding?.classes ?? null;
+  if (built !== null && coverClasses !== null && coverClasses.length > 1) {
+    const point = built.shares.outstanding!;
+    const filing = point.filing;
+    gaps.push({
+      field: "keyless.sharesOutstanding.classes",
+      reason:
+        `the cover page of ${filing === undefined ? "the latest filing" : `${filing.form} ${filing.accn} (filed ${filing.filed})`} ` +
+        `reports dei:${DEI_SHARES_TAG} once per share class; companyfacts carries no class dimension, so the ${coverClasses.length} ` +
+        `unnamed counts (${coverClasses.join(" + ")}) are summed to ${point.value} as of ${point.asOf}. Per-class figures are not ` +
+        "recoverable from this source, so any per-class analysis is out of reach keylessly.",
+      severity: "info",
+      attemptedSources: [`edgar:companyfacts dei/${DEI_SHARES_TAG}`],
+      expected: true,
+    });
+    notes.push(
+      `keyless share count: ${coverClasses.length} share classes summed (${coverClasses.join(" + ")} = ${point.value} at ${point.asOf})`,
+    );
+  }
   const factsFetchedAt = inputs.edgar.companyFacts.ok
     ? inputs.edgar.companyFacts.value.fetchedAt
     : fetchedAt;
@@ -577,6 +605,34 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         attemptedSources: ["edgar:companyfacts"],
         expected: true,
       });
+    }
+    // A later filing that moved a material line by more than the threshold is
+    // the single most decision-relevant thing companyfacts can tell a reader
+    // about a period, and it was computed and then dropped: the row carried a
+    // `restatement` flag no manifest ever read.
+    if (result.restatements.length > 0) {
+      const listed = result.restatements
+        .slice(0, MAX_LISTED_RESTATEMENTS)
+        .map(
+          (r) =>
+            `${r.date} ${r.field} ${r.original} → ${r.restated} (${r.changePct >= 0 ? "+" : ""}${r.changePct.toFixed(1)}%, ` +
+            `first ${r.originalFiling.form} ${r.originalFiling.accn} filed ${r.originalFiling.filed}, ` +
+            `restated in ${r.restatedFiling.form} ${r.restatedFiling.accn} filed ${r.restatedFiling.filed})`,
+        );
+      const extra = result.restatements.length - listed.length;
+      gaps.push({
+        field: `keyless.${member}.restatements`,
+        reason:
+          `${result.restatements.length} material line(s) restated by more than ${RESTATEMENT_THRESHOLD_PCT}% in a later filing; ` +
+          `this statement carries the LAST-FILED value and keeps the superseded one as \`original\`: ` +
+          listed.join("; ") +
+          (extra > 0 ? `; and ${extra} more` : ""),
+        severity: "warn",
+        attemptedSources: ["edgar:companyfacts"],
+      });
+      notes.push(
+        `${member}: ${result.restatements.length} restated material line(s) — last-filed values shown, first-reported values kept as \`original\``,
+      );
     }
     if (result.rows.length === 0) {
       const why = result.gaps[0]?.reason ?? "no period resolved from the filed facts";

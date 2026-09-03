@@ -993,3 +993,79 @@ describe("applyKeylessFallbacks — public float measurement date", () => {
     expect(row).toMatchObject({ outstandingShares: 14_776, floatShares: null, freeFloat: null, publicFloatAsOf: null });
   });
 });
+
+/**
+ * Two things companyfacts knows that the manifest used to drop on the floor: a
+ * material line a later filing restated, and a cover-page share count that is
+ * the sum of several unnamed share classes.
+ */
+describe("applyKeylessFallbacks — restatements and multi-class share counts", () => {
+  const withFacts = (f: CompanyFacts): KeylessInputs =>
+    inputs({
+      edgar: {
+        ...inputs().edgar,
+        companyFacts: { ok: true, value: { data: f, asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+      },
+    });
+
+  it("reports a restated material line, both filings and the direction of the change", async () => {
+    const f = appleFacts();
+    const revenue = f.facts["us-gaap"]!["RevenueFromContractWithCustomerExcludingAssessedTax"] as {
+      units: Record<string, Record<string, unknown>[]>;
+    };
+    const unit = Object.keys(revenue.units)[0]!;
+    // FY2024 was first reported as 380 in the FY2024 10-K and carried at 400 as
+    // a comparative in the FY2025 10-K: a 5.3% restatement of revenue.
+    revenue.units[unit] = [
+      ...revenue.units[unit]!,
+      { start: "2023-10-01", end: "2024-09-28", val: 400, form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31", accn: "0000320193-25-000010" },
+    ];
+    const out = await applyKeylessFallbacks(withFacts(f));
+    const entry = out.gaps.find((g) => g.field === "keyless.incomeAnnual.restatements")!;
+    expect(entry.severity).toBe("warn");
+    expect(entry.reason).toMatch(/1 material line\(s\) restated by more than 1%/);
+    expect(entry.reason).toMatch(/2024-09-28 revenue 380 → 400 \(\+5\.3%/);
+    expect(entry.reason).toMatch(/first 10-K .* filed 2024-11-01/);
+    expect(entry.reason).toMatch(/restated in 10-K 0000320193-25-000010 filed 2025-10-31/);
+    // The row carries the last-filed value and keeps the first-reported one.
+    const row = out.members.incomeAnnual.ok
+      ? out.members.incomeAnnual.value.data.rows.find((r) => r["date"] === "2024-09-28")!
+      : null;
+    expect(row!["revenue"]).toBe(400);
+    expect(out.notes.some((n) => n.startsWith("incomeAnnual: 1 restated material line"))).toBe(true);
+  });
+
+  it("adds no restatement entry when every period was filed once", async () => {
+    const out = await applyKeylessFallbacks(inputs());
+    expect(out.gaps.some((g) => g.field.endsWith(".restatements"))).toBe(false);
+  });
+
+  it("sums the per-class cover counts and names the parts, the filing and the total", async () => {
+    const f = appleFacts();
+    const shares = f.facts["dei"]!["EntityCommonStockSharesOutstanding"] as {
+      units: Record<string, Record<string, unknown>[]>;
+    };
+    const unit = Object.keys(shares.units)[0]!;
+    const common = { end: "2025-10-17", form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31", accn: "0000320193-25-000099" };
+    // Three unnamed classes in one filing: companyfacts drops the dimension.
+    shares.units[unit] = [
+      { ...common, val: 9_000 },
+      { ...common, val: 4_000 },
+      { ...common, val: 1_776 },
+    ];
+    const out = await applyKeylessFallbacks(withFacts(f));
+    const entry = out.gaps.find((g) => g.field === "keyless.sharesOutstanding.classes")!;
+    expect(entry.severity).toBe("info");
+    expect(entry.expected).toBe(true);
+    expect(entry.reason).toMatch(/10-K 0000320193-25-000099 \(filed 2025-10-31\)/);
+    expect(entry.reason).toMatch(/3 unnamed counts \(9000 \+ 4000 \+ 1776\) are summed to 14776 as of 2025-10-17/);
+    expect(out.notes).toContain("keyless share count: 3 share classes summed (9000 + 4000 + 1776 = 14776 at 2025-10-17)");
+    // The summed total is what every derived figure then uses.
+    expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.data.rows[0]!.outstandingShares).toBe(14_776);
+  });
+
+  it("adds no class entry when the cover count came from a single fact", async () => {
+    const out = await applyKeylessFallbacks(inputs());
+    expect(out.gaps.some((g) => g.field === "keyless.sharesOutstanding.classes")).toBe(false);
+  });
+});

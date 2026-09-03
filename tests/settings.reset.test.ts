@@ -11,7 +11,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -168,6 +168,17 @@ describe("runSettingsReset", () => {
     expect(storedSettings()).toEqual([[WRITABLE_SETTINGS_REVISION_KEY, "12"]]);
   });
 
+  it("reports a database that exists but cannot be opened instead of \"nothing to reset\"", () => {
+    // A directory in the database's place is present-but-unopenable on every
+    // platform. Reporting databaseExists:false here would exit 0 while every
+    // stored setting survived.
+    mkdirSync(dbFile);
+
+    expect(() => runSettingsReset({ dbFile, confirmed: true })).toThrow(
+      /cannot open the database at /,
+    );
+  });
+
   it("never creates a database and tolerates one without the settings table", () => {
     const absent = runSettingsReset({ dbFile, confirmed: true });
     expect(absent).toMatchObject({ databaseExists: false, rows: [], deleted: 0 });
@@ -256,5 +267,11 @@ describe("runSettingsResetCli", () => {
     expect(applied.status, applied.stderr).toBe(0);
     expect(applied.stdout).toContain("deleted 1 stored setting row:");
     expect(storedSettings()).toEqual([]);
+
+    // The same argv reports a real failure with a non-zero exit (F5).
+    mkdirSync(path.join(directory, "locked.db"));
+    const unopenable = run(["--yes", "--db", path.join(directory, "locked.db")]);
+    expect(unopenable.status).toBe(1);
+    expect(unopenable.stderr).toContain("cannot open the database at ");
   }, 90_000);
 });

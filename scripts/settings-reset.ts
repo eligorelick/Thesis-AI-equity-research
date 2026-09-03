@@ -21,6 +21,7 @@
  *   npm run settings:reset -- --yes --db /path/to/thesis.db
  */
 
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -84,16 +85,16 @@ export function parseSettingsResetArguments(
 
 /**
  * Read the stored settings and, when confirmed, delete them in one statement.
- * Never creates a database: an absent file means nothing is stored.
+ * Never creates a database: an absent file means nothing is stored. A file that
+ * is present but cannot be opened — locked, truncated, or unreadable — is an
+ * error, not "nothing to reset": swallowing it would exit 0 while the stored
+ * settings survived.
  */
 export function runSettingsReset({
   dbFile,
   confirmed,
 }: SettingsResetArguments): SettingsResetSummary {
-  let sqlite: Database.Database;
-  try {
-    sqlite = new Database(dbFile, { fileMustExist: true });
-  } catch {
+  if (!existsSync(dbFile)) {
     return {
       dbFile,
       confirmed,
@@ -102,6 +103,17 @@ export function runSettingsReset({
       deleted: 0,
       preserved: [],
     };
+  }
+
+  let sqlite: Database.Database;
+  try {
+    sqlite = new Database(dbFile, { fileMustExist: true });
+  } catch (error) {
+    throw new Error(
+      `cannot open the database at ${dbFile}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
 
   try {

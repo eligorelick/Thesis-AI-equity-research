@@ -197,6 +197,10 @@ const VERIFICATION_LOG_ORDER = [
   "source",
   "reason",
   "traceKind",
+  // WS7 (D-20): the verification log now carries deterministic-check entries
+  // (direction / period / unit / named-individual) alongside the citation-
+  // coverage ones, and `check` is what tells them apart.
+  "check",
 ] as const;
 const AS_OF_MAP_ORDER = ["field", "asOf"] as const;
 const DATA_COMPLETENESS_ORDER = [
@@ -490,6 +494,8 @@ describe("shared report surface manifest", () => {
       { id: "verification-log-field:source", key: "source", label: "Source", optional: true },
       { id: "verification-log-field:reason", key: "reason", label: "Reason", optional: true },
       { id: "verification-log-field:traceKind", key: "traceKind", label: "Trace kind", optional: true },
+      // WS7 (D-20)
+      { id: "verification-log-field:check", key: "check", label: "Check", optional: true },
     ]);
     expect(AS_OF_MAP_FIELDS).toEqual([
       { id: "as-of-map-field:field", key: "field", label: "Field", optional: false },

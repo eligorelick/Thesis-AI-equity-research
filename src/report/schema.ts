@@ -380,6 +380,188 @@ export const ProvenanceCoverageSchema = z
 export type ProvenanceCoverage = z.infer<typeof ProvenanceCoverageSchema>;
 
 /* ------------------------------------------------------------------------ *
+ * WS7 (D-20) begin — adversarial-protocol and deterministic-check metadata.
+ *
+ * Two things the pre-remediation report never said out loud:
+ *
+ *  1. WHICH ORDER the judge saw the two analyst cases in, how long each case
+ *     was, and how strong each analyst said its own case was. The judge always
+ *     read BULL then BEAR, so first position was a standing, undisclosed
+ *     advantage; length was an undisclosed second one.
+ *  2. WHAT WAS CHECKED, as opposed to what was merely cited. `provenanceCoverage`
+ *     answers "could this figure be traced to a source?" — a provenance question.
+ *     `consistencyChecks` answers "does the sentence around that figure agree
+ *     with the registry record it cites?" — direction, period, unit, and the
+ *     restriction on claims about named people. The two are reported side by
+ *     side and never merged: a report can be fully cited and still fail a
+ *     direction check, and saying so is the point.
+ *
+ * Every field is optional so every persisted report still validates.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * One deterministic check family: how many claim/figure pairs were ELIGIBLE
+ * (`checked`), how many passed, how many failed. `rate` is null when nothing
+ * was eligible — never synthetic perfection, matching {@link CoverageRateSchema}.
+ */
+export const CheckRateSchema = z
+  .object({
+    checked: z.number().int().nonnegative(),
+    passed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    /**
+     * `passed / checked`, or null when nothing was eligible. Deliberately NOT
+     * declared `.min(0).max(1)` like {@link CoverageRateSchema}'s rate: the
+     * superRefine below pins `rate === passed / checked` with `passed + failed
+     * === checked` and all three nonnegative, which implies [0,1] strictly more
+     * tightly than a bound would. Declaring the bound as well would make this
+     * leaf byte-identical to the coverage one, and `toStructuredJsonSchema`'s
+     * `reused: "ref"` would hoist it into `$defs` — where the nullable-union
+     * collapse cannot reach it, leaving a union in the emitted schema against
+     * Anthropic's separate union-parameter cap.
+     */
+    rate: z.number().nullable(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.passed + value.failed !== value.checked) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["checked"],
+        message: "checked must equal passed + failed",
+      });
+    }
+    const expected = value.checked === 0 ? null : value.passed / value.checked;
+    if (
+      value.rate !== expected &&
+      !(
+        value.rate !== null &&
+        expected !== null &&
+        Math.abs(value.rate - expected) <= 1e-12
+      )
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["rate"],
+        message: "rate must equal passed / checked, or null when checked is zero",
+      });
+    }
+  });
+export type CheckRate = z.infer<typeof CheckRateSchema>;
+
+/**
+ * The deterministic, no-model checks the verification stage runs on top of
+ * citation coverage. Each family counts only the pairs it could actually
+ * evaluate, so a low `checked` is visible rather than hidden inside a rate.
+ */
+export const ConsistencyChecksSchema = z
+  .object({
+    /** A direction word ("rose", "fell") vs the sign of the cited delta. */
+    direction: CheckRateSchema,
+    /** A period phrase ("in Q3", "in FY2025") vs the cited record's period. */
+    period: CheckRateSchema,
+    /** A unit word ("%", "bps", "billion") vs the cited record's registry unit. */
+    unit: CheckRateSchema,
+    /** Claims that name a person: filings/transcripts only, never web search. */
+    namedIndividual: CheckRateSchema,
+  })
+  .strict();
+export type ConsistencyChecks = z.infer<typeof ConsistencyChecksSchema>;
+
+export const JudgeOrderSettingSchema = z.enum([
+  "random",
+  "bull-first",
+  "bear-first",
+  "both",
+]);
+export type JudgeOrderSetting = z.infer<typeof JudgeOrderSettingSchema>;
+
+export const JudgeOrderSchema = z.enum(["bull-first", "bear-first"]);
+export type JudgeOrder = z.infer<typeof JudgeOrderSchema>;
+
+/** How one analyst case was presented to the judge (length + self-assessment). */
+export const AnalystCasePresentationSchema = z
+  .object({
+    /** Serialized characters of the case AS THE JUDGE RECEIVED IT. */
+    chars: z.number().int().nonnegative(),
+    /** Serialized characters before the cap was applied. */
+    originalChars: z.number().int().nonnegative(),
+    capChars: z.number().int().positive(),
+    truncated: z.boolean(),
+    /** Whole claim/evidence entries dropped to fit the cap. */
+    droppedItems: z.number().int().nonnegative(),
+    /** The analyst's own 1-5 strength rubric score; null when it did not answer. */
+    caseStrength: z.number().int().min(1).max(5).nullable(),
+  })
+  .strict();
+export type AnalystCasePresentation = z.infer<typeof AnalystCasePresentationSchema>;
+
+/** One field the two `both`-mode judge passes did not agree on. */
+export const JudgeOrderDisagreementSchema = z
+  .object({
+    field: z.string(),
+    primary: z.string(),
+    secondary: z.string(),
+  })
+  .strict();
+
+/**
+ * `THESIS_JUDGE_ORDER=both` reconciliation. RECONCILIATION MEANS: the two judge
+ * passes (identical inputs, swapped case order) must agree on every A-F section
+ * grade and on each scenario probability to two decimals. Those are the fields
+ * a reader acts on and the ones position bias would move. When they disagree,
+ * the PRIMARY pass (the seeded order) is the report — the secondary is never
+ * silently averaged in — and every disagreeing field is listed here and in the
+ * missing-data manifest, so an order-sensitive grade is disclosed rather than
+ * hidden. Prose, reasoning and disagreement lists are NOT compared: two runs of
+ * a language model never produce identical prose and demanding it would report
+ * a failure on every run.
+ */
+export const JudgeReconciliationSchema = z
+  .object({
+    performed: z.boolean(),
+    secondaryOrder: JudgeOrderSchema.nullable(),
+    agreed: z.boolean(),
+    comparedFields: z.array(z.string()),
+    disagreements: z.array(JudgeOrderDisagreementSchema),
+    note: z.string(),
+  })
+  .strict();
+export type JudgeReconciliation = z.infer<typeof JudgeReconciliationSchema>;
+
+/** Whether the judge graded output written by its own model family. */
+export const SharedModelFamilySchema = z
+  .object({
+    shared: z.boolean(),
+    analystFamily: z.string().nullable(),
+    judgeFamily: z.string().nullable(),
+  })
+  .strict();
+
+/**
+ * How the adversarial stage was actually run for this report: which case the
+ * judge read first, the seed that decided it, how long each case was, what each
+ * analyst said its own case was worth, whether the judge shared a model family
+ * with the analysts, and (in `both` mode) whether the mirrored run agreed.
+ */
+export const JudgeProtocolSchema = z
+  .object({
+    setting: JudgeOrderSettingSchema,
+    order: JudgeOrderSchema,
+    /** Seed the order was drawn from (the job id, else the payload fingerprint). */
+    seed: z.string(),
+    bull: AnalystCasePresentationSchema,
+    bear: AnalystCasePresentationSchema,
+    sharedModelFamily: SharedModelFamilySchema,
+    reconciliation: JudgeReconciliationSchema.optional(),
+    /** The sentence a reader sees, in the report header and both exports. */
+    note: z.string().min(1),
+  })
+  .strict();
+export type JudgeProtocol = z.infer<typeof JudgeProtocolSchema>;
+// WS7 (D-20) end.
+
+/* ------------------------------------------------------------------------ *
  * §7.0 meta
  * ------------------------------------------------------------------------ */
 
@@ -446,6 +628,11 @@ export const MetaSchema = z
     verificationRate: z.number().nullable(),
     /** Explicit provenance metrics; optional only for reports before 1.2.0. */
     provenanceCoverage: ProvenanceCoverageSchema.optional(),
+    // WS7 (D-20): what the deterministic verifier CHECKED, reported beside — never
+    // merged into — what it could cite, and how the adversarial stage was run.
+    consistencyChecks: ConsistencyChecksSchema.optional(),
+    judgeProtocol: JudgeProtocolSchema.optional(),
+    // end WS7
     /** Provider/critical-section gate; optional for legacy persisted reports. */
     dataCompleteness: DataCompletenessSchema.optional(),
     /** Requested versus effective per-pass execution settings. */
@@ -1031,7 +1218,23 @@ export const VerificationLogEntrySchema = z
         "currency-mismatch",
         "period-mismatch",
         "date-mismatch",
+        // WS7 (D-20): deterministic no-model check failures. Additive — a log
+        // written before these existed never carries one.
+        "direction-mismatch",
+        "period-word-mismatch",
+        "unit-word-mismatch",
+        "named-individual-unsourced",
+        "named-individual-web-source",
+        "credibility-source-restricted",
+        // end WS7
       ])
+      .optional(),
+    /**
+     * WS7 (D-20): which deterministic check produced this entry. Absent on
+     * citation-coverage entries, which are provenance, not consistency.
+     */
+    check: z
+      .enum(["direction", "period", "unit", "named-individual"])
       .optional(),
     /**
      * How the number traced — separates the CITATION-COVERAGE modes the audit
@@ -1108,6 +1311,8 @@ export const AppendixSchema = z
     /** Citation coverage (provenance, not correctness) — see MetaSchema. */
     verificationRate: z.number().nullable(),
     provenanceCoverage: ProvenanceCoverageSchema.optional(),
+    /** WS7 (D-20): deterministic direction/period/unit/named-individual checks. */
+    consistencyChecks: ConsistencyChecksSchema.optional(),
     verificationLog: z.array(VerificationLogEntrySchema).optional(),
     costBreakdown: z.array(CostBreakdownEntrySchema),
   })
@@ -1574,6 +1779,23 @@ const AnalystCaseObjectSchema = z
     catalysts: z.array(SourcedClaimSchema),
     priceTarget: AnalystPriceTargetSchema,
     evidence: z.array(TracedNumberSchema),
+    /**
+     * WS7 (D-20): the analyst's own 1-5 assessment of how strong ITS OWN side's
+     * evidence is, against the rubric stated verbatim in the analyst prompt
+     * (prompts.ts CASE_STRENGTH_RUBRIC). The judge is shown both numbers and is
+     * told it may discount a side that scored itself low — a self-report, not a
+     * measurement, and explicitly not evidence on its own.
+     *
+     * Snake_case is deliberate and is the ONE exception to this schema's
+     * camelCase: the field name is fixed by the remediation criteria, and the
+     * prompt, the JSON Schema sent to the model and the stored artifact all have
+     * to spell it the same way.
+     *
+     * OPTIONAL and nullable so a bull/bear pass artifact persisted before this
+     * field existed still parses on resume, and so a model that omits it fails
+     * the field rather than the whole case.
+     */
+    case_strength: z.number().int().min(1).max(5).nullable().optional(),
   })
   .strict();
 export const ANALYST_CASE_SCHEMA = AnalystCaseObjectSchema.superRefine(
@@ -1808,6 +2030,26 @@ export function fillNullableGaps(schema: z.ZodType, data: unknown): unknown {
 }
 
 export function collapseNullableComplexity<T>(schema: T): T {
+  // WS7 (D-20): a nullable leaf used by two or more fields is HOISTED into
+  // `$defs` by `reused: "ref"`, and every use becomes a bare `$ref`. Before this
+  // pass ran only over inline properties, so a hoisted `X | null` survived as a
+  // union — invisible until a second field happened to share its exact shape,
+  // which is what adding the check-rate block did. Collapse the `$defs` entries
+  // first, remember which ones collapsed, and treat a property whose `$ref`
+  // points at one exactly as if it had been collapsed inline (drop it from
+  // `required`, so the model may omit it and fillNullableGaps restores the null).
+  const collapsedRefs = new Set<string>();
+  const root = schema as unknown as Record<string, unknown>;
+  const defs = root?.$defs;
+  if (defs !== null && typeof defs === "object" && !Array.isArray(defs)) {
+    for (const [name, def] of Object.entries(defs as Record<string, unknown>)) {
+      if (def === null || typeof def !== "object") continue;
+      if (collapseNullableUnion(def as Record<string, unknown>)) {
+        collapsedRefs.add(`#/$defs/${name}`);
+      }
+    }
+  }
+
   const seen = new WeakSet<object>();
   const walk = (node: unknown): void => {
     if (node === null || typeof node !== "object") return;
@@ -1824,7 +2066,10 @@ export function collapseNullableComplexity<T>(schema: T): T {
       for (const key of Object.keys(props)) {
         const prop = props[key];
         if (prop === null || typeof prop !== "object") continue;
-        const collapsed = collapseNullableUnion(prop as Record<string, unknown>);
+        const ref = (prop as Record<string, unknown>).$ref;
+        const collapsed =
+          collapseNullableUnion(prop as Record<string, unknown>) ||
+          (typeof ref === "string" && collapsedRefs.has(ref)); // WS7
         if (collapsed && required) {
           const idx = required.indexOf(key);
           if (idx !== -1) required.splice(idx, 1);
@@ -1877,6 +2122,11 @@ const ALWAYS_FILLED_BY_GENERATION = new Set([
   // from the legacy display field. The Zod field stays optional only so old
   // persisted reports remain readable.
   "sourceId",
+  // WS7 (D-20): the analyst self-assessment. Optional on the Zod schema only so
+  // a bull/bear artifact persisted before the field existed still parses on
+  // resume; a fresh analyst pass is prompted for it and the request schema
+  // requires it, so "I forgot" is not an available answer.
+  "case_strength",
 ]);
 
 export function requireAlwaysFilledFields<T>(schema: T): T {

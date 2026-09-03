@@ -33,6 +33,8 @@ import type {
   MetricRow,
   Projections,
   ProvenanceCoverage,
+  CheckRate,
+  ConsistencyChecks,
   Quality,
   Report,
   RouteMetrics,
@@ -133,6 +135,29 @@ function provenanceCoverageHtml(coverage: ProvenanceCoverage): string {
         ),
       ],
     ],
+  );
+}
+
+// WS7 (D-20): CHECKED, printed beside CITED and never folded into it. The row
+// shows passed of checked, because a rate alone would hide how few pairs were
+// eligible; "0/0" means the check found nothing it could evaluate.
+const CONSISTENCY_CHECK_LABELS: readonly [keyof ConsistencyChecks, string][] = [
+  ["direction", "Direction word vs the sign of the cited change"],
+  ["period", "Period phrase vs the cited figure's period"],
+  ["unit", "Unit word vs the cited figure's registry unit"],
+  ["namedIndividual", "Claims naming a person: filings/transcripts only"],
+];
+
+function checkCellHtml(rate: CheckRate): string {
+  return `${rate.passed}/${rate.checked} (${
+    rate.rate === null ? "n/a &mdash; nothing eligible" : `${(rate.rate * 100).toFixed(0)}%`
+  })`;
+}
+
+function consistencyChecksHtml(checks: ConsistencyChecks): string {
+  return table(
+    ["Deterministic check", "Passed / checked"],
+    CONSISTENCY_CHECK_LABELS.map(([key, label]) => [esc(label), checkCellHtml(checks[key])]),
   );
 }
 
@@ -900,6 +925,12 @@ function sectionAppendix(
         : `${(a.verificationRate * 100).toFixed(0)}%`
     }</strong> <span class="muted">— share of report figures traceable to a citation or payload value; a provenance check, not a correctness/accuracy check.</span></p>${
       a.provenanceCoverage ? provenanceCoverageHtml(a.provenanceCoverage) : ""
+    }${
+      // WS7 (D-20): what was CHECKED, under its own heading so it is never read
+      // as part of the coverage number above it.
+      a.consistencyChecks
+        ? `<h3>Deterministic checks</h3><p class="muted">No model call. Each check evaluates only the claim/figure pairs it can locate, so a low &quot;checked&quot; count means little could be checked &mdash; not that everything passed. Failures appear in the verification log with the sentence, the cited figure and the reason.</p>${consistencyChecksHtml(a.consistencyChecks)}`
+        : ""
     }${vlog}
     <h3>As-of map</h3>${asOfTable}
     <h3>Cost breakdown</h3>${cost}<p>Total: <strong>${formatCostUsd(totalCost)}</strong></p></section>`;
@@ -922,6 +953,12 @@ function headerBlock(
     [
       ["Generated", m.generatedAt],
       ["Model", m.model],
+      // WS7 (D-20): the sentence a reader sees — which case the judge read
+      // first, both case lengths, both self-assessments, and whether the judge
+      // shared a model family with the analysts.
+      ...(m.judgeProtocol !== undefined
+        ? [["Judgement protocol", m.judgeProtocol.note]]
+        : []),
       ...(m.execution
         ? [[
             "Pass execution",

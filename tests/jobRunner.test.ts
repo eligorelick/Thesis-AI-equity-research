@@ -63,6 +63,8 @@ const configMocks = vi.hoisted(() => ({
     tokenFile: undefined,
     // WS6 (D-19): THESIS_EV_INCLUDE_LEASES defaults off.
     evIncludeLeases: false,
+    // WS7 (D-20): THESIS_JUDGE_ORDER defaults to the one-judge-pass random order.
+    judgeOrder: "random" as const,
   })),
 }));
 

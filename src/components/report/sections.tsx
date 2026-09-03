@@ -28,7 +28,9 @@ import type {
   BalanceSheet,
   Business,
   CatalystsRisks,
+  CheckRate,
   Competitive,
+  ConsistencyChecks,
   Disagreement,
   Executive,
   Fundamentals,
@@ -227,6 +229,21 @@ function tracedAuditCells(trace: TracedNumber): readonly ReactNode[] {
 }
 
 const TRACED_AUDIT_HEADERS = TRACED_NUMBER_FIELDS.map((descriptor) => descriptor.label);
+
+// WS7 (D-20): the deterministic check families, in the order the appendix and
+// both exports show them.
+const CONSISTENCY_CHECK_LABELS: readonly [keyof ConsistencyChecks, string][] = [
+  ["direction", "direction word vs the sign of the cited change"],
+  ["period", "period phrase vs the cited figure's period"],
+  ["unit", "unit word vs the cited figure's registry unit"],
+  ["namedIndividual", "claims naming a person: filings/transcripts only"],
+];
+
+function checkValue(rate: CheckRate): string {
+  return `${rate.passed}/${rate.checked} (${
+    rate.rate === null ? "n/a — nothing eligible" : `${(rate.rate * 100).toFixed(1)}%`
+  })`;
+}
 
 /* ======================================================================== *
  * §7.1 Verdict header + grade strip
@@ -1905,6 +1922,7 @@ export function AppendixSection({
   const totalCost = roundedDisplayedCostTotal(appendix.costBreakdown.map((entry) => entry.costUsd));
   const rate = appendix.verificationRate;
   const provenance = appendix.provenanceCoverage;
+  const checks = appendix.consistencyChecks; // WS7 (D-20)
   const presentation = completeness ?? deriveReportCompletenessPresentation(
     undefined,
     appendix.missingData,
@@ -1998,6 +2016,31 @@ export function AppendixSection({
               </span>
             </div>
           </div>
+        </SubBlock>
+      )}
+
+      {/* WS7 (D-20): CHECKED, in its own block beside CITED above. Merging the
+          two would let a direction failure hide inside a coverage percentage. */}
+      {checks && (
+        <SubBlock label="deterministic checks (no model call)">
+          <div className="grid gap-2 text-[11px] sm:grid-cols-2">
+            {CONSISTENCY_CHECK_LABELS.map(([key, label]) => (
+              <div key={key}>
+                <span className="text-faint">{label}</span>{" "}
+                <span
+                  className={checks[key].failed > 0 ? "mono text-amber-500" : "mono text-muted"}
+                >
+                  {checkValue(checks[key])}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-[10px] text-faint">
+            Each check evaluates only the claim/figure pairs it can locate, so a low
+            &ldquo;checked&rdquo; count means little could be checked, not that everything passed.
+            Failures are listed in the verification log with the sentence, the cited figure and the
+            reason.
+          </p>
         </SubBlock>
       )}
 
@@ -2100,6 +2143,20 @@ export function ReportMetaStrip({
         {m.execution && (
           <span title={m.execution.map((entry) => `${entry.step}: requested ${entry.requestedModel}/${entry.requestedEffort ?? "n/a"}; effective ${entry.effectiveModel}/${entry.effectiveEffort ?? "n/a"}${entry.adjustments.length ? ` (${entry.adjustments.join(", ")})` : ""}`).join("\n")}>
             passes <span className="mono text-muted">{m.execution.map((entry) => `${entry.step}:${entry.effectiveModel.replace(/^claude-/, "")}`).join(" · ")}</span>
+          </span>
+        )}
+        {/* WS7 (D-20): the judge's case order is a fairness control, and a
+            control nobody can see is not a control. The badge shows which side
+            the judge read first; the tooltip carries the full sentence. */}
+        {m.judgeProtocol && (
+          <span title={m.judgeProtocol.note}>
+            judge read{" "}
+            <span className="mono text-muted">
+              {m.judgeProtocol.order === "bull-first" ? "bull first" : "bear first"}
+            </span>
+            {m.judgeProtocol.sharedModelFamily.shared && (
+              <span className="ml-1 text-amber-500">· same model family</span>
+            )}
           </span>
         )}
         <span>

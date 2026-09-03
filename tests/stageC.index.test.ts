@@ -461,6 +461,48 @@ describe("pipelinePasses.runVerifyPass (WeakMap context recovery)", () => {
     ).toBe(true);
   });
 
+  // WS7 (D-20): the deterministic checks run on the ASSEMBLED report, so their
+  // results and their manifest disclosure have to be merged after assembly —
+  // exactly the forwarding bug class this file exists for (H4).
+  it("stamps the deterministic checks and discloses a failing one in the manifest", async () => {
+    const { bundle, computed, validation } = buildInputs();
+    const payload = pipelinePasses.assembleContextPayload(bundle, computed, validation);
+    const deps: PassDeps<ContextPayload> = { analysisModel: "claude-opus-4-8", payload };
+
+    // A claim naming a person, sourced to a web-search result the pipeline did
+    // observe. Registry-independent, so it exercises the merge path on this
+    // deliberately sparse fixture.
+    const url = "https://example.com/interview";
+    const judge = fakeJudgeOutput();
+    judge.leadership.governanceNotes.push({
+      text: "CEO Jane Roe reiterated the buyback pace on a podcast.",
+      label: "FACT",
+      source: `web:${url}`,
+      asOf: "2026-07-01",
+    });
+
+    const result = await pipelinePasses.runVerifyPass(deps, judge, { fetchedUrls: [url] });
+
+    // "checked" is stamped in BOTH places a reader looks, beside coverage.
+    expect(result.verifiedReport.meta.consistencyChecks).toBeDefined();
+    expect(result.verifiedReport.appendix.consistencyChecks).toEqual(
+      result.verifiedReport.meta.consistencyChecks,
+    );
+    expect(result.verifiedReport.appendix.consistencyChecks?.namedIndividual.failed).toBe(1);
+    // The failure reaches the manifest, not just the (long) verification log.
+    expect(
+      result.verifiedReport.appendix.missingData.some(
+        (entry) => entry.field === "verify.check.namedIndividual" && entry.severity === "warn",
+      ),
+    ).toBe(true);
+    expect(
+      (result.verifiedReport.appendix.verificationLog ?? []).some(
+        (entry) =>
+          entry.check === "named-individual" && entry.reason === "named-individual-web-source",
+      ),
+    ).toBe(true);
+  });
+
   it("falls back to the minimal stand-in for an unregistered payload (no cross-job leak)", async () => {
     // Register a DIFFERENT job's context, then verify against an UNRELATED payload
     // object. The WeakMap keys on identity, so the registered context must NOT leak.

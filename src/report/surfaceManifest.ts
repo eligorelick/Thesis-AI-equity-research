@@ -493,6 +493,7 @@ export const VERIFICATION_LOG_FIELD_ORDER = [
   "source",
   "reason",
   "traceKind",
+  "check", // WS7 (D-20)
 ] as const satisfies readonly VerificationLogFieldKey[];
 export const VERIFICATION_LOG_FIELDS = [
   { id: "verification-log-field:claim", key: "claim", label: "Claim", optional: false },
@@ -503,6 +504,8 @@ export const VERIFICATION_LOG_FIELDS = [
   { id: "verification-log-field:source", key: "source", label: "Source", optional: true },
   { id: "verification-log-field:reason", key: "reason", label: "Reason", optional: true },
   { id: "verification-log-field:traceKind", key: "traceKind", label: "Trace kind", optional: true },
+  // WS7 (D-20): which deterministic check produced this entry, when one did.
+  { id: "verification-log-field:check", key: "check", label: "Check", optional: true },
 ] as const satisfies readonly FieldDescriptor<VerificationLogFieldKey>[];
 export const VERIFICATION_LOG_FIELD_BY_KEY = {
   claim: VERIFICATION_LOG_FIELDS[0],
@@ -513,6 +516,7 @@ export const VERIFICATION_LOG_FIELD_BY_KEY = {
   source: VERIFICATION_LOG_FIELDS[5],
   reason: VERIFICATION_LOG_FIELDS[6],
   traceKind: VERIFICATION_LOG_FIELDS[7],
+  check: VERIFICATION_LOG_FIELDS[8], // WS7 (D-20)
 } as const satisfies Record<VerificationLogFieldKey, FieldDescriptor<VerificationLogFieldKey>>;
 
 export type AsOfMapFieldKey = "field" | "asOf";

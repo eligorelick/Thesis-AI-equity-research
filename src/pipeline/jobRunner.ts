@@ -975,9 +975,18 @@ function createSettlementCheckpoint<T>(
             // A request in flight holds its own lease; renew it on the same
             // beat so a long generation cannot expire into presumed spend
             // while it is still being read.
-            for (const [permitId, requestLease] of requestLeases) {
+            for (const [, requestLease] of requestLeases) {
               if (!renewPaidPassLease(requestLease, undefined, state.schedulerLimits)) {
-                requestLeases.delete(permitId);
+                // KEEP the identity in the map. Renewal loses authority
+                // exactly when the lease has already expired into a presumed
+                // row at its full reserved maximum — and the provider may
+                // still return real usage for this very request moments
+                // later. Dropping the entry made `settle` return early, so
+                // the measurement was thrown away and the presumption stood
+                // (on Opus 5, a permanent ~$9.53 row where the truth might be
+                // $0.40). settleRequestCost is written for exactly this case:
+                // it supersedes the presumed row with the measured one and
+                // tolerates a lease row that is already gone.
                 stopRenewal();
                 controller.abort(new Error(`paid ${pass} request lease renewal lost authority`));
                 return;

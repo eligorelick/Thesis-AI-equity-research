@@ -2054,7 +2054,7 @@ describe("runJob - durable paid-pass settlements", () => {
         // Refused, this never resolves: `capacity` is transient, so the
         // runner's reserve loop would retry forever and no request is sent.
         const permit = await admittedWithin(
-          admission!.reserve({ maximumUsd: 0.5 }),
+          admission!.reserve({ attempt: 1, kind: "stream", maximumUsd: 0.5 }),
           "the pass's own first request was never admitted",
         );
         liveDuringRequest = handle.db
@@ -2115,13 +2115,13 @@ describe("runJob - durable paid-pass settlements", () => {
         await launchTestAnalystSide(lifecycle, "bull");
         const bullAdmission = deps.admissionFor?.("bull")!;
         const bullPermit = await admittedWithin(
-          bullAdmission.reserve({ maximumUsd: 0.5 }),
+          bullAdmission.reserve({ attempt: 1, kind: "stream", maximumUsd: 0.5 }),
           "bull's first request was never admitted",
         );
         await launchTestAnalystSide(lifecycle, "bear");
         const bearAdmission = deps.admissionFor?.("bear")!;
         const bearPermit = await admittedWithin(
-          bearAdmission.reserve({ maximumUsd: 0.5 }),
+          bearAdmission.reserve({ attempt: 1, kind: "stream", maximumUsd: 0.5 }),
           "bear's first request was refused while bull was still streaming",
         );
         concurrentRequests = handle.db
@@ -2151,6 +2151,77 @@ describe("runJob - durable paid-pass settlements", () => {
 
     expect(result.status).toBe("done");
     expect(concurrentRequests).toEqual(["bear", "bull"]);
+  });
+
+  it("still records a late measured settlement after a request lease renewal lost authority", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T00:00:00.000Z"));
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 2,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 200,
+      jobLeaseTtlMs: 10_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "late-measurement", new Date(), limits)!;
+    const base = mockPasses();
+    const stolen = deferred();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (deps, lifecycle) => {
+        await launchTestAnalystSide(lifecycle, "bull");
+        const admission = deps.admissionFor?.("bull")!;
+        const permit = await admittedWithin(
+          admission.reserve({ attempt: 1, kind: "stream", maximumUsd: 12 }),
+          "bull's first request was never admitted",
+        );
+        // Renewal loses authority for the REQUEST lease only: exactly the
+        // state in which the reservation has already expired into a presumed
+        // row at its full maximum.
+        handle.db
+          .update(jobLlmLeases)
+          .set({ leaseOwner: "stolen:owner" })
+          .where(eq(jobLlmLeases.permitId, permit.id))
+          .run();
+        stolen.resolve(undefined);
+        await new Promise<void>((resolve) => {
+          deps.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        // The provider still returned real usage for this request.
+        await admission.settle(permit, {
+          model: "claude-sonnet-5",
+          usage: {
+            input_tokens: 20_000,
+            output_tokens: 800,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          webSearches: 0,
+          costUsd: 0.12,
+          fallbackUsed: false,
+        });
+        throw new Error("bull aborted after its request lease lost authority");
+      },
+    };
+
+    const running = runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    });
+    await stolen.promise;
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(await running).toMatchObject({ status: "error", reportId: null });
+    // The measurement is the record, not the presumed maximum.
+    expect(handle.db.select().from(costLog).all()).toEqual([
+      expect.objectContaining({ costUsd: 0.12, settlementKind: "actual", step: "bull" }),
+    ]);
   });
 
   it("analyst finish lifecycle stays local until the durable settlement commits", async () => {

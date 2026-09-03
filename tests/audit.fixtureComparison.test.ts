@@ -831,6 +831,38 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
     after:
       "insufficient historical coverage: only 3 quarterly statement(s) available (< 8), but verified ipoDate 2015-01-02 is older than 24 months — treated as incomplete data coverage, NOT a recent-IPO overlay (audit 2026-07-11 finding #4). Long-window CAGRs/technicals degrade via their own insufficiency flags.",
   },
+  // Added 2026-09-02 (WS5, D-16): the route result now carries the REIT
+  // equity-vs-mortgage sub-map, because SIC 6798 covers both types and the two
+  // maps disagree about which metrics mean anything. DEMO is a Technology
+  // issuer on the general route, so the decision is null and no routing note
+  // moves; only the new leaf appears.
+  {
+    path: "stageB.route.reitSubmap",
+    beforeMissing: true,
+    after: null,
+  },
+  // Added 2026-09-02 (WS5, D-17): route metrics for financial companies. DEMO
+  // is a Technology issuer on the general route, which has none, so the block
+  // is present and empty — the shape appears, no figure moves.
+  {
+    path: "stageB.financialMetrics",
+    beforeMissing: true,
+    after: { route: "general", metrics: [], notes: [], gaps: [], asOf: null },
+  },
+  // Added 2026-09-02 (WS5, D-17): the Piotroski result carries the scale it was
+  // scored on, so a 3-of-3 financial variant is never read against the 9-point
+  // scale. DEMO is non-financial, so it is the standard variant and the score
+  // itself is unchanged — only the label is new.
+  {
+    path: "stageB.forensics.piotroski.variant",
+    beforeMissing: true,
+    after: "standard",
+  },
+  {
+    path: "stageB.forensics.piotroski.label",
+    beforeMissing: true,
+    after: "Piotroski F (7 signals)",
+  },
   {
     path: "report.valuation.dcf.assumptions.3.basis",
     before: OLD_BALANCE_BASIS,

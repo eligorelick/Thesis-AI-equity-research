@@ -443,14 +443,19 @@ function ForensicsPanel({ computed }: { computed: ComputedMetrics }) {
           delta={beneish?.verdict ? <Badge tone={beneishTone}>{beneish.verdict}</Badge> : undefined}
           tone={beneishTone}
         />
+        {/*
+          WS5: a financial route scores 3 of the paper's 9 signals, so the label
+          names the variant and the tone bands are proportional. The 9-point
+          thresholds would have painted a perfect 3/3 red.
+        */}
         <StatCell
-          label="piotroski F"
+          label={piotroski?.variant === "financial" ? "piotroski F (fin.)" : "piotroski F"}
           value={piotroski && piotroski.score !== null ? `${piotroski.score} / ${piotroski.outOf}` : "n/a"}
           tone={
-            piotroski && piotroski.score !== null
-              ? piotroski.score >= 7
+            piotroski && piotroski.score !== null && piotroski.outOf > 0
+              ? piotroski.score / piotroski.outOf >= 7 / 9
                 ? "pos"
-                : piotroski.score <= 3
+                : piotroski.score / piotroski.outOf <= 3 / 9
                   ? "neg"
                   : "warn"
               : "muted"

@@ -1370,6 +1370,58 @@ export const FairValueSchema = z
 export type FairValue = z.infer<typeof FairValueSchema>;
 
 /* ------------------------------------------------------------------------ *
+ * WS5 §7.5d route metrics for financial companies (Stage B; computed-derived)
+ *
+ * The bank, insurer and mortgage-REIT routes lead with figures a general
+ * report has no place for — NIM, the efficiency ratio, CET1 or its labeled
+ * leverage stand-in, the NPL ratio, provisions over loans, the deposit cost,
+ * the combined / loss / expense ratios, reserve development, book value per
+ * share, the net interest spread and assets-over-equity leverage. Stage B
+ * computes each from the filer's own XBRL tags where the metric's definition
+ * allows, and WITHHOLDS it with a stated reason where it does not
+ * (src/pipeline/stageB/financialMetrics.ts).
+ *
+ * `withheldReason` is the load-bearing half: a blank cell with no reason reads
+ * as a fetch that failed, when in fact the figure was refused. `proxy` marks a
+ * deliberate stand-in — tangible leverage where CET1 is untagged, net interest
+ * income over average total assets where earning assets are untagged — which
+ * is always published under its OWN name, never the name it stands in for.
+ * ------------------------------------------------------------------------ */
+
+export const RouteMetricSchema = z
+  .object({
+    /** Stable id, matching the route policy's `lead` ids (e.g. "efficiencyRatio"). */
+    key: z.string(),
+    /** Display name exactly as the report renders it. */
+    label: z.string(),
+    value: z.number().nullable(),
+    unit: z.enum(["%", "x", "currency", "currency/share"]),
+    /** Formula and the inputs that produced it (or would have). */
+    basis: z.string(),
+    /** Source path per input, e.g. "edgar:companyfacts us-gaap/NoninterestExpense". */
+    sources: z.array(z.string()),
+    asOf: z.string().nullable(),
+    /** Non-null when the metric was withheld; the same text reaches the manifest. */
+    withheldReason: z.string().nullable(),
+    /** True when this is a labeled stand-in rather than the named metric. */
+    proxy: z.boolean(),
+  })
+  .strict();
+export type RouteMetricRow = z.infer<typeof RouteMetricSchema>;
+
+export const RouteMetricsSchema = z
+  .object({
+    /** The sector route these metrics belong to. */
+    route: z.string(),
+    /** Empty on routes that have no route metrics (general, equity REIT). */
+    metrics: z.array(RouteMetricSchema),
+    notes: z.array(z.string()),
+    asOf: z.string().nullable(),
+  })
+  .strict();
+export type RouteMetrics = z.infer<typeof RouteMetricsSchema>;
+
+/* ------------------------------------------------------------------------ *
  * The judge output — everything the judge/synthesis pass must emit.
  *
  * This is the full report MINUS `meta` and `appendix`, which the pipeline
@@ -1458,6 +1510,12 @@ const ReportObjectSchema = z
      * upsidePct from it so the two never diverge.
      */
     fairValue: FairValueSchema.optional(),
+    /**
+     * WS5: route metrics for financial companies (pipeline-filled from Stage B
+     * `computed.financialMetrics`). Optional so every persisted report still
+     * parses, and absent entirely on routes that have no route metrics.
+     */
+    routeMetrics: RouteMetricsSchema.optional(),
   })
   .strict();
 export const ReportSchema = ReportObjectSchema.superRefine(

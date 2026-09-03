@@ -64,6 +64,9 @@ const ALLOWED_MARKDOWN = new Set([
   "docs/DATA-RIGHTS.md",
   "docs/audit/README-NOTES-WS8.md",
   // end WS8
+  // WS5
+  "docs/audit/README-NOTES-WS5.md",
+  "docs/audit/ws5-methodology.md",
 ]);
 const VERIFY_GATES = [
   "npm run check:dependencies",

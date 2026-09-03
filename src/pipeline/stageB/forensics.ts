@@ -1076,11 +1076,45 @@ export interface PiotroskiOptions {
    * the score on non-financial firms, and scoring those four on a bank produced
    * coin-flips inside a 9-point score the report presents as a solvency read
    * (JPMorgan graded 2/6 in the 2026-09-02 keyless sweep, both misses being the
-   * OCF tests). When set, the four signals report not-applicable and the
-   * F-score is reported out of the signals that remain, exactly as it already
-   * is when a prior year is missing.
+   * OCF tests).
+   *
+   * WS5 (D-17) withholds two more, for the same reason stated one layer deeper:
+   * ΔLEVER and ΔTURN do not merely fail on a financial balance sheet, they
+   * measure the opposite of what the paper reads them as.
+   *
+   * - ΔLEVER (long-term debt / average total assets, falling = good) treats
+   *   debt as a solvency burden. For a bank, insurer or mortgage REIT debt is
+   *   an INPUT — deposits, policy reserves and repo fund the earning assets —
+   *   and the funding that matters is not long-term debt at all, so the tag the
+   *   signal reads covers a minor slice of the liability side. A bank shrinking
+   *   its bond issuance while doubling deposits scores a point for
+   *   deleveraging it did not do.
+   * - ΔTURN (revenue / beginning total assets, rising = good) reads asset
+   *   turnover as operating efficiency. A financial company's assets ARE its
+   *   revenue-generating book, so the ratio tracks the yield environment and
+   *   balance-sheet mix; it rises when rates rise and falls when a bank adds
+   *   low-yield liquidity, neither of which is an efficiency gain.
+   *
+   * Those two are gated on {@link balanceSheetFunded}, NOT on this flag: this
+   * one also fires for FIN-OTHER issuers (asset managers, exchanges, brokers)
+   * whose balance sheets are ordinary, so ΔLEVER and ΔTURN still mean what the
+   * paper says there. Same reasoning as the ROTE-vs-ROIC switch in
+   * `metricPolicy`, which is deliberately narrower than this classifier.
+   *
+   * Nothing is dropped silently: every withheld signal keeps its reason on the
+   * signal itself, and the result is relabeled so a reduced score is never read
+   * against the 9-point scale.
    */
   financialsSuppressed?: boolean;
+  /**
+   * True only for the deposit-, float- or repo-funded routes (bank, insurer,
+   * mortgage REIT). Withholds ΔLEVER and ΔTURN on top of the four above,
+   * leaving three signals (ROA > 0, ΔROA, no equity issuance). A FIN-OTHER
+   * issuer keeps both: it has ordinary debt and an ordinary asset base, so a
+   * falling leverage ratio really is deleveraging and rising turnover really is
+   * efficiency.
+   */
+  balanceSheetFunded?: boolean;
   /**
    * Equity-issuance de-minimis (statement currency units). Default 0 =
    * paper-strict "no common equity issued". The research notes leave a 1%-of-
@@ -1092,9 +1126,17 @@ export interface PiotroskiOptions {
 
 export interface PiotroskiResult {
   score: number | null;
-  /** Number of evaluable signals (9 with 3 fiscal years, 7 with 2). */
+  /** Number of evaluable signals (9 with 3 fiscal years, 7 with 2, 3 on a financial route). */
   outOf: number;
   signals: Record<PiotroskiSignalName, PiotroskiSignal>;
+  /**
+   * WS5: which scale this score is on. "standard" is the paper's 9-signal
+   * F-score; "financial" is the reduced battery for a bank, insurer or
+   * mortgage REIT. A 3-of-3 must never be read against the 9-point scale.
+   */
+  variant: "standard" | "financial";
+  /** WS5: display label carrying the scale, e.g. "Piotroski F (financial variant, 3 signals)". */
+  label: string;
   notes: string[];
   gaps: ManifestEntry[];
   asOf: { current: string | null; prior: string | null; prior2: string | null };
@@ -1168,8 +1210,15 @@ export function computePiotroski(
       : na("net income, CFO, or beginning-of-year total assets missing");
 
   // 5. F_ΔLEVER — LTD / AVERAGE total assets fell (paper uses average TA here)
+  const leverageWithheld =
+    "long-term debt over assets measures a solvency burden; for a financial company debt is an INPUT — deposits, policy reserves and repo fund the earning assets, and none of them is long-term debt — so a falling ratio is a funding-mix change, not deleveraging — signal withheld";
+  const turnoverWithheld =
+    "asset turnover reads revenue over assets as operating efficiency; a financial company's assets ARE its revenue-generating book, so the ratio tracks the rate environment and balance-sheet mix (it falls when a bank adds low-yield liquidity) — signal withheld";
+  const balanceSheetFunded = options?.balanceSheetFunded === true;
   let s5: PiotroskiSignal;
-  {
+  if (balanceSheetFunded) {
+    s5 = na(leverageWithheld);
+  } else {
     const ltdT = nv(current.balance?.longTermDebt);
     const ltdP = nv(prior.balance?.longTermDebt);
     const taT = posOrNull(current.balance?.totalAssets);
@@ -1248,7 +1297,9 @@ export function computePiotroski(
 
   // 9. F_ΔTURN — sales / beginning-of-year TA rose (needs TA at t−2)
   let s9: PiotroskiSignal;
-  if (!prior2) {
+  if (balanceSheetFunded) {
+    s9 = na(turnoverWithheld);
+  } else if (!prior2) {
     s9 = na("requires total assets at t−2 (3rd fiscal year) — omitted");
   } else {
     const turnT = div(revT, taBeginT);
@@ -1262,10 +1313,12 @@ export function computePiotroski(
         : na("revenue or beginning-of-year total assets missing");
   }
 
-  if (!prior2) {
+  if (!prior2 && !balanceSheetFunded) {
     notes.push(
       "Only 2 fiscal years supplied — ΔROA and Δturnover unavailable; F-score reported out of 7 (research §6.2).",
     );
+  } else if (!prior2) {
+    notes.push("Only 2 fiscal years supplied — ΔROA unavailable in addition to the withheld financial signals.");
   }
 
   const signals: Record<PiotroskiSignalName, PiotroskiSignal> = {
@@ -1301,10 +1354,31 @@ export function computePiotroski(
     );
   }
 
+  // WS5: the label carries the scale. A 3-of-3 on a bank must never be read
+  // against the paper's 9-point scale, and the payload/UI render this string.
+  const variant: PiotroskiResult["variant"] = finSuppressed ? "financial" : "standard";
+  const withheldCount = balanceSheetFunded ? "six" : "four";
+  const label = finSuppressed
+    ? `Piotroski F (financial variant, ${outOf} of 9 signals — the ${withheldCount} that presume a non-financial balance sheet are withheld)`
+    : `Piotroski F (${outOf} signals)`;
+  if (finSuppressed) {
+    notes.push(
+      `Piotroski F is reported on the FINANCIAL variant: ${outOf} of the paper's 9 signals. The current ratio, gross ` +
+        "margin and both operating-cash-flow tests are withheld" +
+        (balanceSheetFunded
+          ? ", and so are ΔLEVER and ΔTURN — on a deposit-, float- or repo-funded balance sheet each measures " +
+            "something other than what the paper reads it as"
+          : "; ΔLEVER and ΔTURN are KEPT, because this issuer is fee-based with an ordinary balance sheet") +
+        ". The score is NOT comparable to a 9-point F-score.",
+    );
+  }
+
   return {
     score,
     outOf,
     signals,
+    variant,
+    label,
     notes,
     gaps,
     asOf: {
@@ -1978,6 +2052,19 @@ export function runForensics(route: CompanyRoute, inputs: ForensicsInputs): Fore
     inputs.isEmergingMarket ?? false,
   );
   let altman: AltmanResult | null = null;
+  if (altmanSelection.variant === null) {
+    // WS5 (criterion g): the variant selector already explains the refusal in
+    // its notes; carry that exact text into the MANIFEST too, so a report whose
+    // Z-score cell is blank says why it is blank rather than looking like a
+    // fetch that failed.
+    gaps.push(
+      gapEntry(
+        "forensics.altmanZ",
+        `Altman Z withheld: ${altmanSelection.notes[0] ?? "the Z-family models were estimated on non-financial firms and are not defined for this classification"}`,
+        "info",
+      ),
+    );
+  }
   if (altmanSelection.variant !== null) {
     if (cur.balance && cur.income) {
       const altmanInputs = {
@@ -2034,6 +2121,16 @@ export function runForensics(route: CompanyRoute, inputs: ForensicsInputs): Fore
     notes.push(
       "Beneish M-score not computed: financial company (Beneish excluded financial institutions from the model's estimation sample, paper p.5).",
     );
+    // WS5 (criterion g): the reason reaches the MANIFEST, not only the notes.
+    // A battery that silently produces nothing reads as missing data; this says
+    // it was refused, and why.
+    gaps.push(
+      gapEntry(
+        "forensics.beneishM",
+        "Beneish M-score withheld for a financial company: Beneish (1999) excluded financial institutions from the estimation sample (paper p.5), and its eight indices read receivables, gross margin, asset quality and depreciation — none of which carries the same meaning on a bank, insurer or mortgage-REIT balance sheet",
+        "info",
+      ),
+    );
   } else if (!hasPeriod(pri)) {
     gaps.push(
       gapEntry(
@@ -2059,11 +2156,17 @@ export function runForensics(route: CompanyRoute, inputs: ForensicsInputs): Fore
   } else {
     piotroski = computePiotroski(cur, pri, pri2, {
       equityIssuanceDeMinimis: inputs.equityIssuanceDeMinimis ?? undefined,
-      // Withhold the four signals that are not economic on this route: the
-      // current ratio and gross margin it hard-suppresses everywhere else, and
-      // the two operating-cash-flow tests (OCF is not a profit or accrual
-      // signal for a bank, insurer or mortgage REIT).
+      // Withhold the four signals that are not economic on any financial
+      // classification: the current ratio and gross margin it hard-suppresses
+      // everywhere else, and the two operating-cash-flow tests.
       financialsSuppressed: suppressed,
+      // ΔLEVER and ΔTURN go only on the deposit-, float- or repo-funded routes.
+      // A FIN-OTHER issuer (asset manager, exchange, insurance broker) is
+      // fee-based with ordinary debt and an ordinary asset base, so falling
+      // leverage really is deleveraging there and rising turnover really is
+      // efficiency — the same narrower gate the ROTE/ROIC switch uses.
+      balanceSheetFunded:
+        route.base === "bank" || route.base === "insurer" || route.base === "reit-mortgage",
     });
     if (suppressed) {
       notes.push(
@@ -2078,6 +2181,14 @@ export function runForensics(route: CompanyRoute, inputs: ForensicsInputs): Fore
   if (suppressed) {
     notes.push(
       "Accrual ratios suppressed for financial companies — financial-asset flows swamp operating accruals (research §6.3).",
+    );
+    // WS5 (criterion g): reason to the manifest as well as the notes.
+    gaps.push(
+      gapEntry(
+        "forensics.accrualsRatio",
+        "accrual ratios withheld for a financial company: the Sloan scaler is net operating assets, which subtracts (total liabilities − total debt) — for a bank that is its deposits, i.e. its raw material, so the ratio measures funding mix rather than earnings quality",
+        "info",
+      ),
     );
   } else if (hasPeriod(pri)) {
     accruals = computeAccruals(cur, pri);

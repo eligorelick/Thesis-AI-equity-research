@@ -939,10 +939,6 @@ function throwFirstSettlementRejection(outcomes: PromiseSettledResult<unknown>[]
  * request maximum; in "pass" mode there is no per-request admission at all, and
  * two judge requests were sharing one reservation sized for one order.
  */
-function judgeRequestsPerPass(): 1 | 2 {
-  return JUDGE_PASSES_PER_SETTING[getConfig().judgeOrder];
-}
-
 function passReservationUsd(
   model: string,
   pass: DurablePass,
@@ -954,6 +950,11 @@ function passReservationUsd(
   return getConfig().reservationMode === "pass"
     ? maximumPassCostUsd(model, pass, verifyCapability, judgeRequestsPerPass())
     : maximumRequestCostUsd(model, pass, verifyCapability);
+}
+
+/** How many provider requests one judge pass issues under the setting in force. */
+function judgeRequestsPerPass(): 1 | 2 {
+  return JUDGE_PASSES_PER_SETTING[getConfig().judgeOrder];
 }
 
 /** Whether provider requests are admitted individually. */

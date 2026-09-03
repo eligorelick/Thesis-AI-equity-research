@@ -31,6 +31,8 @@ import type {
   MetricRow,
   Projections,
   ProvenanceCoverage,
+  CheckRate,
+  ConsistencyChecks,
   Quality,
   Report,
   FairValue,
@@ -118,6 +120,30 @@ function provenanceCoverageTable(coverage: ProvenanceCoverage): string {
         ),
       ],
     ],
+  );
+}
+
+// WS7 (D-20): CHECKED, printed beside CITED and never folded into it. A rate on
+// its own would hide how few pairs were eligible, so the row shows passed of
+// checked; "0/0" means the check found nothing it could evaluate, which is a
+// fact about the report, not a pass.
+const CONSISTENCY_CHECK_LABELS: readonly [keyof ConsistencyChecks, string][] = [
+  ["direction", "Direction word vs the sign of the cited change"],
+  ["period", "Period phrase vs the cited figure's period"],
+  ["unit", "Unit word vs the cited figure's registry unit"],
+  ["namedIndividual", "Claims naming a person: filings/transcripts only"],
+];
+
+function checkCell(rate: CheckRate): string {
+  return `${rate.passed}/${rate.checked} (${
+    rate.rate === null ? "n/a — nothing eligible" : `${(rate.rate * 100).toFixed(0)}%`
+  })`;
+}
+
+function consistencyChecksTable(checks: ConsistencyChecks): string {
+  return table(
+    ["Deterministic check", "Passed / checked"],
+    CONSISTENCY_CHECK_LABELS.map(([key, label]) => [label, checkCell(checks[key])]),
   );
 }
 
@@ -993,6 +1019,22 @@ function renderAppendix(
   if (a.provenanceCoverage) {
     lines.push(provenanceCoverageTable(a.provenanceCoverage), "");
   }
+  // WS7 (D-20): what was CHECKED, in its own subsection so it is never read as
+  // part of the coverage number above it.
+  if (a.consistencyChecks) {
+    lines.push(
+      "### Deterministic checks",
+      "",
+      markdownProse(
+        "No model call. Each check evaluates only the claim/figure pairs it can locate, so a low " +
+          "\"checked\" count means little could be checked — not that everything passed. Failures " +
+          "appear in the verification log with the sentence, the cited figure and the reason.",
+      ),
+      "",
+      consistencyChecksTable(a.consistencyChecks),
+      "",
+    );
+  }
   if (a.verificationLog && a.verificationLog.length > 0) {
     lines.push(
       table(
@@ -1044,6 +1086,12 @@ function renderHeader(
       [
         ["Generated", m.generatedAt],
         ["Model", m.model],
+        // WS7 (D-20): the sentence a reader sees — which case the judge read
+        // first, both case lengths, both self-assessments, and whether the judge
+        // shared a model family with the analysts.
+        ...(m.judgeProtocol !== undefined
+          ? [["Judgement protocol", m.judgeProtocol.note]]
+          : []),
         // Legacy reports carry a verifyModel label (removed setting) — keep it.
         ...(m.verifyModel !== undefined ? [["Verify model", m.verifyModel]] : []),
         ["Spec version", m.specVersion],

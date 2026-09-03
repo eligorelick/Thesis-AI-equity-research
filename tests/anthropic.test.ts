@@ -17,7 +17,6 @@ import type { BetaMessage, BetaUsage } from "@anthropic-ai/sdk/resources/beta/me
 import { resetConfigCache } from "@/config/env";
 import {
   CLIENT_MAX_RETRIES,
-  FABLE_FALLBACK_MODEL,
   MAX_PROVIDER_WEB_SEARCHES,
   PASS_TRANSPORT_MAX_ATTEMPTS,
   PASS_BILLING_EXPOSURE_MULTIPLIER,
@@ -26,7 +25,6 @@ import {
   PASS_TRANSPORT_RETRY_DELAYS_MS,
   PREFERENCE_ORDER,
   PRICING,
-  SERVER_SIDE_FALLBACK_BETA,
   WEB_SEARCH_TOOL_TYPE,
   WEB_SEARCH_USD_PER_SEARCH,
   MAX_PAUSE_RESUMPTIONS,
@@ -42,6 +40,7 @@ import {
   modelContextTokenLimit,
   pickPreferredModel,
   pricedModelAlias,
+  registryEntryFor,
   resolveModel,
   resumeIfPaused,
   runPass,
@@ -365,15 +364,17 @@ describe("buildPassParams", () => {
     expect(() => buildPassParams({
       ...baseOpts,
       field: "llm.judge",
-      tools: [webSearchTool(1)] as never,
+      tools: [webSearchTool(1, "claude-opus-4-8")] as never,
     })).toThrow(/judge.*web.search|web.search.*judge/i);
   });
 
   it("adds the server-side fallback beta + fallbacks for claude-fable-5", () => {
     const { params, usesFallbackBeta } = buildPassParams({ ...baseOpts, model: "claude-fable-5" });
     expect(usesFallbackBeta).toBe(true);
-    expect(params.betas).toEqual([SERVER_SIDE_FALLBACK_BETA]);
-    expect(params.fallbacks).toEqual([{ model: FABLE_FALLBACK_MODEL }]);
+    // Both come from the registry entry, not from a literal beside it.
+    const fallback = registryEntryFor("claude-fable-5").serverSideFallback!;
+    expect(params.betas).toEqual([fallback.beta]);
+    expect(params.fallbacks).toEqual([{ model: fallback.model }]);
     // fable-5: thinking is always-on — the param must NOT be sent (400).
     expect(params).not.toHaveProperty("thinking");
   });
@@ -473,7 +474,7 @@ describe("buildPassParams", () => {
   });
 
   it("passes tools through unchanged", () => {
-    const tools = [webSearchTool(MAX_PROVIDER_WEB_SEARCHES)];
+    const tools = [webSearchTool(MAX_PROVIDER_WEB_SEARCHES, "claude-opus-4-8")];
     const { params } = buildPassParams({ ...baseOpts, tools });
     expect(params.tools).toBe(tools);
   });
@@ -481,7 +482,7 @@ describe("buildPassParams", () => {
 
 describe("webSearchTool", () => {
   it("returns the switchable tool type with name and max_uses", () => {
-    expect(webSearchTool(MAX_PROVIDER_WEB_SEARCHES)).toEqual({
+    expect(webSearchTool(MAX_PROVIDER_WEB_SEARCHES, "claude-opus-4-8")).toEqual({
       type: WEB_SEARCH_TOOL_TYPE,
       name: "web_search",
       max_uses: MAX_PROVIDER_WEB_SEARCHES,
@@ -504,9 +505,9 @@ describe("webSearchTool", () => {
   });
 
   it("enforces a positive integer search cap and a priced target model", () => {
-    expect(() => webSearchTool(MAX_PROVIDER_WEB_SEARCHES + 1)).toThrow(/max_uses.*8/i);
+    expect(() => webSearchTool(MAX_PROVIDER_WEB_SEARCHES + 1, "claude-opus-4-8")).toThrow(/max_uses.*8/i);
     for (const maxUses of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(() => webSearchTool(maxUses)).toThrow(/max_uses/i);
+      expect(() => webSearchTool(maxUses, "claude-opus-4-8")).toThrow(/max_uses/i);
     }
     expect(() => webSearchTool(1, "claude-mystery-9")).toThrow(/unsupported|priced/i);
   });
@@ -1300,6 +1301,34 @@ describe("runPass transport failures at stream construction", () => {
     _resetAnthropicForTests(client);
 
     await expect(runPass(baseOpts)).rejects.toThrow(TypeError);
+  });
+
+  /**
+   * runPassStreaming documents that `firstToken` "cannot hang". The
+   * programming-bug rethrow path never signalled it, so a bug thrown before
+   * any stream event left `await bullHandle.firstToken` waiting forever — bear
+   * was never launched and the pass died at its deadline.
+   */
+  it("settles firstToken before rethrowing a programming bug", async () => {
+    _resetAnthropicForTests({
+      beta: {
+        messages: {
+          stream: () => {
+            throw new TypeError("undefined is not a function");
+          },
+        },
+      },
+    } as unknown as Anthropic);
+
+    const handle = runPassStreaming(streamingOpts);
+    handle.result.catch(() => {});
+    await expect(Promise.race([
+      handle.firstToken,
+      new Promise((_resolve, reject) => {
+        setTimeout(() => reject(new Error("firstToken hung")), 2_000).unref?.();
+      }),
+    ])).resolves.toBe("error");
+    await expect(handle.result).rejects.toThrow(TypeError);
   });
 });
 

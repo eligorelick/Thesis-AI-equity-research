@@ -100,6 +100,7 @@ import {
 } from "@/db";
 import { costLog, jobLlmLeases, jobPassArtifacts, jobs, reports } from "@/db/schema";
 import { setSetting } from "@/settings/settings";
+import { explainAnalysisModel } from "@/settings/contracts";
 import {
   ACTIVE_JOB_STALE_MS,
   BullBearPassFailure,
@@ -6231,6 +6232,58 @@ describe("runJob — model-resolution failure", () => {
     expect(types[types.length - 1]).toBe("done");
     const done = events.find((e): e is Extract<JobEvent, { type: "done" }> => e.type === "done");
     expect(done?.dataOnly).toBe(true);
+  });
+
+  /**
+   * D-02: a stored model id the registry refuses is a NAMED cause, not a
+   * transport accident, and the data-only report has to say so — the step
+   * detail is transient UI, the report is the durable record.
+   */
+  it("discloses a rejected analysis model as a model-rejected execution adjustment", async () => {
+    vi.stubEnv("ANALYSIS_MODEL", "claude-opus-5-20260115");
+    const { jobId } = createJob("AAPL");
+    const { passes, calls } = mockPasses();
+    resolveModelMock.mockRejectedValue(
+      new Error(explainAnalysisModel("claude-opus-5-20260115") ?? "rejected"),
+    );
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle("AAPL"),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: true });
+    expect(calls).toEqual([]);
+    const repRow = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get();
+    const parsed = ReportSchema.parse(JSON.parse(repRow?.reportJson ?? "{}"));
+    expect(parsed.meta.execution).toEqual(LLM_STEPS.map((step) => ({
+      step,
+      requestedModel: "claude-opus-5-20260115",
+      effectiveModel: "none",
+      requestedEffort: "high",
+      effectiveEffort: null,
+      fallbackUsed: false,
+      adjustments: ["model-rejected"],
+      note: expect.stringContaining("dated snapshot ids do not exist"),
+    })));
+  });
+
+  it("leaves execution metadata off a transport-failed resolution, which is not a rejection", async () => {
+    vi.stubEnv("ANALYSIS_MODEL", ""); // empty env = unset, whatever the host holds
+    const { jobId } = createJob("AAPL");
+    const { passes } = mockPasses();
+    resolveModelMock.mockRejectedValue(new Error("503 models.list() transport error"));
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle("AAPL"),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    const repRow = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get();
+    const parsed = ReportSchema.parse(JSON.parse(repRow?.reportJson ?? "{}"));
+    expect(parsed.meta.execution).toBeUndefined();
   });
 });
 

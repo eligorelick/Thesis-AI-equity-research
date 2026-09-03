@@ -414,7 +414,7 @@ export const ExecutionMetadataEntrySchema = z
     requestedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable(),
     effectiveEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable(),
     fallbackUsed: z.boolean(),
-    adjustments: z.array(z.enum(["model-floor", "fallback", "effort-stripped"])),
+    adjustments: z.array(z.enum(["model-floor", "fallback", "effort-stripped", "model-rejected"])),
     /** Sentence(s) naming what each adjustment changed and why; absent when none. */
     note: z.string().optional(),
   })
@@ -1106,7 +1106,9 @@ export const CostBreakdownEntrySchema = z
     requestedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
     effectiveEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
     fallbackUsed: z.boolean().optional(),
-    adjustments: z.array(z.enum(["model-floor", "fallback", "effort-stripped"])).optional(),
+    adjustments: z
+      .array(z.enum(["model-floor", "fallback", "effort-stripped", "model-rejected"]))
+      .optional(),
   })
   .strict();
 export type CostBreakdownEntry = z.infer<typeof CostBreakdownEntrySchema>;

@@ -7,6 +7,7 @@
     "deprecations": "https://docs.anthropic.com/en/docs/about-claude/model-deprecations"
   },
   "webSearchUsdPerThousand": 10,
+  "judgeFloorModelId": "claude-sonnet-5",
   "autoPreference": [
     "claude-opus-5",
     "claude-opus-4-8",

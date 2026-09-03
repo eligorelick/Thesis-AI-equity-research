@@ -40,6 +40,7 @@ import {
   resolveModel,
   type VerifyReservationCapability,
 } from "@/providers/anthropic";
+import { explainAnalysisModel } from "@/settings/contracts";
 import {
   getWritableSettingsAuthority,
   type EffortLevel,
@@ -2668,7 +2669,24 @@ export async function runJob<TPayload = unknown>(
           startStep(state, step);
           finishStep(state, step, "skipped", reason);
         }
-        return persistDataOnly(state, bundle, validation, computed, now, hasKey);
+        // D-02: when the stored value is one the registry refuses (a dated
+        // snapshot for a 4.6+ family, say), the run degrades with a named
+        // cause rather than a transport accident. Disclose it as the
+        // `model-rejected` execution adjustment so the data-only report says
+        // which value was refused and what is accepted instead.
+        const rejection = explainAnalysisModel(capturedSettings.state.analysisModel);
+        return persistDataOnly(state, bundle, validation, computed, now, hasKey, {
+          execution: rejection === null
+            ? undefined
+            : LLM_STEPS.map((step) => buildExecutionMetadataEntry({
+                step,
+                requestedModel: capturedSettings.state.analysisModel,
+                effectiveModel: "none",
+                requestedEffort: capturedSettings.state.analysisEffort,
+                fallbackUsed: false,
+                rejectedReason: rejection,
+              })),
+        });
       }
     }
 
@@ -3731,6 +3749,8 @@ function persistDataOnly(
   computed: ComputedMetrics | null,
   now: () => Date,
   hasKey: boolean,
+  /** Requested-versus-effective disclosure for a run that never reached a model. */
+  disclosure: { execution?: ExecutionMetadataEntry[] } = {},
 ): RunJobResult {
   // No job may be persisted terminal while a step still reads as live. The
   // callers mark the steps they know about, but `markSkipped` only moves a
@@ -3759,6 +3779,7 @@ function persistDataOnly(
     computed,
     costBreakdown: buildCostBreakdown(state),
     presumed: presumedSpendDisclosure(state.jobId, state.runGeneration),
+    execution: disclosure.execution,
     reason: hasKey
       ? "LLM analysis could not complete — the failed pass errors are disclosed in the missing-data manifest; this is a data-only report."
       : NO_KEY_SKIP_REASON,
@@ -4246,6 +4267,12 @@ interface DataOnlyInput {
   reason: string;
   /** Part of `costUsd` that is a presumed upper bound (DECISIONS D-07). */
   presumed?: PresumedSpendDisclosure | null;
+  /**
+   * Requested-versus-effective execution for a run that never reached a model,
+   * carrying the `model-rejected` adjustment when the stored model id was
+   * refused (DECISIONS D-02).
+   */
+  execution?: ExecutionMetadataEntry[];
 }
 
 /**
@@ -4310,6 +4337,9 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
       pipelineVersion: PIPELINE_VERSION,
       costUsd: input.costUsd,
       ...(input.presumed == null ? {} : { presumedCostUsd: input.presumed.totalUsd }),
+      ...(input.execution === undefined || input.execution.length === 0
+        ? {}
+        : { execution: input.execution }),
       verificationRate: null,
       provenanceCoverage: emptyCoverage,
       dataCompleteness: buildDataCompleteness(missingData),

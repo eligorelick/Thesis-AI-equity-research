@@ -17,18 +17,20 @@ import {
   explainRejectedModelId,
   isHighOrAboveEffort,
   isRegistryDatedSnapshot,
+  judgeFloorModelId,
   parseModelRegistry,
   resolveRegistryModel,
 } from "@/models/registry";
 import {
-  FABLE_FALLBACK_MODEL,
   MODEL_REGISTRY_SNAPSHOT_DATE,
   PREFERENCE_ORDER,
   PRICED_MODEL_ALIASES,
-  SERVER_SIDE_FALLBACK_BETA,
   WEB_SEARCH_TOOL_TYPE,
   WEB_SEARCH_TOOL_TYPE_BASIC,
+  maximumPassCostUsd,
+  maximumRequestCostUsd,
 } from "@/providers/anthropic";
+import { JUDGE_MODEL_FLOOR, judgeModelFor } from "@/pipeline/stageC/passes";
 import { ANALYSIS_MODEL_OPTIONS, explainAnalysisModel, isValidDatedAnalysisModel } from "@/settings/contracts";
 import { modelSupportsEffort } from "@/report/execution";
 
@@ -92,7 +94,10 @@ describe("config/models.json", () => {
     expect(entry("claude-opus-4-8").thinking).toEqual({ mode: "adaptive", sendParam: true });
     expect(entry("claude-sonnet-5").thinking).toEqual({ mode: "adaptive", sendParam: false });
     for (const id of ["claude-fable-5-1", "claude-fable-5"]) {
-      expect(entry(id).serverSideFallback).toEqual({ beta: SERVER_SIDE_FALLBACK_BETA, model: FABLE_FALLBACK_MODEL });
+      expect(entry(id).serverSideFallback).toEqual({
+        beta: "server-side-fallback-2026-06-01",
+        model: "claude-opus-4-8",
+      });
     }
     for (const id of ["claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]) {
       expect(entry(id).serverSideFallback).toBeNull();
@@ -108,6 +113,24 @@ describe("config/models.json", () => {
       "claude-fable-5",
     ]);
     expect(PREFERENCE_ORDER).toEqual(autoPreferenceIds());
+  });
+
+  it("owns the judge floor, and every consumer reads it from here", () => {
+    expect(judgeFloorModelId()).toBe("claude-sonnet-5");
+    expect(activeModelIds()).toContain(judgeFloorModelId());
+    // Stage C's judge route and both provider reservation bounds.
+    expect(JUDGE_MODEL_FLOOR).toBe(judgeFloorModelId());
+    expect(judgeModelFor("claude-haiku-4-5")).toBe(judgeFloorModelId());
+    expect(maximumRequestCostUsd("claude-haiku-4-5", "synthesize"))
+      .toBe(maximumRequestCostUsd(judgeFloorModelId(), "synthesize"));
+    expect(maximumPassCostUsd("claude-haiku-4-5", "synthesize"))
+      .toBe(maximumPassCostUsd(judgeFloorModelId(), "synthesize"));
+  });
+
+  it("rejects a judge floor that is not an active registry model", () => {
+    const document = JSON.parse(JSON.stringify(MODEL_REGISTRY)) as Record<string, unknown>;
+    document.judgeFloorModelId = "claude-not-a-model";
+    expect(() => parseModelRegistry(document)).toThrow(/judgeFloorModelId/);
   });
 });
 

@@ -81,6 +81,13 @@ const RegistrySchema = z
     snapshotDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     sources: z.record(z.string(), z.string()),
     webSearchUsdPerThousand: z.number().positive(),
+    /**
+     * Cheapest model that reliably emits the judge's strict-keyed JSON, so a
+     * judge pass floored off an unsuitable model runs here (DECISIONS D-06).
+     * One registry-owned value rather than the same id spelled out in the
+     * provider's two reservation bounds and in the Stage C pass module.
+     */
+    judgeFloorModelId: z.string().min(1),
     autoPreference: z.array(z.string()).min(1),
     models: z.array(RegistryModelSchema).min(1),
   })
@@ -112,6 +119,18 @@ const RegistrySchema = z
       if (fallback !== undefined && !ids.has(fallback)) {
         ctx.addIssue({ code: "custom", message: `${model.id}: fallback model ${fallback} is not in the registry` });
       }
+    }
+    const judgeFloor = registry.models.find((m) => m.id === registry.judgeFloorModelId);
+    if (judgeFloor === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: `judgeFloorModelId names unknown model ${registry.judgeFloorModelId}`,
+      });
+    } else if (judgeFloor.lifecycle !== "active") {
+      ctx.addIssue({
+        code: "custom",
+        message: `judgeFloorModelId names non-active model ${registry.judgeFloorModelId}`,
+      });
     }
     for (const preferred of registry.autoPreference) {
       const entry = registry.models.find((m) => m.id === preferred);
@@ -154,6 +173,15 @@ export function acceptedModelIds(): readonly string[] {
 /** The `auto` preference order (all active). */
 export function autoPreferenceIds(): readonly string[] {
   return MODEL_REGISTRY.autoPreference;
+}
+
+/**
+ * Cheapest model that reliably emits the judge's strict-keyed JSON
+ * (DECISIONS D-06). The single source for the judge floor: the provider's
+ * reservation bounds and the Stage C judge route both read it here.
+ */
+export function judgeFloorModelId(): string {
+  return MODEL_REGISTRY.judgeFloorModelId;
 }
 
 export interface ResolvedRegistryModel {

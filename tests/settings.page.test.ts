@@ -592,7 +592,14 @@ describe("settings page controller", () => {
       onAnalysisEffort: vi.fn(),
     }));
     expect(legacyHtml).toContain("legacy-mystery-model");
-    expect(legacyHtml).toContain("unsupported current model");
+    // D-02: the stored value's own rejection message, not a generic label the
+    // reader cannot act on. It names the value and the accepted ids.
+    expect(legacyHtml).toContain("not in the model registry");
+    expect(legacyHtml).toContain("accepted ids: ");
+    // The option labels come from the registry, so the newest models cannot go
+    // missing the way the hand-maintained map let them.
+    expect(legacyHtml).toContain("claude-opus-5 — Claude Opus 5");
+    expect(legacyHtml).toContain("claude-fable-5-1 — Claude Fable 5.1");
     expect(legacyHtml).toContain("select a supported analysis model before saving");
     const legacyInput = legacyHtml.match(
       /<input[^>]*value="legacy-mystery-model"[^>]*>/,

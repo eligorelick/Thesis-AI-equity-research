@@ -73,6 +73,7 @@ const ALLOWED_MARKDOWN = new Set([
   "docs/audit/README-NOTES-WS6.md", // WS6
   // WS4: the data-layer handover notes for the README rewrite.
   "docs/audit/README-NOTES-WS4.md",
+  "docs/audit/README-NOTES-WS123.md", // WS1-3
 ]);
 const VERIFY_GATES = [
   "npm run check:dependencies",

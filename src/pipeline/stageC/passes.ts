@@ -1598,17 +1598,37 @@ export async function runJudgePass(
   // below is what the cost log records for the pass.
   let result = run.result;
   if (presentation.secondaryOrder !== null) {
-    const mirrored = await attempt(presentation.secondaryOrder);
-    result = mergeJudgeBilling(result, mirrored);
+    // `attempt()` can REJECT rather than return a failure shape: a validate
+    // hook throws, an abort throws, and an over-reservation error is rethrown
+    // by the provider because it is neither an APIError nor retryable. Awaiting
+    // it unwrapped discarded a completed, already-billed primary judge output,
+    // skipped its settlement (so the runner settled the pass at zero while the
+    // spend sat in the ledger) and burned a retry — two more judge passes for a
+    // failure in the OPTIONAL half of the pass. A throw is fed to the same
+    // disclosed-degradation path a returned failure takes.
+    let mirrored: PassRun<JudgeOutput> | null = null;
+    let mirroredThrow: string | null = null;
+    try {
+      mirrored = await attempt(presentation.secondaryOrder);
+    } catch (error) {
+      mirroredThrow = error instanceof Error ? error.message : String(error);
+    }
+    // A throw carries no billing evidence; a returned failure still contributes
+    // whatever it billed, which is the module's stated contract.
+    if (mirrored !== null) result = mergeJudgeBilling(result, mirrored);
     draft = withReconciliation(
       draft,
-      mirrored.ok
-        ? reconcileJudgeOutputs(
-            run.result.output,
-            mirrored.result.output,
-            presentation.secondaryOrder,
+      mirrored === null
+        ? reconciliationNotPerformed(
+            `the mirrored judge request threw before it could report an outcome (${mirroredThrow}); the seeded-order pass stands and its cost is settled, but anything the mirrored request billed is not counted here`,
           )
-        : reconciliationNotPerformed(mirrored.error.message),
+        : mirrored.ok
+          ? reconcileJudgeOutputs(
+              run.result.output,
+              mirrored.result.output,
+              presentation.secondaryOrder,
+            )
+          : reconciliationNotPerformed(mirrored.error.message),
     );
   }
 
@@ -1627,6 +1647,21 @@ export async function runJudgePass(
  * A mirrored attempt that failed still contributes whatever it billed — an
  * unsettled paid request is exactly the thing the spend controls exist to catch.
  */
+/** Sum the two server-tool counters, keeping "no block at all" when neither has one. */
+function mergeServerToolUse(
+  primary: PassUsage["server_tool_use"],
+  mirrored: PassUsage["server_tool_use"],
+): PassUsage["server_tool_use"] {
+  if (!primary) return mirrored;
+  if (!mirrored) return primary;
+  return {
+    ...primary,
+    ...mirrored,
+    web_search_requests:
+      (primary.web_search_requests ?? 0) + (mirrored.web_search_requests ?? 0),
+  };
+}
+
 function mergeJudgeBilling(
   primary: PassResult<JudgeOutput>,
   mirrored: PassRun<JudgeOutput>,
@@ -1650,7 +1685,13 @@ function mergeJudgeBilling(
         primary.usage.cache_read_input_tokens,
         usage?.cache_read_input_tokens,
       ),
-      server_tool_use: primary.usage.server_tool_use,
+      // N13 (2026-09 review): `webSearches` above sums both requests, so
+      // keeping only the primary's server-tool-use block contradicted the
+      // provider's own aggregation (aggregateUsage in providers/anthropic.ts
+      // rewrites these two counters from the summed totals). Nothing
+      // under-bills today — cost comes from `costUsd` and the column from
+      // `webSearches` — but the two numbers must not disagree.
+      server_tool_use: mergeServerToolUse(primary.usage.server_tool_use, usage?.server_tool_use),
     },
     costUsd: primary.costUsd + costUsd,
     webSearches: primary.webSearches + webSearches,

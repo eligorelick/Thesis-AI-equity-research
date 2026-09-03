@@ -569,6 +569,94 @@ describe("THESIS_JUDGE_ORDER=both", () => {
     expect(reconciliation?.performed).toBe(false);
     expect(reconciliation?.note).toContain("mirrored judge attempt died");
   });
+
+  it("keeps a completed, already-billed primary when the mirrored attempt THROWS", async () => {
+    // BLOCKER 3 (2026-09 review): the mirrored attempt was awaited unwrapped,
+    // and `attempt()` can REJECT rather than return a failure shape — a validate
+    // hook throws, an abort throws, and an over-reservation error is rethrown by
+    // the provider because it is neither an APIError nor retryable. The throw
+    // propagated out of runJudgePass, discarding a successful billed primary,
+    // skipping its settlement (the runner then settled the pass at zero while
+    // the spend sat in the ledger) and burning a retry — two more judge passes.
+    const { bundle, computed, payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { costUsd: 0.4 });
+    let validations = 0;
+    const settlements: { outcome: string; costUsd: number }[] = [];
+
+    const run = await runJudgePass(
+      makeDeps(mock, {
+        judgeOrder: "both",
+        validateRunPass: () => {
+          validations += 1;
+          if (validations === 2) {
+            throw new Error("request reservation exceeds the remaining job cost cap");
+          }
+        },
+      }),
+      payload,
+      analystCase("bull"),
+      analystCase("bear"),
+      undefined,
+      async (settlement) => {
+        settlements.push({
+          outcome: settlement.outcome,
+          costUsd: settlement.telemetry.costUsd,
+        });
+      },
+    );
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    // The mirrored request never launched, so only the primary was billed —
+    // and the pass settles ONCE, at what the primary actually cost.
+    expect(mock.calls.filter((call) => call.field === "llm.judge")).toHaveLength(1);
+    expect(run.result.costUsd).toBeCloseTo(0.4, 10);
+    expect(settlements).toEqual([{ outcome: "success", costUsd: 0.4 }]);
+    // The throw is disclosed on the same path a returned failure takes.
+    const reconciliation = run.result.judgeProtocol?.reconciliation;
+    expect(reconciliation?.performed).toBe(false);
+    expect(reconciliation?.note).toContain("threw before it could report an outcome");
+    expect(reconciliation?.note).toContain("remaining job cost cap");
+
+    const report = assembleReport(
+      {
+        symbol: "AAPL",
+        bundle,
+        computed,
+        judgeOutput: run.result.output,
+        verify: { verificationRate: null, log: [] },
+        costEntries: [{ step: "synthesize", model: "claude-opus-4-8", costUsd: 0.4 }],
+        model: "claude-opus-4-8",
+        judgeProtocol: run.result.judgeProtocol,
+      },
+      GENERATED_AT,
+    );
+    const disclosure = report.appendix.missingData.find(
+      (entry) => entry.field === "llm.judge.order-reconciliation",
+    );
+    expect(disclosure?.severity).toBe("warn");
+    expect(disclosure?.reason).toContain("threw before it could report an outcome");
+  });
+
+  it("sums the mirrored request's web-search counter into the merged server-tool block", async () => {
+    // N13: `webSearches` summed both requests while `server_tool_use` kept only
+    // the primary's, contradicting the provider's own aggregation.
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { webSearches: 2 });
+    mock.onJson("llm.judge", fakeJudgeOutput(), { webSearches: 3 });
+    const run = await runJudgePass(
+      makeDeps(mock, { judgeOrder: "both" }),
+      payload,
+      analystCase("bull"),
+      analystCase("bear"),
+    );
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.webSearches).toBe(5);
+    expect(run.result.usage.server_tool_use?.web_search_requests).toBe(5);
+  });
 });
 
 /* ------------------------------------------------------------------------ *

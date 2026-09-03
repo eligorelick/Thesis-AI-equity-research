@@ -14,6 +14,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
   ReportSchema,
@@ -35,6 +36,7 @@ import {
   reportToJsonSchema,
   judgeOutputToJsonSchema,
   analystCaseToJsonSchema,
+  toStructuredJsonSchema,
   fillNullableGaps,
   VerdictSchema,
   AltmanScoreSchema,
@@ -805,6 +807,50 @@ describe("collapseNullableComplexity + fillNullableGaps", () => {
     expect(tracedNumberDef?.required).not.toContain("asOf");
     expect(tracedNumberDef?.properties).not.toHaveProperty("verified");
     expect(tracedNumberDef?.properties).not.toHaveProperty("verificationNote");
+  });
+
+  it("pins the EMITTED shape for a shared nullable leaf, hoisted into $defs", () => {
+    // WS7 (D-20) taught collapseNullableComplexity to descend into `$defs`.
+    // That changes the JSON Schema sent to the model on EVERY pass: a leaf that
+    // `reused: "ref"` hoists is now collapsed from `anyOf: [T, null]` to a plain
+    // T, and every property pointing at it is dropped from `required`, so the
+    // model may omit the key and fillNullableGaps restores the null. The
+    // constraint tests above ("0 unions", "not in required") each pass for
+    // several different emitted shapes; this one pins the shape itself, so the
+    // next change to the emitter shows up in a diff rather than silently.
+    const NullableLeaf = z.object({ id: z.string(), label: z.string() }).strict().nullable();
+    const Shared = z
+      .object({ left: NullableLeaf, right: NullableLeaf, always: z.string() })
+      .strict();
+
+    expect(toStructuredJsonSchema(Shared)).toEqual({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        // Collapsed: the union is GONE from the hoisted definition. Before the
+        // $defs descent it stayed `anyOf: [{...}, { type: "null" }]`.
+        __schema0: {
+          type: "object",
+          additionalProperties: false,
+          properties: { id: { type: "string" }, label: { type: "string" } },
+          required: ["id", "label"],
+        },
+      },
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        always: { type: "string" },
+        // Bare $refs, with no null branch anywhere.
+        left: { $ref: "#/$defs/__schema0" },
+        right: { $ref: "#/$defs/__schema0" },
+      },
+      // Both $ref'd nullable properties dropped; the non-nullable one stays.
+      required: ["always"],
+    });
+
+    // And the parse-time counterpart still restores what the model may now omit.
+    const filled = fillNullableGaps(Shared, { always: "x" });
+    expect(filled).toEqual({ always: "x", left: null, right: null });
+    expect(Shared.safeParse(filled).success).toBe(true);
   });
 
   it("fillNullableGaps restores an explicit null for an omitted nullable field before Zod validation", () => {

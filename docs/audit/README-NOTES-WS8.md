@@ -36,8 +36,9 @@ Notes for whoever writes the surrounding paragraph:
   `cacheMaintenanceLastRunAt` (the cache-sweep stamp) and
   `__writableSettingsRevision` (the monotonic counter behind the settings
   compare-and-swap). Neither is listed in the preview.
-- The Settings page has no reset control. It does have a **resume queued work**
-  control (below). If the README claims a UI reset, it would be wrong today.
+- The Settings page has no reset control. It has a **resume queued work**
+  control (below), but only under `THESIS_RESUME_ON_START=0`. If the README
+  claims a UI reset, it would be wrong today.
 
 ## Startup hold (R-42)
 
@@ -47,6 +48,12 @@ New env key, belongs in the README's configuration table:
 > not claim queued jobs and arms no wake timer, so paid work left by a restart
 > waits until you resume it with `POST /api/jobs/resume`, the Settings page
 > "resume queued work" button, or any new report/retry/cancel request.
+
+The Settings page shows that button only when the server reports
+`THESIS_RESUME_ON_START=0`: `GET /api/settings` carries the resolved flag as
+`capabilities.resumeOnStart`, and `SettingsPageView` renders
+`ResumeQueueControl` only when it is false. On the default `1` there is nothing
+held, so the panel is absent rather than inert.
 
 New route worth a line in any endpoint list: `POST /api/jobs/resume` → `202
 { resumed: true, queued: n }`. Same-origin guarded like the other mutating

@@ -93,6 +93,12 @@ export interface SettingsCapabilities {
   hasFredKey: boolean;
   hasAnthropicKey: boolean;
   fixtureMode: boolean;
+  /**
+   * `THESIS_RESUME_ON_START` as the server resolved it. False means startup
+   * held queued work, which is the only situation in which the Settings page
+   * offers its "resume queued work" control.
+   */
+  resumeOnStart: boolean;
 }
 
 /** Additive GET/POST representation; secrets never cross this boundary. */

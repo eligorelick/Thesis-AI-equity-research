@@ -95,6 +95,10 @@ import {
   type RunPassFn,
   type RunPassStreamingFn,
 } from "@/pipeline/stageC/passes";
+// WS7 (D-20)
+import { getConfig } from "@/config/env";
+import type { JudgeProtocolDraft } from "@/pipeline/stageC/judgeProtocol";
+import { emptyConsistencyChecks } from "@/pipeline/stageC/consistency";
 import {
   invokePassSettlementHook,
   type PassSettlementHook,
@@ -118,6 +122,15 @@ interface AssemblyContext {
 }
 
 const assemblyContexts = new WeakMap<ContextPayload, AssemblyContext>();
+
+/**
+ * WS7 (D-20): the adversarial protocol the judge pass actually ran under. The
+ * runner's facade hands `runVerifyPass`/`assembleReport` a JudgeOutput and no
+ * pass metadata, so the protocol is stashed against the SAME per-job payload
+ * object identity the assembly context uses. Same WeakMap discipline: collected
+ * with the job's payload, never shared between concurrent jobs.
+ */
+const judgeProtocols = new WeakMap<ContextPayload, JudgeProtocolDraft>();
 
 /* ------------------------------------------------------------------------ *
  * Provider-runner adapters
@@ -181,7 +194,22 @@ function toPassDeps(deps: RunnerPassDeps<ContextPayload>): PassDeps {
     effort: deps.effort ?? "high",
     signal: deps.signal,
     admissionFor: deps.admissionFor,
+    // WS7 (D-20): the per-job seed the judge's case order is drawn from. The
+    // runner threads the job id; without one the passes fall back to the
+    // payload fingerprint, so the draw stays deterministic either way.
+    jobSeed: deps.jobSeed,
   };
+}
+
+/**
+ * WS7 (D-20): add the `THESIS_JUDGE_ORDER` setting from the PARSED config, so
+ * production has exactly one place where that env var is interpreted. Applied
+ * only on the two judge-shaped paths (the judge pass and the preflight that has
+ * to rebuild its exact request) — the analyst and verify paths do not depend on
+ * it and must not pay a config read for it.
+ */
+function withJudgeOrder(passDeps: PassDeps): PassDeps {
+  return { ...passDeps, judgeOrder: getConfig().judgeOrder };
 }
 
 /* ------------------------------------------------------------------------ *
@@ -389,7 +417,7 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
     let args: RunPassArgs;
     if (request.pass === "synthesize") {
       args = buildJudgeRunPassArgs(
-        passDeps,
+        withJudgeOrder(passDeps), // WS7 (D-20)
         deps.payload,
         request.bull.data,
         request.bear.data,
@@ -481,7 +509,7 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
   ): Promise<PassResultLike<JudgeOutput>> {
     const passDeps = toPassDeps(deps);
     const run = await runJudgePass_(
-      passDeps,
+      withJudgeOrder(passDeps), // WS7 (D-20)
       deps.payload,
       bull.data,
       bear.data,
@@ -489,6 +517,12 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
       settlement,
       beforeProviderLaunch,
     );
+    // WS7 (D-20): keep the protocol for assembly. Recorded before `unwrap`
+    // throws on a failed pass, so a judge retry's protocol never leaks into the
+    // attempt that eventually succeeds — each attempt overwrites it.
+    if (run.ok && run.result.judgeProtocol !== undefined) {
+      judgeProtocols.set(deps.payload, run.result.judgeProtocol);
+    }
     return toPassResultLike(unwrap(run, "judge"));
   },
 
@@ -519,11 +553,15 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
         verify: {
           verificationRate: null,
           coverage: emptyCoverage,
+          checks: emptyConsistencyChecks(),
           log: [],
         },
         costEntries: [],
         model: deps.analysisModel,
         pipelineVersion: PIPELINE_VERSION,
+        // WS7 (D-20): the order/length/self-assessment protocol the judge pass
+        // recorded for this exact payload.
+        judgeProtocol: judgeProtocols.get(deps.payload),
         // Forward the Stage A validation gaps recovered from the WeakMap so the
         // verified report's appendix discloses them (H4). reconcileMeta in the
         // runner preserves appendix.missingData, so this is the manifest the
@@ -544,11 +582,13 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
         ...verify.verifiedReport.meta,
         verificationRate: verify.verificationRate,
         provenanceCoverage: verify.coverage,
+        consistencyChecks: verify.checks, // WS7 (D-20)
       },
       appendix: {
         ...verify.verifiedReport.appendix,
         verificationRate: verify.verificationRate,
         provenanceCoverage: verify.coverage,
+        consistencyChecks: verify.checks, // WS7 (D-20)
         verificationLog: verify.log,
       },
     });
@@ -601,6 +641,10 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
         costEntries,
         model: input.meta.model,
         pipelineVersion: PIPELINE_VERSION,
+        // WS7 (D-20): the unverified-fallback path still discloses how the judge
+        // pass was run — a report that skipped verification is exactly the one a
+        // reader most needs the protocol for.
+        judgeProtocol: judgeProtocols.get(input.payload as ContextPayload),
         // Forward Stage A validation gaps into the appendix manifest (H4). The
         // runner passes `input.validation`; dropping it here is what made an
         // analyzed report strictly less transparent than a data-only one.

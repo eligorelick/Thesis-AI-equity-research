@@ -23,6 +23,9 @@ import {
   MIN_PAID_PASS_LEASE_SECONDS,
   PAID_LEASE_RENEWAL_DIVISOR,
 } from "@/pipeline/leaseTiming";
+// WS7 (D-20): the judge-order vocabulary lives in the report schema (zod + core
+// types only, no env dependency), so config and Stage C read the same list.
+import { JudgeOrderSettingSchema, type JudgeOrderSetting } from "@/report/schema";
 
 if (typeof window !== "undefined") {
   throw new Error(
@@ -187,6 +190,24 @@ const envSchema = z.object({
   /** Full path of the X-Thesis-Token file; blank means `<data dir>/csrf-token`. */
   THESIS_TOKEN_FILE: optionalPath,
   // end WS8
+  // WS7 (D-20): which order the judge reads the two analyst cases in.
+  //  - "random" (default): drawn from the job id, so it varies across reports
+  //    and is exactly reproducible within one. ONE judge pass.
+  //  - "bull-first" / "bear-first": pinned, for a deliberate A/B comparison.
+  //  - "both": runs the judge TWICE with the orders swapped and reconciles the
+  //    pair. It costs TWO judge passes on every report, which is precisely why
+  //    the cheaper "random" is the default.
+  // An unrecognized value degrades to "random" rather than failing the process:
+  // this is a fairness control, not a spend or safety bound, and the report
+  // names the setting that was actually in force, so a typo is visible.
+  THESIS_JUDGE_ORDER: z
+    .string()
+    .optional()
+    .transform((v): JudgeOrderSetting => {
+      const parsed = JudgeOrderSettingSchema.safeParse(blank(v)?.toLowerCase());
+      return parsed.success ? parsed.data : "random";
+    }),
+  // end WS7
   // WS6 (D-19): include lease liabilities in enterprise value and in the DCF
   // equity bridge. OFF by default: under US GAAP (ASC 842) the operating-lease
   // cost stays in operating expenses, so EBITDA is already after it and adding
@@ -270,6 +291,9 @@ export interface ThesisConfig {
   // WS6 (D-19)
   /** THESIS_EV_INCLUDE_LEASES=1 — count lease liabilities in enterprise value. */
   evIncludeLeases: boolean;
+  // WS7 (D-20)
+  /** THESIS_JUDGE_ORDER — which order the judge reads bull and bear in. */
+  judgeOrder: JudgeOrderSetting;
 }
 
 /**
@@ -307,6 +331,8 @@ export function parseEnv(
     // end WS8
     // WS6 (D-19)
     evIncludeLeases: parsed.THESIS_EV_INCLUDE_LEASES,
+    // WS7 (D-20)
+    judgeOrder: parsed.THESIS_JUDGE_ORDER,
   };
   return Object.freeze(config);
 }

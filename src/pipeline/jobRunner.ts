@@ -246,6 +246,14 @@ export interface PassDeps<TPayload = unknown> {
    */
   effort?: EffortLevel;
   payload: TPayload;
+  /**
+   * WS7 (D-20): per-job seed for the judge's bull/bear presentation order. The
+   * runner passes the job id, so the order is random across reports and exactly
+   * reproducible within one — a resume, a judge retry and the pre-launch request
+   * validation all draw the same order. Optional so mocks may omit it; Stage C
+   * then falls back to the payload fingerprint.
+   */
+  jobSeed?: string;
 }
 
 /** Result of the verification pass: a fully-traced Report + the rate + log. */
@@ -409,6 +417,12 @@ export interface AssembleReportInput {
   verificationRate: number | null;
   verificationLog?: unknown;
   costBreakdown: { step: string; model: string; costUsd: number }[];
+  /**
+   * WS7 (D-20): the payload object identity the passes keyed their per-job
+   * records on, so the unverified-fallback assembly can still recover the judge
+   * order/length protocol the judge pass recorded. Opaque to the runner.
+   */
+  payload?: unknown;
 }
 
 /** Meta fields the runner owns (symbol/model/cost/asOfMap) — the application contract §5. */
@@ -2662,6 +2676,7 @@ export async function runJob<TPayload = unknown>(
       analysisModel,
       effort: analysisEffort,
       payload,
+      jobSeed: jobId, // WS7 (D-20): seeds the judge's case order
       signal: jobSignal,
       ...(usesRequestAdmission()
         ? { admissionFor: (pass: DurablePass) => passAdmissions.get(pass) }
@@ -3012,6 +3027,7 @@ export async function runJob<TPayload = unknown>(
               verificationRate,
               verificationLog: verifyLog,
               costBreakdown,
+              payload, // WS7 (D-20): recovers the judge order/length protocol
             });
         } catch (err) {
           lastValidationDetail = errMessage(err);

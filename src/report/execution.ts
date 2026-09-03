@@ -69,3 +69,75 @@ export function buildExecutionMetadataEntry(input: {
     ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
   };
 }
+
+/* ------------------------------------------------------------------------ *
+ * WS7 (D-20) — shared-model-family disclosure
+ *
+ * The judge grades two cases. When it runs on the SAME model family that wrote
+ * them, the adjudication is not independent of the thing being adjudicated —
+ * the same family's habits, blind spots and phrasing preferences sit on both
+ * sides of the desk. That is not a defect to fix here (which model judges is a
+ * cost/quality decision the operator makes), but it IS a fact the report has to
+ * state, because a reader would otherwise take the judge for a second opinion.
+ *
+ * The family comes from the model registry, never from an id prefix: the
+ * registry is the only authority on which family an id belongs to.
+ * ------------------------------------------------------------------------ */
+
+const ANALYST_STEPS = new Set(["bull", "bear"]);
+const JUDGE_STEP = "synthesize";
+
+function familyOf(model: string): string | null {
+  return resolveRegistryModel(model)?.entry.family ?? null;
+}
+
+export interface SharedModelFamily {
+  shared: boolean;
+  analystFamily: string | null;
+  judgeFamily: string | null;
+}
+
+/**
+ * Compare the family that actually SERVED the analyst passes with the one that
+ * served the judge. `shared` is true only when both are known and equal, and
+ * only when the two analyst sides agree with each other — a run whose sides were
+ * served by different families (a server-side refusal fallback on one side) is
+ * not a clean "the same family judged itself", so the claim is not made.
+ */
+export function sharedModelFamilyOf(
+  entries: readonly { step: string; effectiveModel: string }[],
+): SharedModelFamily {
+  const analystFamilies = new Set(
+    entries
+      .filter((entry) => ANALYST_STEPS.has(entry.step))
+      .map((entry) => familyOf(entry.effectiveModel)),
+  );
+  const judgeModel = entries.find((entry) => entry.step === JUDGE_STEP)?.effectiveModel;
+  const judge = judgeModel === undefined ? null : familyOf(judgeModel);
+  const analyst = analystFamilies.size === 1 ? ([...analystFamilies][0] ?? null) : null;
+  return {
+    shared: analyst !== null && judge !== null && analyst === judge,
+    analystFamily: analyst,
+    judgeFamily: judge,
+  };
+}
+
+/**
+ * Append the shared-family sentence to the judge step's execution note. Returns
+ * a NEW array; the input entries are never mutated. A run with no judge step, or
+ * one whose judge is a different family, comes back unchanged.
+ */
+export function annotateSharedModelFamily(
+  entries: readonly ExecutionMetadataEntry[],
+): ExecutionMetadataEntry[] {
+  const shared = sharedModelFamilyOf(entries);
+  if (!shared.shared) return entries.map((entry) => ({ ...entry }));
+  const sentence =
+    `${JUDGE_STEP}: the judge ran on ${shared.judgeFamily}, the same model family that wrote both ` +
+    "analyst cases, so it graded output from its own family rather than acting as an independent second opinion.";
+  return entries.map((entry) =>
+    entry.step === JUDGE_STEP
+      ? { ...entry, note: entry.note === undefined ? sentence : `${entry.note} ${sentence}` }
+      : { ...entry },
+  );
+}

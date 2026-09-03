@@ -99,6 +99,34 @@ import {
   buildBearFraming,
   buildJudgeFraming,
 } from "@/pipeline/stageC/prompts";
+// WS7 (D-20) begin.
+import {
+  ANALYST_CASE_CHAR_CAP,
+  buildJudgePresentation,
+  buildJudgeProtocolDraft,
+  caseLengthBanner,
+  completeJudgeProtocol,
+  JUDGE_ORDER_ENV_KEY,
+  judgeProtocolManifestEntries,
+  orderedSides,
+  reconcileJudgeOutputs,
+  reconciliationNotPerformed,
+  resolveJudgeOrderSetting,
+  withReconciliation,
+  type JudgePresentation,
+  type JudgeProtocolDraft,
+} from "@/pipeline/stageC/judgeProtocol";
+import {
+  collectPersonNames,
+  runConsistencyChecks,
+} from "@/pipeline/stageC/consistency";
+import { annotateSharedModelFamily, sharedModelFamilyOf } from "@/report/execution";
+import type {
+  ConsistencyChecks,
+  JudgeOrder,
+  JudgeOrderSetting,
+} from "@/report/schema";
+// WS7 (D-20) end.
 import {
   invokePassSettlementHook,
   serializePassFailure,
@@ -238,6 +266,20 @@ export interface PassDeps {
   signal?: AbortSignal;
   /** Per-request cost admission, by pass (DECISIONS D-10). */
   admissionFor?: (pass: "bull" | "bear" | "synthesize" | "verify") => unknown;
+  // WS7 (D-20) begin.
+  /**
+   * Per-job seed the judge's case order is drawn from — the job id in
+   * production. Absent in tests and in the standalone
+   * {@link runJudgeVerifyAssemble} path, which fall back to the payload
+   * fingerprint so the draw stays deterministic and reproducible either way.
+   */
+  jobSeed?: string;
+  /**
+   * `THESIS_JUDGE_ORDER`. Absent means "read the environment", which is what
+   * production does; tests pass it explicitly so no test depends on env state.
+   */
+  judgeOrder?: JudgeOrderSetting;
+  // WS7 (D-20) end.
 }
 
 /* ------------------------------------------------------------------------ *
@@ -255,6 +297,12 @@ export interface PassResult<T> {
   webSearches: number;
   /** Canonical URLs returned by successful web-search result blocks. */
   fetchedUrls: string[];
+  /**
+   * WS7 (D-20): how the adversarial stage ran (case order, seed, per-side
+   * lengths and self-assessments, `both`-mode reconciliation). Set ONLY by the
+   * judge pass; every other pass leaves it undefined.
+   */
+  judgeProtocol?: JudgeProtocolDraft;
 }
 
 /**
@@ -1177,6 +1225,11 @@ export function judgeUserTurns(
   payload: ContextPayload,
   bull: AnalystCase,
   bear: AnalystCase,
+  // WS7 (D-20): which case goes first, and how long each one is, are now inputs
+  // rather than a hard-coded BULL-then-BEAR constant. Omitted only by legacy
+  // callers/tests, which get the historical fixed order and no caps applied.
+  presentation?: JudgePresentation,
+  orderOverride?: JudgeOrder,
 ): { role: "user"; content: RunPassContentBlock[] }[] {
   const entityConflicts = entityConflictsForCases(payload, bull, bear);
   const entityConflictBlock = entityConflicts.length === 0
@@ -1187,17 +1240,32 @@ export function judgeUserTurns(
         JSON.stringify(entityConflicts),
         "Add kind=entity disagreements that name the canonical entity and explain the supported resolution. Do not silently choose or rename an entity.",
       ].join("\n");
+  const order = orderOverride ?? presentation?.order ?? "bull-first";
+  const cases: Record<"bull" | "bear", AnalystCase> = {
+    bull: presentation?.bull.value ?? bull,
+    bear: presentation?.bear.value ?? bear,
+  };
+  const caseBlock = (side: "bull" | "bear"): string => {
+    const capped = side === "bull" ? presentation?.bull : presentation?.bear;
+    const truncationNote = capped?.presentation.truncated === true
+      ? " — TRUNCATED to the shared length cap; the omitted entries are disclosed in the report"
+      : "";
+    return [
+      `${side.toUpperCase()} CASE (independent analyst${truncationNote}):`,
+      JSON.stringify(cases[side]),
+    ].join("\n");
+  };
+  const [first, second] = orderedSides(order);
   return [
     buildCachedUserMessage(
       payload,
       [
         buildJudgeFraming(),
+        ...(presentation === undefined ? [] : ["", caseLengthBanner(presentation)]),
         "",
-        "BULL CASE (independent analyst):",
-        JSON.stringify(bull),
+        caseBlock(first),
         "",
-        "BEAR CASE (independent analyst):",
-        JSON.stringify(bear),
+        caseBlock(second),
         entityConflictBlock,
         "",
         "JUDGE_OUTPUT JSON Schema reference:",
@@ -1411,6 +1479,43 @@ const parseJudgeOutput = (raw: unknown) => {
     : ({ ok: false, error: r.error.message } as const);
 };
 
+/* ------------------------------------------------------------------------ *
+ * WS7 (D-20) — the adversarial protocol for one judge pass
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Resolve the case order and the per-side length caps for a judge pass.
+ *
+ * Deterministic in `(deps.judgeOrder ?? env, deps.jobSeed ?? payload fingerprint,
+ * the two cases)`, which is what lets the runner's `preflightPass` rebuild the
+ * EXACT forthcoming request before spending a cent: the same inputs always draw
+ * the same order and cap the cases identically.
+ */
+export function judgePresentationFor(
+  deps: PassDeps,
+  payload: ContextPayload,
+  bull: AnalystCase,
+  bear: AnalystCase,
+): JudgePresentation {
+  return buildJudgePresentation({
+    setting: judgeOrderSettingFor(deps),
+    seed: deps.jobSeed ?? payloadFingerprint(payload),
+    bull,
+    bear,
+    capChars: ANALYST_CASE_CHAR_CAP,
+  });
+}
+
+/** The order setting in force: explicit dep, else the environment, else default. */
+export function judgeOrderSettingFor(deps: PassDeps): JudgeOrderSetting {
+  return (
+    deps.judgeOrder ??
+    resolveJudgeOrderSetting(
+      typeof process === "undefined" ? undefined : process.env[JUDGE_ORDER_ENV_KEY],
+    )
+  );
+}
+
 /** Exact provider request used by a judge attempt. */
 export function buildJudgeRunPassArgs(
   deps: PassDeps,
@@ -1418,12 +1523,16 @@ export function buildJudgeRunPassArgs(
   bull: AnalystCase,
   bear: AnalystCase,
   validationFeedback?: string,
+  // WS7 (D-20): `both` mode builds the mirrored request with the swapped order.
+  orderOverride?: JudgeOrder,
 ): RunPassArgs {
+  const presentation = judgePresentationFor(deps, payload, bull, bear);
+  const baseTurns = judgeUserTurns(payload, bull, bear, presentation, orderOverride);
   const userTurns =
     validationFeedback === undefined || validationFeedback.length === 0
-      ? judgeUserTurns(payload, bull, bear)
+      ? baseTurns
       : [
-          ...judgeUserTurns(payload, bull, bear),
+          ...baseTurns,
           {
             role: "user" as const,
             content: `Your previous output FAILED report-schema validation with this error. Fix EXACTLY these issues and re-emit the full JUDGE_OUTPUT schema:\n${validationFeedback}`,
@@ -1459,20 +1568,90 @@ export async function runJudgePass(
   settlement?: PassSettlementHook<JudgeOutput>,
   beforeProviderLaunch?: () => void | Promise<void>,
 ): Promise<PassRun<JudgeOutput>> {
-  const request = buildJudgeRunPassArgs(deps, payload, bull, bear, validationFeedback);
-  deps.validateRunPass?.(request);
+  const judgeModel = judgeModelFor(deps.model);
+  const presentation = judgePresentationFor(deps, payload, bull, bear);
+  const attempt = async (order: JudgeOrder): Promise<PassRun<JudgeOutput>> => {
+    const request = buildJudgeRunPassArgs(deps, payload, bull, bear, validationFeedback, order);
+    deps.validateRunPass?.(request);
+    const outcome = await deps.runPass(request);
+    return finishStructuredPass(outcome, parseJudgeOutput, "llm.judge", judgeModel);
+  };
+
   await beforeProviderLaunch?.();
-  const outcome = await deps.runPass(request);
-  const run = finishStructuredPass(
-    outcome,
-    parseJudgeOutput,
-    "llm.judge",
-    judgeModelFor(deps.model),
-  );
-  if (!run.ok) return settlePassRun(run, judgeModelFor(deps.model), settlement);
-  const unresolved = unresolvedJudgeEntityConflicts(payload, bull, bear, run.result.output);
-  const finalRun = unresolved.length === 0 ? run : entityConflictFailure(run.result, unresolved);
-  return settlePassRun(finalRun, judgeModelFor(deps.model), settlement);
+  const run = await attempt(presentation.order);
+  let draft = buildJudgeProtocolDraft(presentation);
+
+  if (!run.ok) return settlePassRun(run, judgeModel, settlement);
+
+  // WS7 (D-20): `THESIS_JUDGE_ORDER=both` runs the judge a SECOND time with the
+  // two cases swapped and reconciles the pair. It costs two judge passes, which
+  // is why it is not the default. The second request rides the same authorized
+  // launch (exactly as the provider's own transport retries do) and is admitted
+  // per-request by the admission object already threaded into the args, so its
+  // spend is reserved and settled like any other request; the merged telemetry
+  // below is what the cost log records for the pass.
+  let result = run.result;
+  if (presentation.secondaryOrder !== null) {
+    const mirrored = await attempt(presentation.secondaryOrder);
+    result = mergeJudgeBilling(result, mirrored);
+    draft = withReconciliation(
+      draft,
+      mirrored.ok
+        ? reconcileJudgeOutputs(
+            run.result.output,
+            mirrored.result.output,
+            presentation.secondaryOrder,
+          )
+        : reconciliationNotPerformed(mirrored.error.message),
+    );
+  }
+
+  const withProtocol: PassResult<JudgeOutput> = { ...result, judgeProtocol: draft };
+  const unresolved = unresolvedJudgeEntityConflicts(payload, bull, bear, withProtocol.output);
+  const finalRun: PassRun<JudgeOutput> = unresolved.length === 0
+    ? { ok: true, result: withProtocol }
+    : entityConflictFailure(withProtocol, unresolved);
+  return settlePassRun(finalRun, judgeModel, settlement);
+}
+
+/**
+ * WS7 (D-20): fold a mirrored `both`-mode attempt's billing into the primary
+ * result so the pass settles ONE cost entry covering both requests. The primary
+ * output is the report; only usage, cost, searches and fetched URLs are merged.
+ * A mirrored attempt that failed still contributes whatever it billed — an
+ * unsettled paid request is exactly the thing the spend controls exist to catch.
+ */
+function mergeJudgeBilling(
+  primary: PassResult<JudgeOutput>,
+  mirrored: PassRun<JudgeOutput>,
+): PassResult<JudgeOutput> {
+  const usage = mirrored.ok ? mirrored.result.usage : mirrored.usage;
+  const costUsd = mirrored.ok ? mirrored.result.costUsd : (mirrored.costUsd ?? 0);
+  const webSearches = mirrored.ok ? mirrored.result.webSearches : (mirrored.webSearches ?? 0);
+  const fetchedUrls = mirrored.ok ? mirrored.result.fetchedUrls : [];
+  const add = (a: number | null | undefined, b: number | null | undefined): number =>
+    (a ?? 0) + (b ?? 0);
+  return {
+    ...primary,
+    usage: {
+      input_tokens: add(primary.usage.input_tokens, usage?.input_tokens),
+      output_tokens: add(primary.usage.output_tokens, usage?.output_tokens),
+      cache_creation_input_tokens: add(
+        primary.usage.cache_creation_input_tokens,
+        usage?.cache_creation_input_tokens,
+      ),
+      cache_read_input_tokens: add(
+        primary.usage.cache_read_input_tokens,
+        usage?.cache_read_input_tokens,
+      ),
+      server_tool_use: primary.usage.server_tool_use,
+    },
+    costUsd: primary.costUsd + costUsd,
+    webSearches: primary.webSearches + webSearches,
+    fallbackUsed:
+      primary.fallbackUsed || (mirrored.ok ? mirrored.result.fallbackUsed : mirrored.fallbackUsed === true),
+    fetchedUrls: [...new Set([...primary.fetchedUrls, ...fetchedUrls])],
+  };
 }
 
 /* ------------------------------------------------------------------------ *
@@ -1488,6 +1667,12 @@ export interface VerifyResult<T = JudgeOutput> {
   /** Legacy DB/API alias for numeric provenance coverage. */
   verificationRate: number | null;
   coverage: ProvenanceCoverage;
+  /**
+   * WS7 (D-20): what the deterministic checks CHECKED, kept separate from what
+   * they could cite. `coverage` says a figure resolved to a record; `checks`
+   * says the sentence around it agreed with that record.
+   */
+  checks: ConsistencyChecks;
   log: VerificationLogEntry[];
   /** Backward-compatible numeric counters. */
   traced: number;
@@ -1617,6 +1802,22 @@ function resolveOmittedIdentity(
 }
 
 /**
+ * WS7 (D-20): the people the report itself names in its executive cards. The
+ * best evidence for "which names in this document are people" is the document's
+ * own `leadership.executives[].name` list, which the judge filled from the
+ * payload — no name guessing required for those.
+ */
+function reportExecutiveNames(root: unknown): string[] {
+  const leadership = (root as { leadership?: { executives?: unknown } }).leadership;
+  const executives = leadership?.executives;
+  if (!Array.isArray(executives)) return [];
+  return executives.flatMap((executive) => {
+    const name = (executive as { name?: unknown }).name;
+    return typeof name === "string" && name.trim().length > 0 ? [name.trim()] : [];
+  });
+}
+
+/**
  * Deterministic CITATION-COVERAGE pass (the authority for the `verified` flag).
  * This measures PROVENANCE, not correctness. A TracedNumber is supported only
  * when its exact registry ID resolves and value, unit, currency, period, and
@@ -1654,6 +1855,21 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
   );
   const numbers = collectTracedNumberRefs(verifiedReport);
   const claims = collectSourcedClaimRefs(verifiedReport);
+
+  // WS7 (D-20): the deterministic no-model checks. Run before the coverage loop
+  // because the named-individual restriction can reject a claim the citation
+  // check would otherwise have counted as supported.
+  const consistency = runConsistencyChecks({
+    claims,
+    registry,
+    citationRegistry,
+    fetchedUrls,
+    personNames: collectPersonNames({
+      leadershipNotes: payload.leadership?.notes,
+      insiderNotes: payload.insiders?.notes,
+      executiveNames: reportExecutiveNames(verifiedReport),
+    }),
+  });
 
   const log: VerificationLogEntry[] = [];
   let traced = 0;
@@ -1774,7 +1990,12 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
     const sourceId = citationSourceId(claim);
     if (sourceId !== null) claim.sourceId = sourceId;
     const match = claimSourceMatch(claim, registry, citationRegistry, fetchedUrls);
-    const supported = match.supported;
+    // WS7 (D-20): a claim about a named person that rests on a web-search result
+    // is REJECTED, and rejected means it does not count as supported either. If
+    // the URL still carried it, the coverage number would say the opposite of
+    // the finding sitting next to it in the same appendix.
+    const rejected = consistency.rejectedClaimPaths.has(path);
+    const supported = match.supported && !rejected;
     const judgment = claim.label === "JUDGMENT";
     if (judgment) {
       judgmentsTotal += 1;
@@ -1789,7 +2010,11 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
     log.push({
       claim: claim.text,
       outcome: supported ? "verified" : "unverified",
-      note: supported ? "citation observed" : `[unverified] ${match.reason}`,
+      note: supported
+        ? "citation observed"
+        : rejected
+          ? "[unverified] rejected by the named-individual restriction; see the check entry for this path"
+          : `[unverified] ${match.reason}`,
       traceKind: supported
         ? registryRecord?.kind === "computed"
           ? "computed-derived"
@@ -1800,7 +2025,25 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
       path,
       evidenceKind: judgment ? "judgment" : "factual-claim",
       source: sourceId ?? claim.source,
-      reason: match.reason,
+      reason: rejected ? "unknown-source" : match.reason,
+    });
+  }
+
+  // WS7 (D-20): one log entry per deterministic-check FAILURE, each naming the
+  // sentence, the figure it cited and why it failed. These are distinct from the
+  // citation-coverage entries above (they carry `check`), so a reader can tell
+  // "this number has no source" from "this sentence contradicts its source".
+  for (const finding of consistency.findings) {
+    log.push({
+      claim: finding.sentence,
+      outcome: "unverified",
+      note: `[check:${finding.check}] ${finding.note} Cited figure: ${finding.figure}.`,
+      traceKind: "untraced",
+      path: finding.path,
+      evidenceKind: "factual-claim",
+      ...(finding.sourceId === null ? {} : { source: finding.sourceId }),
+      reason: finding.reason,
+      check: finding.check,
     });
   }
 
@@ -1830,6 +2073,7 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
     verifiedReport,
     verificationRate: numeric.rate,
     coverage,
+    checks: consistency.checks,
     log,
     traced,
     total,
@@ -1866,10 +2110,19 @@ export interface AssembleReportArgs {
     verificationRate: number | null;
     /** Omitted only by legacy/test callers; generation passes explicit coverage. */
     coverage?: ProvenanceCoverage;
+    /** WS7 (D-20): deterministic check results; omitted only by legacy callers. */
+    checks?: ConsistencyChecks;
     log: VerificationLogEntry[];
   };
   costEntries: CostBreakdownEntry[];
   model: string;
+  /**
+   * WS7 (D-20): how the judge pass was actually run (order, seed, per-side
+   * lengths and self-assessments, `both`-mode reconciliation). Completed here
+   * with the model-family fact the cost entries carry. Omitted by the data-only
+   * and legacy paths, which never ran a judge.
+   */
+  judgeProtocol?: JudgeProtocolDraft;
   /** Pipeline version stamped into meta (SPEC §2). Defaults to REPORT_SPEC_VERSION. */
   pipelineVersion?: string;
   /**
@@ -2206,11 +2459,32 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
     judgments: { cited: 0, total: 0, rate: null },
   };
 
+  // WS7 (D-20): complete the adversarial protocol with the model families the
+  // settled cost entries name, and disclose it — in the metadata AND in the
+  // missing-data manifest, like every other behavior the report depends on.
+  const execution = annotateSharedModelFamily(
+    args.costEntries.map((entry) =>
+      buildExecutionMetadataEntry({
+        step: entry.step,
+        requestedModel: entry.requestedModel ?? entry.model,
+        effectiveModel: entry.model,
+        requestedEffort: entry.requestedEffort ?? null,
+        fallbackUsed: entry.fallbackUsed ?? false,
+      }),
+    ),
+  );
+  const judgeProtocol =
+    args.judgeProtocol === undefined
+      ? undefined
+      : completeJudgeProtocol(args.judgeProtocol, sharedModelFamilyOf(execution));
+
   const missingData = dedupManifest([
     ...args.bundle.gaps,
     ...args.computed.gaps,
     ...(args.validationGaps ?? []),
     ...degradationDisclosures(args.computed.degradation),
+    ...(args.judgeProtocol?.disclosures ?? []),
+    ...(judgeProtocol === undefined ? [] : judgeProtocolManifestEntries(judgeProtocol)),
   ]);
 
   const meta: ReportMeta = {
@@ -2223,16 +2497,12 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
     costUsd: totalCost(args.costEntries),
     verificationRate: args.verify.verificationRate,
     provenanceCoverage: coverage,
+    // WS7 (D-20)
+    ...(args.verify.checks === undefined ? {} : { consistencyChecks: args.verify.checks }),
+    ...(judgeProtocol === undefined ? {} : { judgeProtocol }),
+    // end WS7
     dataCompleteness: buildDataCompleteness(missingData),
-    execution: args.costEntries.map((entry) =>
-      buildExecutionMetadataEntry({
-        step: entry.step,
-        requestedModel: entry.requestedModel ?? entry.model,
-        effectiveModel: entry.model,
-        requestedEffort: entry.requestedEffort ?? null,
-        fallbackUsed: entry.fallbackUsed ?? false,
-      }),
-    ),
+    execution,
     disclaimer: DISCLAIMER_TEXT,
     asOfMap: buildAsOfMap(args.bundle),
   };
@@ -2247,6 +2517,8 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
     missingData,
     verificationRate: args.verify.verificationRate,
     provenanceCoverage: coverage,
+    // WS7 (D-20): checked, beside cited, in the appendix a reader actually opens.
+    ...(args.verify.checks === undefined ? {} : { consistencyChecks: args.verify.checks }),
     verificationLog: args.verify.log,
     costBreakdown: args.costEntries,
   };
@@ -2366,8 +2638,11 @@ export async function runJudgeVerifyAssemble(
   let lastZodError: string | null = null;
   let lastRawOutput: string | null = null;
 
+  // WS7 (D-20): same seeded order and same per-side caps as the runner's path.
+  const presentation = judgePresentationFor(deps, payload, bull, bear);
+
   for (let attempt = 0; attempt <= MAX_JUDGE_RETRIES; attempt++) {
-    const baseTurns = judgeUserTurns(payload, bull, bear);
+    const baseTurns = judgeUserTurns(payload, bull, bear, presentation);
     const userTurns: { role: "user" | "assistant"; content: string | RunPassContentBlock[] }[] =
       lastZodError === null
         ? baseTurns
@@ -2456,11 +2731,17 @@ export async function runJudgeVerifyAssemble(
           // Thread the coverage triplet through so meta/appendix.provenanceCoverage
           // reflect the real measured provenance instead of being zeroed next to a
           // genuine verificationRate.
-          verify: { verificationRate: verify.verificationRate, coverage: verify.coverage, log: verify.log },
+          verify: {
+            verificationRate: verify.verificationRate,
+            coverage: verify.coverage,
+            checks: verify.checks,
+            log: verify.log,
+          },
           costEntries,
           model: deps.model,
           pipelineVersion: assemble.pipelineVersion,
           validationGaps: assemble.validationGaps,
+          judgeProtocol: buildJudgeProtocolDraft(presentation),
         },
         generatedAt,
       );

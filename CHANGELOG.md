@@ -12,6 +12,9 @@ every acceptance criterion and
 [`docs/audit/DECISIONS.md`](docs/audit/DECISIONS.md) records why each choice was
 made.
 
+The remediation ran from 2026-09-02 to 2026-09-03 and closed with a live
+measurement: one paid Opus 5 run, whose findings are in this changelog.
+
 ### You may need to act
 
 - **`ANALYSIS_MODEL` no longer accepts a dated snapshot** for any model but

@@ -68,20 +68,26 @@ gate once WS9 creates it.
 - 2026-09-02: WS9. README at 250 lines with three generated blocks, `tests/docs.lint.test.ts`, CHANGELOG, WS5's separate methodology note folded into `docs/METHODOLOGY.md` and deleted (811fb74, 89f698f). Remediation report 80b2b99.
 - 2026-09-02: merged the WS4 review fixes (af2cef6). 3716 product tests.
 - 2026-09-03: merged the WS7 review fixes (f94d9a4) and regenerated the README configuration block the new `.env.example` prose moved (60b29e3). Full gate green: 3727 product tests, 4 integration, both coverage contracts, build, `audit:security` 0 vulnerabilities.
+- 2026-09-03: owner approved all four outstanding decisions. Eleven worktrees removed (branches kept, each verified an ancestor of main first); the SEC payloads for CIK 2115436 recorded live, which disproved D-14's mechanism and rebuilt the successor lookup (ad25888); one paid run measured (Opus 5, MSFT, $5.31) and folded into the README (51422ce); `auto` left at Opus 5 / `high`.
+- 2026-09-03: the two defects the paid run exposed, fixed (35fa83b). A discarded attempt is marked in the cost breakdown and named in the manifest; the zod error behind a schema rejection survives on the pass artifact. Nothing recorded is echoed into the report — the test written to pin that caught the first implementation doing exactly that.
+- 2026-09-03: audited every checkable documentation claim against the code — env keys, symbols, file paths, npm commands, cited SHAs. Three were wrong and are corrected (7688ea8).
 - 2026-09-03: the one WS4 follow-up the fix agent could not own — `ebit` bypassing the adjusted derivation — closed on the Stage B baseline (d68ac63). Two tests that encoded the retired rule changed with it; `docs/METHODOLOGY.md` states the EBIT basis. The audited projection did not move.
 
 ## Next
 
-All nine workstreams, their fresh-context reviews and every review fix are
-merged, and the full gate is green on the result.
+Nothing is outstanding. All nine workstreams, their fresh-context reviews and
+every review fix are merged; the worktrees are removed, the EDGAR payloads are
+recorded, the authorised paid run is measured and folded into the README, and
+both defects that run exposed are fixed. The full gate is green on the result
+and the work is pushed to `origin/main`.
 
-Nothing is outstanding. All nine workstreams, their reviews and every review
-fix are merged; the worktrees are removed, the EDGAR payloads are recorded and
-the authorised paid run is measured and folded into the README. Two follow-ups
-the paid run exposed are listed in the remediation report.
+The one question the work could not answer offline: three of three passes were
+schema-rejected on a single run. That is now diagnosable — the zod error is
+persisted on the pass artifact — but establishing a cause needs another paid
+run, which was not taken.
 
 ## Open questions for the owner (asked at the end of the turn, never mid-task)
 
 1. ~~Measured end-to-end cost figures require a live paid run.~~ **Approved and done, 2026-09-03**: Opus 5, MSFT, $5.31, in the README table beside the Haiku figure. Every pass was schema-rejected once and repaired, so six requests bought three results; see the remediation report.
 2. ~~Recording the real SEC payloads for CIK 2115436 requires a live EDGAR fetch.~~ **Approved and done, 2026-09-03.** The recording disproved D-14's mechanism; see the revised decision and `fixtures/edgar/xom_successor_*`.
-3. `auto` default and default effort are unchanged (Opus 5, `high`).
+3. ~~`auto` default and default effort.~~ **Confirmed unchanged, 2026-09-03**: Opus 5 at `high`.

@@ -650,8 +650,11 @@ export function selectAltmanVariant(
 
 /**
  * Verified against Beneish (1999) Table 3 Panel A. TATA coefficient is 4.679
- * (the circulating 4.697 is a transcription error). The 5-variable model has
- * no primary source and is deliberately NOT implemented (research §2.4).
+ * (the circulating 4.697 is a transcription error). The 5-variable model is
+ * deliberately NOT implemented: it is not a reduced form of this model but a
+ * different one from Beneish's earlier 1997 paper, fitted on a different sample
+ * with a different control design, so its output is not comparable to this
+ * model's thresholds (research §2.4).
  */
 export const BENEISH_COEFFICIENTS = {
   intercept: -4.84,

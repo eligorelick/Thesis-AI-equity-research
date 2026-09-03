@@ -101,7 +101,8 @@ than publish a number that is wrong by an exchange rate.
 ## 2. Beneish M-Score
 
 Messod Beneish, *The Detection of Earnings Manipulation*, Financial Analysts
-Journal 55(5), 1999.
+Journal 55(5), 1999. (Not to be confused with his 1997 five-variable model — see
+§2.4.)
 
 **Published — coefficients.** The eight-variable model, from Table 3:
 
@@ -139,14 +140,17 @@ never a finding.
 
 ### 2.2 The estimation sample
 
-**Published.** The model was fitted on 74 manipulators identified from SEC
-enforcement actions between 1982 and 1992, against a control sample of
-Compustat non-manipulators. Two consequences follow and are stated wherever the
-score appears: the base rate of manipulation in that sample is far higher than
-in a random listed company today, so a flag carries a high false-positive rate;
-and the sample was drawn under pre-2000 accounting standards, before ASC 606
-and ASC 842 changed how revenue and leases reach the statements the indices are
-computed from.
+**Published.** The model was fitted on **74 manipulators** identified from SEC
+enforcement actions between **1982 and 1992**, against **2,332 Compustat
+non-manipulators** matched by two-digit SIC industry and year.
+
+Two consequences follow, and both are stated wherever the score appears. The
+base rate of manipulation in that sample is far higher than in a random listed
+company today, so a flag carries a high false-positive rate out of sample. And
+the sample was drawn under pre-2000 accounting standards, before ASC 606 and
+ASC 842 changed how revenue and leases reach the statements the indices are
+computed from — the indices are the same, but the inputs are not the ones they
+were fitted on.
 
 ### 2.3 Thresholds
 
@@ -167,10 +171,16 @@ routinely. The report says this wherever the score appears.
 
 ### 2.4 What is deliberately not implemented
 
-**The five-variable M-score is not implemented.** A reduced form circulates
-widely, but it has no primary source in Beneish (1999) and its coefficients
-cannot be traced to a published table. This project computes the eight-variable
-model or nothing.
+**The five-variable M-score is not implemented.** It circulates as though it
+were a convenient reduced form of the eight-variable model. It is not: it comes
+from Beneish's **earlier 1997 paper**, a different study fitted on **64 GAAP
+violators** against controls chosen for *extreme financial performance* rather
+than matched by industry. Different sample, different control design, different
+coefficients — the number it produces is not an eight-variable M-score with
+three terms dropped, and the two are not comparable to each other or to a
+published threshold.
+
+This project computes the eight-variable 1999 model or nothing.
 
 **TATA is required.** When total accruals cannot be computed — net income,
 operating cash flow or total assets missing — the whole M-score is withheld

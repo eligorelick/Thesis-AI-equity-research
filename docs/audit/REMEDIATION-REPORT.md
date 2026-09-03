@@ -192,15 +192,29 @@ run disagreed on. Both cases share one length cap, the judge is told both
 lengths, and truncation is disclosed. Each analyst scores its own case against a
 stated rubric. Verification gained deterministic direction, period and unit
 checks reported separately from citation coverage, and claims naming a person
-are restricted to filings and transcripts — the leadership prompt previously
-pointed the model at web search for exactly those claims.
+are restricted to filings, transcripts and payload figures — the leadership
+prompt previously pointed the model at web search for exactly those claims.
 
 The review found the shared-model-family disclosure dead on the production path
 (computed from an empty list, so it could never fire), completeness metadata
 invalidated by the act of adding a check disclosure, a thrown mirrored judge
 attempt discarding an already-paid primary, and three classes of false positive
 in the new checks — including any correct sentence about a lower-is-better
-metric. Repairs are recorded in the merge commit for `fix-ws7-review`.
+metric. All of it is repaired and merged (`f94d9a4`); the merge commit lists
+the fixes. Three of them are worth naming here: the family disclosure is now
+stamped from the runner's own execution list at a single choke point covering
+the primary path, the unverified fallback and durable verify recovery;
+`dataCompleteness` is recomputed at both sites that edit the manifest, which
+also closes a pre-existing defect where any run with presumed spend carried
+inconsistent completeness metadata; and a thrown mirrored attempt is routed to
+the existing "reconciliation not performed" path, so the primary stands and
+settles once at what it cost.
+
+`THESIS_JUDGE_ORDER=both` also sized its spend for one order. The pass worst
+case and the pass reservation now take a per-pass judge request count, and
+`.env.example` says `both` assumes the default request mode. The generated
+README cost table is unchanged: it prints the analyst pass worst case, not the
+judge's.
 
 ### WS8 — security, privacy and compliance (D-21)
 
@@ -260,6 +274,23 @@ a change the criteria did not ask for:
 - The emitted JSON schema's "no unions" invariant was passing by construction in
   one place and by luck in another until WS7 found it. Its neighbours deserve
   the same check.
+- `PERIOD_PATTERNS`'s `FY` pattern still allows an optional century, so "FY 15%"
+  matches "FY 15" the same way "Q1 15%" did before the WS7 fix. The shape does
+  not occur in real prose, but it is the same defect.
+- `src/pipeline/jobRunner.ts` now imports `stageC/judgeProtocol` at build time,
+  which transitively pulls `stageC/payload.ts` for `fnv1a32`. Moving that hash
+  into a leaf module would keep the runner's dependency surface as narrow as its
+  own JSDoc note claims.
+- A judge protocol reconstructed on a durable resume re-derives the order from
+  the resuming process's `THESIS_JUDGE_ORDER`. An operator who changes the
+  setting between the run and the resume gets a reconstructed order that may not
+  be the one the judge read. The disclosure names the setting it used, so it is
+  not silent; persisting the protocol on the synthesize artifact would remove
+  the ambiguity, at the cost of an envelope-version bump.
+- `tests/jobRunner.test.ts` counts `getConfig` calls to assert that no provider
+  or model boundary is crossed. The count has been incremented three times for
+  unrelated reasons; the surrounding assertions pin the property directly and
+  the counter should go.
 
 ## Open questions for the owner
 

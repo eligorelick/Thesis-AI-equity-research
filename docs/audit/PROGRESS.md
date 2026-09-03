@@ -14,16 +14,16 @@ Read this, `DECISIONS.md`, and `git log` before resuming.
 | WS6 valuation inputs / disclosure | merged | main | 8e88364 | D-18, D-19; eight of eight met, one residual (N is not a column in the multiples table) |
 | WS7 AI pipeline | merged | main | 82f12b9 | D-20; shared-family disclosure, completeness metadata, judge mirroring |
 | WS8 security / privacy / compliance | merged | main | 1c5d771 | D-21; five of five met |
-| WS9 README / docs | last (me) | main | — | D-22 |
 | WS4 data layer | merged | main | 8d3b3b3 | D-11..D-15; eleven of twelve criteria met, Form 4 deferred with a disclosed gap |
 | Fresh-context reviews | done (4 subagents) | main | — | WS1-3: 2 blockers, 4 should-fix, 8 nits. WS5: 2 blockers, 5 should-fix, 5 nits. WS6: 2 blockers, 5 should-fix, 9 nits. WS8: 3 should-fix, 6 nits |
 | Fresh-context review of WS4 | done | main | — | 1 blocker (Caterpillar total debt 16% low), 7 should-fix, 9 nits, plus a pre-existing leak of the EDGAR contact into Yahoo's User-Agent |
+| Fresh-context review of WS7 | done | main | — | 3 blockers, 6 should-fix, 4 nits; one sub-claim of a finding was wrong and is recorded as such |
 | Review fixes: WS8 | merged | main | e6b854f | Offline guard closed in two suites, settings CAS counter preserved, the token's reach described honestly |
 | Review fixes: WS5 | merged | main | a20d9c0 | Mortgage-REIT misrouting, the justified multiple's growth cap, four wrong-rather-than-absent numbers, route metrics wired to a reader |
 | Review fixes: WS6 | merged | main | 2d4487d | Finance leases back in enterprise value, the own-history rank on one basis, SBC charged once |
 | Review fixes: WS1-3 | merged | main | 8a7cd92 | Resume no longer re-bills, a pass lease no longer blocks its own first request, presumed spend disclosed |
 | Review fixes: WS4 | merged | main | af2cef6 | Caterpillar total debt, statement-source gaps, the Yahoo User-Agent leak |
-| Review fixes: WS7 | running (subagent) | `fix-ws7-review` | — | 3 blockers, 6 should-fix, 4 nits; merged with the full gate when it lands |
+| Review fixes: WS7 | merged | main | f94d9a4 | Shared-family disclosure live on the production path, completeness metadata recomputed, a paid primary survives a thrown mirror, four false-positive checks, `both` sized for two requests |
 | WS4 follow-up: EBIT | done | main | d68ac63 | `ebit` follows operating income only; the refused figure no longer reaches the DCF under a second name |
 | WS9 README and docs | done | main | 89f698f | D-22; 250 lines, three generated blocks, doc-lint test, CHANGELOG, engines 22.18 |
 | Audited delta contract | done | main | 57cdee7 | D-23; `npm run audit:deltas`, grouped reasons, manifest identity, escaped path keys |
@@ -65,16 +65,18 @@ gate once WS9 creates it.
 - 2026-09-02: merged WS4 (8d3b3b3), the audited delta contract (57cdee7), WS7 (82f12b9) and the WS8, WS5, WS6 and WS1-3 review fixes (e6b854f, a20d9c0, 2d4487d, 8a7cd92). Full gate green after each.
 - 2026-09-02: WS9. README at 250 lines with three generated blocks, `tests/docs.lint.test.ts`, CHANGELOG, `docs/audit/ws5-methodology.md` folded into `docs/METHODOLOGY.md` (811fb74, 89f698f). Remediation report 80b2b99.
 - 2026-09-02: merged the WS4 review fixes (af2cef6). 3716 product tests.
+- 2026-09-03: merged the WS7 review fixes (f94d9a4) and regenerated the README configuration block the new `.env.example` prose moved (60b29e3). Full gate green: 3727 product tests, 4 integration, both coverage contracts, build, `audit:security` 0 vulnerabilities.
 - 2026-09-03: the one WS4 follow-up the fix agent could not own — `ebit` bypassing the adjusted derivation — closed on the Stage B baseline (d68ac63). Two tests that encoded the retired rule changed with it; `docs/METHODOLOGY.md` states the EBIT basis. The audited projection did not move.
 
 ## Next
 
-1. Merge the WS7 review fixes when the subagent lands, regenerating the
-   intended-delta list if they move the Stage B projection.
-2. Run `npm run verify` end to end on the result.
-3. Remove the eleven worktrees (branches kept) — needs the owner's word, being
-   destructive.
-4. Ask the owner the three questions at the foot of this file.
+All nine workstreams, their fresh-context reviews and every review fix are
+merged, and the full gate is green on the result.
+
+1. Remove the eleven `thesis-*` worktrees beside the repository (branches
+   kept) — needs the owner's word, being destructive. `git worktree list`
+   names them.
+2. Ask the owner the three questions at the foot of this file.
 
 ## Open questions for the owner (asked at the end of the turn, never mid-task)
 

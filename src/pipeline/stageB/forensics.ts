@@ -1095,14 +1095,26 @@ export interface PiotroskiOptions {
    *   balance-sheet mix; it rises when rates rise and falls when a bank adds
    *   low-yield liquidity, neither of which is an efficiency gain.
    *
-   * When set, SIX signals report not-applicable and the F-score is reported out
-   * of the three that remain (ROA > 0, ΔROA and no equity issuance), with its
-   * own denominator, exactly as it already is when a prior year is missing.
+   * Those two are gated on {@link balanceSheetFunded}, NOT on this flag: this
+   * one also fires for FIN-OTHER issuers (asset managers, exchanges, brokers)
+   * whose balance sheets are ordinary, so ΔLEVER and ΔTURN still mean what the
+   * paper says there. Same reasoning as the ROTE-vs-ROIC switch in
+   * `metricPolicy`, which is deliberately narrower than this classifier.
+   *
    * Nothing is dropped silently: every withheld signal keeps its reason on the
-   * signal itself, and the result is relabeled so a 3-point score is never read
+   * signal itself, and the result is relabeled so a reduced score is never read
    * against the 9-point scale.
    */
   financialsSuppressed?: boolean;
+  /**
+   * True only for the deposit-, float- or repo-funded routes (bank, insurer,
+   * mortgage REIT). Withholds ΔLEVER and ΔTURN on top of the four above,
+   * leaving three signals (ROA > 0, ΔROA, no equity issuance). A FIN-OTHER
+   * issuer keeps both: it has ordinary debt and an ordinary asset base, so a
+   * falling leverage ratio really is deleveraging and rising turnover really is
+   * efficiency.
+   */
+  balanceSheetFunded?: boolean;
   /**
    * Equity-issuance de-minimis (statement currency units). Default 0 =
    * paper-strict "no common equity issued". The research notes leave a 1%-of-
@@ -1202,8 +1214,9 @@ export function computePiotroski(
     "long-term debt over assets measures a solvency burden; for a financial company debt is an INPUT — deposits, policy reserves and repo fund the earning assets, and none of them is long-term debt — so a falling ratio is a funding-mix change, not deleveraging — signal withheld";
   const turnoverWithheld =
     "asset turnover reads revenue over assets as operating efficiency; a financial company's assets ARE its revenue-generating book, so the ratio tracks the rate environment and balance-sheet mix (it falls when a bank adds low-yield liquidity) — signal withheld";
+  const balanceSheetFunded = options?.balanceSheetFunded === true;
   let s5: PiotroskiSignal;
-  if (finSuppressed) {
+  if (balanceSheetFunded) {
     s5 = na(leverageWithheld);
   } else {
     const ltdT = nv(current.balance?.longTermDebt);
@@ -1284,7 +1297,7 @@ export function computePiotroski(
 
   // 9. F_ΔTURN — sales / beginning-of-year TA rose (needs TA at t−2)
   let s9: PiotroskiSignal;
-  if (finSuppressed) {
+  if (balanceSheetFunded) {
     s9 = na(turnoverWithheld);
   } else if (!prior2) {
     s9 = na("requires total assets at t−2 (3rd fiscal year) — omitted");
@@ -1300,7 +1313,7 @@ export function computePiotroski(
         : na("revenue or beginning-of-year total assets missing");
   }
 
-  if (!prior2 && !finSuppressed) {
+  if (!prior2 && !balanceSheetFunded) {
     notes.push(
       "Only 2 fiscal years supplied — ΔROA and Δturnover unavailable; F-score reported out of 7 (research §6.2).",
     );
@@ -1344,15 +1357,19 @@ export function computePiotroski(
   // WS5: the label carries the scale. A 3-of-3 on a bank must never be read
   // against the paper's 9-point scale, and the payload/UI render this string.
   const variant: PiotroskiResult["variant"] = finSuppressed ? "financial" : "standard";
+  const withheldCount = balanceSheetFunded ? "six" : "four";
   const label = finSuppressed
-    ? `Piotroski F (financial variant, ${outOf} of 9 signals — the six that presume a non-financial balance sheet are withheld)`
+    ? `Piotroski F (financial variant, ${outOf} of 9 signals — the ${withheldCount} that presume a non-financial balance sheet are withheld)`
     : `Piotroski F (${outOf} signals)`;
   if (finSuppressed) {
     notes.push(
       `Piotroski F is reported on the FINANCIAL variant: ${outOf} of the paper's 9 signals. The current ratio, gross ` +
-        "margin, both operating-cash-flow tests, ΔLEVER and ΔTURN are withheld — each measures something other than " +
-        "what the paper reads it as on a deposit-, float- or repo-funded balance sheet. The score is NOT comparable " +
-        "to a 9-point F-score.",
+        "margin and both operating-cash-flow tests are withheld" +
+        (balanceSheetFunded
+          ? ", and so are ΔLEVER and ΔTURN — on a deposit-, float- or repo-funded balance sheet each measures " +
+            "something other than what the paper reads it as"
+          : "; ΔLEVER and ΔTURN are KEPT, because this issuer is fee-based with an ordinary balance sheet") +
+        ". The score is NOT comparable to a 9-point F-score.",
     );
   }
 
@@ -2139,11 +2156,17 @@ export function runForensics(route: CompanyRoute, inputs: ForensicsInputs): Fore
   } else {
     piotroski = computePiotroski(cur, pri, pri2, {
       equityIssuanceDeMinimis: inputs.equityIssuanceDeMinimis ?? undefined,
-      // Withhold the four signals that are not economic on this route: the
-      // current ratio and gross margin it hard-suppresses everywhere else, and
-      // the two operating-cash-flow tests (OCF is not a profit or accrual
-      // signal for a bank, insurer or mortgage REIT).
+      // Withhold the four signals that are not economic on any financial
+      // classification: the current ratio and gross margin it hard-suppresses
+      // everywhere else, and the two operating-cash-flow tests.
       financialsSuppressed: suppressed,
+      // ΔLEVER and ΔTURN go only on the deposit-, float- or repo-funded routes.
+      // A FIN-OTHER issuer (asset manager, exchange, insurance broker) is
+      // fee-based with ordinary debt and an ordinary asset base, so falling
+      // leverage really is deleveraging there and rising turnover really is
+      // efficiency — the same narrower gate the ROTE/ROIC switch uses.
+      balanceSheetFunded:
+        route.base === "bank" || route.base === "insurer" || route.base === "reit-mortgage",
     });
     if (suppressed) {
       notes.push(

@@ -22,6 +22,7 @@ import {
   type FinancialMetricsInputs,
   type RouteMetric,
 } from "@/pipeline/stageB/financialMetrics";
+import { RouteMetricsSchema } from "@/report/schema";
 import type { CompanyFacts } from "@/edgar/xbrl";
 import type { FetchResult } from "@/types/core";
 
@@ -255,6 +256,38 @@ describe("bank route metrics", () => {
     expect(r.metrics.length).toBeGreaterThan(0);
     expect(r.metrics.every((m) => m.value === null)).toBe(true);
     expect(r.metrics.every((m) => m.withheldReason !== null)).toBe(true);
+  });
+});
+
+describe("route metrics satisfy the report contract", () => {
+  it("every computed and withheld metric parses against RouteMetricsSchema", () => {
+    // The schema is what a report can carry; a metric shape Stage B produces
+    // but the report cannot represent would be dropped silently at assembly.
+    for (const route of ["bank", "insurer", "reit-mortgage"] as const) {
+      const computed = computeFinancialMetrics(route, bankInputs());
+      const parsed = RouteMetricsSchema.safeParse({
+        route: computed.route,
+        metrics: computed.metrics,
+        notes: computed.notes,
+        asOf: computed.asOf,
+      });
+      expect(parsed.success, `${route}: ${parsed.error?.message ?? ""}`).toBe(true);
+    }
+
+    // Including the all-withheld case, which is the one a degraded report hits.
+    const bare = computeFinancialMetrics("bank", {
+      companyFacts: null,
+      balance: [],
+      income: [],
+    });
+    expect(
+      RouteMetricsSchema.safeParse({
+        route: bare.route,
+        metrics: bare.metrics,
+        notes: bare.notes,
+        asOf: bare.asOf,
+      }).success,
+    ).toBe(true);
   });
 });
 

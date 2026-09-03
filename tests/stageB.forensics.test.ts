@@ -1243,7 +1243,10 @@ describe("computePiotroski — financial route", () => {
     // than with operating efficiency. Three signals remain: ROA > 0, ΔROA and
     // no equity issuance.
     const { current, prior, prior2 } = piotroskiPeriods();
-    const r = computePiotroski(current, prior, prior2, { financialsSuppressed: true });
+    const r = computePiotroski(current, prior, prior2, {
+      financialsSuppressed: true,
+      balanceSheetFunded: true,
+    });
     expect(r.outOf).toBe(3);
     expect(r.score).toBe(3);
     for (const name of [
@@ -1269,9 +1272,28 @@ describe("computePiotroski — financial route", () => {
     expect(r.signals.turnoverUp.detail).toMatch(/rate environment/);
   });
 
-  it("relabels the score so a 3-point result is never read against the 9-point scale", () => {
+  it("keeps ΔLEVER and ΔTURN for a fee-based FIN-OTHER issuer, whose balance sheet is ordinary", () => {
+    // An asset manager or exchange is routed 'general' but still trips the
+    // broad forensic classifier. Its debt IS debt and its assets are not its
+    // revenue-generating book, so those two signals still mean what the paper
+    // says — the same reason `metricPolicy` keeps ROIC for these issuers.
     const { current, prior, prior2 } = piotroskiPeriods();
     const r = computePiotroski(current, prior, prior2, { financialsSuppressed: true });
+
+    expect(r.outOf).toBe(5);
+    expect(r.signals.leverageDown.value).not.toBeNull();
+    expect(r.signals.turnoverUp.value).not.toBeNull();
+    expect(r.signals.cfoPositive.value).toBeNull();
+    expect(r.label).toContain("5 of 9 signals");
+    expect(r.notes.join(" ")).toContain("ΔLEVER and ΔTURN are KEPT");
+  });
+
+  it("relabels the score so a 3-point result is never read against the 9-point scale", () => {
+    const { current, prior, prior2 } = piotroskiPeriods();
+    const r = computePiotroski(current, prior, prior2, {
+      financialsSuppressed: true,
+      balanceSheetFunded: true,
+    });
 
     expect(r.variant).toBe("financial");
     expect(r.label).toContain("financial variant");

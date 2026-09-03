@@ -86,6 +86,19 @@ describe("parseEnv", () => {
     expect(config.fixtureMode).toBe(true);
   });
 
+  // WS6 (D-19): THESIS_EV_INCLUDE_LEASES decides whether lease liabilities
+  // count in the enterprise-value bridge and the DCF equity bridge. It is a
+  // strict "1" opt-in: any other value leaves the house default (off) in place,
+  // so a typo can never silently change every EV multiple.
+  it("parses THESIS_EV_INCLUDE_LEASES as a strict 1 opt-in, defaulting off", () => {
+    expect(parseEnv({}).evIncludeLeases).toBe(false);
+    expect(parseEnv({ THESIS_EV_INCLUDE_LEASES: "1" }).evIncludeLeases).toBe(true);
+    expect(parseEnv({ THESIS_EV_INCLUDE_LEASES: " 1 " }).evIncludeLeases).toBe(true);
+    for (const raw of ["0", "", " ", "true", "yes", "on", "01", "2"]) {
+      expect(parseEnv({ THESIS_EV_INCLUDE_LEASES: raw }).evIncludeLeases, raw).toBe(false);
+    }
+  });
+
   it("returns a frozen config object", () => {
     const config = parseEnv({});
     expect(Object.isFrozen(config)).toBe(true);

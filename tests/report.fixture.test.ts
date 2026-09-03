@@ -79,8 +79,19 @@ describe("DEMO-sample.json fixture", () => {
     });
 
     it("carries the mandatory disclaimer + FRED attribution literals", () => {
-      expect(report.meta.disclaimer).toBe(DISCLAIMER_TEXT);
+      // WS6 (D-19): the fixture is a PERSISTED report, byte-pinned by the audit
+      // fixture comparison, so it carries the disclaimer that was in force when
+      // it was written. The schema accepts any non-empty disclaimer on the
+      // parse side precisely so historical reports stay readable (L5 audit);
+      // what must hold is that it disclaims investment advice.
+      expect(report.meta.disclaimer).toContain("not investment advice");
       expect(report.macro.fredAttribution).toBe(FRED_ATTRIBUTION_TEXT);
+      // The CURRENT constant, which every newly generated report embeds, also
+      // names the grades and scenario price targets the report emits.
+      expect(DISCLAIMER_TEXT).toContain("not investment advice");
+      expect(DISCLAIMER_TEXT).toContain("letter grades");
+      expect(DISCLAIMER_TEXT).toContain("scenario price targets");
+      expect(DISCLAIMER_TEXT).toContain("buy, sell, or hold");
     });
 
     it("has exactly 3 scenarios whose probabilities sum to 1.0", () => {

@@ -176,6 +176,16 @@ function assumptionRows(a: DcfAssumptions): DcfAssumption[] {
     { name: "sales-to-capital", value: num2(a.salesToCapital.value), basis: a.salesToCapital.basis },
     { name: "terminal growth", value: pct1(a.terminal.gTermPct.value), basis: a.terminal.gTermPct.basis },
     { name: "terminal ROIC", value: pct1(a.terminal.roicTermPct.value), basis: a.terminal.roicTermPct.basis },
+    {
+      name: "free cash flow, SBC treatment",
+      value:
+        a.sbc.value.beforeSbc === null
+          ? "n/a"
+          : a.sbc.value.afterSbc === null || a.sbc.value.sbc === null
+            ? `${big(a.sbc.value.beforeSbc)} (unadjusted)`
+            : `${big(a.sbc.value.beforeSbc)} → ${big(a.sbc.value.afterSbc)}`,
+      basis: a.sbc.basis,
+    },
   ];
 }
 

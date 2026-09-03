@@ -115,6 +115,15 @@ const envSchema = z.object({
     0,
     MAX_ROLLING_WINDOW_MINUTES,
   ),
+  // WS6 (D-19): include lease liabilities in enterprise value and in the DCF
+  // equity bridge. OFF by default: under US GAAP (ASC 842) the operating-lease
+  // cost stays in operating expenses, so EBITDA is already after it and adding
+  // the lease liability to EV as well double-counts the leases in EV/EBITDA.
+  // Any value other than "1" (including unset) leaves it off.
+  THESIS_EV_INCLUDE_LEASES: z
+    .string()
+    .optional()
+    .transform((v) => blank(v) === "1"),
   // Strictly greater than the provider's 600-second hard request timeout.
   THESIS_PAID_PASS_LEASE_SECONDS: positiveIntegerEnv(900, 600, MAX_NODE_TIMER_SECONDS),
   THESIS_JOB_LEASE_SECONDS: positiveIntegerEnv(900, 0, MAX_NODE_TIMER_SECONDS),
@@ -145,6 +154,9 @@ export interface ThesisConfig {
   rollingCostWindowMs: number;
   paidPassLeaseTtlMs: number;
   jobLeaseTtlMs: number;
+  // WS6 (D-19)
+  /** THESIS_EV_INCLUDE_LEASES=1 — count lease liabilities in enterprise value. */
+  evIncludeLeases: boolean;
 }
 
 /**
@@ -173,6 +185,8 @@ export function parseEnv(
     rollingCostWindowMs: parsed.THESIS_ROLLING_COST_WINDOW_MINUTES * 60_000,
     paidPassLeaseTtlMs: parsed.THESIS_PAID_PASS_LEASE_SECONDS * 1_000,
     jobLeaseTtlMs: parsed.THESIS_JOB_LEASE_SECONDS * 1_000,
+    // WS6 (D-19)
+    evIncludeLeases: parsed.THESIS_EV_INCLUDE_LEASES,
   };
   return Object.freeze(config);
 }

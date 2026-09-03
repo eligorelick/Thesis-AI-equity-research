@@ -234,6 +234,15 @@ export interface DcfBalanceRow {
   cashAndShortTermInvestments: number | null;
 }
 
+/** WS6 (D-19): SBC treatment, with the reported FCF before and after it. */
+export interface DcfSbcTreatment {
+  beforeSbc: number | null;
+  afterSbc: number | null;
+  sbc: number | null;
+  asOf: string | null;
+  basis: string;
+}
+
 /**
  * WS6 (D-18): log-linear revenue trend over every annual year on record
  * (growth.ts `logLinearGrowth`). Structural, so the DCF does not depend on the
@@ -263,6 +272,14 @@ export interface DcfAssumptionInputs {
    * unattributed percentage.
    */
   waccBasis?: string | null;
+  /**
+   * WS6 (D-19): the reported free-cash-flow metric before and after the SBC
+   * deduction (capital.ts). The FCFF DCF does not consume FCF — it projects
+   * EBIT, which already expenses SBC — but the assumption block must show the
+   * adjustment so the two numbers a reader sees are never silently different
+   * definitions.
+   */
+  fcfSbc?: DcfSbcTreatment | null;
   /** Forward annual analyst estimates (FMP names); null/empty when uncovered. */
   analystEstimates: AnalystEstimateRow[] | null;
   waccPct: number;
@@ -437,6 +454,8 @@ export interface DcfAssumptions {
   years: number;
   /** WS6 (D-19): the discount rate with every input named. */
   wacc: Assumption<number>;
+  /** WS6 (D-19): SBC treatment, with the reported FCF before and after it. */
+  sbc: Assumption<DcfSbcTreatment>;
   /** WS6 (D-18): the growth anchor's methods, point estimate and range. */
   growthAnchor: GrowthAnchor;
   /** Revenue growth per explicit year, percent, length === years. */
@@ -806,12 +825,33 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
   const roicTerm = terminal.roicTermPct;
   const reinvestRate = roicTerm > 0 ? gTerm / roicTerm : 0;
 
+  // WS6 (D-19): SBC treatment, stated in the assumption block with the size of
+  // the adjustment to the reported free-cash-flow metric.
+  const sbcInfo = inputs.fcfSbc ?? null;
+  const sbcBasis =
+    sbcInfo === null || sbcInfo.beforeSbc === null
+      ? "Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series."
+      : sbcInfo.sbc === null
+        ? `Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series. Reported free cash flow as of ${sbcInfo.asOf ?? "?"}: ${fmtNum(sbcInfo.beforeSbc)}, UNADJUSTED — stock-based compensation was not disclosed.`
+        : `Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series. Reported free cash flow as of ${sbcInfo.asOf ?? "?"}: ${fmtNum(sbcInfo.beforeSbc)} before SBC → ${fmtNum(sbcInfo.afterSbc as number)} after subtracting SBC of ${fmtNum(sbcInfo.sbc)}.`;
+  notes.push(sbcBasis);
+
   const assumptions: DcfAssumptions = {
     startRevenue: { value: startRev, basis: `${periodBasis} revenue as of ${ttm?.date ?? "?"}` },
     years,
     wacc: {
       value: inputs.waccPct,
       basis: inputs.waccBasis ?? `WACC ${fmtNum(inputs.waccPct)}% (inputs not supplied to the assumption block)`,
+    },
+    sbc: {
+      value: inputs.fcfSbc ?? {
+        beforeSbc: null,
+        afterSbc: null,
+        sbc: null,
+        asOf: null,
+        basis: "free-cash-flow SBC treatment not supplied to the assumption block",
+      },
+      basis: sbcBasis,
     },
     growthAnchor,
     growthPath: {
@@ -1493,6 +1533,16 @@ export interface MultiplesBalance {
   intangibleAssets: number | null;
   minorityInterest: number | null;
   preferredStock: number | null;
+  /**
+   * WS6 (D-19): lease liabilities (FMP `capitalLeaseObligations`, which carries
+   * the operating AND finance lease liability; the EDGAR statements builder
+   * resolves the same field). FMP's `totalDebt` is documented as
+   * shortTermDebt + longTermDebt + capitalLeaseObligations, so this figure is
+   * ALREADY inside `totalDebt` and the EV bridge subtracts it back out unless
+   * THESIS_EV_INCLUDE_LEASES=1. Null when undisclosed, which is itself
+   * disclosed: the leases then cannot be separated from totalDebt.
+   */
+  capitalLeaseObligations?: number | null;
 }
 
 /** Quarterly fundamentals merged per quarter by the caller (FMP names). */
@@ -1565,9 +1615,36 @@ export interface MultiplesFrameworkInputs {
   /** REIT-only: FFO/AFFO totals provided by the caller (labeled approximate upstream). */
   ffoApprox?: number | null;
   affoApprox?: number | null;
+  /**
+   * WS6 (D-19): include lease liabilities in enterprise value
+   * (THESIS_EV_INCLUDE_LEASES=1). OFF by default, because under US GAAP
+   * (ASC 842) the operating-lease cost stays in operating expenses, so EBITDA
+   * is already AFTER it — adding the lease liability to EV as well would
+   * double-count the leases in EV/EBITDA.
+   */
+  includeLeasesInEv?: boolean;
+}
+
+/** WS6 (D-19): the EV bridge, both ways, with the convention stated. */
+export interface EnterpriseValueBridge {
+  /** The EV actually used by the EV multiples. */
+  value: number | null;
+  /** EV with lease liabilities left out (the house default). */
+  excludingLeases: number | null;
+  /** EV with lease liabilities counted as debt. */
+  includingLeases: number | null;
+  /** Lease liabilities used for the adjustment; null when undisclosed. */
+  leaseLiability: number | null;
+  includeLeases: boolean;
+  basis: string;
 }
 
 export interface OwnHistoryBand {
+  /**
+   * WS6 (D-19): RANK AMONG `observations` QUARTERS (0-100), not a percentile.
+   * The field name is kept for backward compatibility; every label built from
+   * it says "rank among N quarters", with N = `observations`.
+   */
   percentileRank: number | null;
   /**
    * 5th percentile of up to 20 quarterly observations. NOTE: because the window
@@ -1608,6 +1685,8 @@ export interface MultipleStat {
 
 export interface MultiplesResult {
   multiples: MultipleStat[];
+  /** WS6 (D-19): the enterprise-value bridge, both ways. */
+  enterpriseValue: EnterpriseValueBridge;
   sectorAppropriate: MultipleKey[];
   asOf: { quote: string | null; statements: string | null };
   notes: string[];
@@ -1826,9 +1905,14 @@ function bandFor(values: number[] | undefined, current: number | null, basis: st
   // near-min/near-max (≈ observed range), not stable tail percentiles. Flag thin
   // windows so p5/p95 aren't over-read; the median/quartiles stay robust.
   const lowSample = values.length < FULL_OWN_HISTORY_OBS;
-  const observationBasis = `${basis} (${values.length} observations)`;
+  // WS6 (D-19): the headline figure is a RANK AMONG N QUARTERS, never a
+  // percentile of a distribution - 8-20 observations cannot estimate one.
+  const observationBasis =
+    `${basis} (${values.length} observations). The reported figure is a RANK AMONG ${values.length} QUARTERS ` +
+    "(0-100 by linear interpolation between order statistics), not a percentile of a distribution: " +
+    "the sample is far too small for that, and a rank within the observed sample is what it actually measures.";
   const notedBasis = lowSample
-    ? `${observationBasis} — LOW SAMPLE (${values.length} quarterly observations < 5y): p5/p95 track the tail observations (≈ observed range), not stable percentiles`
+    ? `${observationBasis} LOW SAMPLE (${values.length} quarterly observations < 5y): p5/p95 track the tail observations (≈ observed range), not stable quantiles.`
     : observationBasis;
   return {
     percentileRank: current !== null ? percentileRank(values, current) : null,
@@ -1899,7 +1983,11 @@ export function multiplesFramework(
     isNum(equity) && isNum(bal?.goodwill) && isNum(bal?.intangibleAssets)
       ? equity - bal.goodwill - bal.intangibleAssets
       : null;
-  const ev =
+  // WS6 (D-19): the EV bridge, computed BOTH ways and disclosed.
+  // Base = market cap + total debt + preferred + minority interest − cash and
+  // short-term investments. FMP's totalDebt already contains the lease
+  // liability, so the default (leases NOT in EV) subtracts it back out.
+  const evIncludingLeases =
     mcap !== null && bal && isNum(bal.totalDebt) && isNum(bal.cashAndShortTermInvestments)
       ? mcap +
         bal.totalDebt +
@@ -1907,8 +1995,59 @@ export function multiplesFramework(
         (isNum(bal.minorityInterest) ? bal.minorityInterest : 0) -
         bal.cashAndShortTermInvestments
       : null;
+  const leaseLiability = isNum(bal?.capitalLeaseObligations) && bal.capitalLeaseObligations !== 0
+    ? Math.abs(bal.capitalLeaseObligations)
+    : null;
+  const includeLeases = inputs.includeLeasesInEv === true;
+  const evExcludingLeases =
+    evIncludingLeases === null
+      ? null
+      : leaseLiability === null
+        ? evIncludingLeases
+        : evIncludingLeases - leaseLiability;
+  const ev = includeLeases ? evIncludingLeases : evExcludingLeases;
+  const evBridgeBasis =
+    (includeLeases
+      ? "Enterprise value INCLUDES lease liabilities (THESIS_EV_INCLUDE_LEASES=1). "
+      : "Enterprise value EXCLUDES lease liabilities (house default; set THESIS_EV_INCLUDE_LEASES=1 to include them). ") +
+    "EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments" +
+    (leaseLiability === null
+      ? "; lease liabilities were not disclosed separately, so they could not be separated from totalDebt and EV is reported as-is"
+      : `, ${includeLeases ? "keeping" : "less"} lease liabilities of ${fmtNum(leaseLiability)} (already inside totalDebt under FMP's definition)`) +
+    ". EV/EBITDA uses this same EV; EBITDA is AFTER operating-lease cost (US GAAP ASC 842 keeps it in operating expenses)" +
+    (includeLeases
+      ? ", so a lease-INCLUSIVE EV over a lease-EXPENSED EBITDA double-counts the leases and is not comparable to the default — this pairing is the caller's explicit choice."
+      : ", so excluding the lease liability from EV keeps numerator and denominator on the same basis.") +
+    (evIncludingLeases === null || evExcludingLeases === null
+      ? ""
+      : ` EV excluding leases ${fmtNum(evExcludingLeases)}; EV including leases ${fmtNum(evIncludingLeases)}.`);
+  const enterpriseValue: EnterpriseValueBridge = {
+    value: ev,
+    excludingLeases: evExcludingLeases,
+    includingLeases: evIncludingLeases,
+    leaseLiability,
+    includeLeases,
+    basis: evBridgeBasis,
+  };
+  notes.push(evBridgeBasis);
   if (ev === null) {
     gaps.push(gapEntry("valuation.multiples.enterpriseValue", "EV components missing (marketCap/totalDebt/cash) — EV multiples n/m", "info"));
+  } else if (leaseLiability === null) {
+    gaps.push(
+      gapEntry(
+        "valuation.multiples.enterpriseValue.leases",
+        "lease liabilities (capitalLeaseObligations) not disclosed — they could not be separated from totalDebt, so enterprise value may include them regardless of THESIS_EV_INCLUDE_LEASES",
+        "info",
+      ),
+    );
+  } else if (includeLeases) {
+    gaps.push(
+      gapEntry(
+        "valuation.multiples.enterpriseValue.leases",
+        `THESIS_EV_INCLUDE_LEASES=1: enterprise value includes lease liabilities of ${fmtNum(leaseLiability)} while EBITDA remains after operating-lease cost (ASC 842) — EV/EBITDA is not comparable to the default basis`,
+        "warn",
+      ),
+    );
   }
 
   const financialsRoute = route === "bank" || route === "insurer" || route === "reit-mortgage";
@@ -1999,7 +2138,7 @@ export function multiplesFramework(
     if (currencyMismatch && (inputs.keyMetricsHistory?.length ?? 0) > 0) {
       notes.push("vendor pre-baked multiple history skipped: currency mismatch (ADR) makes it untrustworthy");
     }
-    gaps.push(gapEntry("valuation.multiples.ownHistory", `insufficient history (need ≥${MIN_HISTORY_OBS_FOR_BAND} quarters) to build own-history percentile bands (up to 5y)`, "info"));
+    gaps.push(gapEntry("valuation.multiples.ownHistory", `insufficient history (need ≥${MIN_HISTORY_OBS_FOR_BAND} quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)`, "info"));
   }
 
   // --- Assemble ---------------------------------------------------------------
@@ -2037,8 +2176,8 @@ export function multiplesFramework(
         : "latest";
   const basisByKey: Record<MultipleKey, string> = {
     peTtm: `price / epsDiluted (${incomeBasisLabel}); fallback marketCap / netIncome (${incomeBasisLabel})`,
-    evToEbitda: `EV (mcap + totalDebt + preferred + minority - cash&STI, ${balanceBasisLabel}) / (operatingIncome + D&A), ${incomeBasisLabel}-computed — vendor ebitda field not trusted`,
-    evToSales: `EV / revenue (${incomeBasisLabel})`,
+    evToEbitda: `EV / (operatingIncome + D&A), ${incomeBasisLabel}-computed — vendor ebitda field not trusted. ${evBridgeBasis} Balance basis: ${balanceBasisLabel}.`,
+    evToSales: `EV / revenue (${incomeBasisLabel}). ${evBridgeBasis}`,
     priceToFcf: `marketCap / (operatingCashFlow + capitalExpenditure) (${cashFlowBasisLabel}; FMP capex negative)`,
     priceToBook: `marketCap / totalStockholdersEquity (${balanceBasisLabel})`,
     priceToTbv: `marketCap / (equity - goodwill - intangibleAssets) (${balanceBasisLabel})`,
@@ -2055,13 +2194,26 @@ export function multiplesFramework(
       peers: peerStats((inputs.peers ?? []).map((p) => p.multiples[key]), notes, key),
     };
   });
+  // WS6 (D-19): state N per multiple. The report's multiples table carries the
+  // rank but not the window size, so the sentence that makes the number
+  // readable - "rank among N quarters", never "percentile" - is published here.
+  for (const m of multiples) {
+    const band = m.ownHistory;
+    if (band === null || band.percentileRank === null) continue;
+    notes.push(
+      `${m.key}: the own-history figure is a RANK AMONG ${band.observations} QUARTERS of this issuer's own history ` +
+        `(${fmtNum(band.percentileRank)} on a 0-100 scale), not a percentile of a distribution - ${band.observations} observations ` +
+        "cannot estimate percentiles, and a rank within the observed sample is what it measures.",
+    );
+  }
+
   // Negative denominators were already nulled via posOrNull; belt-and-braces:
   for (const m of multiples) {
     if (m.current !== null && m.current <= 0) {
       m.current = null;
       // The own-history rank was computed from this value before it was ruled
       // not-meaningful, so it must go too — otherwise the report shows a
-      // percentile (typically 0th) for a multiple it prints as n/m. The
+      // rank (typically 0) for a multiple it prints as n/m. The
       // distribution (p5..p95, observations) is independent of `current` and
       // stays.
       if (m.ownHistory !== null) m.ownHistory = { ...m.ownHistory, percentileRank: null };
@@ -2071,6 +2223,7 @@ export function multiplesFramework(
 
   return {
     multiples,
+    enterpriseValue,
     sectorAppropriate: SECTOR_APPROPRIATE_MULTIPLES[route],
     asOf: { quote: null, statements: inc?.date ?? bal?.date ?? null },
     notes,
@@ -2475,6 +2628,13 @@ export interface ValuationBundleInputs {
   /** Minority interest / preferred equity for the DCF equity bridge (0 when absent). */
   minorityInterest?: number | null;
   preferred?: number | null;
+  /**
+   * WS6 (D-19): lease liabilities (FMP `capitalLeaseObligations`), already
+   * inside `totalDebt` and therefore inside `netDebt`. Null when undisclosed.
+   */
+  leaseLiability?: number | null;
+  /** WS6 (D-19): THESIS_EV_INCLUDE_LEASES — keep leases in the EV bridge. */
+  includeLeasesInEv?: boolean;
   /** General route: DCF assumption inputs (null when not applicable). */
   dcfInputs: DcfAssumptionInputs | null;
   multiples: MultiplesFrameworkInputs;
@@ -2701,9 +2861,31 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
     notes.push(...built.notes);
     assumptions = built.assumptions;
     if (assumptions !== null) {
+      // WS6 (D-19): the DCF equity bridge follows the SAME lease convention as
+      // the multiples EV. Net debt is built from totalDebt, which already
+      // contains the lease liability, so the default subtracts it back out and
+      // THESIS_EV_INCLUDE_LEASES=1 keeps it. Both bridges are stated.
+      const leaseLiability =
+        isNum(inputs.leaseLiability) && inputs.leaseLiability !== 0 ? Math.abs(inputs.leaseLiability) : null;
+      const includeLeases = inputs.includeLeasesInEv === true;
+      const netDebtIncludingLeases = inputs.netDebt;
+      const netDebtExcludingLeases =
+        isNum(netDebtIncludingLeases) && leaseLiability !== null
+          ? netDebtIncludingLeases - leaseLiability
+          : netDebtIncludingLeases;
+      const netDebtForBridge = includeLeases ? netDebtIncludingLeases : netDebtExcludingLeases;
+      if (isNum(netDebtIncludingLeases)) {
+        notes.push(
+          `DCF equity bridge: EV − net debt − minority interest − preferred equity. ` +
+            (leaseLiability === null
+              ? "Lease liabilities were not disclosed separately, so they could not be separated from total debt; net debt is used as reported."
+              : `Net debt including leases ${fmtNum(netDebtIncludingLeases)}; excluding leases ${fmtNum(netDebtExcludingLeases as number)}; ` +
+                `${includeLeases ? "INCLUDING" : "EXCLUDING"} lease liabilities of ${fmtNum(leaseLiability)} (house default excludes them; THESIS_EV_INCLUDE_LEASES=1 includes them).`),
+        );
+      }
       const runOpts: DcfRunOptions = {
         waccPct: inputs.waccPct,
-        netDebt: inputs.netDebt,
+        netDebt: netDebtForBridge,
         dilutedShares: inputs.dilutedShares,
         minorityInterest: inputs.minorityInterest ?? null,
         preferred: inputs.preferred ?? null,

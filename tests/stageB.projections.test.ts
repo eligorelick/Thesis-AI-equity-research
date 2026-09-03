@@ -78,7 +78,7 @@ function dcfValuation(): ValuationResult {
     dcf,
     sensitivity: null,
     reverseDcf: null,
-    multiples: { multiples: [], sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
+    multiples: { multiples: [], enterpriseValue: { value: null, excludingLeases: null, includingLeases: null, leaseLiability: null, includeLeases: false, basis: "test" }, sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
     notes: [],
     gaps: [],
   };

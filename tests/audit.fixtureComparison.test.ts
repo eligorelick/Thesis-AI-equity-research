@@ -407,7 +407,7 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "report.scores.aspects.valuation.drivers.1.value",
     before: -26.36,
-    after: -25.94,
+    after: -26.2,
   },
   {
     path: "stageB.scores.aspects.fundamentals.drivers.0.value",
@@ -427,7 +427,7 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "stageB.scores.aspects.valuation.drivers.1.value",
     before: -26.36,
-    after: -25.94,
+    after: -26.2,
   },
   // Added 2026-08-31 (self-audit remediation): the quality and leadership
   // aspect notes are now route-aware. They advertised the ROIC-WACC spread
@@ -466,7 +466,7 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "report.appendix.missingData.45",
     beforeMissing: true,
-    after: {"field":"valuation.multiples.ownHistory","reason":"insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)","severity":"info"},
+    after: {"field":"valuation.multiples.ownHistory","reason":"insufficient history (need ≥8 quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)","severity":"info"},
   },
   {
     path: "stageB.gaps.43",
@@ -476,7 +476,7 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "stageB.gaps.44",
     beforeMissing: true,
-    after: {"field":"valuation.multiples.ownHistory","reason":"insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)","severity":"info"},
+    after: {"field":"valuation.multiples.ownHistory","reason":"insufficient history (need ≥8 quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)","severity":"info"},
   },
   {
     path: "stageB.valuation.gaps.0",
@@ -486,7 +486,7 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "stageB.valuation.gaps.1",
     beforeMissing: true,
-    after: {"field": "valuation.multiples.ownHistory", "reason": "insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)", "severity": "info"},
+    after: {"field":"valuation.multiples.ownHistory","reason":"insufficient history (need ≥8 quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)","severity":"info"},
   },
   // Added 2026-08-31 (bank capital-return completion): financial routes now
   // score return on TANGIBLE COMMON EQUITY instead of ROIC, whose invested
@@ -576,22 +576,22 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "stageB.valuation.multiples.gaps.1",
     beforeMissing: true,
-    after: {"field": "valuation.multiples.ownHistory", "reason": "insufficient history (need ≥8 quarters) to build own-history percentile bands (up to 5y)", "severity": "info"},
+    after: {"field":"valuation.multiples.ownHistory","reason":"insufficient history (need ≥8 quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)","severity":"info"},
   },
   {
     path: "stageB.valuation.multiples.notes.0",
     before: "income-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
-    after: "Peer multiples are not supplied by the pipeline in this version — the peer median/IQR columns are unavailable for every multiple. This is a missing input, NOT a finding that the company has no peers.",
+    after: "Enterprise value EXCLUDES lease liabilities (house default; set THESIS_EV_INCLUDE_LEASES=1 to include them). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments, less lease liabilities of 100000000 (already inside totalDebt under FMP's definition). EV/EBITDA uses this same EV; EBITDA is AFTER operating-lease cost (US GAAP ASC 842 keeps it in operating expenses), so excluding the lease liability from EV keeps numerator and denominator on the same basis. EV excluding leases 6600000000; EV including leases 6700000000.",
   },
   {
     path: "stageB.valuation.multiples.notes.1",
     before: "cash-flow-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
-    after: "income-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
+    after: "Peer multiples are not supplied by the pipeline in this version — the peer median/IQR columns are unavailable for every multiple. This is a missing input, NOT a finding that the company has no peers.",
   },
   {
     path: "stageB.valuation.multiples.notes.2",
     beforeMissing: true,
-    after: "cash-flow-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
+    after: "income-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
   },
   // Added 2026-08-31: range52w now reports whether the price history
   // actually spans 12 months, and nulls the range when it does not, so a
@@ -646,7 +646,7 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "report.scores.composite.score",
     before: 77.59,
-    after: 77.53,
+    after: 77.25,
   },
   {
     path: "stageB.returns.roic.latestRoicPct",
@@ -711,7 +711,7 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "stageB.scores.composite.score",
     before: 77.59,
-    after: 77.53,
+    after: 77.25,
   },
   // Added 2026-08-31: runForensics now aggregates the four models' own
   // house-rule notes into ForensicsReport.notes, mirroring the gaps
@@ -984,17 +984,32 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "report.fairValue.perShare.value",
     before: 146.23,
-    after: 152.05,
+    after: 152.54,
   },
   {
     path: "report.fairValue.upsidePct",
     before: 265.575,
-    after: 280.12500000000006,
+    after: 281.34999999999997,
+  },
+  {
+    path: "report.meta.disclaimer",
+    before: "Informational only — not investment advice.",
+    after: "Informational only — not investment advice. This report contains A-F letter grades and scenario price targets; both are model outputs derived from the data and assumptions disclosed here, and neither is a recommendation to buy, sell, or hold any security.",
+  },
+  {
+    path: "report.scores.aspects.balanceSheet.drivers.2.value",
+    before: 1.03,
+    after: 0.89,
+  },
+  {
+    path: "report.scores.aspects.balanceSheet.score",
+    before: 78.65,
+    after: 76.78,
   },
   {
     path: "report.scores.aspects.valuation.drivers.0.value",
     before: 265.58,
-    after: 280.13,
+    after: 281.35,
   },
   {
     path: "report.valuation.dcf.assumptions.1.basis",
@@ -1077,149 +1092,269 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
     after: {"name":"terminal ROIC","value":"9.3%","basis":"terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, \"Terminal value house convention\"); ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC"},
   },
   {
+    path: "report.valuation.dcf.assumptions.8",
+    beforeMissing: true,
+    after: {"name":"free cash flow, SBC treatment","value":"1.80B → 1.55B","basis":"Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series. Reported free cash flow as of 2025-12-31: 1800000000 before SBC → 1550000000 after subtracting SBC of 250000000."},
+  },
+  {
     path: "report.valuation.dcf.perShare.value",
     before: 146.23,
-    after: 152.05,
+    after: 152.54,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.0.perShare",
     before: 166.376092292583,
-    after: 173.31719497414153,
+    after: 173.8049998521903,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.1.perShare",
     before: 167.7149851175111,
-    after: 174.7346564277419,
+    after: 175.22246130579066,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.10.perShare",
     before: 145.54397447067558,
-    after: 151.32249055005084,
+    after: 151.8102954280996,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.11.perShare",
     before: 145.888476635414,
-    after: 151.6872087187548,
+    after: 152.17501359680358,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.12.perShare",
     before: 146.23297880015247,
-    after: 152.05192688745873,
+    after: 152.5397317655075,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.13.perShare",
     before: 146.57748096489092,
-    after: 152.4166450561627,
+    after: 152.9044499342115,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.14.perShare",
     before: 146.92198312962938,
-    after: 152.78136322486668,
+    after: 153.26916810291547,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.15.perShare",
     before: 137.02303327015306,
-    after: 142.33041820222823,
+    after: 142.81822308027702,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.16.perShare",
     before: 137.07019569277645,
-    after: 142.38034820027016,
+    after: 142.86815307831895,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.17.perShare",
     before: 137.07839478363584,
-    after: 142.3890284284642,
+    after: 142.87683330651296,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.18.perShare",
     before: 137.03897964504117,
-    after: 142.34730033895167,
+    after: 142.83510521700046,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.19.perShare",
     before: 136.940533723176,
-    after: 142.24307743409335,
+    after: 142.7308823121421,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.2.perShare",
     before: 169.2211734983775,
-    after: 176.329230640098,
+    after: 176.81703551814675,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.20.perShare",
     before: 129.477139616909,
-    after: 134.36994217687254,
+    after: 134.8577470549213,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.21.perShare",
     before: 129.31120340693457,
-    after: 134.19426853293618,
+    after: 134.68207341098494,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.22.perShare",
     before: 129.08313762406544,
-    after: 133.95281944150534,
+    after: 134.44062431955413,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.23.perShare",
     before: 128.78009840764705,
-    after: 133.63199734118118,
+    after: 134.11980221922994,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.24.perShare",
     before: 128.38543965803257,
-    after: 133.21417930937966,
+    after: 133.70198418742842,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.3.perShare",
     before: 170.9424020912171,
-    after: 178.15146400916245,
+    after: 178.63926888721124,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.4.perShare",
     before: 172.94649343185347,
-    after: 180.27315901861843,
+    after: 180.76096389666722,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.5.perShare",
     before: 155.24133879734714,
-    after: 161.5593302903874,
+    after: 162.0471351684362,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.6.perShare",
     before: 156.0003561762538,
-    after: 162.36288816834582,
+    after: 162.8506930463946,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.7.perShare",
     before: 156.82318027878264,
-    after: 163.23399706273446,
+    after: 163.72180194078325,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.8.perShare",
     before: 157.72643914234646,
-    after: 164.1902607739791,
+    after: 164.67806565202787,
   },
   {
     path: "report.valuation.dcf.sensitivityGrid.9.perShare",
     before: 158.73308812865395,
-    after: 165.25598172552236,
+    after: 165.74378660357115,
   },
   {
     path: "report.valuation.dcf.upsidePct",
     before: 265.575,
-    after: 280.12500000000006,
+    after: 281.34999999999997,
+  },
+  {
+    path: "report.valuation.multiples.1.current",
+    before: 2.392857142857143,
+    after: 2.357142857142857,
+  },
+  {
+    path: "report.valuation.multiples.2.current",
+    before: 0.536,
+    after: 0.528,
+  },
+  {
+    path: "report.valuation.reverseDcf.impliedValue",
+    before: -17.24609375,
+    after: -17.5,
+  },
+  {
+    path: "stageB.capital.dilution",
+    beforeMissing: true,
+    after: {"basicShares":200000000,"dilutedShares":205000000,"overhangPct":2.5,"asOf":"2025-12-31","note":"Dilution from outstanding awards: diluted 205000000 vs basic 200000000 weighted-average shares as of 2025-12-31 — a 2.5% overhang. Options, RSUs and convertibles that are antidilutive in a loss year are excluded from the diluted count by the filer, so a loss-making issuer's overhang understates the award pool."},
+  },
+  {
+    path: "stageB.capital.fcf.basis",
+    beforeMissing: true,
+    after: "Free cash flow = operating cash flow + capital expenditure (FMP capex negative), MINUS stock-based compensation (house default: SBC is a cash-equivalent operating expense settled in shares, not a genuine add-back — Damodaran, \"Stock Based Compensation: The Elephant in the Room\"). Both the before- and after-SBC figures are reported; years with no disclosed SBC are unadjusted and say so.",
+  },
+  {
+    path: "stageB.capital.fcf.latestConversion",
+    before: 1.0285714285714285,
+    after: 0.8857142857142857,
+  },
+  {
+    path: "stageB.capital.fcf.latestFcf",
+    before: 1800000000,
+    after: 1550000000,
+  },
+  {
+    path: "stageB.capital.fcf.latestFcfBeforeSbc",
+    beforeMissing: true,
+    after: 1800000000,
+  },
+  {
+    path: "stageB.capital.fcf.latestSbc",
+    beforeMissing: true,
+    after: 250000000,
+  },
+  {
+    path: "stageB.capital.fcf.series.0.fcf",
+    before: 1550000000,
+    after: 1330000000,
+  },
+  {
+    path: "stageB.capital.fcf.series.0.fcfBeforeSbc",
+    beforeMissing: true,
+    after: 1550000000,
+  },
+  {
+    path: "stageB.capital.fcf.series.0.fcfConversion",
+    before: 1.0333333333333334,
+    after: 0.8866666666666667,
+  },
+  {
+    path: "stageB.capital.fcf.series.0.note",
+    before: {"$auditUndefined":true},
+    after: "SBC 220000000 subtracted from FCF (house default): 1550000000 → 1330000000",
+  },
+  {
+    path: "stageB.capital.fcf.series.0.stockBasedCompensation",
+    beforeMissing: true,
+    after: 220000000,
+  },
+  {
+    path: "stageB.capital.fcf.series.1.fcf",
+    before: 1800000000,
+    after: 1550000000,
+  },
+  {
+    path: "stageB.capital.fcf.series.1.fcfBeforeSbc",
+    beforeMissing: true,
+    after: 1800000000,
+  },
+  {
+    path: "stageB.capital.fcf.series.1.fcfConversion",
+    before: 1.0285714285714285,
+    after: 0.8857142857142857,
+  },
+  {
+    path: "stageB.capital.fcf.series.1.note",
+    before: {"$auditUndefined":true},
+    after: "SBC 250000000 subtracted from FCF (house default): 1800000000 → 1550000000",
+  },
+  {
+    path: "stageB.capital.fcf.series.1.stockBasedCompensation",
+    beforeMissing: true,
+    after: 250000000,
+  },
+  {
+    path: "stageB.capital.notes.1",
+    beforeMissing: true,
+    after: "Dilution from outstanding awards: diluted 205000000 vs basic 200000000 weighted-average shares as of 2025-12-31 — a 2.5% overhang. Options, RSUs and convertibles that are antidilutive in a loss year are excluded from the diluted count by the filer, so a loss-making issuer's overhang understates the award pool.",
+  },
+  {
+    path: "stageB.capital.notes.2",
+    beforeMissing: true,
+    after: "Free cash flow = operating cash flow + capital expenditure (FMP capex negative), MINUS stock-based compensation (house default: SBC is a cash-equivalent operating expense settled in shares, not a genuine add-back — Damodaran, \"Stock Based Compensation: The Elephant in the Room\"). Both the before- and after-SBC figures are reported; years with no disclosed SBC are unadjusted and say so.",
+  },
+  {
+    path: "stageB.capital.notes.3",
+    beforeMissing: true,
+    after: "Latest free cash flow (2025-12-31): 1800000000 before SBC, 1550000000 after subtracting SBC of 250000000.",
+  },
+  {
+    path: "stageB.capital.sbc.note",
+    before: {"$auditUndefined":true},
+    after: "SBC % of FCF is measured against FCF BEFORE the SBC deduction",
   },
   {
     path: "stageB.fairValue.perShare.value",
     before: 146.23,
-    after: 152.05,
+    after: 152.54,
   },
   {
     path: "stageB.fairValue.upsidePct",
     before: 265.575,
-    after: 280.12500000000006,
+    after: 281.34999999999997,
   },
   {
     path: "stageB.gaps.45",
@@ -1272,9 +1407,19 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
     after: {"waccPct":9.255946000000002,"riskFree":{"pct":4,"seriesId":"fmp:treasury-rates.year10","asOf":"2025-12-31"},"erp":{"pct":5,"source":"FMP market-risk-premium (US totalEquityRiskPremium)","asOf":"2026-07-06"},"beta":{"raw":1.1,"adjusted":1.0670000000000002,"final":1.0670000000000002,"method":"Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2]"},"costOfEquityPct":9.335,"costOfDebt":{"pct":12,"method":"effective","syntheticRating":null},"taxRate":{"fraction":0.2708333,"basis":"FMP ratios effectiveTaxRate (observed effective rate)"},"weights":{"equity":0.8648648648648649,"debt":0.13513513513513514,"basis":"market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy"},"summary":"WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)"},
   },
   {
+    path: "stageB.scores.aspects.balanceSheet.drivers.2.value",
+    before: 1.03,
+    after: 0.89,
+  },
+  {
+    path: "stageB.scores.aspects.balanceSheet.score",
+    before: 78.65,
+    after: 76.78,
+  },
+  {
     path: "stageB.scores.aspects.valuation.drivers.0.value",
     before: 265.58,
-    after: 280.13,
+    after: 281.35,
   },
   {
     path: "stageB.valuation.assumptions.growthAnchor",
@@ -1347,6 +1492,16 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
     after: "ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC",
   },
   {
+    path: "stageB.valuation.assumptions.notes.4",
+    beforeMissing: true,
+    after: "Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series. Reported free cash flow as of 2025-12-31: 1800000000 before SBC → 1550000000 after subtracting SBC of 250000000.",
+  },
+  {
+    path: "stageB.valuation.assumptions.sbc",
+    beforeMissing: true,
+    after: {"value":{"beforeSbc":1800000000,"afterSbc":1550000000,"sbc":250000000,"asOf":"2025-12-31","basis":"Free cash flow = operating cash flow + capital expenditure (FMP capex negative), MINUS stock-based compensation (house default: SBC is a cash-equivalent operating expense settled in shares, not a genuine add-back — Damodaran, \"Stock Based Compensation: The Elephant in the Room\"). Both the before- and after-SBC figures are reported; years with no disclosed SBC are unadjusted and say so."},"basis":"Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series. Reported free cash flow as of 2025-12-31: 1800000000 before SBC → 1550000000 after subtracting SBC of 250000000."},
+  },
+  {
     path: "stageB.valuation.assumptions.terminal.roicTermPct.basis",
     before: "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)",
     after: "terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, \"Terminal value house convention\"); ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC",
@@ -1364,12 +1519,12 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "stageB.valuation.dcf.equityValue",
     before: 29977760654.031258,
-    after: 31170645011.92904,
+    after: 31270645011.92904,
   },
   {
     path: "stageB.valuation.dcf.perShare",
     before: 146.23297880015247,
-    after: 152.05192688745873,
+    after: 152.5397317655075,
   },
   {
     path: "stageB.valuation.dcf.pvExplicit",
@@ -1742,6 +1897,36 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
     after: {"field":"valuation.dcf.terminalRoic.waccBasis","reason":"no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC","severity":"info"},
   },
   {
+    path: "stageB.valuation.multiples.enterpriseValue",
+    beforeMissing: true,
+    after: {"value":6600000000,"excludingLeases":6600000000,"includingLeases":6700000000,"leaseLiability":100000000,"includeLeases":false,"basis":"Enterprise value EXCLUDES lease liabilities (house default; set THESIS_EV_INCLUDE_LEASES=1 to include them). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments, less lease liabilities of 100000000 (already inside totalDebt under FMP's definition). EV/EBITDA uses this same EV; EBITDA is AFTER operating-lease cost (US GAAP ASC 842 keeps it in operating expenses), so excluding the lease liability from EV keeps numerator and denominator on the same basis. EV excluding leases 6600000000; EV including leases 6700000000."},
+  },
+  {
+    path: "stageB.valuation.multiples.multiples.1.basis",
+    before: "EV (mcap + totalDebt + preferred + minority - cash&STI, latest quarterly balance sheet 2025-12-31) / (operatingIncome + D&A), latest annual FY 2025-12-31 — TTM suppressed-computed — vendor ebitda field not trusted",
+    after: "EV / (operatingIncome + D&A), latest annual FY 2025-12-31 — TTM suppressed-computed — vendor ebitda field not trusted. Enterprise value EXCLUDES lease liabilities (house default; set THESIS_EV_INCLUDE_LEASES=1 to include them). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments, less lease liabilities of 100000000 (already inside totalDebt under FMP's definition). EV/EBITDA uses this same EV; EBITDA is AFTER operating-lease cost (US GAAP ASC 842 keeps it in operating expenses), so excluding the lease liability from EV keeps numerator and denominator on the same basis. EV excluding leases 6600000000; EV including leases 6700000000. Balance basis: latest quarterly balance sheet 2025-12-31.",
+  },
+  {
+    path: "stageB.valuation.multiples.multiples.1.current",
+    before: 2.392857142857143,
+    after: 2.357142857142857,
+  },
+  {
+    path: "stageB.valuation.multiples.multiples.2.basis",
+    before: "EV / revenue (latest annual FY 2025-12-31 — TTM suppressed)",
+    after: "EV / revenue (latest annual FY 2025-12-31 — TTM suppressed). Enterprise value EXCLUDES lease liabilities (house default; set THESIS_EV_INCLUDE_LEASES=1 to include them). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments, less lease liabilities of 100000000 (already inside totalDebt under FMP's definition). EV/EBITDA uses this same EV; EBITDA is AFTER operating-lease cost (US GAAP ASC 842 keeps it in operating expenses), so excluding the lease liability from EV keeps numerator and denominator on the same basis. EV excluding leases 6600000000; EV including leases 6700000000.",
+  },
+  {
+    path: "stageB.valuation.multiples.multiples.2.current",
+    before: 0.536,
+    after: 0.528,
+  },
+  {
+    path: "stageB.valuation.multiples.notes.3",
+    beforeMissing: true,
+    after: "cash-flow-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
+  },
+  {
     path: "stageB.valuation.notes.0",
     before: "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%",
     after: "Near-term growth anchor: median of 4 available growth methods = 9.11%, range 7.89% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case 7.89% (average implied growth over the next 2 fiscal years, through 2027-12-31) (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)",
@@ -1754,132 +1939,147 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
   {
     path: "stageB.valuation.notes.4",
     beforeMissing: true,
+    after: "Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series. Reported free cash flow as of 2025-12-31: 1800000000 before SBC → 1550000000 after subtracting SBC of 250000000.",
+  },
+  {
+    path: "stageB.valuation.notes.5",
+    beforeMissing: true,
+    after: "DCF equity bridge: EV − net debt − minority interest − preferred equity. Net debt including leases -1300000000; excluding leases -1400000000; EXCLUDING lease liabilities of 100000000 (house default excludes them; THESIS_EV_INCLUDE_LEASES=1 includes them).",
+  },
+  {
+    path: "stageB.valuation.notes.6",
+    beforeMissing: true,
     after: "NET_DEBT_V1: net debt -1300000000 as of 2025-12-31; totalDebt 1200000000, cashAndShortTermInvestments 2500000000",
+  },
+  {
+    path: "stageB.valuation.reverseDcf.impliedRevenueGrowthPct",
+    before: -17.24609375,
+    after: -17.5,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.0.0",
     before: 166.376092292583,
-    after: 173.31719497414153,
+    after: 173.8049998521903,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.0.1",
     before: 167.7149851175111,
-    after: 174.7346564277419,
+    after: 175.22246130579066,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.0.2",
     before: 169.2211734983775,
-    after: 176.329230640098,
+    after: 176.81703551814675,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.0.3",
     before: 170.9424020912171,
-    after: 178.15146400916245,
+    after: 178.63926888721124,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.0.4",
     before: 172.94649343185347,
-    after: 180.27315901861843,
+    after: 180.76096389666722,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.1.0",
     before: 155.24133879734714,
-    after: 161.5593302903874,
+    after: 162.0471351684362,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.1.1",
     before: 156.0003561762538,
-    after: 162.36288816834582,
+    after: 162.8506930463946,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.1.2",
     before: 156.82318027878264,
-    after: 163.23399706273446,
+    after: 163.72180194078325,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.1.3",
     before: 157.72643914234646,
-    after: 164.1902607739791,
+    after: 164.67806565202787,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.1.4",
     before: 158.73308812865395,
-    after: 165.25598172552236,
+    after: 165.74378660357115,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.2.0",
     before: 145.54397447067558,
-    after: 151.32249055005084,
+    after: 151.8102954280996,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.2.1",
     before: 145.888476635414,
-    after: 151.6872087187548,
+    after: 152.17501359680358,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.2.2",
     before: 146.23297880015247,
-    after: 152.05192688745873,
+    after: 152.5397317655075,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.2.3",
     before: 146.57748096489092,
-    after: 152.4166450561627,
+    after: 152.9044499342115,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.2.4",
     before: 146.92198312962938,
-    after: 152.78136322486668,
+    after: 153.26916810291547,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.3.0",
     before: 137.02303327015306,
-    after: 142.33041820222823,
+    after: 142.81822308027702,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.3.1",
     before: 137.07019569277645,
-    after: 142.38034820027016,
+    after: 142.86815307831895,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.3.2",
     before: 137.07839478363584,
-    after: 142.3890284284642,
+    after: 142.87683330651296,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.3.3",
     before: 137.03897964504117,
-    after: 142.34730033895167,
+    after: 142.83510521700046,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.3.4",
     before: 136.940533723176,
-    after: 142.24307743409335,
+    after: 142.7308823121421,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.4.0",
     before: 129.477139616909,
-    after: 134.36994217687254,
+    after: 134.8577470549213,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.4.1",
     before: 129.31120340693457,
-    after: 134.19426853293618,
+    after: 134.68207341098494,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.4.2",
     before: 129.08313762406544,
-    after: 133.95281944150534,
+    after: 134.44062431955413,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.4.3",
     before: 128.78009840764705,
-    after: 133.63199734118118,
+    after: 134.11980221922994,
   },
   {
     path: "stageB.valuation.sensitivity.perShare.4.4",
     before: 128.38543965803257,
-    after: 133.21417930937966,
+    after: 133.70198418742842,
   },
   // ---- WS6 (valuation inputs and disclosure) ---- END
 ];

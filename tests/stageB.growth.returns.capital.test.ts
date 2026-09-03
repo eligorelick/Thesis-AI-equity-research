@@ -850,13 +850,59 @@ describe("computeCapital — core ratios", () => {
   it("SBC as % of revenue and % of FCF", () => {
     expect(res.sbc.latest).toBe(10);
     expect(res.sbc.pctOfRevenue).toBeCloseTo(5, 12); // 10/200
-    expect(res.sbc.pctOfFcf).toBeCloseTo(12.5, 12); // 10/80
+    // WS6 (D-19): measured against FCF BEFORE the deduction (10/80), because
+    // dividing SBC by an FCF it has already been subtracted from double-counts.
+    expect(res.sbc.pctOfFcf).toBeCloseTo(12.5, 12);
+    expect(res.sbc.note).toContain("BEFORE the SBC deduction");
   });
 
-  it("FCF conversion = FCF / NI", () => {
-    expect(res.fcf.latestFcf).toBe(80);
-    expect(res.fcf.latestConversion).toBeCloseTo(0.8, 12);
+  // WS6 (D-19): free cash flow now SUBTRACTS stock-based compensation by
+  // default, so the reported FCF is 80 - 10 = 70 and the conversion follows it.
+  // Both figures are kept: `fcfBeforeSbc` is the vendor convention.
+  it("FCF is reported after SBC, with the before-SBC figure kept, and conversion follows it", () => {
+    expect(res.fcf.latestFcfBeforeSbc).toBe(80);
+    expect(res.fcf.latestSbc).toBe(10);
+    expect(res.fcf.latestFcf).toBe(70);
+    expect(res.fcf.latestConversion).toBeCloseTo(0.7, 12); // 70 / 100 net income
     expect(res.fcf.series[0].date < res.fcf.series[1].date).toBe(true); // oldest→newest
+    const latest = res.fcf.series[res.fcf.series.length - 1];
+    expect(latest.fcfBeforeSbc).toBe(80);
+    expect(latest.stockBasedCompensation).toBe(10);
+    expect(latest.note).toContain("SBC 10 subtracted from FCF");
+    expect(res.fcf.basis).toContain("MINUS stock-based compensation");
+    expect(res.notes.some((n) => n.includes("80 before SBC, 70 after subtracting SBC of 10"))).toBe(true);
+  });
+
+  it("leaves FCF unadjusted, and says so, when SBC is not disclosed", () => {
+    const cf = capCashflow.map((r) => ({ ...r, stockBasedCompensation: null }));
+    const res2 = computeCapital(capIncome, cf, capBalance, capMcapHistory, { price: 20 });
+    expect(res2.fcf.latestFcf).toBe(80);
+    expect(res2.fcf.latestFcfBeforeSbc).toBe(80);
+    expect(res2.fcf.latestSbc).toBeNull();
+    expect(res2.fcf.series[res2.fcf.series.length - 1].note).toContain(
+      "stock-based compensation not disclosed for this year",
+    );
+    expect(res2.gaps.some((g) => g.field === "capital.fcf.sbc" && g.severity === "info")).toBe(true);
+  });
+
+  it("shows dilution from outstanding awards as diluted vs basic shares", () => {
+    const inc = capIncome.map((r, i) =>
+      i === 0 ? { ...r, weightedAverageShsOut: 95, weightedAverageShsOutDil: 100 } : r,
+    );
+    const res2 = computeCapital(inc, capCashflow, capBalance, capMcapHistory, { price: 20 });
+    expect(res2.dilution.basicShares).toBe(95);
+    expect(res2.dilution.dilutedShares).toBe(100);
+    expect(res2.dilution.overhangPct).toBeCloseTo((5 / 95) * 100, 12);
+    expect(res2.dilution.asOf).toBe("2025-12-31");
+    expect(res2.dilution.note).toContain("diluted 100 vs basic 95");
+  });
+
+  it("discloses the dilution overhang as unavailable when the basic count is missing", () => {
+    // capIncome carries only the diluted count.
+    expect(res.dilution.basicShares).toBeNull();
+    expect(res.dilution.overhangPct).toBeNull();
+    expect(res.dilution.note).toContain("unavailable");
+    expect(res.gaps.some((g) => g.field === "capital.dilution")).toBe(true);
   });
 
   it("capex intensity = |capex| / revenue", () => {

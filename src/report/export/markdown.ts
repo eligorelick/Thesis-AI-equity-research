@@ -613,12 +613,14 @@ function renderValuation(v: Valuation, scenarioTargets?: ScenarioTargets, fairVa
     "### Multiples",
     "",
     table(
-      ["Multiple", "Current", "Peer median", "Own 5y pctile", "Sector-appropriate"],
+      // WS6 (D-19): a rank among N quarters of the issuer's own history, not a
+      // percentile of a distribution.
+      ["Multiple", "Current", "Peer median", "Own-history rank", "Sector-appropriate"],
       v.multiples.map((m) => [
         m.name,
         m.current === null ? DASH : num(m.current, 1),
         m.peerMedian === null ? DASH : num(m.peerMedian, 1),
-        m.own5yPercentile === null ? DASH : `${m.own5yPercentile.toFixed(0)}%`,
+        m.own5yPercentile === null ? DASH : `rank ${m.own5yPercentile.toFixed(0)}/100`,
         m.sectorAppropriate ? "yes" : "no",
       ]),
     ),

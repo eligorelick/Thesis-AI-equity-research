@@ -65,6 +65,10 @@ function explicitAssumptions(over: Partial<{
     startRevenue: { value: over.startRevenue ?? 1000, basis: "test" },
     years,
     wacc: { value: 9, basis: "test" },
+    sbc: {
+      value: { beforeSbc: null, afterSbc: null, sbc: null, asOf: null, basis: "test" },
+      basis: "test",
+    },
     growthAnchor: {
       pointPct: growthPath[0],
       rangePct: null,
@@ -2066,11 +2070,16 @@ describe("terminalRoic — evidenced excess returns carried into the terminal", 
     expect(a.notes).toContain(
       "terminal ROIC held at WACC: 2 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house convention)",
     );
-    // WS6 (D-19): with no per-year risk-free observation the note says the
-    // CURRENT WACC was applied to every year, and it is the last note written.
-    expect(a.notes.at(-1)).toBe(
+    // WS6 (D-19): with no per-year risk-free observation the notes say the
+    // CURRENT WACC was applied to every year, and the manifest says so too.
+    expect(a.notes).toContain(
       "ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9% — no per-year risk-free observation was available to recompute a year-specific WACC",
     );
+    expect(
+      built.gaps.some(
+        (g) => g.field === "valuation.dcf.terminalRoic.waccBasis" && g.severity === "info",
+      ),
+    ).toBe(true);
     expect(a.terminal.roicTermPct.basis).toContain("HOUSE CONVENTION");
   });
 
@@ -2154,5 +2163,223 @@ describe("buildDcfAssumptions — revenue history with a spike or a collapse", (
     expect(a.growthPath.value[0]).toBeCloseTo(-6, 9);
     expect(a.growthAnchor.rangePct).toBeNull();
     expect(a.growthAnchor.basis).toContain("single method; no range");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WS6 (D-19) — enterprise-value bridge and the operating-lease option
+// ---------------------------------------------------------------------------
+
+describe("multiplesFramework — EV bridge and THESIS_EV_INCLUDE_LEASES", () => {
+  const evInputs: MultiplesFrameworkInputs = {
+    quote: { price: 100, marketCap: 10_000, currency: "USD" },
+    reportedCurrency: "USD",
+    incomeTtm: {
+      date: "2025-12-31",
+      revenue: 5000,
+      operatingIncome: 1000,
+      depreciationAndAmortization: 200,
+      netIncome: 700,
+      epsDiluted: 7,
+    },
+    cashFlowTtm: {
+      date: "2025-12-31",
+      operatingCashFlow: 900,
+      capitalExpenditure: -150,
+      depreciationAndAmortization: 200,
+    },
+    balance: {
+      date: "2025-12-31",
+      // FMP's totalDebt already CONTAINS capitalLeaseObligations.
+      totalDebt: 2000,
+      cashAndShortTermInvestments: 500,
+      totalStockholdersEquity: 4000,
+      goodwill: 800,
+      intangibleAssets: 200,
+      minorityInterest: 100,
+      preferredStock: 50,
+      capitalLeaseObligations: 300,
+    },
+  };
+  // EV including leases = 10000 + 2000 + 50 + 100 - 500 = 11,650.
+  // EV excluding leases = 11,650 - 300 = 11,350. EBITDA = 1000 + 200 = 1200.
+  const EV_INC = 11_650;
+  const EV_EX = 11_350;
+
+  it("excludes lease liabilities by default and reports BOTH enterprise values", () => {
+    const r = multiplesFramework("general", evInputs);
+    expect(r.enterpriseValue.includeLeases).toBe(false);
+    expect(r.enterpriseValue.value).toBe(EV_EX);
+    expect(r.enterpriseValue.excludingLeases).toBe(EV_EX);
+    expect(r.enterpriseValue.includingLeases).toBe(EV_INC);
+    expect(r.enterpriseValue.leaseLiability).toBe(300);
+    expect(r.enterpriseValue.basis).toContain("EXCLUDES lease liabilities");
+    expect(r.enterpriseValue.basis).toContain("EV excluding leases 11350");
+    expect(r.enterpriseValue.basis).toContain("EV including leases 11650");
+    // EBITDA basis is stated, and it is the SAME EV the multiple divides.
+    expect(r.enterpriseValue.basis).toContain("EBITDA is AFTER operating-lease cost");
+    const evEbitda = r.multiples.find((m) => m.key === "evToEbitda");
+    expect(evEbitda?.current).toBeCloseTo(EV_EX / 1200, 12);
+    expect(evEbitda?.basis).toContain("EXCLUDES lease liabilities");
+    const evSales = r.multiples.find((m) => m.key === "evToSales");
+    expect(evSales?.current).toBeCloseTo(EV_EX / 5000, 12);
+  });
+
+  it("includes them when asked, and warns that EV/EBITDA then double-counts", () => {
+    const r = multiplesFramework("general", { ...evInputs, includeLeasesInEv: true });
+    expect(r.enterpriseValue.includeLeases).toBe(true);
+    expect(r.enterpriseValue.value).toBe(EV_INC);
+    const evEbitda = r.multiples.find((m) => m.key === "evToEbitda");
+    expect(evEbitda?.current).toBeCloseTo(EV_INC / 1200, 12);
+    expect(r.enterpriseValue.basis).toContain("INCLUDES lease liabilities");
+    expect(r.enterpriseValue.basis).toContain("double-counts");
+    const gap = r.gaps.find((g) => g.field === "valuation.multiples.enterpriseValue.leases");
+    expect(gap?.severity).toBe("warn");
+    expect(gap?.reason).toContain("not comparable to the default basis");
+  });
+
+  it("discloses that leases could not be separated when they are undisclosed", () => {
+    const balance = { ...evInputs.balance!, capitalLeaseObligations: null };
+    const r = multiplesFramework("general", { ...evInputs, balance });
+    expect(r.enterpriseValue.leaseLiability).toBeNull();
+    expect(r.enterpriseValue.value).toBe(EV_INC);
+    expect(r.enterpriseValue.excludingLeases).toBe(EV_INC);
+    expect(r.enterpriseValue.basis).toContain("could not be separated from totalDebt");
+    const gap = r.gaps.find((g) => g.field === "valuation.multiples.enterpriseValue.leases");
+    expect(gap?.severity).toBe("info");
+  });
+});
+
+describe("valueCompany — the DCF equity bridge follows the same lease convention", () => {
+  const route: CompanyRoute = { base: "general", overlays: [], evidence: { sector: null, industry: null } };
+  const dcfIn: DcfAssumptionInputs = {
+    revenueCagr3yPct: 8,
+    revenueCagr5yPct: 8,
+    analystEstimates: null,
+    waccPct: 9,
+    riskFreePct: 4,
+    incomeTtm: { date: "2025-12-31", revenue: 1000, operatingIncome: 250, incomeBeforeTax: 240, incomeTaxExpense: 48 },
+    incomeHistory: [
+      { date: "2025-12-31", revenue: 1000, operatingIncome: 250 },
+      { date: "2024-12-31", revenue: 940, operatingIncome: 235 },
+    ],
+    balance: { date: "2025-12-31", basis: "annual", totalDebt: 200, totalStockholdersEquity: 700, cashAndShortTermInvestments: 150 },
+    marketCap: 8000,
+  };
+  const bundle = (over: Partial<Parameters<typeof valueCompany>[1]> = {}) => ({
+    currentPrice: 100,
+    waccPct: 9,
+    netDebt: 500,
+    dilutedShares: 100,
+    minorityInterest: null,
+    preferred: null,
+    dcfInputs: dcfIn,
+    multiples: {
+      quote: { price: 100, marketCap: 8000, currency: "USD" },
+      reportedCurrency: "USD",
+      incomeTtm: null,
+      cashFlowTtm: null,
+      balance: null,
+    },
+    excessReturn: null,
+    reit: null,
+    ...over,
+  });
+
+  it("subtracts the lease liability from net debt by default, raising the per-share value", () => {
+    const withLeases = valueCompany(route, bundle({ leaseLiability: 120, includeLeasesInEv: true }));
+    const exLeases = valueCompany(route, bundle({ leaseLiability: 120, includeLeasesInEv: false }));
+    if (withLeases.kind !== "dcf" || exLeases.kind !== "dcf") throw new Error("expected the DCF route");
+    const a = withLeases.dcf?.perShare as number;
+    const b = exLeases.dcf?.perShare as number;
+    // Net debt 500 including leases, 380 excluding them, over 100 shares.
+    expect(b - a).toBeCloseTo(120 / 100, 9);
+    expect(exLeases.notes.some((n) => n.includes("EXCLUDING lease liabilities of 120"))).toBe(true);
+    expect(withLeases.notes.some((n) => n.includes("INCLUDING lease liabilities of 120"))).toBe(true);
+    expect(exLeases.notes.some((n) => n.includes("Net debt including leases 500; excluding leases 380"))).toBe(true);
+  });
+
+  it("says so when leases are not disclosed separately", () => {
+    const r = valueCompany(route, bundle({ leaseLiability: null }));
+    if (r.kind !== "dcf") throw new Error("expected the DCF route");
+    expect(r.notes.some((n) => n.includes("could not be separated from total debt"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WS6 (D-19) — "rank among N quarters", never "percentile"
+// ---------------------------------------------------------------------------
+
+describe("multiplesFramework — own-history figure is a rank among N quarters", () => {
+  const quarters = (count: number): QuarterlyFundamentalsRow[] => {
+    const suffixes = ["12-31", "09-30", "06-30", "03-31"] as const;
+    return Array.from({ length: count }, (_, index) => ({
+      date: `${2026 - Math.floor(index / 4)}-${suffixes[index % 4]}`,
+      revenue: 25,
+      operatingIncome: 5,
+      depreciationAndAmortization: 1,
+      netIncome: 4,
+      operatingCashFlow: 6,
+      capitalExpenditure: -1,
+      totalStockholdersEquity: 100,
+      totalDebt: 0,
+      cashAndShortTermInvestments: 0,
+      preferredStock: 0,
+      minorityInterest: 0,
+      incomeDepreciationAndAmortization: 1,
+    }));
+  };
+  const evHistory = (count: number): EnterpriseValuesRow[] =>
+    quarters(count).map((q) => ({ date: q.date, marketCapitalization: 1000, enterpriseValue: 1000 }));
+
+  const inputs: MultiplesFrameworkInputs = {
+    quote: { price: 100, marketCap: 1000, currency: "USD" },
+    reportedCurrency: "USD",
+    incomeTtm: {
+      date: "2026-12-31",
+      revenue: 100,
+      operatingIncome: 20,
+      depreciationAndAmortization: 4,
+      netIncome: 16,
+      epsDiluted: 1.6,
+    },
+    cashFlowTtm: { date: "2026-12-31", operatingCashFlow: 24, capitalExpenditure: -4, depreciationAndAmortization: 4 },
+    balance: {
+      date: "2026-12-31",
+      totalDebt: 0,
+      cashAndShortTermInvestments: 0,
+      totalStockholdersEquity: 400,
+      goodwill: 0,
+      intangibleAssets: 0,
+      minorityInterest: 0,
+      preferredStock: 0,
+    },
+    quarterlyFundamentals: quarters(12),
+    enterpriseValuesHistory: evHistory(12),
+  };
+
+  it("states the window size and calls the figure a rank, not a percentile", () => {
+    const r = multiplesFramework("general", inputs);
+    const pe = r.multiples.find((m) => m.key === "peTtm");
+    // 12 quarters yield 9 rolling four-quarter TTM windows.
+    expect(pe?.ownHistory?.observations).toBe(9);
+    expect(pe?.ownHistory?.basis).toContain("RANK AMONG 9 QUARTERS");
+    expect(pe?.ownHistory?.basis).not.toMatch(/percentile of a distribution\.(?! )/);
+    // The window size reaches the report through the valuation notes, because
+    // the report's multiples row carries the rank but not N.
+    expect(
+      r.notes.some((n) => n.startsWith("peTtm:") && n.includes("RANK AMONG 9 QUARTERS")),
+    ).toBe(true);
+  });
+
+  it("says a short window is insufficient to rank against, not to build percentiles", () => {
+    const r = multiplesFramework("general", {
+      ...inputs,
+      quarterlyFundamentals: quarters(4),
+      enterpriseValuesHistory: evHistory(4),
+    });
+    const gap = r.gaps.find((g) => g.field === "valuation.multiples.ownHistory");
+    expect(gap?.reason).toContain("rank the current multiple among the issuer's own quarters");
+    expect(gap?.reason).not.toContain("percentile");
   });
 });

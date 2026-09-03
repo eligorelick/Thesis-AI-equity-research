@@ -216,11 +216,16 @@ describe("reportToMarkdown", () => {
   const md = reportToMarkdown(report);
 
   it("contains the mandatory disclaimer and FRED attribution verbatim", () => {
-    expect(md).toContain(DISCLAIMER_TEXT);
+    // WS6 (D-19): renderers print the STORED disclaimer as written, so a
+    // persisted report keeps the text that was in force when it was generated.
+    expect(md).toContain(report.meta.disclaimer);
+    expect(report.meta.disclaimer).toContain("not investment advice");
     expect(md).toContain(FRED_ATTRIBUTION_TEXT);
-    // And the schema literals match the exported constants.
-    expect(report.meta.disclaimer).toBe(DISCLAIMER_TEXT);
     expect(report.macro.fredAttribution).toBe(FRED_ATTRIBUTION_TEXT);
+    // A report generated now carries the current constant verbatim.
+    const current = clone(report);
+    current.meta.disclaimer = DISCLAIMER_TEXT;
+    expect(reportToMarkdown(current)).toContain(DISCLAIMER_TEXT);
   });
 
   it("renders source envelopes in Markdown and React appendices", () => {

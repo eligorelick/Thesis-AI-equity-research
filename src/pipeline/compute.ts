@@ -112,6 +112,8 @@ import {
   classifyInstrumentSupport,
   UnsupportedInstrumentError,
 } from "@/pipeline/stageB/instrumentSupport";
+// WS6 (D-19): THESIS_EV_INCLUDE_LEASES.
+import { getConfig } from "@/config/env";
 import { mergeManifest } from "@/pipeline/stageA/manifest";
 import type { Scoring, Projections, ScenarioTargets, FairValue } from "@/report/schema";
 
@@ -1111,8 +1113,9 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     ttmInc,
     ttmCf,
     growth,
-    wacc: returns.wacc,
     // WS6 wiring.
+    capital,
+    wacc: returns.wacc,
     waccInputs: returns.waccInputs,
     waccHistory: returns.waccHistory,
     roic: returns.roic,
@@ -1495,6 +1498,8 @@ interface ValuationCtx {
   ttmInc: TtmIncome | null;
   ttmCf: TtmCashFlow | null;
   growth: GrowthResult;
+  /** WS6 (D-19): FCF/SBC treatment for the DCF assumption block. */
+  capital: CapitalResult;
   wacc: WaccResult;
   // WS6 (D-19): the named WACC inputs and the per-fiscal-year WACC series.
   waccInputs: WaccDisclosure;
@@ -1555,6 +1560,8 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
 
   const netDebtInfo = netDebtFromBalance(balPoint);
   const netDebtDerived = netDebtInfo.value;
+  // WS6 (D-19): THESIS_EV_INCLUDE_LEASES, read once for both bridges.
+  const evIncludeLeases = getConfig().evIncludeLeases;
 
   // --- DCF inputs (general route) -------------------------------------------
   const analystEstimates: AnalystEstimateRow[] | null = bundle.analystEstimates.ok
@@ -1616,6 +1623,14 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
           waccPct: wacc.waccPct ?? 0,
           // WS6 (D-19): every WACC input named in the assumption block.
           waccBasis: ctx.waccInputs.summary,
+          // WS6 (D-19): the reported FCF before and after the SBC deduction.
+          fcfSbc: {
+            beforeSbc: ctx.capital.fcf.latestFcfBeforeSbc,
+            afterSbc: ctx.capital.fcf.latestFcf,
+            sbc: ctx.capital.fcf.latestSbc,
+            asOf: ctx.capital.asOf,
+            basis: ctx.capital.fcf.basis,
+          },
           riskFreePct: rf.pct ?? 0,
           incomeTtm: dcfIncomeTtm,
           incomeHistory: dcfIncomeHistory,
@@ -1696,6 +1711,8 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
         intangibleAssets: num(balPoint.intangibleAssets),
         minorityInterest: num(balPoint.minorityInterest),
         preferredStock: num(balPoint.preferredStock),
+        // WS6 (D-19): lease liabilities for the EV bridge.
+        capitalLeaseObligations: num(balPoint.capitalLeaseObligations),
       }
     : null;
 
@@ -1729,6 +1746,8 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
     enterpriseValuesHistory,
     ffoApprox: route.base === "reit" ? ffoApprox : null,
     affoApprox: route.base === "reit" ? affoApprox : null,
+    // WS6 (D-19): off by default; see docs/METHODOLOGY.md, "EV bridge".
+    includeLeasesInEv: evIncludeLeases,
   };
 
   // --- Excess-return inputs (financials) ------------------------------------
@@ -1786,6 +1805,9 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
     dilutedShares,
     minorityInterest: balPoint ? num(balPoint.minorityInterest) : null,
     preferred: balPoint ? num(balPoint.preferredStock) : null,
+    // WS6 (D-19): the DCF equity bridge follows the same lease convention.
+    leaseLiability: balPoint ? num(balPoint.capitalLeaseObligations) : null,
+    includeLeasesInEv: evIncludeLeases,
     dcfInputs,
     multiples,
     excessReturn,

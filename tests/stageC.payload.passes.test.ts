@@ -508,11 +508,15 @@ describe("payload determinism + provenance", () => {
       // against. financeHash and provenanceHash also move because the growth
       // anchor is now the median of the available methods rather than the 3y
       // CAGR alone, so the DCF figures themselves change. The larger prompt is
-      // the point of the change, not a side effect.
-      fingerprint: "1.3.0:327cc8ef",
-      promptBytes: 87_319,
+      // the point of the change, not a side effect. The same commit also
+      // subtracts stock-based compensation from free cash flow (both figures
+      // are reported), states the enterprise-value bridge both with and
+      // without lease liabilities, and publishes the own-history figure as a
+      // rank among N quarters rather than a percentile.
+      fingerprint: "1.3.0:2307bf33",
+      promptBytes: 88_933,
       provenanceCount: 306,
-      provenanceHash: "5b3fff05",
+      provenanceHash: "67b88217",
       provenanceIdsHash: "1e316594",
       citationCount: 11,
       citationHash: "7ebe5276",
@@ -524,7 +528,7 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "e2259241",
+      financeHash: "ef06bbcf",
     });
   });
 
@@ -926,7 +930,7 @@ describe("payload determinism + provenance", () => {
       valuation: {
         kind: "dcf-suppressed",
         route: computed.valuation.route,
-        multiples: "multiples" in computed.valuation && computed.valuation.multiples ? computed.valuation.multiples : { multiples: [], sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
+        multiples: "multiples" in computed.valuation && computed.valuation.multiples ? computed.valuation.multiples : { multiples: [], enterpriseValue: { value: null, excludingLeases: null, includingLeases: null, leaseLiability: null, includeLeases: false, basis: "test" }, sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
         notes: ["fcfDcf suppressed by metric policy (unprofitable overlay) — DCF/sensitivity/reverse-DCF not modelled; free cash flow is structurally negative."],
         gaps: [],
       },
@@ -1640,7 +1644,11 @@ describe("assembleReport", () => {
     expect(() => ReportSchema.parse(report)).not.toThrow();
     expect(report.meta.symbol).toBe("AAPL");
     expect(report.meta.companyName).toBe("Apple Inc.");
-    expect(report.meta.disclaimer).toBe("Informational only — not investment advice.");
+    // WS6 (D-19): the generated disclaimer names the grades and scenario price
+    // targets the report actually emits, and that neither is a recommendation.
+    expect(report.meta.disclaimer).toBe(
+      "Informational only — not investment advice. This report contains A-F letter grades and scenario price targets; both are model outputs derived from the data and assumptions disclosed here, and neither is a recommendation to buy, sell, or hold any security.",
+    );
     expect(report.meta.specVersion).toBe("1.2.0");
     // verifyModel is no longer stamped (deterministic verification, no model);
     // the schema keeps it OPTIONAL so legacy persisted reports still parse.

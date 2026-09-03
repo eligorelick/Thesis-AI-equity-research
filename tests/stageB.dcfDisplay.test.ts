@@ -22,7 +22,7 @@ import {
   type ValuationResult,
 } from "@/pipeline/stageB/valuation";
 
-const MULTIPLES = { multiples: [], sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] };
+const MULTIPLES = { multiples: [], enterpriseValue: { value: null, excludingLeases: null, includingLeases: null, leaseLiability: null, includeLeases: false, basis: "test" }, sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] };
 
 function builtAssumptions(): DcfAssumptions {
   const built = buildDcfAssumptions({

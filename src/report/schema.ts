@@ -383,8 +383,16 @@ export type ProvenanceCoverage = z.infer<typeof ProvenanceCoverageSchema>;
  * §7.0 meta
  * ------------------------------------------------------------------------ */
 
+// WS6 (D-19) begin: the disclaimer now names WHAT the report actually emits.
+// "Informational only" alone did not describe a document that grades six
+// aspects A-F and prints three scenario price targets; a reader could
+// reasonably read those as a call. The rating-safety scan skips this key
+// (NON_NARRATIVE_STRING_KEYS), so the words it must disclaim can be named.
+// It contains no HTML-sensitive characters, so the print renderer's esc() is
+// a no-op on it and it appears byte-for-byte.
 export const DISCLAIMER_TEXT =
-  "Informational only — not investment advice." as const;
+  "Informational only — not investment advice. This report contains A-F letter grades and scenario price targets; both are model outputs derived from the data and assumptions disclosed here, and neither is a recommendation to buy, sell, or hold any security." as const;
+// WS6 (D-19) end.
 
 export const DataCompletenessSchema = z
   .object({
@@ -642,7 +650,25 @@ export const MultipleRowSchema = z
     name: z.string(),
     current: z.number().nullable(),
     peerMedian: z.number().nullable(),
+    // WS6 (D-19) begin -------------------------------------------------------
+    /**
+     * RANK AMONG N QUARTERS, 0-100: where the current multiple sits within the
+     * issuer's OWN observed quarterly history, by linear interpolation between
+     * order statistics. It is NOT a percentile of a distribution: the window is
+     * 8-20 quarterly observations, which is far too few to estimate
+     * percentiles, and the CFA Institute's own guidance is to describe such a
+     * figure as a rank within the observed sample. The FIELD NAME is kept for
+     * backward compatibility with persisted reports; every rendered label says
+     * "rank among N quarters".
+     */
     own5yPercentile: z.number().nullable(),
+    // N (the number of quarters ranked among) is NOT carried as a row field:
+    // the judge shares this schema and its JSON-schema optional-parameter
+    // budget is guarded, and the judge never authors this table anyway
+    // (applyMultiples replaces it wholesale from computed data). N is published
+    // per multiple in the computed valuation notes, which the Stage C payload
+    // already carries into the report.
+    // WS6 (D-19) end ---------------------------------------------------------
     sectorAppropriate: z.boolean(),
   })
   .strict();

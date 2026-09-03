@@ -2256,7 +2256,11 @@ export const MULTIPLE_LABELS: Record<MultipleKey, string> = {
   peTtm: "P/E (TTM)",
   evToEbitda: "EV/EBITDA",
   evToSales: "EV/Sales",
-  priceToFcf: "P/FCF",
+  // WS6 review (SHOULD-FIX 4): "free cash flow" means two things in this report
+  // — the vendor convention (OCF + capex) that this multiple and its own-history
+  // distribution are built on, and the house default that subtracts SBC. The
+  // label says which one the reader is looking at.
+  priceToFcf: "P/FCF (before SBC)",
   priceToBook: "P/B",
   priceToTbv: "P/TBV",
   priceToFfo: "P/FFO",
@@ -2285,6 +2289,9 @@ export function applyMultiples(
           current: stat.current,
           peerMedian: stat.peers?.median ?? null,
           own5yPercentile: stat.ownHistory?.percentileRank ?? null,
+          // WS6 review (SHOULD-FIX 3): N travels with the rank so every render
+          // surface can print "rank 62 of 12 quarters" instead of a bare 62.
+          ownHistoryObservations: stat.ownHistory?.observations ?? null,
           sectorAppropriate: mr.sectorAppropriate.includes(stat.key),
         }));
   return { ...valuation, multiples: rows };

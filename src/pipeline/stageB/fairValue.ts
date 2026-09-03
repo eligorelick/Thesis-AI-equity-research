@@ -163,14 +163,21 @@ function assumptionRows(a: DcfAssumptions): DcfAssumption[] {
   // rows, so a reader sees the WACC inputs and the method spread, not just the
   // point estimate the fade starts from.
   const anchor = a.growthAnchor;
+  // WS6 review (SHOULD-FIX 1): `pointPct` is the CLAMPED anchor the DCF fades
+  // from, and the row says so when the clamp moved it — the table used to print
+  // the pre-clamp median beside a year-one growth taken from the clamped value.
+  const clampNote =
+    anchor.preClampMedianPct === undefined
+      ? ""
+      : `, clamped from the ${pct1(anchor.preClampMedianPct)} median`;
   const anchorValue =
     anchor.rangePct === null
-      ? `${pct1(anchor.pointPct)} (single method)`
-      : `${pct1(anchor.pointPct)} (range ${pct1(anchor.rangePct[0])} – ${pct1(anchor.rangePct[1])})`;
+      ? `${pct1(anchor.pointPct)} (single method${clampNote})`
+      : `${pct1(anchor.pointPct)} (range ${pct1(anchor.rangePct[0])} – ${pct1(anchor.rangePct[1])}${clampNote})`;
   return [
     { name: "start revenue", value: big(a.startRevenue.value), basis: a.startRevenue.basis },
     { name: "WACC (discount rate)", value: pct1(a.wacc.value), basis: a.wacc.basis },
-    { name: "near-term growth anchor (median of methods)", value: anchorValue, basis: anchor.basis },
+    { name: "near-term growth anchor (median of methods, after the house clamp)", value: anchorValue, basis: anchor.basis },
     { name: "revenue growth (yr1 → yrN)", value: `${pct1(g[0])} → ${pct1(g[g.length - 1])}`, basis: a.growthPath.basis },
     { name: "EBIT margin (yr1 → yrN)", value: `${pct1(m[0])} → ${pct1(m[m.length - 1])}`, basis: a.ebitMarginPath.basis },
     { name: "sales-to-capital", value: num2(a.salesToCapital.value), basis: a.salesToCapital.basis },

@@ -230,10 +230,12 @@ const envSchema = z.object({
       return parsed.success ? parsed.data : "random";
     }),
   // end WS7
-  // WS6 (D-19): include lease liabilities in enterprise value and in the DCF
-  // equity bridge. OFF by default: under US GAAP (ASC 842) the operating-lease
-  // cost stays in operating expenses, so EBITDA is already after it and adding
-  // the lease liability to EV as well double-counts the leases in EV/EBITDA.
+  // WS6 (D-19): keep the OPERATING-lease liability in enterprise value and in
+  // the DCF equity bridge. OFF by default: under US GAAP (ASC 842) the
+  // operating-lease cost stays in operating expenses, so EBIT and EBITDA are
+  // already after it and adding that liability to EV as well double-counts the
+  // leases in EV/EBITDA. It never touches the FINANCE-lease liability, which is
+  // debt in both frames because EBIT and EBITDA are BEFORE finance-lease cost.
   // Any value other than "1" (including unset) leaves it off.
   THESIS_EV_INCLUDE_LEASES: z
     .string()
@@ -316,7 +318,7 @@ export interface ThesisConfig {
   tokenFile: string | undefined;
   // end WS8
   // WS6 (D-19)
-  /** THESIS_EV_INCLUDE_LEASES=1 — count lease liabilities in enterprise value. */
+  /** THESIS_EV_INCLUDE_LEASES=1 — keep the OPERATING-lease liability in enterprise value. */
   evIncludeLeases: boolean;
   // WS7 (D-20)
   /** THESIS_JUDGE_ORDER — which order the judge reads bull and bear in. */

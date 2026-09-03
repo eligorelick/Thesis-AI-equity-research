@@ -24,10 +24,10 @@ import {
 
 const MULTIPLES = { multiples: [], enterpriseValue: { value: null, excludingLeases: null, includingLeases: null, leaseLiability: null, includeLeases: false, basis: "test" }, sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] };
 
-function builtAssumptions(): DcfAssumptions {
+function builtAssumptions(over: { revenueCagr3yPct?: number; revenueCagr5yPct?: number } = {}): DcfAssumptions {
   const built = buildDcfAssumptions({
-    revenueCagr3yPct: 12,
-    revenueCagr5yPct: 12,
+    revenueCagr3yPct: over.revenueCagr3yPct ?? 12,
+    revenueCagr5yPct: over.revenueCagr5yPct ?? 12,
     analystEstimates: null,
     waccPct: 9,
     riskFreePct: 4,
@@ -89,6 +89,33 @@ describe("computeDcfDisplay — general DCF route", () => {
       expect(typeof r.value).toBe("string");
       expect(typeof r.basis).toBe("string");
     }
+  });
+
+  // WS6 review (SHOULD-FIX 1): the anchor row used to print the PRE-clamp
+  // median beside a "revenue growth (yr1 -> yrN)" row taken from the clamped
+  // value, so the table contradicted itself for any high-growth issuer.
+  it("prints the CLAMPED near-term anchor, and says it was clamped, in the assumption row", () => {
+    const assumptions = builtAssumptions({ revenueCagr3yPct: 65, revenueCagr5yPct: 65 });
+    const opts = { waccPct: 9, netDebt: -100, dilutedShares: 100 };
+    const display = computeDcfDisplay({
+      kind: "dcf",
+      route: "general",
+      assumptions,
+      dcf: runDcf(assumptions, opts),
+      sensitivity: sensitivityGrid(assumptions, opts),
+      reverseDcf: null,
+      multiples: MULTIPLES,
+      notes: [],
+      gaps: [],
+    });
+    const anchorRow = display.assumptions.find((r) => r.name.startsWith("near-term growth anchor"))!;
+    const growthRow = display.assumptions.find((r) => r.name.startsWith("revenue growth"))!;
+    expect(anchorRow.name).toContain("after the house clamp");
+    expect(anchorRow.value).toContain("25.0%");
+    expect(anchorRow.value).toContain("clamped from the 65.0% median");
+    // The anchor row and the year-one growth row now agree.
+    expect(growthRow.value.startsWith("25.0%")).toBe(true);
+    expect(anchorRow.basis).toContain("CLAMPED to 25%");
   });
 
   it("flattens the deterministic sensitivity grid into cells matching the computed matrix", () => {

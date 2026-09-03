@@ -362,9 +362,13 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
     expect(labels).toContain("Revenue CAGR");
     expect(report.fundamentals.marginTrend.map((row) => row.label)).toContain("Operating margin");
     expect(report.fundamentals.returns.map((row) => row.label)).toContain("ROIC");
-    expect(report.fundamentals.fcf.map((row) => row.label)).toContain("Free cash flow");
+    // WS6 review (SHOULD-FIX 4): the row label names WHICH free cash flow it is
+    // — the house default subtracts SBC, the vendor convention does not, and the
+    // data-only report has no note channel to say so anywhere else.
+    expect(report.fundamentals.fcf.map((row) => row.label)).toContain("Free cash flow (after SBC, house default)");
+    expect(report.fundamentals.fcf.map((row) => row.label)).toContain("Free cash flow (before SBC, vendor convention)");
     // Monetary rows carry the statements' own currency, never a default.
-    const fcfRow = report.fundamentals.fcf.find((row) => row.label === "Free cash flow");
+    const fcfRow = report.fundamentals.fcf.find((row) => row.label === "Free cash flow (after SBC, house default)");
     expect(fcfRow?.values.every((cell) => cell.value.currency === "USD")).toBe(true);
     expect(fcfRow?.values.map((cell) => cell.value.value)).toEqual(
       computed.capital.fcf.series.filter((y) => y.fcf !== null).map((y) => y.fcf),

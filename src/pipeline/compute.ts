@@ -869,6 +869,13 @@ function riskFreePct(
 
 // WS6: the full FRED DGS10 observation history the bundle fetched (five years
 // back), so a WACC can be recomputed at each fiscal year end.
+/**
+ * The series every PER-YEAR WACC is recomputed from. The CURRENT WACC's
+ * risk-free rate prefers the vendor's treasury endpoint (see `riskFreePct`), so
+ * the two can be different sources; when they are, the returns notes say so (N8).
+ */
+const WACC_HISTORY_RF_SERIES_ID = "fred:DGS10";
+
 function riskFreeObservations(bundle: DataBundle): { date: string; value: number }[] {
   const dgs10 = bundle.macro.core["DGS10"];
   if (!dgs10 || !dgs10.ok) return [];
@@ -1635,15 +1642,33 @@ function computeReturns(
     wacc,
     roic.series.map((y) => y.date),
     riskFreeObservations(bundle),
-    { seriesId: "fred:DGS10" },
+    { seriesId: WACC_HISTORY_RF_SERIES_ID },
   );
   const waccInputs = waccDisclosure(wacc);
   notes.push(waccInputs.summary);
   notes.push(...waccHistory.notes);
-  // The per-year-WACC shortfall is disclosed by the DCF assumption block (its
-  // only consumer is the terminal excess-return rule), so it is NOT pushed here
-  // as a returns-level gap; `waccHistory.gaps` stays on the result for callers.
-  gaps.push(...wacc.gaps, ...roic.gaps, ...rote.gaps, ...dupont.gaps);
+  // N8: the CURRENT WACC's risk-free rate is the vendor's treasury endpoint when
+  // one is available and FRED DGS10 only as the fallback, while every per-year
+  // WACC is recomputed from DGS10. When the two differ, the newest fiscal year's
+  // own WACC can differ from the current one by SOURCE rather than by time, and
+  // saying so is the difference between a disclosed basis and a puzzling one.
+  const currentRfSeries = wacc.riskFreeSeriesId;
+  if (
+    waccHistory.points.length > 0 &&
+    typeof currentRfSeries === "string" &&
+    currentRfSeries !== WACC_HISTORY_RF_SERIES_ID
+  ) {
+    notes.push(
+      `Risk-free SOURCE differs between the current WACC and its history: the current WACC uses ${currentRfSeries}, ` +
+        `every per-fiscal-year WACC uses ${WACC_HISTORY_RF_SERIES_ID}. The newest year's own WACC can therefore differ ` +
+        "from the current one because the two rates come from different series, not because the rate moved over time.",
+    );
+  }
+  // N1: the per-year-WACC shortfall reaches the missing-data manifest. It used
+  // to be deliberately withheld here on the grounds that the DCF assumption
+  // block discloses it, but that block only raises its own gap when NO year
+  // carried its own WACC — a partial shortfall was disclosed nowhere.
+  gaps.push(...wacc.gaps, ...roic.gaps, ...rote.gaps, ...dupont.gaps, ...waccHistory.gaps);
   return { wacc, waccInputs, waccHistory, roic, rote, dupont, roicVsWacc, notes, gaps };
 }
 
@@ -1794,7 +1819,12 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
             beforeSbc: ctx.capital.fcf.latestFcfBeforeSbc,
             afterSbc: ctx.capital.fcf.latestFcf,
             sbc: ctx.capital.fcf.latestSbc,
-            asOf: ctx.capital.asOf,
+            // N2: the FCF row's OWN fiscal year end, not the capital block's
+            // as-of (which falls back to the income or balance statement). The
+            // assumption block printed a date that was not the year the figure
+            // came from whenever those statements ended on different days.
+            asOf:
+              ctx.capital.fcf.series[ctx.capital.fcf.series.length - 1]?.date ?? ctx.capital.asOf,
             basis: ctx.capital.fcf.basis,
           },
           riskFreePct: rf.pct ?? 0,
@@ -1877,8 +1907,13 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
         intangibleAssets: num(balPoint.intangibleAssets),
         minorityInterest: num(balPoint.minorityInterest),
         preferredStock: num(balPoint.preferredStock),
-        // WS6 (D-19): lease liabilities for the EV bridge.
+        // WS6 (D-19): lease liabilities for the EV bridge. The TOTAL is
+        // disclosure context; only the OPERATING slice is netted out of EV
+        // (WS6 review, BLOCKER 1), and the EDGAR route is the only one that
+        // resolves the split — on the FMP route it is absent and EV is
+        // reported as-is with the leases gap raised.
         capitalLeaseObligations: num(balPoint.capitalLeaseObligations),
+        operatingLeaseLiability: num(balPoint.operatingLeaseLiability),
       }
     : null;
 
@@ -2013,6 +2048,7 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
     preferred: balPoint ? num(balPoint.preferredStock) : null,
     // WS6 (D-19): the DCF equity bridge follows the same lease convention.
     leaseLiability: balPoint ? num(balPoint.capitalLeaseObligations) : null,
+    operatingLeaseLiability: balPoint ? num(balPoint.operatingLeaseLiability) : null,
     includeLeasesInEv: evIncludeLeases,
     dcfInputs,
     multiples,
@@ -2227,6 +2263,9 @@ function mergeQuarterly(
       cashAndShortTermInvestments: bal ? num(bal.cashAndShortTermInvestments) : null,
       preferredStock: bal ? num(bal.preferredStock) : null,
       minorityInterest: bal ? num(bal.minorityInterest) : null,
+      // WS6 review (BLOCKER 2): the lease slice too, so a lease-adjusted current
+      // EV is ranked against a lease-adjusted history.
+      operatingLeaseLiability: bal ? num(bal.operatingLeaseLiability) : null,
     };
   });
 }

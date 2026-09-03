@@ -313,8 +313,13 @@ function fundamentalsSections(
   ]);
 
   const fcf = present([
-    seriesRow("Free cash flow", cap.fcf.series.map((y) => ({ date: y.date, value: y.fcf })), "currency", "computed.capital.fcf", currency),
-    seriesRow("FCF conversion (FCF / net income)", cap.fcf.series.map((y) => ({ date: y.date, value: y.fcfConversion })), "x", "computed.capital.fcf.conversion", null),
+    // WS6 review (SHOULD-FIX 4): the data-only report has no note channel, so
+    // the row label itself has to carry the definition — "Free cash flow" alone
+    // printed the after-SBC figure beside a P/FCF built on the before-SBC one.
+    seriesRow("Free cash flow (after SBC, house default)", cap.fcf.series.map((y) => ({ date: y.date, value: y.fcf })), "currency", "computed.capital.fcf", currency),
+    seriesRow("Free cash flow (before SBC, vendor convention)", cap.fcf.series.map((y) => ({ date: y.date, value: y.fcfBeforeSbc })), "currency", "computed.capital.fcf.beforeSbc", currency),
+    seriesRow("FCF conversion (FCF after SBC / net income)", cap.fcf.series.map((y) => ({ date: y.date, value: y.fcfConversion })), "x", "computed.capital.fcf.conversion", null),
+    seriesRow("FCF conversion (FCF before SBC / net income — the graded ratio)", cap.fcf.series.map((y) => ({ date: y.date, value: y.fcfConversionBeforeSbc })), "x", "computed.capital.fcf.conversionBeforeSbc", null),
     seriesRow("Capex / revenue", cap.capexIntensity.series.map((y) => ({ date: y.date, value: y.capexToRevenuePct })), "%", "computed.capital.capexIntensity", null),
   ]);
 
@@ -404,6 +409,9 @@ function balanceSheetSection(
       ),
     );
   }
+  // N3: dilution from outstanding awards is SHOWN, or its unavailability is
+  // stated — criterion (d). It reached no reader surface before.
+  allocation.push(fact(cap.dilution.note, "computed.capital.dilution", cap.dilution.asOf));
   const bb = cap.buybackPriceAnalysis;
   if (bb.totalRepurchased > 0 && currency !== null) {
     const priceNote = isNum(bb.premiumDiscountPct)

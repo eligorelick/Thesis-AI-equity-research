@@ -851,12 +851,16 @@ export const MultipleRowSchema = z
      * "rank among N quarters".
      */
     own5yPercentile: z.number().nullable(),
-    // N (the number of quarters ranked among) is NOT carried as a row field:
-    // the judge shares this schema and its JSON-schema optional-parameter
-    // budget is guarded, and the judge never authors this table anyway
-    // (applyMultiples replaces it wholesale from computed data). N is published
-    // per multiple in the computed valuation notes, which the Stage C payload
-    // already carries into the report.
+    /**
+     * N — the number of quarters the rank is taken among. WS6 review
+     * (SHOULD-FIX 3): "rank 62" with no N is not a rank a reader can read, and
+     * N reached only the Stage C payload notes before. OPTIONAL, so persisted
+     * pre-review reports still parse; the judge never authors this table
+     * (applyMultiples replaces it wholesale from computed data), and an
+     * optional field costs one slot of the guarded JSON-schema
+     * optional-parameter budget, which the schema test still holds under.
+     */
+    ownHistoryObservations: z.number().nullable().optional(),
     // WS6 (D-19) end ---------------------------------------------------------
     sectorAppropriate: z.boolean(),
   })
@@ -2196,6 +2200,49 @@ export function removeVerifierOwnedRequestFields<T>(schema: T): T {
   return schema;
 }
 
+/**
+ * The multiples table is replaced WHOLESALE by `applyMultiples` from computed
+ * Stage B numbers, and the judge is told to emit `[]`. `ownHistoryObservations`
+ * (N, the number of quarters a rank is taken among) is therefore pipeline-owned
+ * in exactly the way `verified` is verifier-owned, so it is removed from the
+ * REQUEST schema — which also keeps it off Anthropic's optional-parameter
+ * counter, the reason N was not carried as a row field before (WS6 review,
+ * SHOULD-FIX 3). The Zod field stays `.optional()` so persisted reports written
+ * before the review still parse.
+ */
+export function removePipelineOwnedRequestFields<T>(schema: T): T {
+  const seen = new WeakSet<object>();
+  const walk = (node: unknown): void => {
+    if (node === null || typeof node !== "object") return;
+    if (seen.has(node as object)) return;
+    seen.add(node as object);
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    const obj = node as Record<string, unknown>;
+    if (obj.type === "object" && obj.properties && typeof obj.properties === "object") {
+      const props = obj.properties as Record<string, unknown>;
+      if (
+        "name" in props &&
+        "current" in props &&
+        "peerMedian" in props &&
+        "own5yPercentile" in props &&
+        "sectorAppropriate" in props &&
+        "ownHistoryObservations" in props
+      ) {
+        delete props.ownHistoryObservations;
+        if (Array.isArray(obj.required)) {
+          obj.required = (obj.required as string[]).filter((key) => key !== "ownHistoryObservations");
+        }
+      }
+    }
+    for (const child of Object.values(obj)) walk(child);
+  };
+  walk(schema);
+  return schema;
+}
+
 /** Data-only reports may store null odds; judge requests must always emit odds. */
 function requireJudgeScenarioProbabilities<T>(schema: T): T {
   const seen = new WeakSet<object>();
@@ -2257,8 +2304,10 @@ export function toStructuredJsonSchema(
     reused: "ref",
   }) as Record<string, unknown>;
   return requireAlwaysFilledFields(
-    removeVerifierOwnedRequestFields(
-      collapseNullableComplexity(relaxUnsupportedConstraints(closeAdditionalProperties(json))),
+    removePipelineOwnedRequestFields(
+      removeVerifierOwnedRequestFields(
+        collapseNullableComplexity(relaxUnsupportedConstraints(closeAdditionalProperties(json))),
+      ),
     ),
   );
 }

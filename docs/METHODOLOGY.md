@@ -78,8 +78,23 @@ with the full range shown and each method's value named:
 
 The point estimate is the median; the range is min..max across the available
 methods. Methods that could not be computed are named in the assumption block
-and disclosed as a `valuation.dcf.growthAnchor` manifest entry. The result is
-clamped to [−10%, +25%], and a clamp that fires is annotated.
+and disclosed as a `valuation.dcf.growthAnchor` manifest entry.
+
+The median is then **clamped to [−10%, +25%]**, and the anchor the report
+prints is the clamped value — the same number the growth path fades from.
+When the clamp moves it, the anchor's basis says so, the growth-path basis
+repeats it, and the assumption row reads "25.0% (…, clamped from the 65.0%
+median)". Nothing prints the pre-clamp median as if it were the anchor.
+
+**Three of the four methods read the same series.** The regression, the 3-year
+CAGR and the 5-year CAGR are all functions of the same annual revenue history,
+so the median is weighted roughly three to one toward that history and the
+analyst-consensus case rarely moves it — it can only shift the median when it
+lands between the three history-derived values, and never sets the anchor on
+its own. That is a deliberate bias toward the filed record over sell-side
+expectations, but it means the consensus case should not be read as an equal
+fourth vote. The range printed beside the point estimate is where a large
+analyst/history disagreement becomes visible.
 
 **Two rules were retired here, and the assumption block says so.** The former
 "lower of the 3Y/5Y CAGR" rule let whichever window happened to be worse
@@ -103,7 +118,8 @@ effective rate to the company's own historical median. Cash flows are
 discounted on the **mid-year convention**.
 
 Terminal growth is **min(2.5%, risk-free rate)** — nothing grows faster than
-the risk-free rate in perpetuity (Damodaran). A Gordon guard requires
+the risk-free rate in perpetuity (Damodaran). Like the terminal-ROIC rule below
+it prints as a HOUSE CONVENTION, in those words, wherever it appears. A Gordon guard requires
 WACC − g ≥ 2.0pp in the base case (1.5pp in the sensitivity grid, where a
 tighter guard would blank cells the grid exists to show); when it binds, g is
 pulled down and the note says so.
@@ -131,8 +147,19 @@ they are modest.
 
 Each fiscal year is compared to **its own** WACC where one could be recomputed
 (see *WACC inputs* above); otherwise the current WACC is applied to every year
-and the note says exactly that. Terminal reinvestment is g ÷ ROIC_terminal,
-Damodaran's consistency rule.
+and the note says exactly that. Any year that could not be recomputed also
+reaches the missing-data manifest as `returns.wacc.history`, including the
+partial case where only some years are missing. When a history is supplied but
+no year carries a computable ROIC there is no comparison at all, and the note
+says that — not that a risk-free observation was missing.
+
+The per-year WACCs are always recomputed from **FRED `DGS10`**, while the
+current WACC prefers the provider's own 10-year treasury rate and falls back to
+`DGS10`. When those two differ, the returns notes say so explicitly: the newest
+fiscal year's own WACC can then differ from the current one because the two
+rates come from different series, not because the rate moved.
+
+Terminal reinvestment is g ÷ ROIC_terminal, Damodaran's consistency rule.
 
 ---
 
@@ -157,6 +184,19 @@ silently compared with an adjusted one. SBC as a percentage of FCF is measured
 against the **before** figure: dividing SBC by an FCF it has already been
 subtracted from would count it twice.
 
+Every surface that prints a free-cash-flow figure names which one it is. The
+payload and the data-only report label the rows "after SBC, house default" and
+"before SBC, vendor convention", and both series are shown. Two conversion
+ratios are published the same way, and the **before**-SBC one is the ratio the
+balance-sheet grade scores, under a driver named `fcfConversionBeforeSbc`: that
+is the definition the conversion band was calibrated on, and grading the
+after-SBC ratio against it would charge the same expense twice, because SBC as a
+percentage of free cash flow is already one of the five scored metrics. The
+aspect note states the definition. Price to free cash flow uses the **before**
+figure — the same basis as the own-history distribution it is ranked in — and is
+labelled "P/FCF (before SBC)" wherever it renders, with the basis string saying
+that the capital block's house-default figure is a different number.
+
 The FCFF discounted-cash-flow model projects revenue, EBIT margin and
 reinvestment. SBC is already an operating expense inside that EBIT, so it is
 never added back there either. The DCF and the free-cash-flow metric are
@@ -168,8 +208,16 @@ consistent, but they are not the same series, and the assumption block says so.
 
 Dilution from outstanding awards is reported as the gap between the **diluted**
 and **basic** weighted-average share counts of the latest fiscal year, with the
-as-of date and the overhang in percent. A missing count is disclosed
-(`capital.dilution`), never assumed to be zero. Awards that are antidilutive in
+as-of date and the overhang in percent. It reaches readers as a capital figure
+in the Stage C payload and as a capital-allocation note in the data-only
+report, and the note is emitted in BOTH states — the unavailable case says so
+in words rather than going silent. A missing count is disclosed
+(`capital.dilution`), never assumed to be zero.
+
+Stock-based compensation is subtracted from free cash flow **with the sign the
+filer reported**. The us-gaap element is a positive add-back inside operating
+cash flow, so a negative figure is a net credit — forfeiture reversals
+exceeding the period's awards — and it is added back rather than charged. Awards that are antidilutive in
 a loss year are excluded from the diluted count by the filer, so a loss-making
 issuer's overhang understates the award pool; the note says this.
 
@@ -199,21 +247,50 @@ belong in EV; undisclosed means zero, following the provider's convention. The
 DCF's equity bridge is the same identity read backwards: equity value =
 EV − net debt − minority interest − preferred equity.
 
-**Operating leases are excluded by default**, and the option to include them is
-`THESIS_EV_INCLUDE_LEASES=1`. Off is the correct default rather than a timid
-one: under US GAAP (ASC 842) the operating-lease cost stays in operating
-expenses, so EBITDA is already *after* it, and adding the lease liability to EV
-as well double-counts the leases in EV/EBITDA. The provider's `totalDebt`
-already contains the lease liability, so the default subtracts it back out.
+**The OPERATING-lease liability is excluded by default; the finance-lease
+liability is not.** The option to keep the operating slice in is
+`THESIS_EV_INCLUDE_LEASES=1`. The split is the whole point. Under US GAAP
+(ASC 842) operating-lease cost stays in operating expenses, so EBIT and EBITDA
+are already *after* it and adding that liability to EV as well double-counts the
+leases in EV/EBITDA. Finance-lease cost is *not* in either figure: it is split
+between right-of-use amortisation, which EBITDA adds back, and interest, which
+sits below EBIT. The finance-lease liability is therefore debt in both frames
+and stays in enterprise value and in net debt, always. The provider's
+`totalDebt` contains both, so the default subtracts the operating slice back out
+and leaves the finance slice where it is.
 
-Both enterprise values — with and without leases — are computed and shown in
-the assumption block, along with the lease liability itself. When leases are
-not disclosed separately they cannot be separated from total debt, and that is
-disclosed rather than guessed. Turning the option on raises a warning-level
-manifest entry stating that EV/EBITDA then pairs a lease-inclusive numerator
-with a lease-expensed denominator and is not comparable to the default basis.
-The DCF equity bridge follows the identical convention through net debt, so the
-two can never disagree.
+Only the EDGAR route resolves the split: the lease chain there sums a separately
+resolved operating and finance liability, and the operating slice is published
+as its own balance-sheet field. FMP publishes one combined
+`capitalLeaseObligations` and no split, so on that route **no lease adjustment
+is made at all** — enterprise value is reported as-is and an info-level
+`valuation.multiples.enterpriseValue.leases` manifest entry says that removing
+the combined figure would strip an unknown amount of finance-lease debt out of
+EV. The same entry fires when no lease liability is disclosed at all. Nothing is
+guessed, and nothing unknown is netted.
+
+Both enterprise values — as reported, and less the operating-lease liability —
+are computed, together with the total lease liability and its finance slice.
+They are published in the EV bridge basis string, which is a computed valuation
+note and is quoted verbatim into the EV/EBITDA and EV/sales basis lines and into
+the DCF equity-bridge note; there is no separate assumption-block row for them.
+Turning the option on raises a warning-level manifest entry stating that
+EV/EBITDA then pairs a lease-inclusive numerator with a lease-expensed
+denominator and is not comparable to the default basis. The DCF equity bridge
+follows the identical convention through net debt, so the two can never
+disagree.
+
+**The own-history enterprise value carries the same adjustment.** Each
+historical quarter window removes *its own* operating-lease liability whenever
+the current EV removed one, so the rank compares like with like. A window whose
+balance sheet discloses no operating-lease liability cannot be put on that basis;
+its EV/EBITDA and EV/sales are dropped from the distribution — never ranked
+against a differently-defined history — and the count of dropped windows is
+disclosed as `valuation.multiples.ownHistory.evLeaseBasis`. The vendor's
+pre-baked EV ratios are built on the vendor's own lease-inclusive enterprise
+value, so when the adjustment fires those bands are withheld under the same
+manifest entry rather than published on a basis the current number does not
+share.
 
 ---
 
@@ -230,8 +307,21 @@ percentile of a distribution, and CFA Institute guidance is to describe such a
 figure as a rank within the observed sample. The numeric field keeps its
 historical name for backward compatibility with persisted reports, but its
 description, every rendered label, the basis strings and the missing-data
-reason all say rank, and N is published per multiple in the computed valuation
-notes.
+reason all say rank.
+
+**N is rendered beside the rank**, not left in a note: the multiples row carries
+`ownHistoryObservations`, and every surface prints it — "rank 62/100 of 12
+quarters" in the Markdown and print-HTML exports, "rank 62 of 12 quarters" on
+the app's own-history bar. A report persisted before that field existed still parses and
+still renders, without inventing an N. The field is optional in Zod for exactly
+that reason and is stripped from the judge's request schema — the judge never
+authors this table (`applyMultiples` replaces it wholesale from computed
+numbers), so carrying it costs nothing against the request schema's
+optional-parameter budget. The score drivers built from the rank are named
+`peOwnHistoryRank`, `priceToTbvOwnHistoryRank` and `pFfoOwnHistoryRank` with
+unit `rank`, the valuation aspect note says rank, and the Stage C prompt
+instructs the model in the same terms, so the narrative cannot call it a
+percentile either.
 
 Fewer than 8 quarters produces no rank at all. Fewer than 20 (a full five
 years) flags the window as low-sample, because at those sizes the 5th and 95th

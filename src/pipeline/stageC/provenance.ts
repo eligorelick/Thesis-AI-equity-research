@@ -144,6 +144,9 @@ export function canonicalizeTracedUnit(
   // it just lets a pipeline-computed driver trace to its registered record
   // instead of failing unit canonicalization (which would strand it unverified).
   if (
+    // "pctile" is the retired spelling, kept so persisted reports still trace;
+    // "rank" is what grading emits now (WS6 review, SHOULD-FIX 3).
+    normalized === "rank" ||
     normalized === "pctile" ||
     normalized === "z" ||
     normalized === "m" ||

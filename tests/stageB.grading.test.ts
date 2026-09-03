@@ -113,7 +113,9 @@ function wacc(): WaccResult {
 function capital(over: Partial<CapitalResult> = {}): CapitalResult {
   return {
     asOf: "2025-09-30",
-    fcf: { series: [], latestFcf: 1000, latestConversion: 1.05 },
+    // WS6 review (SHOULD-FIX 2): the BEFORE-SBC ratio is the graded one — the
+    // definition FCF_CONVERSION_BAND was calibrated on. Both are carried.
+    fcf: { series: [], latestFcf: 1000, latestConversion: 1.05, latestConversionBeforeSbc: 1.15 },
     capexIntensity: { series: [], latestPct: 5, slopePctPtsPerYear: 0 },
     maintenanceVsGrowthCapex: { capexToDALatest: 1, capexToDA5yAvg: 1, impliedMaintenanceCapex: null, impliedGrowthCapex: null, note: "" },
     netDebtToEbitda: { value: 0.8, netDebt: 800, ebitda: 1000, asOf: "2025-09-30" },
@@ -262,6 +264,27 @@ describe("grading — primitives", () => {
  * ------------------------------------------------------------------------ */
 
 describe("grading — computeScores", () => {
+  // WS6 review (SHOULD-FIX 2): the balance-sheet aspect graded FCF-after-SBC on
+  // a band calibrated for FCF-before-SBC, under a driver still called
+  // "fcfConversion" — an undisclosed definition change that also charged
+  // stock-based compensation against two of the five metrics.
+  it("grades FCF conversion on the BEFORE-SBC ratio and names the definition in the driver and the note", () => {
+    const s = computeScores(makeInputs());
+    // The driver's identity is its source path, which is what the score-drivers
+    // table renders.
+    const sources = s.aspects.balanceSheet.drivers.map((d) => d.source);
+    expect(sources).toContain("computed.scores.balanceSheet.fcfConversionBeforeSbc");
+    expect(sources).not.toContain("computed.scores.balanceSheet.fcfConversion");
+    const driver = s.aspects.balanceSheet.drivers.find(
+      (d) => d.source === "computed.scores.balanceSheet.fcfConversionBeforeSbc",
+    )!;
+    // The fixture's after-SBC ratio is 1.05 and its before-SBC ratio 1.15.
+    expect(driver.value).toBeCloseTo(1.15, 12);
+    expect(s.aspects.balanceSheet.note).toContain("BEFORE stock-based compensation");
+    // SBC is still scored — exactly once.
+    expect(sources).toContain("computed.scores.balanceSheet.sbcPctOfFcf");
+  });
+
   it("a healthy company scores well across aspects with a composite band", () => {
     const s = computeScores(makeInputs());
     expect(s.bandsVersion).toBe(SCORE_BANDS_VERSION);
@@ -363,7 +386,7 @@ describe("grading — computeScores", () => {
   it("dcf-suppressed valuation (unprofitable overlay) keeps dataCompleteness at 0.3, not 0 or 1 (2026-07 audit finding 3)", () => {
     // Mirrors the "dcf" branch's unprofitable-overlay behavior exactly: dcfUpside
     // (0.4) and reverseImpliedVsAchievable (0.3) are suppressed via metric
-    // policy, only peOwnPercentile (0.3) actually scores — same math as before
+    // policy, only peOwnHistoryRank (0.3) actually scores — same math as before
     // the dcf-suppressed kind existed, so this must NOT regress to 0 (no
     // signals emitted) or silently jump to 1.0 (only the un-suppressed signal
     // counted toward totalWeight).
@@ -586,7 +609,7 @@ describe("grading — currency-suppressed DCF path (audit H3)", () => {
     // The ADR currency guard suppresses dcf + reverseDcf (both null) while the
     // multiples framework stays available. The dcfUpside (0.4) and
     // reverseImpliedVsAchievable (0.3) signals must be DROPPED (no data), the
-    // aspect scored on peOwnPercentile alone with completeness 0.3 — never a
+    // aspect scored on peOwnHistoryRank alone with completeness 0.3 — never a
     // saturated UPSIDE_BAND score from a mixed-currency +800% "upside".
     const suppressed = {
       ...(valuationDcf() as unknown as Record<string, unknown>),
@@ -597,13 +620,14 @@ describe("grading — currency-suppressed DCF path (audit H3)", () => {
     } as unknown as ValuationResult;
     const s = computeScores(makeInputs({ valuation: suppressed, currentPrice: 100 }));
     const v = s.aspects.valuation;
-    // peOwnPercentile fixture = 40 -> MULTIPLE_PERCENTILE_BAND breakpoints
+    // peOwnHistoryRank fixture = 40 -> MULTIPLE_OWN_HISTORY_RANK_BAND breakpoints
     // [25,74]..[50,56]: 74 + (56-74)*(40-25)/25 = 74 - 10.8 = 63.2 exactly.
     expect(v.score).toBeCloseTo(63.2, 6);
     expect(v.dataCompleteness).toBeCloseTo(0.3, 6);
     expect(v.drivers.some((d) => d.source.endsWith(".dcfUpside"))).toBe(false);
     expect(v.drivers.some((d) => d.source.endsWith(".reverseImpliedVsAchievable"))).toBe(false);
-    expect(v.drivers.some((d) => d.source.endsWith(".peOwnPercentile"))).toBe(true);
+    // WS6 review (SHOULD-FIX 3): the driver names the rank, not a percentile.
+    expect(v.drivers.some((d) => d.source.endsWith(".peOwnHistoryRank"))).toBe(true);
   });
 });
 

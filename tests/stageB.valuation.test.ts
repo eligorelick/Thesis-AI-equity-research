@@ -683,6 +683,50 @@ describe("buildDcfAssumptions", () => {
     expect(a.notes.some((n) => n.includes(">5pp") || n.includes("conservatism"))).toBe(false);
   });
 
+  // WS6 review (SHOULD-FIX 1): the near-term clamp used to be invisible in the
+  // assumption block — the anchor carried the PRE-clamp median while year-one
+  // growth carried the clamped value, and the growth-path basis interpolated
+  // the clamped value under the pre-clamp label. For an NVIDIA-like history the
+  // table printed a 65% anchor beside 25% year-one growth.
+  // N6: criterion (b) asks for "house convention" wherever the terminal rule
+  // prints. The terminal-ROIC basis said it; the terminal-growth basis did not.
+  it("calls the terminal-growth cap a HOUSE CONVENTION, matching the terminal-ROIC basis", () => {
+    const a = buildDcfAssumptions(baseInputs).assumptions as DcfAssumptions;
+    expect(a.terminal.gTermPct.basis).toContain("HOUSE CONVENTION");
+    expect(a.terminal.gTermPct.basis).not.toContain("house rule");
+  });
+
+  it("carries the near-term clamp into the anchor, its basis and the growth-path basis", () => {
+    const a = buildDcfAssumptions({
+      ...baseInputs,
+      revenueCagr3yPct: 65,
+      revenueCagr5yPct: 65,
+      analystEstimates: null,
+    }).assumptions as DcfAssumptions;
+    // The anchor IS the value the DCF fades from.
+    expect(a.growthAnchor.pointPct).toBeCloseTo(25, 9);
+    expect(a.growthPath.value[0]).toBeCloseTo(25, 9);
+    // ...and the pre-clamp median is kept, and named, rather than silently lost.
+    expect(a.growthAnchor.preClampMedianPct).toBeCloseTo(65, 9);
+    expect(a.growthAnchor.basis).toContain("median of 2 available growth methods = 65%");
+    expect(a.growthAnchor.basis).toContain("CLAMPED to 25%");
+    expect(a.growthPath.basis).toContain("clamped to 25%");
+    // The assumption ROW a reader sees is asserted in tests/stageB.dcfDisplay.test.ts.
+  });
+
+  it("leaves the anchor untouched, and says nothing about a clamp, when it does not fire", () => {
+    const a = buildDcfAssumptions({
+      ...baseInputs,
+      revenueCagr3yPct: 12,
+      revenueCagr5yPct: 13,
+      analystEstimates: null,
+    }).assumptions as DcfAssumptions;
+    expect(a.growthAnchor.pointPct).toBeCloseTo(12.5, 9);
+    expect(a.growthAnchor.preClampMedianPct).toBeUndefined();
+    expect(a.growthAnchor.basis).not.toContain("CLAMPED");
+    expect(a.growthPath.basis).not.toContain("clamped");
+  });
+
   it("lists every method's value and names the ones that were unavailable", () => {
     const a = buildDcfAssumptions({
       ...baseInputs,
@@ -969,6 +1013,72 @@ describe("multiplesFramework", () => {
     // The distribution itself is still real and stays; only the rank of a
     // now-meaningless current value goes.
     expect(evEbitda?.ownHistory?.percentileRank ?? null).toBeNull();
+  });
+
+  // WS6 review (BLOCKER 2): the own-history EV must be built from the SAME
+  // definition as the current one. A lease-adjusted current multiple ranked
+  // inside a lease-inclusive historical distribution compared two quantities
+  // and biased the printed rank.
+  const leaseAdjustedCurrent: MultiplesFrameworkInputs = {
+    ...baseInputs,
+    balance: { ...baseInputs.balance!, capitalLeaseObligations: 260, operatingLeaseLiability: 200 },
+  };
+
+  it("removes each historical quarter's OWN operating-lease liability when the current EV removed one", () => {
+    const quarters = flatHistoryQuarters(12).map((quarter) => ({ ...quarter, operatingLeaseLiability: 40 }));
+    const evRows = flatEvHistory(quarters.map((quarter) => quarter.date));
+    const r = multiplesFramework("general", {
+      ...leaseAdjustedCurrent,
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: evRows,
+    });
+    const history = r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory;
+    // Window EV = mcap 400 - operating leases 40 = 360; TTM revenue = 4 x 25 = 100.
+    expect(history?.p50).toBeCloseTo(3.6, 9);
+    expect(history?.observations).toBe(9);
+    expect(history?.basis).toContain("removes that quarter's OWN operating-lease liability");
+    // Equity-based bands are untouched by the EV basis.
+    const pb = r.multiples.find((multiple) => multiple.key === "priceToBook")?.ownHistory;
+    expect(pb?.p50).toBeCloseTo(4, 9);
+  });
+
+  it("drops EV windows that cannot be put on the current EV's lease basis instead of ranking against a lease-inclusive history", () => {
+    const quarters = flatHistoryQuarters(12); // no operatingLeaseLiability disclosed
+    const evRows = flatEvHistory(quarters.map((quarter) => quarter.date));
+    const r = multiplesFramework("general", {
+      ...leaseAdjustedCurrent,
+      quarterlyFundamentals: quarters,
+      enterpriseValuesHistory: evRows,
+    });
+    const evSales = r.multiples.find((multiple) => multiple.key === "evToSales")?.ownHistory;
+    const evEbitda = r.multiples.find((multiple) => multiple.key === "evToEbitda")?.ownHistory;
+    expect(evSales).toBeNull();
+    expect(evEbitda).toBeNull();
+    expect(r.gaps.some((g) => g.field === "valuation.multiples.ownHistory.evLeaseBasis")).toBe(true);
+    // The equity-based bands, which never touched EV, survive.
+    expect(r.multiples.find((multiple) => multiple.key === "priceToBook")?.ownHistory).not.toBeNull();
+  });
+
+  it("withholds the vendor pre-baked EV bands when the current EV carries a lease adjustment", () => {
+    const vendorRows = Array.from({ length: 12 }, (_, index) => ({
+      date: `2026-${String(12 - index).padStart(2, "0")}-01`,
+      evToSales: 4,
+      evToEBITDA: 9,
+      priceToBookRatio: 3,
+    }));
+    const withAdjustment = multiplesFramework("general", {
+      ...leaseAdjustedCurrent,
+      keyMetricsHistory: vendorRows,
+    });
+    const noAdjustment = multiplesFramework("general", { ...baseInputs, keyMetricsHistory: vendorRows });
+    // Without the adjustment the vendor EV band is published as before...
+    expect(noAdjustment.multiples.find((m) => m.key === "evToSales")?.ownHistory).not.toBeNull();
+    // ...and with it, the lease-INCLUSIVE vendor distribution is withheld.
+    expect(withAdjustment.multiples.find((m) => m.key === "evToSales")?.ownHistory).toBeNull();
+    expect(withAdjustment.multiples.find((m) => m.key === "evToEbitda")?.ownHistory).toBeNull();
+    // A non-EV vendor band is unaffected.
+    expect(withAdjustment.multiples.find((m) => m.key === "priceToBook")?.ownHistory).not.toBeNull();
+    expect(withAdjustment.gaps.some((g) => g.field === "valuation.multiples.ownHistory.evLeaseBasis")).toBe(true);
   });
 
   it("builds exactly nine own-history observations from twelve contiguous TTM windows", () => {
@@ -1983,6 +2093,23 @@ describe("terminalRoic — evidenced excess returns carried into the terminal", 
     });
   });
 
+  // N5: a history that exists but carries no computable ROIC has no
+  // ROIC-vs-WACC comparison AT ALL, so blaming a missing per-year risk-free
+  // observation misstated the cause. The reason it reports is the real one.
+  it("does not blame a missing risk-free observation when the history carries no computable ROIC", () => {
+    const t = terminalRoic(9, [year("2025-12-31", null), year("2024-12-31", null)]);
+    expect(t.waccBasis).toBe("none");
+    expect(t.waccBasisNote).toBeNull();
+    expect(t.note).toContain("0 fiscal years of ROIC on record");
+    expect(t.roicTermPct).toBe(9);
+  });
+
+  it("still names the current-WACC fallback when years DO carry a ROIC but no per-year rate", () => {
+    const t = terminalRoic(9, [year("2025-12-31", 12), year("2024-12-31", 11)]);
+    expect(t.waccBasis).toBe("current");
+    expect(t.waccBasisNote).toContain("no per-year risk-free observation");
+  });
+
   it("carries half the median spread, capped at 5pp, when ROIC beat WACC in every one of the last five years", () => {
     // spreads over WACC 9: 17, 15, 16, 13, 11 → median 15 → half 7.5 → capped at 5
     const t = terminalRoic(9, fiveAbove);
@@ -2198,48 +2325,76 @@ describe("multiplesFramework — EV bridge and THESIS_EV_INCLUDE_LEASES", () => 
       intangibleAssets: 200,
       minorityInterest: 100,
       preferredStock: 50,
+      // 300 of lease liabilities in total: 220 operating + 80 finance.
       capitalLeaseObligations: 300,
+      operatingLeaseLiability: 220,
     },
   };
-  // EV including leases = 10000 + 2000 + 50 + 100 - 500 = 11,650.
-  // EV excluding leases = 11,650 - 300 = 11,350. EBITDA = 1000 + 200 = 1200.
+  // EV as reported = 10000 + 2000 + 50 + 100 - 500 = 11,650.
+  // EV less the OPERATING lease liability = 11,650 - 220 = 11,430. The 80 of
+  // finance leases STAYS: EBIT and EBITDA are both before finance-lease cost.
+  // EBITDA = 1000 + 200 = 1200.
   const EV_INC = 11_650;
-  const EV_EX = 11_350;
+  const EV_EX = 11_430;
 
-  it("excludes lease liabilities by default and reports BOTH enterprise values", () => {
+  it("removes ONLY the operating-lease liability by default, keeping the finance slice as debt", () => {
     const r = multiplesFramework("general", evInputs);
     expect(r.enterpriseValue.includeLeases).toBe(false);
     expect(r.enterpriseValue.value).toBe(EV_EX);
     expect(r.enterpriseValue.excludingLeases).toBe(EV_EX);
     expect(r.enterpriseValue.includingLeases).toBe(EV_INC);
-    expect(r.enterpriseValue.leaseLiability).toBe(300);
-    expect(r.enterpriseValue.basis).toContain("EXCLUDES lease liabilities");
-    expect(r.enterpriseValue.basis).toContain("EV excluding leases 11350");
-    expect(r.enterpriseValue.basis).toContain("EV including leases 11650");
-    // EBITDA basis is stated, and it is the SAME EV the multiple divides.
-    expect(r.enterpriseValue.basis).toContain("EBITDA is AFTER operating-lease cost");
+    // The adjustment is the OPERATING slice, never the combined figure.
+    expect(r.enterpriseValue.leaseLiability).toBe(220);
+    expect(r.enterpriseValue.totalLeaseLiability).toBe(300);
+    expect(r.enterpriseValue.financeLeaseLiability).toBe(80);
+    expect(r.enterpriseValue.basis).toContain("EXCLUDES the OPERATING-lease liability");
+    expect(r.enterpriseValue.basis).toContain("the finance-lease liability of 80 STAYS in EV on both bases");
+    expect(r.enterpriseValue.basis).toContain("EV excluding the operating-lease liability 11430");
+    expect(r.enterpriseValue.basis).toContain("EV as reported 11650");
+    // Both earnings frames are stated, and it is the SAME EV the multiple divides.
+    expect(r.enterpriseValue.basis).toContain("EBIT and EBITDA are already AFTER it");
+    expect(r.enterpriseValue.basis).toContain("Finance-lease cost is NOT in EBIT");
     const evEbitda = r.multiples.find((m) => m.key === "evToEbitda");
     expect(evEbitda?.current).toBeCloseTo(EV_EX / 1200, 12);
-    expect(evEbitda?.basis).toContain("EXCLUDES lease liabilities");
+    expect(evEbitda?.basis).toContain("EXCLUDES the OPERATING-lease liability");
     const evSales = r.multiples.find((m) => m.key === "evToSales");
     expect(evSales?.current).toBeCloseTo(EV_EX / 5000, 12);
   });
 
-  it("includes them when asked, and warns that EV/EBITDA then double-counts", () => {
+  it("keeps the operating slice when asked, and warns that EV/EBITDA is then not comparable", () => {
     const r = multiplesFramework("general", { ...evInputs, includeLeasesInEv: true });
     expect(r.enterpriseValue.includeLeases).toBe(true);
     expect(r.enterpriseValue.value).toBe(EV_INC);
     const evEbitda = r.multiples.find((m) => m.key === "evToEbitda");
     expect(evEbitda?.current).toBeCloseTo(EV_INC / 1200, 12);
-    expect(r.enterpriseValue.basis).toContain("INCLUDES lease liabilities");
-    expect(r.enterpriseValue.basis).toContain("double-counts");
+    expect(r.enterpriseValue.basis).toContain("INCLUDES the operating-lease liability");
+    expect(r.enterpriseValue.basis).toContain("not comparable to the default basis");
     const gap = r.gaps.find((g) => g.field === "valuation.multiples.enterpriseValue.leases");
     expect(gap?.severity).toBe("warn");
     expect(gap?.reason).toContain("not comparable to the default basis");
   });
 
+  it("leaves EV as reported when only the COMBINED lease figure is available (the FMP route)", () => {
+    // FMP publishes one capitalLeaseObligations field and no split. Removing it
+    // would strip an unknown amount of finance-lease debt out of EV, so nothing
+    // is removed and the leases gap states why.
+    const balance = { ...evInputs.balance, operatingLeaseLiability: null } as NonNullable<typeof evInputs.balance>;
+    const r = multiplesFramework("general", { ...evInputs, balance });
+    expect(r.enterpriseValue.value).toBe(EV_INC);
+    expect(r.enterpriseValue.excludingLeases).toBe(EV_INC);
+    expect(r.enterpriseValue.leaseLiability).toBeNull();
+    expect(r.enterpriseValue.totalLeaseLiability).toBe(300);
+    const gap = r.gaps.find((g) => g.field === "valuation.multiples.enterpriseValue.leases");
+    expect(gap?.severity).toBe("info");
+    expect(gap?.reason).toContain("combined operating + finance figure");
+  });
+
   it("discloses that leases could not be separated when they are undisclosed", () => {
-    const balance = { ...evInputs.balance!, capitalLeaseObligations: null };
+    const balance = {
+      ...evInputs.balance,
+      capitalLeaseObligations: null,
+      operatingLeaseLiability: null,
+    } as NonNullable<typeof evInputs.balance>;
     const r = multiplesFramework("general", { ...evInputs, balance });
     expect(r.enterpriseValue.leaseLiability).toBeNull();
     expect(r.enterpriseValue.value).toBe(EV_INC);
@@ -2286,17 +2441,28 @@ describe("valueCompany — the DCF equity bridge follows the same lease conventi
     ...over,
   });
 
-  it("subtracts the lease liability from net debt by default, raising the per-share value", () => {
-    const withLeases = valueCompany(route, bundle({ leaseLiability: 120, includeLeasesInEv: true }));
-    const exLeases = valueCompany(route, bundle({ leaseLiability: 120, includeLeasesInEv: false }));
+  it("subtracts ONLY the operating-lease liability from net debt, leaving the finance slice as debt", () => {
+    const over = { leaseLiability: 120, operatingLeaseLiability: 90 };
+    const withLeases = valueCompany(route, bundle({ ...over, includeLeasesInEv: true }));
+    const exLeases = valueCompany(route, bundle({ ...over, includeLeasesInEv: false }));
     if (withLeases.kind !== "dcf" || exLeases.kind !== "dcf") throw new Error("expected the DCF route");
     const a = withLeases.dcf?.perShare as number;
     const b = exLeases.dcf?.perShare as number;
-    // Net debt 500 including leases, 380 excluding them, over 100 shares.
-    expect(b - a).toBeCloseTo(120 / 100, 9);
-    expect(exLeases.notes.some((n) => n.includes("EXCLUDING lease liabilities of 120"))).toBe(true);
-    expect(withLeases.notes.some((n) => n.includes("INCLUDING lease liabilities of 120"))).toBe(true);
-    expect(exLeases.notes.some((n) => n.includes("Net debt including leases 500; excluding leases 380"))).toBe(true);
+    // Net debt 500 as reported, 410 less the 90 of OPERATING leases, over 100
+    // shares. The 30 of finance leases stays: EBIT is before finance-lease cost.
+    expect(b - a).toBeCloseTo(90 / 100, 9);
+    expect(exLeases.notes.some((n) => n.includes("REMOVING the operating-lease liability of 90"))).toBe(true);
+    expect(withLeases.notes.some((n) => n.includes("KEEPING the operating-lease liability of 90"))).toBe(true);
+    expect(exLeases.notes.some((n) => n.includes("Net debt as reported 500; less the OPERATING lease liability 410"))).toBe(true);
+    expect(exLeases.notes.some((n) => n.includes("the finance-lease liability of 30 stays in net debt on both bases"))).toBe(true);
+  });
+
+  it("makes NO lease adjustment when only the combined lease figure is known", () => {
+    const r = valueCompany(route, bundle({ leaseLiability: 120, operatingLeaseLiability: null }));
+    const plain = valueCompany(route, bundle({ leaseLiability: null, operatingLeaseLiability: null }));
+    if (r.kind !== "dcf" || plain.kind !== "dcf") throw new Error("expected the DCF route");
+    expect(r.dcf?.perShare).toBeCloseTo(plain.dcf?.perShare as number, 9);
+    expect(r.notes.some((n) => n.includes("its operating slice is not, so no lease adjustment was made"))).toBe(true);
   });
 
   it("says so when leases are not disclosed separately", () => {

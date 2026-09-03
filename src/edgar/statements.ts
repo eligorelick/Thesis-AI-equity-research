@@ -454,6 +454,10 @@ function describeDerivedEbit(ctx: { subtracted: string[]; unavailable: string[];
  * (Apple FY2025: operating ~12.5B + finance ~1.2B = 13.72B) and its `totalDebt`
  * includes the pair, so both belong here or net debt, ROIC's invested capital
  * and the historical cost-of-debt denominator all drift off the house numbers.
+ *
+ * The two parts stay individually addressable (`Resolved.parts`): `computeBalance`
+ * publishes the operating slice as its own field, because that is the only slice
+ * the enterprise-value bridge may remove (WS6 review, BLOCKER 1).
  */
 const LEASE_LIABILITY_SPEC: ChainSpec = {
   kind: "sumAnyOf",
@@ -1512,6 +1516,17 @@ function computeBalance(v: FieldValues, notes: NoteSink, ctx: string, cc: Comput
     `totalDebt ${ctx}`,
   );
   v.netDebt ??= sub(v.totalDebt ?? null, v.cashAndCashEquivalents ?? null);
+  // WS6 review (BLOCKER 1): the OPERATING slice of the lease liability, on its
+  // own. Under ASC 842 operating-lease cost sits in operating expenses, so EBIT
+  // and EBITDA are already AFTER it and only that slice may be netted out of
+  // enterprise value; finance-lease cost is split between right-of-use
+  // amortisation (added back in EBITDA) and interest (below EBIT), so the
+  // finance-lease liability is debt in both frames and stays in EV. Read off
+  // the `sumAnyOf` parts the lease chain already resolved — no second tag
+  // lookup, and null (never zero) when the filer tagged no operating-lease
+  // liability, which is what the EV bridge treats as "not separable".
+  v.operatingLeaseLiability ??=
+    cc.resolved.get("capitalLeaseObligations")?.parts?.["operatingLeaseLiability"] ?? null;
 }
 
 /**
@@ -1946,7 +1961,7 @@ const BALANCE_DEF: StatementDef = {
   anchors: ["totalAssets"],
   aliases: BALANCE_ALIASES,
   unsourced: BALANCE_UNSOURCED,
-  computed: ["cashAndShortTermInvestments", "totalEquity", "totalLiabilities", "totalDebt", "netDebt"],
+  computed: ["cashAndShortTermInvestments", "totalEquity", "totalLiabilities", "totalDebt", "netDebt", "operatingLeaseLiability"],
   compute: computeBalance,
 };
 

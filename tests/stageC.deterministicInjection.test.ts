@@ -356,6 +356,9 @@ describe("valuation.multiples — deterministic injection (assembly)", () => {
         current: stat.current,
         peerMedian: stat.peers?.median ?? null,
         own5yPercentile: stat.ownHistory?.percentileRank ?? null,
+        // WS6 review (SHOULD-FIX 3): N travels with the rank so the rendered
+        // label can say "rank 62 of 20 quarters" instead of a bare 62.
+        ownHistoryObservations: stat.ownHistory?.observations ?? null,
         sectorAppropriate: mr.sectorAppropriate.includes(stat.key),
       })),
     );
@@ -385,9 +388,9 @@ describe("valuation.multiples — deterministic injection (assembly)", () => {
 
     const out = applyMultiples(jo.valuation, computedValuation);
     expect(out.multiples).toEqual([
-      { name: "P/E (TTM)", current: 11.2, peerMedian: 10.5, own5yPercentile: 62, sectorAppropriate: true },
-      { name: "P/TBV", current: 1.4, peerMedian: null, own5yPercentile: null, sectorAppropriate: true },
-      { name: "EV/EBITDA", current: null, peerMedian: 9.9, own5yPercentile: null, sectorAppropriate: false },
+      { name: "P/E (TTM)", current: 11.2, peerMedian: 10.5, own5yPercentile: 62, ownHistoryObservations: 20, sectorAppropriate: true },
+      { name: "P/TBV", current: 1.4, peerMedian: null, own5yPercentile: null, ownHistoryObservations: null, sectorAppropriate: true },
+      { name: "EV/EBITDA", current: null, peerMedian: 9.9, own5yPercentile: null, ownHistoryObservations: null, sectorAppropriate: false },
     ]);
     // The judge's narrative surfaces on valuation are untouched.
     expect(out.reverseDcf).toEqual(jo.valuation.reverseDcf);

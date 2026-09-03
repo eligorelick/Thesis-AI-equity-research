@@ -314,6 +314,38 @@ a change the criteria did not ask for:
   unrelated reasons; the surrounding assertions pin the property directly and
   the counter should go.
 
+## What the one authorised paid run showed
+
+Opus 5 at `high` effort, MSFT, 2026-09-03, in an isolated data directory. It
+completed: 41 manifest entries, a 99.3% verification rate, and it settled at
+**$5.31** against a $2.34 calculation.
+
+The gap is not drift in the rates. Every one of the three LLM passes — bull,
+bear and judge — was rejected as schema-invalid on its first attempt and
+succeeded on its single repair, so six requests were billed for three results.
+The three winning requests came to $2.66, within 14% of the calculation; the
+three discarded ones came to $2.65 and bought nothing. `MAX_ANALYST_REPAIRS`
+is 1, so the run was one further rejection away from a data-only report.
+
+Two things worked exactly as the remediation intended, confirmed here on the
+production path rather than in a test: every request settled as `actual` with
+no presumed spend, and the report's cost breakdown lists all six requests, so
+`meta.costUsd` is what was actually billed rather than what succeeded. WS7's
+shared-model-family warning also fired for real — the judge and both analysts
+ran on the opus family and the manifest says so.
+
+Two follow-ups fall out, neither in the criteria:
+
+- **A repaired pass is invisible to a reader.** The breakdown shows two `bull`
+  rows with no indication that the first was discarded, and no manifest entry
+  records the repair. A reader can see they paid twice but not why. This is the
+  kind of thing the manifest exists for.
+- **Three rejections out of three is not chance.** One schema rejection per
+  pass, on the strongest model at the highest effort, points at the request
+  schema or the prompt rather than at the model. Diagnosing it needs the
+  rejected payloads, which are not retained, and confirming a fix needs further
+  paid runs.
+
 ## Open questions for the owner
 
 1. Measured end-to-end cost figures require a live paid run. Until one is

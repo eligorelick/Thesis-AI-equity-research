@@ -73,11 +73,12 @@ export function renderPricingBlock(registry, sizing) {
   }
   lines.push("");
   lines.push(`The worst case is every request one pass could make (${maxRequestsPerPass}: six transport attempts,`);
-  lines.push("each able to pause and resume five times); it is reported, not reserved, so a");
-  lines.push("job cap only has to cover the requests in flight. The estimate is a");
-  lines.push("calculation, not a measurement: the fixture run shape at registry rates, with");
-  lines.push("Haiku's synthesize figures those of Sonnet 5 because that pass is raised to");
-  lines.push("it. One measured Haiku run settled at $1.43 in total.");
+  lines.push("each able to pause and resume five times); it is reported, not reserved, so a job");
+  lines.push("cap need only cover the requests in flight. The estimate is a calculation,");
+  lines.push("not a measurement: the fixture run shape at registry rates, with Haiku's");
+  lines.push("synthesize figures those of Sonnet 5 because that pass is raised to it.");
+  lines.push("Measured: Haiku $1.43; Opus 5 on MSFT $5.31 over six requests — each of the three");
+  lines.push("passes was schema-rejected once and repaired, so its winning requests were $2.66.");
   lines.push("");
   lines.push(END_MARKER);
   return lines.join("\n");

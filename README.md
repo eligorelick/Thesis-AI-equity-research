@@ -37,11 +37,10 @@ npm run dev
 Open <http://127.0.0.1:3000>; development and production both bind to
 `127.0.0.1`. Every provider key is optional: with no `FMP_API_KEY`, set
 `EDGAR_CONTACT` to a truthful "Name email" identity and real US-listed tickers
-are served from SEC EDGAR and Yahoo. To evaluate the interface with no key at
-all, `/report/sample` renders a complete fictional report and makes no request,
-and `/company/DEMO` and `/company/DBNK` are reserved strings served from
-`fixtures/fmp` whatever keys are configured — they reach no provider, and each
-run says so in the manifest. Any other symbol is a live request.
+come from SEC EDGAR and Yahoo. With no key at all, `/report/sample` renders a
+fictional report, and `/company/DEMO` and `/company/DBNK` are reserved strings
+served from `fixtures/fmp` whatever keys are set. None of the three reaches a
+provider and each says so in the manifest; any other symbol is a live request.
 
 ## Configuration
 
@@ -170,11 +169,12 @@ searches at $0.01 (the judge never searches).
 | Claude Haiku 4.5 | $0.65 | $3.78 | $23.40 | $0.69 |
 
 The worst case is every request one pass could make (36: six transport attempts,
-each able to pause and resume five times); it is reported, not reserved, so a
-job cap only has to cover the requests in flight. The estimate is a
-calculation, not a measurement: the fixture run shape at registry rates, with
-Haiku's synthesize figures those of Sonnet 5 because that pass is raised to
-it. One measured Haiku run settled at $1.43 in total.
+each able to pause and resume five times); it is reported, not reserved, so a job
+cap need only cover the requests in flight. The estimate is a calculation,
+not a measurement: the fixture run shape at registry rates, with Haiku's
+synthesize figures those of Sonnet 5 because that pass is raised to it.
+Measured: Haiku $1.43; Opus 5 on MSFT $5.31 over six requests — each of the three
+passes was schema-rejected once and repaired, so its winning requests were $2.66.
 
 <!-- END GENERATED: pricing -->
 

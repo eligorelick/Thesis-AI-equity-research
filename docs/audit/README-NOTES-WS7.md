@@ -32,9 +32,16 @@ than count citations. Replace the second half with:
 > direction word ("rose", "fell") must match the sign of the change it is glued
 > to, a period phrase that names a year must match the cited figure's period, a
 > unit word ("%", "bps", "billion") must match the unit the payload registered,
-> and a claim that names a person must cite a filing or a transcript rather than
-> a web-search result. The report prints "checked" beside "cited" and never
-> merges them: a figure can be perfectly cited by a sentence that contradicts it.
+> and a claim that names a person must cite a filing, an earnings-call
+> transcript, or a payload figure — never a web-search result, a news item or a
+> press release. The report prints "checked" beside "cited" and never merges
+> them: a figure can be perfectly cited by a sentence that contradicts it.
+
+The direction check only judges words whose sign is fixed by the word itself.
+"Improved", "deteriorated", "strengthened", "weakened" and their family are
+excluded for the same reason as "widened" and "narrowed": for a lower-is-better
+metric (leverage, churn, days sales outstanding, net debt, a cost ratio) an
+improvement IS a negative number, so the word carries no sign of its own.
 
 **R-57 — limitations, verify tolerance rules.** The fiscal-spelling tolerance
 ("FY2025" read as a 2025-12-31 period end) is unchanged and still applies, now to
@@ -44,9 +51,10 @@ the period check as well as the citation check. Add:
 > the cited figure's value inside the sentence before it can judge the words
 > around it. A low "checked" count therefore means little could be checked, not
 > that everything passed, and the report shows the count rather than a bare rate.
-> A bare quarter with no year ("in Q3") is not checked at all: without the
-> issuer's fiscal calendar there is no way to decide which ISO period end it
-> means.
+> A bare quarter with no year ("in Q3"), and a quarter with a two-digit year
+> ("Q3 '25"), are not checked at all: without the issuer's fiscal calendar there
+> is no way to decide which ISO period end either one means. "Q3 FY25" is
+> checked, through the fiscal spelling above.
 
 ## 2. New configuration row
 
@@ -66,13 +74,19 @@ Prose to accompany it:
 > manifest as order-sensitive. Prose is not compared; two runs of a language
 > model never write the same sentence, and demanding it would report a failure
 > every time. Budget for roughly double the synthesis line of the cost breakdown.
+> `both` assumes the default `THESIS_RESERVATION_MODE=request`, which admits and
+> settles each of the two judge requests on its own; under
+> `THESIS_RESERVATION_MODE=pass` the judge reservation is doubled to cover both,
+> because nothing behind it admits them separately.
 
 ## 3. New report metadata a reader will see
 
 Add to whatever section describes the report header:
 
 > The header carries a **judgement protocol** line: which case the judge read
-> first and the seed that decided it, both case lengths against the shared cap
+> first and a short fingerprint of the seed that decided it (the seed is the job
+> id, so the header prints a hash of it rather than the id itself; the exact
+> value stays in the report JSON), both case lengths against the shared cap
 > and whether either was truncated, both analysts' self-assessed case strength,
 > and — when it applies — that the judge ran on the same model family that wrote
 > the two cases it graded. That last one is not a defect but it is not a second
@@ -85,10 +99,20 @@ coverage table, with a passed/checked count per check family.
 ## 4. Behavior worth one line in "Limitations"
 
 > A case that exceeds the length cap is truncated before the judge sees it:
-> trailing evidence, then catalysts, then risks, then drivers are dropped whole
-> (never below one entry each, and the thesis is never emptied), and the
-> missing-data manifest names what was removed. Truncation is disclosed, never
-> silent — but a truncated case is still a case the judge read less of.
+> trailing entries are dropped whole, cheapest field first — evidence, then
+> catalysts, then risks, then drivers, and finally the thesis itself — never
+> below one entry per field, so a case always keeps at least one thesis point.
+> If a single claim still blows the budget, the claim TEXTS are shortened with a
+> visible truncation marker. The missing-data manifest names what was removed.
+> Truncation is disclosed, never silent — but a truncated case is still a case
+> the judge read less of.
+
+> A report whose judge output is replayed from a durable artifact (a resume that
+> reuses a completed synthesis) cannot recover the two case lengths or either
+> analyst's self-assessed strength: the pass that produced them did not run
+> again. Those fields are reported as unavailable, the header sentence says the
+> protocol was reconstructed from the job seed and the setting rather than
+> recorded, and the manifest carries an `llm.judge.protocol-recovered` warning.
 
 ## 5. Not changed by WS7 (so the README must not claim it)
 

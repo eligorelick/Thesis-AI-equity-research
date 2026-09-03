@@ -86,6 +86,25 @@ describe("parseEnv", () => {
     expect(config.fixtureMode).toBe(true);
   });
 
+  it("holds startup work only for THESIS_RESUME_ON_START=0 and resolves the token file", () => {
+    expect(parseEnv({}).resumeOnStart).toBe(true);
+    expect(parseEnv({ THESIS_RESUME_ON_START: "1" }).resumeOnStart).toBe(true);
+    expect(parseEnv({ THESIS_RESUME_ON_START: " 0 " }).resumeOnStart).toBe(false);
+    expect(parseEnv({ THESIS_RESUME_ON_START: "" }).resumeOnStart).toBe(true);
+
+    expect(parseEnv({}).tokenFile).toBeUndefined();
+    expect(parseEnv({ THESIS_TOKEN_FILE: "  " }).tokenFile).toBeUndefined();
+    expect(parseEnv({ THESIS_TOKEN_FILE: " /var/thesis/token " }).tokenFile)
+      .toBe("/var/thesis/token");
+  });
+
+  it.each(["yes", "true", "2", "00", "-1"])(
+    "rejects THESIS_RESUME_ON_START=%s rather than guessing",
+    (value) => {
+      expect(() => parseEnv({ THESIS_RESUME_ON_START: value })).toThrow(/1 or 0/);
+    },
+  );
+
   it("returns a frozen config object", () => {
     const config = parseEnv({});
     expect(Object.isFrozen(config)).toBe(true);

@@ -12,6 +12,7 @@ import {
   settingsModelOptionsForDisplay,
   type SettingsPageControllerState,
 } from "@/settings/writeQueue";
+import { ResumeQueueControl } from "./ResumeQueueControl";
 
 const MODEL_LABELS: Record<string, string> = {
   auto: "auto — best available [recommended]",
@@ -158,6 +159,8 @@ export function SettingsPageView({
             </>
           ) : null}
         </Panel>
+
+        <ResumeQueueControl />
 
         <Panel title="verification">
           <p className="py-1 text-[11px] leading-snug text-faint">

@@ -11,6 +11,7 @@ import {
   cagrForWindow,
   computeGrowth,
   linearRegressionSlope,
+  logLinearGrowth,
   type GrowthCashFlowRow,
   type GrowthIncomeRow,
 } from "@/pipeline/stageB/growth";
@@ -22,6 +23,8 @@ import {
   computeRoicVsWaccSpread,
   computeWacc,
   lookupSyntheticSpread,
+  waccByFiscalYear,
+  waccDisclosure,
   type ReturnsBalanceRow,
   type ReturnsIncomeRow,
   type WaccInputs,
@@ -847,13 +850,59 @@ describe("computeCapital — core ratios", () => {
   it("SBC as % of revenue and % of FCF", () => {
     expect(res.sbc.latest).toBe(10);
     expect(res.sbc.pctOfRevenue).toBeCloseTo(5, 12); // 10/200
-    expect(res.sbc.pctOfFcf).toBeCloseTo(12.5, 12); // 10/80
+    // WS6 (D-19): measured against FCF BEFORE the deduction (10/80), because
+    // dividing SBC by an FCF it has already been subtracted from double-counts.
+    expect(res.sbc.pctOfFcf).toBeCloseTo(12.5, 12);
+    expect(res.sbc.note).toContain("BEFORE the SBC deduction");
   });
 
-  it("FCF conversion = FCF / NI", () => {
-    expect(res.fcf.latestFcf).toBe(80);
-    expect(res.fcf.latestConversion).toBeCloseTo(0.8, 12);
+  // WS6 (D-19): free cash flow now SUBTRACTS stock-based compensation by
+  // default, so the reported FCF is 80 - 10 = 70 and the conversion follows it.
+  // Both figures are kept: `fcfBeforeSbc` is the vendor convention.
+  it("FCF is reported after SBC, with the before-SBC figure kept, and conversion follows it", () => {
+    expect(res.fcf.latestFcfBeforeSbc).toBe(80);
+    expect(res.fcf.latestSbc).toBe(10);
+    expect(res.fcf.latestFcf).toBe(70);
+    expect(res.fcf.latestConversion).toBeCloseTo(0.7, 12); // 70 / 100 net income
     expect(res.fcf.series[0].date < res.fcf.series[1].date).toBe(true); // oldest→newest
+    const latest = res.fcf.series[res.fcf.series.length - 1];
+    expect(latest.fcfBeforeSbc).toBe(80);
+    expect(latest.stockBasedCompensation).toBe(10);
+    expect(latest.note).toContain("SBC 10 subtracted from FCF");
+    expect(res.fcf.basis).toContain("MINUS stock-based compensation");
+    expect(res.notes.some((n) => n.includes("80 before SBC, 70 after subtracting SBC of 10"))).toBe(true);
+  });
+
+  it("leaves FCF unadjusted, and says so, when SBC is not disclosed", () => {
+    const cf = capCashflow.map((r) => ({ ...r, stockBasedCompensation: null }));
+    const res2 = computeCapital(capIncome, cf, capBalance, capMcapHistory, { price: 20 });
+    expect(res2.fcf.latestFcf).toBe(80);
+    expect(res2.fcf.latestFcfBeforeSbc).toBe(80);
+    expect(res2.fcf.latestSbc).toBeNull();
+    expect(res2.fcf.series[res2.fcf.series.length - 1].note).toContain(
+      "stock-based compensation not disclosed for this year",
+    );
+    expect(res2.gaps.some((g) => g.field === "capital.fcf.sbc" && g.severity === "info")).toBe(true);
+  });
+
+  it("shows dilution from outstanding awards as diluted vs basic shares", () => {
+    const inc = capIncome.map((r, i) =>
+      i === 0 ? { ...r, weightedAverageShsOut: 95, weightedAverageShsOutDil: 100 } : r,
+    );
+    const res2 = computeCapital(inc, capCashflow, capBalance, capMcapHistory, { price: 20 });
+    expect(res2.dilution.basicShares).toBe(95);
+    expect(res2.dilution.dilutedShares).toBe(100);
+    expect(res2.dilution.overhangPct).toBeCloseTo((5 / 95) * 100, 12);
+    expect(res2.dilution.asOf).toBe("2025-12-31");
+    expect(res2.dilution.note).toContain("diluted 100 vs basic 95");
+  });
+
+  it("discloses the dilution overhang as unavailable when the basic count is missing", () => {
+    // capIncome carries only the diluted count.
+    expect(res.dilution.basicShares).toBeNull();
+    expect(res.dilution.overhangPct).toBeNull();
+    expect(res.dilution.note).toContain("unavailable");
+    expect(res.gaps.some((g) => g.field === "capital.dilution")).toBe(true);
   });
 
   it("capex intensity = |capex| / revenue", () => {
@@ -1091,5 +1140,160 @@ describe("computeCapital — missing inputs never throw", () => {
     expect(res.buybackPriceAnalysis.totalRepurchased).toBe(100);
     expect(res.buybackPriceAnalysis.avgPricePaidProxy).toBeNull();
     expect(res.buybackPriceAnalysis.years[0].note).toContain("no market-cap history");
+  });
+});
+
+// ===========================================================================
+// WS6 (D-18) — log-linear revenue trend, the growth anchor's regression method
+// ===========================================================================
+
+describe("logLinearGrowth — trend over every year on record", () => {
+  const series = (values: number[]): { date: string; value: number | null }[] =>
+    values.map((v, i) => ({ date: `${2022 + i}-12-31`, value: v }));
+
+  it("recovers the compound rate of a clean exponential series with a near-perfect fit", () => {
+    // 100 → 110 → 121 → 133.1 is exactly +10%/yr; the elapsed-year x-axis uses
+    // 365.25-day years, so the recovered rate is 10% to within a rounding hair.
+    const fit = logLinearGrowth(series([100, 110, 121, 133.1]));
+    expect(fit.n).toBe(4);
+    expect(fit.growthPct).toBeCloseTo(10, 1);
+    expect(fit.slopePerYear).toBeCloseTo(Math.log(1.1), 3);
+    expect(fit.rSquared).toBeGreaterThan(0.999);
+    expect(fit.startDate).toBe("2022-12-31");
+    expect(fit.endDate).toBe("2025-12-31");
+  });
+
+  it("reports a poor fit for a spike rather than moving the whole anchor", () => {
+    // A collapse after a spike: the trend is still fitted, but R² says the
+    // single trend describes the history badly (D-18: report, do not discard).
+    const fit = logLinearGrowth(series([100, 105, 300, 110]));
+    expect(fit.growthPct).not.toBeNull();
+    expect(fit.rSquared as number).toBeLessThan(0.5);
+  });
+
+  it("excludes non-positive observations and says so", () => {
+    const fit = logLinearGrowth([
+      { date: "2022-12-31", value: -5 },
+      { date: "2023-12-31", value: 100 },
+      { date: "2024-12-31", value: 110 },
+      { date: "2025-12-31", value: 121 },
+    ]);
+    expect(fit.n).toBe(3);
+    expect(fit.note).toContain("non-positive or missing observation(s) excluded");
+  });
+
+  it("returns null with a reason below the minimum point count", () => {
+    const fit = logLinearGrowth(series([100, 110]));
+    expect(fit.growthPct).toBeNull();
+    expect(fit.rSquared).toBeNull();
+    expect(fit.note).toContain("needs ≥3 positive annual observations");
+  });
+
+  it("computeGrowth publishes the revenue log-linear trend beside the CAGRs", () => {
+    const income: GrowthIncomeRow[] = [
+      { date: "2025-12-31", revenue: 133.1 },
+      { date: "2024-12-31", revenue: 121 },
+      { date: "2023-12-31", revenue: 110 },
+      { date: "2022-12-31", revenue: 100 },
+    ];
+    const res = computeGrowth(income, [], { period: "annual" });
+    expect(res.revenueLogLinear.n).toBe(4);
+    expect(res.revenueLogLinear.growthPct).toBeCloseTo(10, 1);
+  });
+});
+
+// ===========================================================================
+// WS6 (D-19) — WACC input disclosure and per-fiscal-year WACC history
+// ===========================================================================
+
+describe("waccDisclosure — every WACC input named with its source and date", () => {
+  it("names the FRED series and date, the ERP source and date, cost-of-debt method, tax basis and E/D weights", () => {
+    const res = computeWacc({
+      ...waccBase,
+      riskFreeSeriesId: "fred:DGS10",
+      erpAsOf: "2026-07-02",
+      effectiveTaxRateBasis: "FMP ratios-ttm effectiveTaxRateTTM",
+      asOf: { riskFreeRate: "2026-07-03", statements: "2025-12-31", marketCap: "2026-07-05" },
+    });
+    const d = waccDisclosure(res);
+    expect(d.riskFree).toEqual({ pct: 4, seriesId: "fred:DGS10", asOf: "2026-07-03" });
+    expect(d.erp).toEqual({ pct: 5, source: "FMP market-risk-premium (US totalEquityRiskPremium)", asOf: "2026-07-02" });
+    expect(d.costOfDebt.method).toBe("effective");
+    expect(d.taxRate).toEqual({ fraction: 0.21, basis: "FMP ratios-ttm effectiveTaxRateTTM" });
+    expect(d.weights.equity).toBeCloseTo(0.9, 12);
+    expect(d.weights.debt).toBeCloseTo(0.1, 12);
+    expect(d.summary).toContain("fred:DGS10");
+    expect(d.summary).toContain("observation 2026-07-03");
+    expect(d.summary).toContain("as of 2026-07-02");
+    expect(d.summary).toContain("Blume-adjusted");
+    expect(d.summary).toContain("E 90% / D 10%");
+  });
+
+  it("labels the dated Damodaran fallback as the ERP source when the vendor value is unusable", () => {
+    const res = computeWacc({ ...waccBase, erpPct: null, riskFreeSeriesId: "fred:DGS10" });
+    const d = waccDisclosure(res);
+    expect(d.erp.pct).toBe(ERP_FALLBACK_PCT);
+    expect(d.erp.source).toContain("static fallback");
+    expect(d.erp.asOf).toBe("2026-07-01");
+  });
+});
+
+describe("waccByFiscalYear — each year's own risk-free rate", () => {
+  const wacc = computeWacc({ ...waccBase, riskFreeSeriesId: "fred:DGS10" });
+
+  it("recomputes WACC per fiscal year, holding beta/ERP/weights/tax constant", () => {
+    // beta 1.0, ERP 5, E/D 0.9/0.1, tax 21%, effective Rd 5% (held: an observed
+    // ratio, not rf + spread). At rf 3.0: Re = 3 + 5 = 8; debt leg =
+    // 0.1·5·0.79 = 0.395; WACC = 0.9·8 + 0.395 = 7.595 (floor max(6, 4) = 6).
+    const res = waccByFiscalYear(wacc, ["2024-12-31"], [
+      { date: "2024-12-30", value: 3.0 },
+    ]);
+    expect(res.points).toHaveLength(1);
+    expect(res.points[0].riskFreePct).toBe(3);
+    expect(res.points[0].riskFreeAsOf).toBe("2024-12-30");
+    expect(res.points[0].costOfEquityPct).toBeCloseTo(8, 12);
+    expect(res.points[0].waccPct).toBeCloseTo(7.595, 10);
+    expect(res.basis).toContain("holding beta 1");
+    expect(res.basis).toContain("fred:DGS10");
+  });
+
+  it("moves a SYNTHETIC cost of debt with the risk-free rate and holds an observed one", () => {
+    // Synthetic path: interest expense missing with debt outstanding, ICR from
+    // EBIT/interest is unavailable — use a de-minimis-free synthetic case.
+    const synthetic = computeWacc({
+      ...waccBase,
+      interestExpenseTtm: 40, // Rd 40% is outside [rf−1, rf+19] → synthetic rating
+      riskFreeSeriesId: "fred:DGS10",
+    });
+    expect(synthetic.costOfDebtMethod).toBe("synthetic");
+    const spread = synthetic.syntheticSpreadPct as number;
+    const res = waccByFiscalYear(synthetic, ["2024-12-31"], [{ date: "2024-12-31", value: 3.0 }]);
+    expect(res.points[0].costOfDebtPct).toBeCloseTo(3 + spread, 10);
+    expect(res.basis).toContain("moves with rf");
+  });
+
+  it("reports the years it could not recompute so the caller can disclose the current-WACC fallback", () => {
+    const res = waccByFiscalYear(wacc, ["2021-12-31", "2024-12-31"], [
+      { date: "2024-12-30", value: 3.0 },
+    ]);
+    expect(res.points.map((p) => p.date)).toEqual(["2024-12-31"]);
+    expect(res.missing).toEqual([
+      { date: "2021-12-31", reason: "no fred:DGS10 observation on or before 2021-12-31" },
+    ]);
+    expect(res.gaps.some((g) => g.field === "returns.wacc.history" && g.severity === "info")).toBe(true);
+  });
+
+  it("rejects a stale observation rather than calling it that year's rate", () => {
+    const res = waccByFiscalYear(wacc, ["2024-12-31"], [{ date: "2024-06-30", value: 3.0 }]);
+    expect(res.points).toHaveLength(0);
+    expect(res.missing[0].reason).toContain("more than 14 days before 2024-12-31");
+  });
+
+  it("degrades to a stated reason when the current WACC itself is unavailable", () => {
+    const noWacc = computeWacc({ ...waccBase, riskFreePct: null });
+    const res = waccByFiscalYear(noWacc, ["2024-12-31"], [{ date: "2024-12-31", value: 3 }]);
+    expect(res.points).toHaveLength(0);
+    expect(res.basis).toContain("per-fiscal-year WACC unavailable");
+    expect(res.missing[0].date).toBe("2024-12-31");
   });
 });

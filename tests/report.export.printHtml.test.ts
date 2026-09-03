@@ -177,8 +177,15 @@ describe("reportToPrintHtml — full schema-valid report", () => {
     // and they must appear byte-for-byte.
     expect(DISCLAIMER_TEXT).toBe(esc(DISCLAIMER_TEXT));
     expect(FRED_ATTRIBUTION_TEXT).toBe(esc(FRED_ATTRIBUTION_TEXT));
-    expect(body).toContain(DISCLAIMER_TEXT);
+    // WS6 (D-19): the renderer prints the STORED disclaimer, so the fixture
+    // (a persisted report) shows the text in force when it was generated, and
+    // a report carrying the current constant shows that verbatim.
+    expect(body).toContain(report.meta.disclaimer);
+    expect(report.meta.disclaimer).toContain("not investment advice");
     expect(body).toContain(FRED_ATTRIBUTION_TEXT);
+    const current = JSON.parse(JSON.stringify(report)) as Report;
+    current.meta.disclaimer = DISCLAIMER_TEXT;
+    expect(reportToPrintHtml(current)).toContain(DISCLAIMER_TEXT);
   });
 
   it("renders the complete source envelope including staleness", () => {

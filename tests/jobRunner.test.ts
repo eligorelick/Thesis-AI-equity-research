@@ -59,6 +59,8 @@ const configMocks = vi.hoisted(() => ({
     // WS8 added these two config fields; this mock returns the full ThesisConfig.
     resumeOnStart: true,
     tokenFile: undefined,
+    // WS6 (D-19): THESIS_EV_INCLUDE_LEASES defaults off.
+    evIncludeLeases: false,
   })),
 }));
 
@@ -424,6 +426,8 @@ function fakeReport(judge: JudgeOutput): Report {
       pipelineVersion: "stage-c-1.0.0",
       costUsd: 0,
       verificationRate: null,
+      // WS6 (D-19): a HISTORICAL disclaimer string; the schema accepts any
+      // non-empty text on the parse side so persisted reports stay readable.
       disclaimer: "Informational only — not investment advice.",
       asOfMap: {},
     },
@@ -3739,10 +3743,15 @@ describe("runJob - durable paid-pass settlements", () => {
 
     expect(result).toMatchObject({ status: "done", dataOnly: false });
     expect(fetchPrerequisite).not.toHaveBeenCalled();
-    // A direct invocation must read only local scheduler limits before taking
-    // its durable claim; durable recovery still avoids every provider/model
+    // A direct invocation must read only local settings before taking its
+    // durable claim; durable recovery still avoids every provider/model
     // boundary and never fetches the data prerequisite.
-    expect(configMocks.getConfig).toHaveBeenCalledTimes(2);
+    // WS6 (D-19): 2 -> 3. Stage B reads THESIS_EV_INCLUDE_LEASES once per run
+    // to decide whether lease liabilities count in the enterprise-value bridge
+    // (src/pipeline/compute.ts). It is a local settings read like the other
+    // two; no provider or model boundary is crossed, which the assertions
+    // below still pin.
+    expect(configMocks.getConfig).toHaveBeenCalledTimes(3);
     expect(resolveModelMock).not.toHaveBeenCalled();
     expect(providerBoundaryMocks.runPass).not.toHaveBeenCalled();
     expect(providerBoundaryMocks.runPassStreaming).not.toHaveBeenCalled();

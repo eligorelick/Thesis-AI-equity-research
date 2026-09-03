@@ -88,11 +88,36 @@ export interface QuoteInput {
 
 export interface FcfYearRow {
   date: string;
+  /**
+   * Free cash flow AFTER stock-based compensation (WS6 house default, D-19).
+   * SBC is a real cost of employing people that happens to be settled in
+   * shares, so adding it back overstates the cash a shareholder can claim.
+   * Equal to `fcfBeforeSbc` when SBC was not disclosed for the year.
+   */
   fcf: number | null;
+  /** FCF as reported/derived, BEFORE the SBC deduction (the vendor convention). */
+  fcfBeforeSbc: number | null;
+  /** SBC expense deducted for this year; null when undisclosed. */
+  stockBasedCompensation: number | null;
   netIncome: number | null;
-  /** FCF / net income (fraction). Null when NI ≤ 0 (denominator guard). */
+  /** FCF (after SBC) / net income (fraction). Null when NI ≤ 0 (denominator guard). */
   fcfConversion: number | null;
   note?: string;
+}
+
+/**
+ * WS6 (D-19): dilution from outstanding awards — the gap between the diluted
+ * and basic weighted-average share counts of the latest fiscal year. Null
+ * members mean the statement did not disclose one of the counts, which is
+ * disclosed rather than assumed to be zero.
+ */
+export interface DilutionOverhang {
+  basicShares: number | null;
+  dilutedShares: number | null;
+  /** (diluted − basic) / basic × 100 — the share overhang from outstanding awards. */
+  overhangPct: number | null;
+  asOf: string | null;
+  note: string;
 }
 
 export interface CapexYearRow {
@@ -139,8 +164,15 @@ export interface CapitalResult {
   fcf: {
     /** Oldest → newest, up to 5 fiscal years. */
     series: FcfYearRow[];
+    /** Latest FCF AFTER the SBC deduction (the house default). */
     latestFcf: number | null;
+    /** Latest FCF BEFORE the SBC deduction, for comparison. */
+    latestFcfBeforeSbc: number | null;
+    /** SBC deducted from the latest year; null when undisclosed. */
+    latestSbc: number | null;
     latestConversion: number | null;
+    /** The convention, stated: what was subtracted and from what. */
+    basis: string;
   };
   capexIntensity: {
     /** Oldest → newest, up to 5 fiscal years. */
@@ -182,6 +214,8 @@ export interface CapitalResult {
     note?: string;
   };
   shareCount: ShareCountTrend;
+  /** WS6 (D-19): diluted-vs-basic share overhang from outstanding awards. */
+  dilution: DilutionOverhang;
   buybackPriceAnalysis: {
     /** Total buyback dollars across analyzed years (positive). */
     totalRepurchased: number;
@@ -209,6 +243,24 @@ export const SHARE_TREND_WINDOW_YEARS = 5;
 export const SHARE_TREND_FLAT_BAND_PCT = 1.0;
 
 const MS_PER_YEAR = 365.25 * 24 * 3600 * 1000;
+
+/**
+ * WS6 (D-19) house default: SBC is subtracted from free cash flow.
+ *
+ * The cash-flow statement adds SBC back to operating cash flow because no cash
+ * left the building that period, but the expense is real: it is paid in newly
+ * issued shares, and the bill lands on the existing holders as dilution.
+ * Damodaran's treatment ("Stock Based Compensation: The Elephant in the Room")
+ * is to treat it as an operating expense that should NOT be added back. Both
+ * figures are reported so a reader can see the size of the adjustment.
+ */
+export const SBC_SUBTRACTED_FROM_FCF = true;
+
+const FCF_SBC_BASIS =
+  "Free cash flow = operating cash flow + capital expenditure (FMP capex negative), MINUS stock-based compensation " +
+  "(house default: SBC is a cash-equivalent operating expense settled in shares, not a genuine add-back — Damodaran, " +
+  "\"Stock Based Compensation: The Elephant in the Room\"). Both the before- and after-SBC figures are reported; " +
+  "years with no disclosed SBC are unadjusted and say so.";
 
 const MAINT_CAPEX_HEURISTIC_NOTE =
   "HEURISTIC: maintenance capex approximated by D&A (maintenance = min(|capex|, D&A), growth = max(0, |capex| − D&A)); actual split is not disclosed in standardized statements";
@@ -275,14 +327,30 @@ export function computeCapital(
     const rows = cf.slice(0, CAPITAL_SERIES_MAX_YEARS).reverse(); // oldest → newest
     for (const r of rows) {
       const rowNotes: string[] = [];
-      let fcf: number | null = null;
+      let fcfBeforeSbc: number | null = null;
       if (isFiniteNumber(r.freeCashFlow)) {
-        fcf = r.freeCashFlow;
+        fcfBeforeSbc = r.freeCashFlow;
       } else {
-        fcf = deriveFcf(r.operatingCashFlow, r.capitalExpenditure);
-        if (fcf !== null) {
+        fcfBeforeSbc = deriveFcf(r.operatingCashFlow, r.capitalExpenditure);
+        if (fcfBeforeSbc !== null) {
           rowNotes.push("FCF derived as operatingCashFlow + capitalExpenditure");
         }
+      }
+      // WS6 (D-19): subtract SBC. The statement reports it as a positive
+      // add-back inside operating cash flow; a filer reporting the opposite
+      // sign still means the same expense, so its magnitude is used.
+      const sbcExpense =
+        isFiniteNumber(r.stockBasedCompensation) && r.stockBasedCompensation !== 0
+          ? Math.abs(r.stockBasedCompensation)
+          : null;
+      let fcf = fcfBeforeSbc;
+      if (fcfBeforeSbc !== null && sbcExpense !== null) {
+        fcf = fcfBeforeSbc - sbcExpense;
+        rowNotes.push(
+          `SBC ${fmt(sbcExpense)} subtracted from FCF (house default): ${fmt(fcfBeforeSbc)} → ${fmt(fcf)}`,
+        );
+      } else if (fcfBeforeSbc !== null) {
+        rowNotes.push("stock-based compensation not disclosed for this year — FCF is unadjusted (before SBC)");
       }
       const ni = isFiniteNumber(r.netIncome)
         ? r.netIncome
@@ -300,6 +368,8 @@ export function computeCapital(
       fcfSeries.push({
         date: r.date,
         fcf,
+        fcfBeforeSbc,
+        stockBasedCompensation: sbcExpense,
         netIncome: ni,
         fcfConversion: conversion,
         note: rowNotes.length > 0 ? rowNotes.join("; ") : undefined,
@@ -498,12 +568,16 @@ export function computeCapital(
         sbcNotes.push("revenue missing or ≤ 0 — SBC % of revenue unavailable");
       }
       let pctOfFcf: number | null = null;
-      const latestFcf = latestFcfRow?.fcf ?? null;
+      // WS6: the RATIO stays measured against FCF BEFORE the deduction —
+      // dividing SBC by an FCF it has already been subtracted from would
+      // double-count it and inflate the ratio.
+      const latestFcf = latestFcfRow?.fcfBeforeSbc ?? null;
       if (sbcVal !== null && latestFcf !== null) {
         if (latestFcf <= 0) {
           sbcNotes.push("FCF ≤ 0 — SBC % of FCF not meaningful");
         } else {
           pctOfFcf = (sbcVal / latestFcf) * 100;
+          sbcNotes.push("SBC % of FCF is measured against FCF BEFORE the SBC deduction");
         }
       }
       sbc = {
@@ -513,6 +587,46 @@ export function computeCapital(
         note: sbcNotes.length > 0 ? sbcNotes.join("; ") : undefined,
       };
     }
+  }
+
+  // --- WS6 (D-19): dilution from outstanding awards -----------------------------------------
+  // The gap between the diluted and basic weighted-average counts IS the
+  // outstanding-award overhang the statement discloses. Missing counts are
+  // disclosed, never assumed to be zero.
+  let dilution: DilutionOverhang;
+  {
+    const latestInc = inc.length > 0 ? inc[0] : undefined;
+    const basic = isFiniteNumber(latestInc?.weightedAverageShsOut) && latestInc.weightedAverageShsOut > 0
+      ? latestInc.weightedAverageShsOut
+      : null;
+    const diluted = isFiniteNumber(latestInc?.weightedAverageShsOutDil) && latestInc.weightedAverageShsOutDil > 0
+      ? latestInc.weightedAverageShsOutDil
+      : null;
+    const overhangPct = basic !== null && diluted !== null ? ((diluted - basic) / basic) * 100 : null;
+    const missing = [
+      basic === null ? "weightedAverageShsOut (basic)" : null,
+      diluted === null ? "weightedAverageShsOutDil (diluted)" : null,
+    ].filter((v): v is string => v !== null);
+    if (missing.length > 0) {
+      gaps.push({
+        field: "capital.dilution",
+        reason: `${missing.join(" and ")} missing on the latest annual income statement — the diluted-vs-basic award overhang is not computable`,
+        severity: "info",
+      });
+    }
+    dilution = {
+      basicShares: basic,
+      dilutedShares: diluted,
+      overhangPct,
+      asOf: latestInc?.date ?? null,
+      note:
+        overhangPct === null
+          ? `Dilution overhang unavailable: ${missing.length > 0 ? missing.join(" and ") + " not disclosed" : "no annual income statement"}.`
+          : `Dilution from outstanding awards: diluted ${fmt(diluted as number)} vs basic ${fmt(basic as number)} weighted-average shares ` +
+            `as of ${latestInc?.date ?? "?"} — a ${fmt(overhangPct)}% overhang. Options, RSUs and convertibles that are ` +
+            "antidilutive in a loss year are excluded from the diluted count by the filer, so a loss-making issuer's overhang understates the award pool.",
+    };
+    if (overhangPct !== null) notes.push(dilution.note);
   }
 
   // --- Diluted share-count 5y trend ---------------------------------------------------------
@@ -670,12 +784,37 @@ export function computeCapital(
     );
   }
 
+  // WS6 (D-19): state the convention and show the adjustment's size, so the
+  // report never prints a free-cash-flow figure whose definition is implicit.
+  if (latestFcfRow !== null) {
+    notes.push(FCF_SBC_BASIS);
+    if (latestFcfRow.stockBasedCompensation !== null && latestFcfRow.fcfBeforeSbc !== null) {
+      notes.push(
+        `Latest free cash flow (${latestFcfRow.date}): ${fmt(latestFcfRow.fcfBeforeSbc)} before SBC, ` +
+          `${fmt(latestFcfRow.fcf as number)} after subtracting SBC of ${fmt(latestFcfRow.stockBasedCompensation)}.`,
+      );
+    } else if (latestFcfRow.fcfBeforeSbc !== null) {
+      notes.push(
+        `Latest free cash flow (${latestFcfRow.date}): ${fmt(latestFcfRow.fcfBeforeSbc)}, UNADJUSTED — stock-based compensation was not disclosed for that year.`,
+      );
+      gaps.push({
+        field: "capital.fcf.sbc",
+        reason:
+          "stock-based compensation not disclosed for the latest fiscal year — free cash flow is reported before SBC, so it is not comparable with SBC-adjusted years",
+        severity: "info",
+      });
+    }
+  }
+
   return {
     asOf,
     fcf: {
       series: fcfSeries,
       latestFcf: latestFcfRow?.fcf ?? null,
+      latestFcfBeforeSbc: latestFcfRow?.fcfBeforeSbc ?? null,
+      latestSbc: latestFcfRow?.stockBasedCompensation ?? null,
       latestConversion: latestFcfRow?.fcfConversion ?? null,
+      basis: FCF_SBC_BASIS,
     },
     capexIntensity: {
       series: capexSeries,
@@ -693,6 +832,7 @@ export function computeCapital(
     interestCoverage,
     sbc,
     shareCount,
+    dilution,
     buybackPriceAnalysis: {
       totalRepurchased,
       avgPricePaidProxy,

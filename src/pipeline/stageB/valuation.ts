@@ -234,11 +234,52 @@ export interface DcfBalanceRow {
   cashAndShortTermInvestments: number | null;
 }
 
+/** WS6 (D-19): SBC treatment, with the reported FCF before and after it. */
+export interface DcfSbcTreatment {
+  beforeSbc: number | null;
+  afterSbc: number | null;
+  sbc: number | null;
+  asOf: string | null;
+  basis: string;
+}
+
+/**
+ * WS6 (D-18): log-linear revenue trend over every annual year on record
+ * (growth.ts `logLinearGrowth`). Structural, so the DCF does not depend on the
+ * whole GrowthResult.
+ */
+export interface DcfRevenueTrend {
+  growthPct: number | null;
+  rSquared: number | null;
+  n: number;
+  startDate: string | null;
+  endDate: string | null;
+}
+
 export interface DcfAssumptionInputs {
   /** 3y revenue CAGR in percent (computed upstream from statements); null when unavailable. */
   revenueCagr3yPct: number | null;
-  /** 5y revenue CAGR in percent — used only for the conservatism cross-check. */
+  /** 5y revenue CAGR in percent — one of the growth-anchor methods (D-18). */
   revenueCagr5yPct?: number | null;
+  /**
+   * WS6 (D-18): the log-linear regression method of the growth anchor. Absent
+   * or null makes it an unavailable method, named as such in the basis.
+   */
+  revenueLogLinear?: DcfRevenueTrend | null;
+  /**
+   * WS6 (D-19): the WACC disclosure sentence (returns.ts `waccDisclosure`),
+   * printed verbatim in the assumption block so the discount rate is never an
+   * unattributed percentage.
+   */
+  waccBasis?: string | null;
+  /**
+   * WS6 (D-19): the reported free-cash-flow metric before and after the SBC
+   * deduction (capital.ts). The FCFF DCF does not consume FCF — it projects
+   * EBIT, which already expenses SBC — but the assumption block must show the
+   * adjustment so the two numbers a reader sees are never silently different
+   * definitions.
+   */
+  fcfSbc?: DcfSbcTreatment | null;
   /** Forward annual analyst estimates (FMP names); null/empty when uncovered. */
   analystEstimates: AnalystEstimateRow[] | null;
   waccPct: number;
@@ -270,6 +311,14 @@ export interface DcfAssumptionInputs {
 export interface DcfRoicYear {
   date: string;
   roicPct: number | null;
+  /**
+   * WS6 (D-19): that fiscal year's OWN WACC, recomputed from the risk-free
+   * observation at its year end (returns.ts `waccByFiscalYear`). Absent or
+   * null means the current WACC is applied to that year and the note says so.
+   */
+  waccPct?: number | null;
+  /** Date of the risk-free observation behind `waccPct`. */
+  waccAsOf?: string | null;
 }
 
 export interface TerminalRoic {
@@ -279,36 +328,89 @@ export interface TerminalRoic {
   basis: string;
   /** Why the default held when history was supplied; null when none is owed. */
   note: string | null;
+  /**
+   * WS6 (D-19): how each fiscal year's ROIC was compared to a cost of capital.
+   * "per-year" when at least one year carried its own recomputed WACC,
+   * "current" when the single current WACC was applied to every year,
+   * "none" when no history was supplied.
+   */
+  waccBasis: "per-year" | "current" | "none";
+  /** The comparison sentence, so the assumption block can state it verbatim. */
+  waccBasisNote: string | null;
 }
 
-const TERMINAL_ROIC_DEFAULT_BASIS = "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)";
+const TERMINAL_ROIC_DEFAULT_BASIS =
+  "terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, \"Terminal value house convention\")";
 
-/** Apply the terminal excess-return house rule (see TERMINAL_EXCESS_RETURN_CAP_PP). */
+/**
+ * Apply the terminal excess-return HOUSE CONVENTION (see
+ * TERMINAL_EXCESS_RETURN_CAP_PP). It is not a standard: it is this app's own
+ * convention, and it is labelled as such wherever it is printed.
+ *
+ * WS6 (D-19): each fiscal year is compared to its OWN WACC when the caller
+ * supplied one (recomputed from that year end's risk-free observation); years
+ * without one fall back to the current WACC and the note says which happened.
+ */
 export function terminalRoic(waccPct: number, history: DcfRoicYear[] | null): TerminalRoic {
-  const hold = (note: string | null): TerminalRoic => ({ roicTermPct: waccPct, excessPp: 0, basis: TERMINAL_ROIC_DEFAULT_BASIS, note });
-  if (history === null) return hold(null);
+  const hold = (
+    note: string | null,
+    waccBasis: TerminalRoic["waccBasis"],
+    waccBasisNote: string | null,
+  ): TerminalRoic => ({
+    roicTermPct: waccPct,
+    excessPp: 0,
+    basis: TERMINAL_ROIC_DEFAULT_BASIS,
+    note,
+    waccBasis,
+    waccBasisNote,
+  });
+  if (history === null) return hold(null, "none", null);
   const years = history
-    .filter((y): y is { date: string; roicPct: number } => isNum(y.roicPct))
+    .filter((y): y is DcfRoicYear & { roicPct: number } => isNum(y.roicPct))
     .sort((a, b) => b.date.localeCompare(a.date))
     .slice(0, 5);
   const n = years.length;
+  // Each year against its own cost of capital when one was recomputed for it.
+  const waccForYear = (y: DcfRoicYear): number => (isNum(y.waccPct) ? y.waccPct : waccPct);
+  const perYear = years.filter((y) => isNum(y.waccPct));
+  const currentOnly = years.filter((y) => !isNum(y.waccPct));
+  const waccBasis: TerminalRoic["waccBasis"] = perYear.length > 0 ? "per-year" : "current";
+  const waccBasisNote =
+    perYear.length === 0
+      ? `ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC ${fmtNum(waccPct)}% — no per-year risk-free observation was available to recompute a year-specific WACC`
+      : `ROIC-vs-WACC history uses each fiscal year's own WACC, recomputed from that year end's risk-free observation (${perYear
+          .map((y) => `${y.date}: ${fmtNum(waccForYear(y))}%${y.waccAsOf ? ` (rf as of ${y.waccAsOf})` : ""}`)
+          .join(", ")})` +
+        (currentOnly.length > 0
+          ? `; the current WACC ${fmtNum(waccPct)}% was applied to ${currentOnly
+              .map((y) => y.date)
+              .join(", ")}, which had no usable risk-free observation`
+          : "");
   if (n < TERMINAL_EXCESS_RETURN_MIN_YEARS) {
     return hold(
-      `terminal ROIC held at WACC: ${n} fiscal year${n === 1 ? "" : "s"} of ROIC on record, ${TERMINAL_EXCESS_RETURN_MIN_YEARS} needed to evidence durable excess returns (house rule)`,
+      `terminal ROIC held at WACC: ${n} fiscal year${n === 1 ? "" : "s"} of ROIC on record, ${TERMINAL_EXCESS_RETURN_MIN_YEARS} needed to evidence durable excess returns (house convention)`,
+      waccBasis,
+      waccBasisNote,
     );
   }
-  const below = years.filter((y) => y.roicPct <= waccPct);
+  const below = years.filter((y) => y.roicPct <= waccForYear(y));
   if (below.length > 0) {
     return hold(
-      `terminal ROIC held at WACC: ROIC was at or below WACC ${fmtNum(waccPct)}% in ${below.length} of the last ${n} fiscal years (${below.map((y) => y.date).join(", ")}) — excess returns not evidenced as durable (house rule)`,
+      `terminal ROIC held at WACC: ROIC was at or below that year's WACC in ${below.length} of the last ${n} fiscal years (${below
+        .map((y) => `${y.date}: ROIC ${fmtNum(y.roicPct)}% vs WACC ${fmtNum(waccForYear(y))}%`)
+        .join("; ")}) — excess returns not evidenced as durable (house convention)`,
+      waccBasis,
+      waccBasisNote,
     );
   }
-  const spreads = years.map((y) => y.roicPct - waccPct);
+  const spreads = years.map((y) => y.roicPct - waccForYear(y));
   const median = medianOf(spreads) as number;
   const excess = Math.min(TERMINAL_EXCESS_RETURN_CAP_PP, TERMINAL_EXCESS_RETURN_CARRY * median);
   if (excess < TERMINAL_EXCESS_RETURN_MIN_PP) {
     return hold(
-      `terminal ROIC held at WACC: ROIC exceeded WACC in all ${n} fiscal years but the median spread ${fmtNum(median)}pp is too thin to carry (house rule floor ${TERMINAL_EXCESS_RETURN_MIN_PP}pp)`,
+      `terminal ROIC held at WACC: ROIC exceeded WACC in all ${n} fiscal years but the median spread ${fmtNum(median)}pp is too thin to carry (house convention floor ${TERMINAL_EXCESS_RETURN_MIN_PP}pp)`,
+      waccBasis,
+      waccBasisNote,
     );
   }
   const oldest = years[n - 1].date;
@@ -319,15 +421,43 @@ export function terminalRoic(waccPct: number, history: DcfRoicYear[] | null): Te
     basis:
       `terminal ROIC = WACC ${fmtNum(waccPct)}% + ${fmtNum(excess)}pp evidenced excess return: ROIC exceeded WACC in each of the last ${n} fiscal years ` +
       `(${oldest} to ${newest}, median spread ${fmtNum(median)}pp); half the spread is carried in perpetuity, capped at ${TERMINAL_EXCESS_RETURN_CAP_PP}pp ` +
-      "(house rule after McKinsey's RONIC guidance and Damodaran's modest-excess-return cap)",
+      "(HOUSE CONVENTION after McKinsey's RONIC guidance and Damodaran's modest-excess-return cap — not a standard; see docs/METHODOLOGY.md)",
     note: null,
+    waccBasis,
+    waccBasisNote,
   };
+}
+
+/** WS6 (D-18): one method of the growth anchor and what it produced. */
+export interface GrowthAnchorMethod {
+  name: string;
+  valuePct: number | null;
+  /** Value with its fit statistics / window, or the reason it was unavailable. */
+  detail: string;
+}
+
+/** WS6 (D-18): median-of-methods near-term growth anchor. */
+export interface GrowthAnchor {
+  /** Median of the available methods, before the near-term clamp. */
+  pointPct: number;
+  /** Min..max across the available methods; null when only one was available. */
+  rangePct: [number, number] | null;
+  methods: GrowthAnchorMethod[];
+  /** Names of the methods that could not be computed. */
+  unavailable: string[];
+  basis: string;
 }
 
 export interface DcfAssumptions {
   startRevenue: Assumption<number>;
   /** Explicit horizon (default 10). */
   years: number;
+  /** WS6 (D-19): the discount rate with every input named. */
+  wacc: Assumption<number>;
+  /** WS6 (D-19): SBC treatment, with the reported FCF before and after it. */
+  sbc: Assumption<DcfSbcTreatment>;
+  /** WS6 (D-18): the growth anchor's methods, point estimate and range. */
+  growthAnchor: GrowthAnchor;
   /** Revenue growth per explicit year, percent, length === years. */
   growthPath: Assumption<number[]>;
   /** EBIT margin per explicit year, percent, length === years. */
@@ -445,52 +575,111 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
   const gTerm = Math.min(TERMINAL_G_CAP_PCT, inputs.riskFreePct);
   const gTermBasis = `min(${TERMINAL_G_CAP_PCT}%, risk-free ${fmtNum(inputs.riskFreePct)}%) — house rule: nothing grows faster than rf forever`;
 
-  // --- Near-term growth: analyst 2y avg if available, else 3y CAGR ---------
+  // --- Near-term growth: MEDIAN OF METHODS (WS6, D-18) ---------------------
+  // Retired here: "lower of the 3Y/5Y CAGR" and the sign-disagreement rule
+  // that set g1 = gTerm. Both let one window decide ten years of growth: the
+  // min rule extrapolated whichever window happened to be worse, and the
+  // sign rule threw the history away entirely. The replacement runs every
+  // method the data supports — a log-linear regression over ALL annual years
+  // (reported with its R2 and n, so an erratic history shows up as a poor fit
+  // instead of moving the anchor), the 3-year and 5-year CAGRs, and the
+  // analyst-consensus case when estimates exist — and takes the MEDIAN, with
+  // the full range shown. Each method's value, and every method that was
+  // unavailable, is named in the basis.
   const analyst = analystTwoYearGrowthPct(inputs.analystEstimates, startRev, ttm?.date ?? null);
   notes.push(...analyst.notes);
-  let g1: number;
-  let g1Basis: string;
-  if (analyst.value !== null) {
-    g1 = analyst.value;
-    g1Basis = `analyst consensus revenue, avg implied growth over next 2 fiscal years (through ${analyst.asOf ?? "?"})`;
-  } else if (isNum(inputs.revenueCagr3yPct)) {
-    g1 = inputs.revenueCagr3yPct;
-    g1Basis = "3y historical revenue CAGR (no analyst estimates available)";
-    const cagr5 = isNum(inputs.revenueCagr5yPct) ? inputs.revenueCagr5yPct : null;
-    if (cagr5 !== null && inputs.revenueCagr3yPct !== 0 && cagr5 !== 0 && Math.sign(inputs.revenueCagr3yPct) !== Math.sign(cagr5)) {
-      // A spike or a collapse inside the window (Pfizer after the 2022 COVID
-      // peak: 3y −12% against 5y +8.5%) is an event, not a trend, and either
-      // window would anchor ten years of growth on it — the min rule below
-      // produced a −10% start and an $3 fair value. Damodaran's guidance for
-      // an erratic history is the stable rate, so the path starts at the
-      // terminal growth rate and the note says why.
-      notes.push(
-        `3y CAGR ${fmtNum(inputs.revenueCagr3yPct)}% and 5y CAGR ${fmtNum(cagr5)}% disagree in sign — revenue history holds a spike or a collapse, not a trend; near-term growth set to the terminal rate ${fmtNum(gTerm)}% (house rule: no trend, no extrapolation)`,
-      );
-      g1 = gTerm;
-      g1Basis = "terminal growth rate (3y and 5y historical revenue CAGRs disagree in sign — no trend to extrapolate, house rule)";
-    } else if (cagr5 !== null && Math.abs(inputs.revenueCagr3yPct - cagr5) > 5) {
-      const smaller = Math.min(inputs.revenueCagr3yPct, cagr5);
-      notes.push(
-        `3y CAGR ${fmtNum(inputs.revenueCagr3yPct)}% vs 5y CAGR ${fmtNum(cagr5)}% differ by >5pp — took smaller ${fmtNum(smaller)}% (house rule: conservatism against re-acceleration)`,
-      );
-      g1 = smaller;
-      g1Basis = "min(3y, 5y) historical revenue CAGR (>5pp divergence, conservatism house rule)";
-    }
-    gaps.push(
-      gapEntry("valuation.dcf.analystGrowth", "no usable analyst revenue estimates — fell back to historical CAGR", "info"),
-    );
+
+  const methods: GrowthAnchorMethod[] = [];
+  const trend = inputs.revenueLogLinear ?? null;
+  if (trend && isNum(trend.growthPct)) {
+    methods.push({
+      name: "log-linear revenue regression",
+      valuePct: trend.growthPct,
+      detail:
+        `${fmtNum(trend.growthPct)}%/yr fitted over ${trend.n} annual years` +
+        `${trend.startDate && trend.endDate ? ` (${trend.startDate} to ${trend.endDate})` : ""}` +
+        `${isNum(trend.rSquared) ? `, R2 ${fmtNum(trend.rSquared)}` : ", R2 unavailable"}`,
+    });
   } else {
+    methods.push({
+      name: "log-linear revenue regression",
+      valuePct: null,
+      detail: `unavailable: ${trend === null ? "no annual revenue trend supplied" : "fewer than 3 positive annual revenue observations"}`,
+    });
+  }
+  if (isNum(inputs.revenueCagr3yPct)) {
+    methods.push({ name: "3y revenue CAGR", valuePct: inputs.revenueCagr3yPct, detail: `${fmtNum(inputs.revenueCagr3yPct)}%` });
+  } else {
+    methods.push({ name: "3y revenue CAGR", valuePct: null, detail: "unavailable: no 3-year revenue CAGR" });
+  }
+  if (isNum(inputs.revenueCagr5yPct)) {
+    methods.push({ name: "5y revenue CAGR", valuePct: inputs.revenueCagr5yPct, detail: `${fmtNum(inputs.revenueCagr5yPct)}%` });
+  } else {
+    methods.push({ name: "5y revenue CAGR", valuePct: null, detail: "unavailable: no 5-year revenue CAGR" });
+  }
+  if (analyst.value !== null) {
+    methods.push({
+      name: "analyst-consensus case",
+      valuePct: analyst.value,
+      detail: `${fmtNum(analyst.value)}% (average implied growth over the next 2 fiscal years, through ${analyst.asOf ?? "?"})`,
+    });
+  } else {
+    methods.push({
+      name: "analyst-consensus case",
+      valuePct: null,
+      detail: "unavailable: no usable analyst revenue estimates",
+    });
+  }
+
+  const available = methods.filter((m): m is GrowthAnchorMethod & { valuePct: number } => isNum(m.valuePct));
+  const unavailable = methods.filter((m) => !isNum(m.valuePct)).map((m) => m.name);
+  if (available.length === 0) {
     gaps.push(
       gapEntry(
         "valuation.dcf.nearTermGrowth",
-        "neither analyst estimates nor 3y revenue CAGR available — DCF growth path not buildable",
+        `no growth-anchor method available (${unavailable.join("; ")}) — DCF growth path not buildable`,
         "critical",
       ),
     );
     return { assumptions: null, notes, gaps };
   }
+  const values = available.map((m) => m.valuePct);
+  const point = medianOf(values) as number;
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  const rangePct: [number, number] | null = available.length > 1 ? [lo, hi] : null;
+  const anchorBasis =
+    `median of ${available.length} available growth method${available.length === 1 ? "" : "s"} = ${fmtNum(point)}%` +
+    `${rangePct === null ? " (single method; no range)" : `, range ${fmtNum(lo)}% to ${fmtNum(hi)}%`}` +
+    ` — methods: ${methods.map((m) => `${m.name} ${m.detail}`).join("; ")}` +
+    ` (house rule, WS6 D-18: median of methods; the former "lower of the 3y/5y CAGR" and sign-disagreement rules are RETIRED)`;
+  notes.push(`Near-term growth anchor: ${anchorBasis}`);
+  if (unavailable.length > 0) {
+    gaps.push(
+      gapEntry(
+        "valuation.dcf.growthAnchor",
+        `growth-anchor method(s) unavailable: ${unavailable.join(", ")} — the point estimate is the median of the ${available.length} that were computable`,
+        "info",
+      ),
+    );
+  }
+  if (analyst.value === null) {
+    gaps.push(
+      gapEntry("valuation.dcf.analystGrowth", "no usable analyst revenue estimates — the consensus-anchored method was excluded from the median", "info"),
+    );
+  }
+
+  let g1 = point;
+  const g1Basis =
+    `median of the available growth methods (${available.map((m) => `${m.name} ${fmtNum(m.valuePct)}%`).join(", ")})`;
   g1 = clampWithNote(g1, NEAR_TERM_GROWTH_CLAMP_PP[0], NEAR_TERM_GROWTH_CLAMP_PP[1], "near-term growth (pct)", notes);
+  const growthAnchor: GrowthAnchor = {
+    pointPct: point,
+    rangePct,
+    methods,
+    unavailable,
+    basis: anchorBasis,
+  };
 
   const growthPath = fadePath(g1, gTerm, years);
 
@@ -621,22 +810,65 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
   // --- Terminal economics ----------------------------------------------------
   const terminal = terminalRoic(inputs.waccPct, inputs.roicHistory ?? null);
   if (terminal.note !== null) notes.push(terminal.note);
+  // WS6 (D-19): say which cost of capital each ROIC year was measured against,
+  // in the notes AND in the manifest when it was not the year's own WACC.
+  if (terminal.waccBasisNote !== null) notes.push(terminal.waccBasisNote);
+  if (terminal.waccBasis === "current") {
+    gaps.push(
+      gapEntry(
+        "valuation.dcf.terminalRoic.waccBasis",
+        "no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC",
+        "info",
+      ),
+    );
+  }
   const roicTerm = terminal.roicTermPct;
   const reinvestRate = roicTerm > 0 ? gTerm / roicTerm : 0;
+
+  // WS6 (D-19): SBC treatment, stated in the assumption block with the size of
+  // the adjustment to the reported free-cash-flow metric.
+  const sbcInfo = inputs.fcfSbc ?? null;
+  const sbcBasis =
+    sbcInfo === null || sbcInfo.beforeSbc === null
+      ? "Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series."
+      : sbcInfo.sbc === null
+        ? `Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series. Reported free cash flow as of ${sbcInfo.asOf ?? "?"}: ${fmtNum(sbcInfo.beforeSbc)}, UNADJUSTED — stock-based compensation was not disclosed.`
+        : `Stock-based compensation is expensed inside the EBIT this DCF projects, so it is never added back here; the reported free-cash-flow metric subtracts it as well (house default). The FCFF path derives from revenue, EBIT margin and reinvestment, not from the free-cash-flow metric, so the two are consistent but not the same series. Reported free cash flow as of ${sbcInfo.asOf ?? "?"}: ${fmtNum(sbcInfo.beforeSbc)} before SBC → ${fmtNum(sbcInfo.afterSbc as number)} after subtracting SBC of ${fmtNum(sbcInfo.sbc)}.`;
+  notes.push(sbcBasis);
 
   const assumptions: DcfAssumptions = {
     startRevenue: { value: startRev, basis: `${periodBasis} revenue as of ${ttm?.date ?? "?"}` },
     years,
+    wacc: {
+      value: inputs.waccPct,
+      basis: inputs.waccBasis ?? `WACC ${fmtNum(inputs.waccPct)}% (inputs not supplied to the assumption block)`,
+    },
+    sbc: {
+      value: inputs.fcfSbc ?? {
+        beforeSbc: null,
+        afterSbc: null,
+        sbc: null,
+        asOf: null,
+        basis: "free-cash-flow SBC treatment not supplied to the assumption block",
+      },
+      basis: sbcBasis,
+    },
+    growthAnchor,
     growthPath: {
       value: growthPath,
-      basis: `linear fade from ${fmtNum(g1)}% (${g1Basis}) to terminal ${fmtNum(gTerm)}% by year ${years}`,
+      basis:
+        `linear fade over the explicit ${years}-year horizon from ${fmtNum(g1)}% (${g1Basis}) to the terminal rate ${fmtNum(gTerm)}% in year ${years}; ` +
+        anchorBasis,
     },
     ebitMarginPath: { value: marginPath, basis: marginBasis },
     taxRatePath: { value: taxRatePath, basis: taxBasis },
     salesToCapital: { value: s2c, basis: s2cBasis },
     terminal: {
       gTermPct: { value: gTerm, basis: gTermBasis },
-      roicTermPct: { value: roicTerm, basis: terminal.basis },
+      roicTermPct: {
+        value: roicTerm,
+        basis: terminal.waccBasisNote === null ? terminal.basis : `${terminal.basis}; ${terminal.waccBasisNote}`,
+      },
       reinvestmentRate: {
         value: reinvestRate,
         basis: "terminal reinvestment = gTerm / ROICterm (Damodaran consistency rule)",
@@ -1301,6 +1533,16 @@ export interface MultiplesBalance {
   intangibleAssets: number | null;
   minorityInterest: number | null;
   preferredStock: number | null;
+  /**
+   * WS6 (D-19): lease liabilities (FMP `capitalLeaseObligations`, which carries
+   * the operating AND finance lease liability; the EDGAR statements builder
+   * resolves the same field). FMP's `totalDebt` is documented as
+   * shortTermDebt + longTermDebt + capitalLeaseObligations, so this figure is
+   * ALREADY inside `totalDebt` and the EV bridge subtracts it back out unless
+   * THESIS_EV_INCLUDE_LEASES=1. Null when undisclosed, which is itself
+   * disclosed: the leases then cannot be separated from totalDebt.
+   */
+  capitalLeaseObligations?: number | null;
 }
 
 /** Quarterly fundamentals merged per quarter by the caller (FMP names). */
@@ -1373,9 +1615,36 @@ export interface MultiplesFrameworkInputs {
   /** REIT-only: FFO/AFFO totals provided by the caller (labeled approximate upstream). */
   ffoApprox?: number | null;
   affoApprox?: number | null;
+  /**
+   * WS6 (D-19): include lease liabilities in enterprise value
+   * (THESIS_EV_INCLUDE_LEASES=1). OFF by default, because under US GAAP
+   * (ASC 842) the operating-lease cost stays in operating expenses, so EBITDA
+   * is already AFTER it — adding the lease liability to EV as well would
+   * double-count the leases in EV/EBITDA.
+   */
+  includeLeasesInEv?: boolean;
+}
+
+/** WS6 (D-19): the EV bridge, both ways, with the convention stated. */
+export interface EnterpriseValueBridge {
+  /** The EV actually used by the EV multiples. */
+  value: number | null;
+  /** EV with lease liabilities left out (the house default). */
+  excludingLeases: number | null;
+  /** EV with lease liabilities counted as debt. */
+  includingLeases: number | null;
+  /** Lease liabilities used for the adjustment; null when undisclosed. */
+  leaseLiability: number | null;
+  includeLeases: boolean;
+  basis: string;
 }
 
 export interface OwnHistoryBand {
+  /**
+   * WS6 (D-19): RANK AMONG `observations` QUARTERS (0-100), not a percentile.
+   * The field name is kept for backward compatibility; every label built from
+   * it says "rank among N quarters", with N = `observations`.
+   */
   percentileRank: number | null;
   /**
    * 5th percentile of up to 20 quarterly observations. NOTE: because the window
@@ -1416,6 +1685,8 @@ export interface MultipleStat {
 
 export interface MultiplesResult {
   multiples: MultipleStat[];
+  /** WS6 (D-19): the enterprise-value bridge, both ways. */
+  enterpriseValue: EnterpriseValueBridge;
   sectorAppropriate: MultipleKey[];
   asOf: { quote: string | null; statements: string | null };
   notes: string[];
@@ -1634,9 +1905,14 @@ function bandFor(values: number[] | undefined, current: number | null, basis: st
   // near-min/near-max (≈ observed range), not stable tail percentiles. Flag thin
   // windows so p5/p95 aren't over-read; the median/quartiles stay robust.
   const lowSample = values.length < FULL_OWN_HISTORY_OBS;
-  const observationBasis = `${basis} (${values.length} observations)`;
+  // WS6 (D-19): the headline figure is a RANK AMONG N QUARTERS, never a
+  // percentile of a distribution - 8-20 observations cannot estimate one.
+  const observationBasis =
+    `${basis} (${values.length} observations). The reported figure is a RANK AMONG ${values.length} QUARTERS ` +
+    "(0-100 by linear interpolation between order statistics), not a percentile of a distribution: " +
+    "the sample is far too small for that, and a rank within the observed sample is what it actually measures.";
   const notedBasis = lowSample
-    ? `${observationBasis} — LOW SAMPLE (${values.length} quarterly observations < 5y): p5/p95 track the tail observations (≈ observed range), not stable percentiles`
+    ? `${observationBasis} LOW SAMPLE (${values.length} quarterly observations < 5y): p5/p95 track the tail observations (≈ observed range), not stable quantiles.`
     : observationBasis;
   return {
     percentileRank: current !== null ? percentileRank(values, current) : null,
@@ -1707,7 +1983,11 @@ export function multiplesFramework(
     isNum(equity) && isNum(bal?.goodwill) && isNum(bal?.intangibleAssets)
       ? equity - bal.goodwill - bal.intangibleAssets
       : null;
-  const ev =
+  // WS6 (D-19): the EV bridge, computed BOTH ways and disclosed.
+  // Base = market cap + total debt + preferred + minority interest − cash and
+  // short-term investments. FMP's totalDebt already contains the lease
+  // liability, so the default (leases NOT in EV) subtracts it back out.
+  const evIncludingLeases =
     mcap !== null && bal && isNum(bal.totalDebt) && isNum(bal.cashAndShortTermInvestments)
       ? mcap +
         bal.totalDebt +
@@ -1715,8 +1995,59 @@ export function multiplesFramework(
         (isNum(bal.minorityInterest) ? bal.minorityInterest : 0) -
         bal.cashAndShortTermInvestments
       : null;
+  const leaseLiability = isNum(bal?.capitalLeaseObligations) && bal.capitalLeaseObligations !== 0
+    ? Math.abs(bal.capitalLeaseObligations)
+    : null;
+  const includeLeases = inputs.includeLeasesInEv === true;
+  const evExcludingLeases =
+    evIncludingLeases === null
+      ? null
+      : leaseLiability === null
+        ? evIncludingLeases
+        : evIncludingLeases - leaseLiability;
+  const ev = includeLeases ? evIncludingLeases : evExcludingLeases;
+  const evBridgeBasis =
+    (includeLeases
+      ? "Enterprise value INCLUDES lease liabilities (THESIS_EV_INCLUDE_LEASES=1). "
+      : "Enterprise value EXCLUDES lease liabilities (house default; set THESIS_EV_INCLUDE_LEASES=1 to include them). ") +
+    "EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments" +
+    (leaseLiability === null
+      ? "; lease liabilities were not disclosed separately, so they could not be separated from totalDebt and EV is reported as-is"
+      : `, ${includeLeases ? "keeping" : "less"} lease liabilities of ${fmtNum(leaseLiability)} (already inside totalDebt under FMP's definition)`) +
+    ". EV/EBITDA uses this same EV; EBITDA is AFTER operating-lease cost (US GAAP ASC 842 keeps it in operating expenses)" +
+    (includeLeases
+      ? ", so a lease-INCLUSIVE EV over a lease-EXPENSED EBITDA double-counts the leases and is not comparable to the default — this pairing is the caller's explicit choice."
+      : ", so excluding the lease liability from EV keeps numerator and denominator on the same basis.") +
+    (evIncludingLeases === null || evExcludingLeases === null
+      ? ""
+      : ` EV excluding leases ${fmtNum(evExcludingLeases)}; EV including leases ${fmtNum(evIncludingLeases)}.`);
+  const enterpriseValue: EnterpriseValueBridge = {
+    value: ev,
+    excludingLeases: evExcludingLeases,
+    includingLeases: evIncludingLeases,
+    leaseLiability,
+    includeLeases,
+    basis: evBridgeBasis,
+  };
+  notes.push(evBridgeBasis);
   if (ev === null) {
     gaps.push(gapEntry("valuation.multiples.enterpriseValue", "EV components missing (marketCap/totalDebt/cash) — EV multiples n/m", "info"));
+  } else if (leaseLiability === null) {
+    gaps.push(
+      gapEntry(
+        "valuation.multiples.enterpriseValue.leases",
+        "lease liabilities (capitalLeaseObligations) not disclosed — they could not be separated from totalDebt, so enterprise value may include them regardless of THESIS_EV_INCLUDE_LEASES",
+        "info",
+      ),
+    );
+  } else if (includeLeases) {
+    gaps.push(
+      gapEntry(
+        "valuation.multiples.enterpriseValue.leases",
+        `THESIS_EV_INCLUDE_LEASES=1: enterprise value includes lease liabilities of ${fmtNum(leaseLiability)} while EBITDA remains after operating-lease cost (ASC 842) — EV/EBITDA is not comparable to the default basis`,
+        "warn",
+      ),
+    );
   }
 
   const financialsRoute = route === "bank" || route === "insurer" || route === "reit-mortgage";
@@ -1807,7 +2138,7 @@ export function multiplesFramework(
     if (currencyMismatch && (inputs.keyMetricsHistory?.length ?? 0) > 0) {
       notes.push("vendor pre-baked multiple history skipped: currency mismatch (ADR) makes it untrustworthy");
     }
-    gaps.push(gapEntry("valuation.multiples.ownHistory", `insufficient history (need ≥${MIN_HISTORY_OBS_FOR_BAND} quarters) to build own-history percentile bands (up to 5y)`, "info"));
+    gaps.push(gapEntry("valuation.multiples.ownHistory", `insufficient history (need ≥${MIN_HISTORY_OBS_FOR_BAND} quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)`, "info"));
   }
 
   // --- Assemble ---------------------------------------------------------------
@@ -1845,8 +2176,8 @@ export function multiplesFramework(
         : "latest";
   const basisByKey: Record<MultipleKey, string> = {
     peTtm: `price / epsDiluted (${incomeBasisLabel}); fallback marketCap / netIncome (${incomeBasisLabel})`,
-    evToEbitda: `EV (mcap + totalDebt + preferred + minority - cash&STI, ${balanceBasisLabel}) / (operatingIncome + D&A), ${incomeBasisLabel}-computed — vendor ebitda field not trusted`,
-    evToSales: `EV / revenue (${incomeBasisLabel})`,
+    evToEbitda: `EV / (operatingIncome + D&A), ${incomeBasisLabel}-computed — vendor ebitda field not trusted. ${evBridgeBasis} Balance basis: ${balanceBasisLabel}.`,
+    evToSales: `EV / revenue (${incomeBasisLabel}). ${evBridgeBasis}`,
     priceToFcf: `marketCap / (operatingCashFlow + capitalExpenditure) (${cashFlowBasisLabel}; FMP capex negative)`,
     priceToBook: `marketCap / totalStockholdersEquity (${balanceBasisLabel})`,
     priceToTbv: `marketCap / (equity - goodwill - intangibleAssets) (${balanceBasisLabel})`,
@@ -1863,13 +2194,26 @@ export function multiplesFramework(
       peers: peerStats((inputs.peers ?? []).map((p) => p.multiples[key]), notes, key),
     };
   });
+  // WS6 (D-19): state N per multiple. The report's multiples table carries the
+  // rank but not the window size, so the sentence that makes the number
+  // readable - "rank among N quarters", never "percentile" - is published here.
+  for (const m of multiples) {
+    const band = m.ownHistory;
+    if (band === null || band.percentileRank === null) continue;
+    notes.push(
+      `${m.key}: the own-history figure is a RANK AMONG ${band.observations} QUARTERS of this issuer's own history ` +
+        `(${fmtNum(band.percentileRank)} on a 0-100 scale), not a percentile of a distribution - ${band.observations} observations ` +
+        "cannot estimate percentiles, and a rank within the observed sample is what it measures.",
+    );
+  }
+
   // Negative denominators were already nulled via posOrNull; belt-and-braces:
   for (const m of multiples) {
     if (m.current !== null && m.current <= 0) {
       m.current = null;
       // The own-history rank was computed from this value before it was ruled
       // not-meaningful, so it must go too — otherwise the report shows a
-      // percentile (typically 0th) for a multiple it prints as n/m. The
+      // rank (typically 0) for a multiple it prints as n/m. The
       // distribution (p5..p95, observations) is independent of `current` and
       // stays.
       if (m.ownHistory !== null) m.ownHistory = { ...m.ownHistory, percentileRank: null };
@@ -1879,6 +2223,7 @@ export function multiplesFramework(
 
   return {
     multiples,
+    enterpriseValue,
     sectorAppropriate: SECTOR_APPROPRIATE_MULTIPLES[route],
     asOf: { quote: null, statements: inc?.date ?? bal?.date ?? null },
     notes,
@@ -2545,6 +2890,13 @@ export interface ValuationBundleInputs {
   /** Minority interest / preferred equity for the DCF equity bridge (0 when absent). */
   minorityInterest?: number | null;
   preferred?: number | null;
+  /**
+   * WS6 (D-19): lease liabilities (FMP `capitalLeaseObligations`), already
+   * inside `totalDebt` and therefore inside `netDebt`. Null when undisclosed.
+   */
+  leaseLiability?: number | null;
+  /** WS6 (D-19): THESIS_EV_INCLUDE_LEASES — keep leases in the EV bridge. */
+  includeLeasesInEv?: boolean;
   /** General route: DCF assumption inputs (null when not applicable). */
   dcfInputs: DcfAssumptionInputs | null;
   multiples: MultiplesFrameworkInputs;
@@ -2810,9 +3162,31 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
     notes.push(...built.notes);
     assumptions = built.assumptions;
     if (assumptions !== null) {
+      // WS6 (D-19): the DCF equity bridge follows the SAME lease convention as
+      // the multiples EV. Net debt is built from totalDebt, which already
+      // contains the lease liability, so the default subtracts it back out and
+      // THESIS_EV_INCLUDE_LEASES=1 keeps it. Both bridges are stated.
+      const leaseLiability =
+        isNum(inputs.leaseLiability) && inputs.leaseLiability !== 0 ? Math.abs(inputs.leaseLiability) : null;
+      const includeLeases = inputs.includeLeasesInEv === true;
+      const netDebtIncludingLeases = inputs.netDebt;
+      const netDebtExcludingLeases =
+        isNum(netDebtIncludingLeases) && leaseLiability !== null
+          ? netDebtIncludingLeases - leaseLiability
+          : netDebtIncludingLeases;
+      const netDebtForBridge = includeLeases ? netDebtIncludingLeases : netDebtExcludingLeases;
+      if (isNum(netDebtIncludingLeases)) {
+        notes.push(
+          `DCF equity bridge: EV − net debt − minority interest − preferred equity. ` +
+            (leaseLiability === null
+              ? "Lease liabilities were not disclosed separately, so they could not be separated from total debt; net debt is used as reported."
+              : `Net debt including leases ${fmtNum(netDebtIncludingLeases)}; excluding leases ${fmtNum(netDebtExcludingLeases as number)}; ` +
+                `${includeLeases ? "INCLUDING" : "EXCLUDING"} lease liabilities of ${fmtNum(leaseLiability)} (house default excludes them; THESIS_EV_INCLUDE_LEASES=1 includes them).`),
+        );
+      }
       const runOpts: DcfRunOptions = {
         waccPct: inputs.waccPct,
-        netDebt: inputs.netDebt,
+        netDebt: netDebtForBridge,
         dilutedShares: inputs.dilutedShares,
         minorityInterest: inputs.minorityInterest ?? null,
         preferred: inputs.preferred ?? null,

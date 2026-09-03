@@ -22,7 +22,7 @@ import {
   type ValuationResult,
 } from "@/pipeline/stageB/valuation";
 
-const MULTIPLES = { multiples: [], sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] };
+const MULTIPLES = { multiples: [], enterpriseValue: { value: null, excludingLeases: null, includingLeases: null, leaseLiability: null, includeLeases: false, basis: "test" }, sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] };
 
 function builtAssumptions(): DcfAssumptions {
   const built = buildDcfAssumptions({
@@ -68,9 +68,17 @@ describe("computeDcfDisplay — general DCF route", () => {
     expect(display.assumptions.length).toBeGreaterThanOrEqual(6);
     const byName = new Map(display.assumptions.map((r) => [r.name.toLowerCase(), r]));
     // The rows cover the load-bearing DCF inputs, and carry the deterministic basis.
-    const growth = [...byName.values()].find((r) => r.name.toLowerCase().includes("growth") && !r.name.toLowerCase().includes("terminal"))!;
+    // WS6: the table now carries a WACC row and a growth-anchor row alongside
+    // the fade row, so the fade row is selected by its exact name.
+    const growth = [...byName.values()].find((r) => r.name.startsWith("revenue growth"))!;
     expect(growth).toBeDefined();
     expect(growth.basis).toBe(a.growthPath.basis);
+    const wacc = byName.get("wacc (discount rate)")!;
+    expect(wacc).toBeDefined();
+    expect(wacc.basis).toBe(a.wacc.basis);
+    const anchor = [...byName.values()].find((r) => r.name.startsWith("near-term growth anchor"))!;
+    expect(anchor).toBeDefined();
+    expect(anchor.basis).toBe(a.growthAnchor.basis);
     const s2c = [...byName.values()].find((r) => r.name.toLowerCase().includes("sales-to-capital"))!;
     expect(s2c.basis).toBe(a.salesToCapital.basis);
     const term = [...byName.values()].find((r) => r.name.toLowerCase().includes("terminal growth"))!;

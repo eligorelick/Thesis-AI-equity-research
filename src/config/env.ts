@@ -187,6 +187,15 @@ const envSchema = z.object({
   /** Full path of the X-Thesis-Token file; blank means `<data dir>/csrf-token`. */
   THESIS_TOKEN_FILE: optionalPath,
   // end WS8
+  // WS6 (D-19): include lease liabilities in enterprise value and in the DCF
+  // equity bridge. OFF by default: under US GAAP (ASC 842) the operating-lease
+  // cost stays in operating expenses, so EBITDA is already after it and adding
+  // the lease liability to EV as well double-counts the leases in EV/EBITDA.
+  // Any value other than "1" (including unset) leaves it off.
+  THESIS_EV_INCLUDE_LEASES: z
+    .string()
+    .optional()
+    .transform((v) => blank(v) === "1"),
   // VERIFY_MODEL was removed (SPEC §12): verification is deterministic
   // numeric-source tracing and never calls a model. A leftover env var is
   // simply ignored.
@@ -258,6 +267,9 @@ export interface ThesisConfig {
   /** THESIS_TOKEN_FILE override; undefined means `<data dir>/csrf-token`. */
   tokenFile: string | undefined;
   // end WS8
+  // WS6 (D-19)
+  /** THESIS_EV_INCLUDE_LEASES=1 — count lease liabilities in enterprise value. */
+  evIncludeLeases: boolean;
 }
 
 /**
@@ -293,6 +305,8 @@ export function parseEnv(
     resumeOnStart: parsed.THESIS_RESUME_ON_START,
     tokenFile: parsed.THESIS_TOKEN_FILE,
     // end WS8
+    // WS6 (D-19)
+    evIncludeLeases: parsed.THESIS_EV_INCLUDE_LEASES,
   };
   return Object.freeze(config);
 }

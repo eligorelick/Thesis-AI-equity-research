@@ -64,6 +64,18 @@ function explicitAssumptions(over: Partial<{
   return {
     startRevenue: { value: over.startRevenue ?? 1000, basis: "test" },
     years,
+    wacc: { value: 9, basis: "test" },
+    sbc: {
+      value: { beforeSbc: null, afterSbc: null, sbc: null, asOf: null, basis: "test" },
+      basis: "test",
+    },
+    growthAnchor: {
+      pointPct: growthPath[0],
+      rangePct: null,
+      methods: [{ name: "test", valuePct: growthPath[0], detail: "test" }],
+      unavailable: [],
+      basis: "test",
+    },
     growthPath: { value: growthPath, basis: "test" },
     ebitMarginPath: { value: ebitMarginPath, basis: "test" },
     taxRatePath: { value: taxRatePath, basis: "test" },
@@ -498,8 +510,11 @@ describe("buildDcfAssumptions", () => {
     expect(a.years).toBe(DCF_HORIZON_YEARS);
     // gTerm = min(2.5, 4.48) = 2.5
     expect(a.terminal.gTermPct.value).toBe(2.5);
-    // growth path fades from 12% (3y CAGR, no analyst) to 2.5% over 10y
-    expect(a.growthPath.value[0]).toBeCloseTo(12, 9);
+    // WS6 (D-18): the anchor is the MEDIAN of the available methods, not the
+    // 3y CAGR alone — here median(3y 12%, 5y 13%) = 12.5%.
+    expect(a.growthAnchor.pointPct).toBeCloseTo(12.5, 9);
+    expect(a.growthAnchor.rangePct).toEqual([12, 13]);
+    expect(a.growthPath.value[0]).toBeCloseTo(12.5, 9);
     expect(a.growthPath.value[9]).toBeCloseTo(2.5, 9);
     expect(a.growthPath.value).toHaveLength(10);
   });
@@ -604,7 +619,11 @@ describe("buildDcfAssumptions", () => {
     const a = buildDcfAssumptions({ ...baseInputs, analystEstimates: est }).assumptions as DcfAssumptions;
     // avg of (10, 10) = 10 — TTM 2025-12-31 → FY1 2026-12-31 is a full 365-day
     // year, so day-count annualization is a no-op here (audit L3).
-    expect(a.growthPath.value[0]).toBeCloseTo(10, 6);
+    // WS6 (D-18): consensus is one METHOD among several, not an override, so
+    // the anchor is median(3y 12%, 5y 13%, consensus 10%) = 12%.
+    const consensus = a.growthAnchor.methods.find((m) => m.name === "analyst-consensus case")!;
+    expect(consensus.valuePct).toBeCloseTo(10, 6);
+    expect(a.growthAnchor.pointPct).toBeCloseTo(12, 6);
     expect(a.growthPath.basis).toMatch(/analyst/i);
   });
 
@@ -622,7 +641,10 @@ describe("buildDcfAssumptions", () => {
     const expected = (Math.pow(1.025, 365.25 / 91) - 1) * 100;
     expect(expected).toBeGreaterThan(10.3); // sanity band on the hand-derived value
     expect(expected).toBeLessThan(10.5);
-    expect(a.growthPath.value[0]).toBeCloseTo(expected, 6);
+    // WS6 (D-18): the annualized leg is the consensus METHOD's value; the
+    // anchor is the median across methods.
+    const consensus = a.growthAnchor.methods.find((m) => m.name === "analyst-consensus case")!;
+    expect(consensus.valuePct).toBeCloseTo(expected, 6);
     expect(a.notes.some((n) => /annualized/i.test(n))).toBe(true);
   });
 
@@ -638,19 +660,80 @@ describe("buildDcfAssumptions", () => {
       incomeTtm: { ...incomeTtm, date: "2026-11-15" },
       analystEstimates: est,
     }).assumptions as DcfAssumptions;
-    expect(a.growthPath.value[0]).toBeCloseTo(10, 9);
+    const consensus = a.growthAnchor.methods.find((m) => m.name === "analyst-consensus case")!;
+    expect(consensus.valuePct).toBeCloseTo(10, 9);
     expect(a.notes.some((n) => /skipped/i.test(n))).toBe(true);
   });
 
-  it("takes min(3y,5y) CAGR when they diverge > 5pp (conservatism)", () => {
+  // WS6 (D-18): the "lower of the 3y/5y CAGR" conservatism rule is RETIRED.
+  // Letting whichever window happened to be worse decide ten years of growth
+  // is not conservatism, it is a coin flip on the window; the replacement is
+  // the median of every method the data supports, with the range shown.
+  it("takes the MEDIAN of the available methods, not the lower CAGR (D-18)", () => {
     const a = buildDcfAssumptions({
       ...baseInputs,
       revenueCagr3yPct: 20,
       revenueCagr5yPct: 10,
       analystEstimates: null,
     }).assumptions as DcfAssumptions;
-    expect(a.growthPath.value[0]).toBeCloseTo(10, 9); // took the smaller
-    expect(a.notes.some((n) => n.includes(">5pp") || n.includes("conservatism"))).toBe(true);
+    expect(a.growthPath.value[0]).toBeCloseTo(15, 9); // median(20, 10), not min
+    expect(a.growthAnchor.rangePct).toEqual([10, 20]);
+    expect(a.growthAnchor.basis).toContain("median of 2 available growth methods");
+    expect(a.growthAnchor.basis).toContain("RETIRED");
+    expect(a.notes.some((n) => n.includes(">5pp") || n.includes("conservatism"))).toBe(false);
+  });
+
+  it("lists every method's value and names the ones that were unavailable", () => {
+    const a = buildDcfAssumptions({
+      ...baseInputs,
+      revenueLogLinear: {
+        growthPct: 11,
+        rSquared: 0.97,
+        n: 5,
+        startDate: "2021-12-31",
+        endDate: "2025-12-31",
+      },
+      analystEstimates: null,
+    }).assumptions as DcfAssumptions;
+    // median(regression 11, 3y 12, 5y 13) = 12
+    expect(a.growthAnchor.pointPct).toBeCloseTo(12, 9);
+    expect(a.growthAnchor.rangePct).toEqual([11, 13]);
+    expect(a.growthAnchor.unavailable).toEqual(["analyst-consensus case"]);
+    expect(a.growthAnchor.methods.map((m) => m.name)).toEqual([
+      "log-linear revenue regression",
+      "3y revenue CAGR",
+      "5y revenue CAGR",
+      "analyst-consensus case",
+    ]);
+    const regression = a.growthAnchor.methods[0];
+    expect(regression.detail).toContain("fitted over 5 annual years");
+    expect(regression.detail).toContain("R2 0.97");
+    expect(regression.detail).toContain("2021-12-31 to 2025-12-31");
+    // The fade horizon is stated in years in the assumption block.
+    expect(a.growthPath.basis).toContain("linear fade over the explicit 10-year horizon");
+    expect(a.growthPath.basis).toContain("in year 10");
+  });
+
+  it("discloses the unavailable methods in the missing-data manifest", () => {
+    const built = buildDcfAssumptions({ ...baseInputs, analystEstimates: null });
+    const gap = built.gaps.find((g) => g.field === "valuation.dcf.growthAnchor");
+    expect(gap?.severity).toBe("info");
+    expect(gap?.reason).toContain("log-linear revenue regression");
+    expect(gap?.reason).toContain("analyst-consensus case");
+  });
+
+  it("suppresses the DCF when no growth method is computable at all", () => {
+    const built = buildDcfAssumptions({
+      ...baseInputs,
+      revenueCagr3yPct: null,
+      revenueCagr5yPct: null,
+      revenueLogLinear: null,
+      analystEstimates: null,
+    });
+    expect(built.assumptions).toBeNull();
+    expect(
+      built.gaps.some((g) => g.field === "valuation.dcf.nearTermGrowth" && g.severity === "critical"),
+    ).toBe(true);
   });
 
   it("clamps near-term growth into [-10, +25] (spec §2.2)", () => {
@@ -1887,8 +1970,17 @@ describe("terminalRoic — evidenced excess returns carried into the terminal", 
   const fiveAbove = [year("2025-12-31", 26), year("2024-12-31", 24), year("2023-12-31", 25), year("2022-12-31", 22), year("2021-12-31", 20)];
 
   it("keeps terminal ROIC at WACC, silently, when no history is supplied", () => {
-    const t = terminalRoic(9, null);
-    expect(t).toEqual({ roicTermPct: 9, excessPp: 0, basis: "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)", note: null });
+    // WS6 (D-19): the result also reports HOW each year was compared to a cost
+    // of capital; with no history there is nothing to compare.
+    expect(terminalRoic(9, null)).toEqual({
+      roicTermPct: 9,
+      excessPp: 0,
+      basis:
+        'terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, "Terminal value house convention")',
+      note: null,
+      waccBasis: "none",
+      waccBasisNote: null,
+    });
   });
 
   it("carries half the median spread, capped at 5pp, when ROIC beat WACC in every one of the last five years", () => {
@@ -1910,15 +2002,17 @@ describe("terminalRoic — evidenced excess returns carried into the terminal", 
   it("holds the default, and says why, when one year fell to or below WACC", () => {
     const t = terminalRoic(9, [...fiveAbove.slice(0, 4), year("2021-12-31", 9)]);
     expect(t.roicTermPct).toBe(9);
+    // WS6 (D-19): the note names that year's OWN WACC and labels the rule a
+    // house convention rather than a house rule.
     expect(t.note).toBe(
-      "terminal ROIC held at WACC: ROIC was at or below WACC 9% in 1 of the last 5 fiscal years (2021-12-31) — excess returns not evidenced as durable (house rule)",
+      "terminal ROIC held at WACC: ROIC was at or below that year's WACC in 1 of the last 5 fiscal years (2021-12-31: ROIC 9% vs WACC 9%) — excess returns not evidenced as durable (house convention)",
     );
   });
 
   it("holds the default when fewer than four fiscal years carry a ROIC", () => {
     const t = terminalRoic(9, [year("2025-12-31", 30), year("2024-12-31", 28), year("2023-12-31", null), year("2022-12-31", 27)]);
     expect(t.roicTermPct).toBe(9);
-    expect(t.note).toBe("terminal ROIC held at WACC: 3 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house rule)");
+    expect(t.note).toBe("terminal ROIC held at WACC: 3 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house convention)");
   });
 
   it("holds the default when the spread is too thin to carry", () => {
@@ -1973,7 +2067,54 @@ describe("terminalRoic — evidenced excess returns carried into the terminal", 
     });
     const a = built.assumptions as DcfAssumptions;
     expect(a.terminal.roicTermPct.value).toBe(9);
-    expect(a.notes.at(-1)).toBe("terminal ROIC held at WACC: 2 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house rule)");
+    expect(a.notes).toContain(
+      "terminal ROIC held at WACC: 2 fiscal years of ROIC on record, 4 needed to evidence durable excess returns (house convention)",
+    );
+    // WS6 (D-19): with no per-year risk-free observation the notes say the
+    // CURRENT WACC was applied to every year, and the manifest says so too.
+    expect(a.notes).toContain(
+      "ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9% — no per-year risk-free observation was available to recompute a year-specific WACC",
+    );
+    expect(
+      built.gaps.some(
+        (g) => g.field === "valuation.dcf.terminalRoic.waccBasis" && g.severity === "info",
+      ),
+    ).toBe(true);
+    expect(a.terminal.roicTermPct.basis).toContain("HOUSE CONVENTION");
+  });
+
+  it("compares each fiscal year to its OWN WACC when one was recomputed for it", () => {
+    // ROIC 12% in every year. Against the CURRENT WACC of 13% no year clears
+    // it, so the default holds; against each year's own (lower) WACC every
+    // year clears it and the evidenced excess return is carried.
+    const perYear = [
+      { date: "2025-12-31", roicPct: 12, waccPct: 8, waccAsOf: "2025-12-30" },
+      { date: "2024-12-31", roicPct: 12, waccPct: 8, waccAsOf: "2024-12-30" },
+      { date: "2023-12-31", roicPct: 12, waccPct: 8, waccAsOf: "2023-12-29" },
+      { date: "2022-12-31", roicPct: 12, waccPct: 8, waccAsOf: "2022-12-30" },
+    ];
+    const held = terminalRoic(13, perYear.map((y) => ({ date: y.date, roicPct: y.roicPct })));
+    expect(held.excessPp).toBe(0);
+    expect(held.waccBasis).toBe("current");
+
+    const evidenced = terminalRoic(13, perYear);
+    expect(evidenced.waccBasis).toBe("per-year");
+    // spreads 4pp each → median 4 → half = 2pp carried over the CURRENT WACC.
+    expect(evidenced.excessPp).toBeCloseTo(2, 9);
+    expect(evidenced.roicTermPct).toBeCloseTo(15, 9);
+    expect(evidenced.waccBasisNote).toContain("each fiscal year's own WACC");
+    expect(evidenced.waccBasisNote).toContain("2025-12-31: 8% (rf as of 2025-12-30)");
+  });
+
+  it("says which years fell back to the current WACC when only some had an observation", () => {
+    const t = terminalRoic(13, [
+      { date: "2025-12-31", roicPct: 20, waccPct: 8, waccAsOf: "2025-12-30" },
+      { date: "2024-12-31", roicPct: 20, waccPct: null, waccAsOf: null },
+      { date: "2023-12-31", roicPct: 20 },
+      { date: "2022-12-31", roicPct: 20, waccPct: 8, waccAsOf: "2022-12-30" },
+    ]);
+    expect(t.waccBasis).toBe("per-year");
+    expect(t.waccBasisNote).toContain("the current WACC 13% was applied to 2024-12-31, 2023-12-31");
   });
 });
 
@@ -1994,25 +2135,251 @@ describe("buildDcfAssumptions — revenue history with a spike or a collapse", (
     marketCap: 140_000,
   });
 
-  it("starts the growth path at the terminal rate when the 3y and 5y CAGRs disagree in sign", () => {
+  // WS6 (D-18): the sign-disagreement rule is RETIRED. Setting g1 = gTerm
+  // discarded the whole revenue history on the strength of two endpoint
+  // windows disagreeing. The median of methods keeps every method's evidence,
+  // and the log-linear regression reports an erratic history as a poor fit
+  // (low R2) instead of silently replacing the anchor.
+  it("no longer forces the terminal rate when the 3y and 5y CAGRs disagree in sign", () => {
     // Pfizer 2025: 3y −12% (post-COVID collapse) against 5y +8.5%.
     const built = buildDcfAssumptions(inputs(-12, 8.5));
     const a = built.assumptions as DcfAssumptions;
-    expect(a.growthPath.value[0]).toBe(2.5);
-    expect(a.growthPath.basis).toMatch(/^linear fade from 2\.5% \(terminal growth rate \(3y and 5y historical revenue CAGRs disagree in sign/);
-    expect(a.notes.some((n) => /disagree in sign — revenue history holds a spike or a collapse, not a trend; near-term growth set to the terminal rate 2\.5%/.test(n))).toBe(true);
+    expect(a.growthPath.value[0]).toBeCloseTo(-1.75, 9); // median(−12, 8.5)
+    expect(a.growthAnchor.rangePct).toEqual([-12, 8.5]);
+    expect(a.notes.some((n) => /disagree in sign/.test(n))).toBe(false);
+    expect(a.growthAnchor.basis).toContain("sign-disagreement rules are RETIRED");
   });
 
-  it("keeps the min(3y, 5y) conservatism rule when both windows agree in sign", () => {
+  it("takes the median, not the minimum, when both windows agree in sign", () => {
     const up = buildDcfAssumptions(inputs(12, 20)).assumptions as DcfAssumptions;
-    expect(up.growthPath.value[0]).toBeCloseTo(12, 9);
+    expect(up.growthPath.value[0]).toBeCloseTo(16, 9);
     const down = buildDcfAssumptions(inputs(-3, -9)).assumptions as DcfAssumptions;
-    expect(down.growthPath.value[0]).toBeCloseTo(-9, 9);
-    expect(down.growthPath.basis).toMatch(/min\(3y, 5y\)/);
+    expect(down.growthPath.value[0]).toBeCloseTo(-6, 9);
+    expect(down.growthPath.basis).not.toMatch(/min\(3y, 5y\)/);
   });
 
-  it("uses the 3y CAGR alone when no 5y window exists", () => {
+  it("uses the 3y CAGR alone when no 5y window exists, and shows no range", () => {
     const a = buildDcfAssumptions(inputs(-6, null)).assumptions as DcfAssumptions;
     expect(a.growthPath.value[0]).toBeCloseTo(-6, 9);
+    expect(a.growthAnchor.rangePct).toBeNull();
+    expect(a.growthAnchor.basis).toContain("single method; no range");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WS6 (D-19) — enterprise-value bridge and the operating-lease option
+// ---------------------------------------------------------------------------
+
+describe("multiplesFramework — EV bridge and THESIS_EV_INCLUDE_LEASES", () => {
+  const evInputs: MultiplesFrameworkInputs = {
+    quote: { price: 100, marketCap: 10_000, currency: "USD" },
+    reportedCurrency: "USD",
+    incomeTtm: {
+      date: "2025-12-31",
+      revenue: 5000,
+      operatingIncome: 1000,
+      depreciationAndAmortization: 200,
+      netIncome: 700,
+      epsDiluted: 7,
+    },
+    cashFlowTtm: {
+      date: "2025-12-31",
+      operatingCashFlow: 900,
+      capitalExpenditure: -150,
+      depreciationAndAmortization: 200,
+    },
+    balance: {
+      date: "2025-12-31",
+      // FMP's totalDebt already CONTAINS capitalLeaseObligations.
+      totalDebt: 2000,
+      cashAndShortTermInvestments: 500,
+      totalStockholdersEquity: 4000,
+      goodwill: 800,
+      intangibleAssets: 200,
+      minorityInterest: 100,
+      preferredStock: 50,
+      capitalLeaseObligations: 300,
+    },
+  };
+  // EV including leases = 10000 + 2000 + 50 + 100 - 500 = 11,650.
+  // EV excluding leases = 11,650 - 300 = 11,350. EBITDA = 1000 + 200 = 1200.
+  const EV_INC = 11_650;
+  const EV_EX = 11_350;
+
+  it("excludes lease liabilities by default and reports BOTH enterprise values", () => {
+    const r = multiplesFramework("general", evInputs);
+    expect(r.enterpriseValue.includeLeases).toBe(false);
+    expect(r.enterpriseValue.value).toBe(EV_EX);
+    expect(r.enterpriseValue.excludingLeases).toBe(EV_EX);
+    expect(r.enterpriseValue.includingLeases).toBe(EV_INC);
+    expect(r.enterpriseValue.leaseLiability).toBe(300);
+    expect(r.enterpriseValue.basis).toContain("EXCLUDES lease liabilities");
+    expect(r.enterpriseValue.basis).toContain("EV excluding leases 11350");
+    expect(r.enterpriseValue.basis).toContain("EV including leases 11650");
+    // EBITDA basis is stated, and it is the SAME EV the multiple divides.
+    expect(r.enterpriseValue.basis).toContain("EBITDA is AFTER operating-lease cost");
+    const evEbitda = r.multiples.find((m) => m.key === "evToEbitda");
+    expect(evEbitda?.current).toBeCloseTo(EV_EX / 1200, 12);
+    expect(evEbitda?.basis).toContain("EXCLUDES lease liabilities");
+    const evSales = r.multiples.find((m) => m.key === "evToSales");
+    expect(evSales?.current).toBeCloseTo(EV_EX / 5000, 12);
+  });
+
+  it("includes them when asked, and warns that EV/EBITDA then double-counts", () => {
+    const r = multiplesFramework("general", { ...evInputs, includeLeasesInEv: true });
+    expect(r.enterpriseValue.includeLeases).toBe(true);
+    expect(r.enterpriseValue.value).toBe(EV_INC);
+    const evEbitda = r.multiples.find((m) => m.key === "evToEbitda");
+    expect(evEbitda?.current).toBeCloseTo(EV_INC / 1200, 12);
+    expect(r.enterpriseValue.basis).toContain("INCLUDES lease liabilities");
+    expect(r.enterpriseValue.basis).toContain("double-counts");
+    const gap = r.gaps.find((g) => g.field === "valuation.multiples.enterpriseValue.leases");
+    expect(gap?.severity).toBe("warn");
+    expect(gap?.reason).toContain("not comparable to the default basis");
+  });
+
+  it("discloses that leases could not be separated when they are undisclosed", () => {
+    const balance = { ...evInputs.balance!, capitalLeaseObligations: null };
+    const r = multiplesFramework("general", { ...evInputs, balance });
+    expect(r.enterpriseValue.leaseLiability).toBeNull();
+    expect(r.enterpriseValue.value).toBe(EV_INC);
+    expect(r.enterpriseValue.excludingLeases).toBe(EV_INC);
+    expect(r.enterpriseValue.basis).toContain("could not be separated from totalDebt");
+    const gap = r.gaps.find((g) => g.field === "valuation.multiples.enterpriseValue.leases");
+    expect(gap?.severity).toBe("info");
+  });
+});
+
+describe("valueCompany — the DCF equity bridge follows the same lease convention", () => {
+  const route: CompanyRoute = { base: "general", overlays: [], evidence: { sector: null, industry: null } };
+  const dcfIn: DcfAssumptionInputs = {
+    revenueCagr3yPct: 8,
+    revenueCagr5yPct: 8,
+    analystEstimates: null,
+    waccPct: 9,
+    riskFreePct: 4,
+    incomeTtm: { date: "2025-12-31", revenue: 1000, operatingIncome: 250, incomeBeforeTax: 240, incomeTaxExpense: 48 },
+    incomeHistory: [
+      { date: "2025-12-31", revenue: 1000, operatingIncome: 250 },
+      { date: "2024-12-31", revenue: 940, operatingIncome: 235 },
+    ],
+    balance: { date: "2025-12-31", basis: "annual", totalDebt: 200, totalStockholdersEquity: 700, cashAndShortTermInvestments: 150 },
+    marketCap: 8000,
+  };
+  const bundle = (over: Partial<Parameters<typeof valueCompany>[1]> = {}) => ({
+    currentPrice: 100,
+    waccPct: 9,
+    netDebt: 500,
+    dilutedShares: 100,
+    minorityInterest: null,
+    preferred: null,
+    dcfInputs: dcfIn,
+    multiples: {
+      quote: { price: 100, marketCap: 8000, currency: "USD" },
+      reportedCurrency: "USD",
+      incomeTtm: null,
+      cashFlowTtm: null,
+      balance: null,
+    },
+    excessReturn: null,
+    reit: null,
+    ...over,
+  });
+
+  it("subtracts the lease liability from net debt by default, raising the per-share value", () => {
+    const withLeases = valueCompany(route, bundle({ leaseLiability: 120, includeLeasesInEv: true }));
+    const exLeases = valueCompany(route, bundle({ leaseLiability: 120, includeLeasesInEv: false }));
+    if (withLeases.kind !== "dcf" || exLeases.kind !== "dcf") throw new Error("expected the DCF route");
+    const a = withLeases.dcf?.perShare as number;
+    const b = exLeases.dcf?.perShare as number;
+    // Net debt 500 including leases, 380 excluding them, over 100 shares.
+    expect(b - a).toBeCloseTo(120 / 100, 9);
+    expect(exLeases.notes.some((n) => n.includes("EXCLUDING lease liabilities of 120"))).toBe(true);
+    expect(withLeases.notes.some((n) => n.includes("INCLUDING lease liabilities of 120"))).toBe(true);
+    expect(exLeases.notes.some((n) => n.includes("Net debt including leases 500; excluding leases 380"))).toBe(true);
+  });
+
+  it("says so when leases are not disclosed separately", () => {
+    const r = valueCompany(route, bundle({ leaseLiability: null }));
+    if (r.kind !== "dcf") throw new Error("expected the DCF route");
+    expect(r.notes.some((n) => n.includes("could not be separated from total debt"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WS6 (D-19) — "rank among N quarters", never "percentile"
+// ---------------------------------------------------------------------------
+
+describe("multiplesFramework — own-history figure is a rank among N quarters", () => {
+  const quarters = (count: number): QuarterlyFundamentalsRow[] => {
+    const suffixes = ["12-31", "09-30", "06-30", "03-31"] as const;
+    return Array.from({ length: count }, (_, index) => ({
+      date: `${2026 - Math.floor(index / 4)}-${suffixes[index % 4]}`,
+      revenue: 25,
+      operatingIncome: 5,
+      depreciationAndAmortization: 1,
+      netIncome: 4,
+      operatingCashFlow: 6,
+      capitalExpenditure: -1,
+      totalStockholdersEquity: 100,
+      totalDebt: 0,
+      cashAndShortTermInvestments: 0,
+      preferredStock: 0,
+      minorityInterest: 0,
+      incomeDepreciationAndAmortization: 1,
+    }));
+  };
+  const evHistory = (count: number): EnterpriseValuesRow[] =>
+    quarters(count).map((q) => ({ date: q.date, marketCapitalization: 1000, enterpriseValue: 1000 }));
+
+  const inputs: MultiplesFrameworkInputs = {
+    quote: { price: 100, marketCap: 1000, currency: "USD" },
+    reportedCurrency: "USD",
+    incomeTtm: {
+      date: "2026-12-31",
+      revenue: 100,
+      operatingIncome: 20,
+      depreciationAndAmortization: 4,
+      netIncome: 16,
+      epsDiluted: 1.6,
+    },
+    cashFlowTtm: { date: "2026-12-31", operatingCashFlow: 24, capitalExpenditure: -4, depreciationAndAmortization: 4 },
+    balance: {
+      date: "2026-12-31",
+      totalDebt: 0,
+      cashAndShortTermInvestments: 0,
+      totalStockholdersEquity: 400,
+      goodwill: 0,
+      intangibleAssets: 0,
+      minorityInterest: 0,
+      preferredStock: 0,
+    },
+    quarterlyFundamentals: quarters(12),
+    enterpriseValuesHistory: evHistory(12),
+  };
+
+  it("states the window size and calls the figure a rank, not a percentile", () => {
+    const r = multiplesFramework("general", inputs);
+    const pe = r.multiples.find((m) => m.key === "peTtm");
+    // 12 quarters yield 9 rolling four-quarter TTM windows.
+    expect(pe?.ownHistory?.observations).toBe(9);
+    expect(pe?.ownHistory?.basis).toContain("RANK AMONG 9 QUARTERS");
+    expect(pe?.ownHistory?.basis).not.toMatch(/percentile of a distribution\.(?! )/);
+    // The window size reaches the report through the valuation notes, because
+    // the report's multiples row carries the rank but not N.
+    expect(
+      r.notes.some((n) => n.startsWith("peTtm:") && n.includes("RANK AMONG 9 QUARTERS")),
+    ).toBe(true);
+  });
+
+  it("says a short window is insufficient to rank against, not to build percentiles", () => {
+    const r = multiplesFramework("general", {
+      ...inputs,
+      quarterlyFundamentals: quarters(4),
+      enterpriseValuesHistory: evHistory(4),
+    });
+    const gap = r.gaps.find((g) => g.field === "valuation.multiples.ownHistory");
+    expect(gap?.reason).toContain("rank the current multiple among the issuer's own quarters");
+    expect(gap?.reason).not.toContain("percentile");
   });
 });

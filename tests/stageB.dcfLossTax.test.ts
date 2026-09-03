@@ -20,6 +20,18 @@ function assumptions(marginPath: number[], taxPct = 25): DcfAssumptions {
   return {
     startRevenue: a(1000),
     years,
+    wacc: a(9),
+    sbc: {
+      value: { beforeSbc: null, afterSbc: null, sbc: null, asOf: null, basis: "test" },
+      basis: "test",
+    },
+    growthAnchor: {
+      pointPct: 0,
+      rangePct: null,
+      methods: [{ name: "test", valuePct: 0, detail: "test" }],
+      unavailable: [],
+      basis: "test",
+    },
     growthPath: arr(marginPath.map(() => 0)),
     ebitMarginPath: arr(marginPath),
     taxRatePath: arr(marginPath.map(() => taxPct)),

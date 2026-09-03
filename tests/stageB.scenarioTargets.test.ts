@@ -82,7 +82,7 @@ function dcfValuation(over: Partial<Extract<ValuationResult, { kind: "dcf" }>> =
     dcf,
     sensitivity: null,
     reverseDcf: null,
-    multiples: { multiples: [], sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
+    multiples: { multiples: [], enterpriseValue: { value: null, excludingLeases: null, includingLeases: null, leaseLiability: null, includeLeases: false, basis: "test" }, sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
     notes: [],
     gaps: [],
     ...over,
@@ -297,7 +297,7 @@ describe("scenarioTargets — ordering / floor / degeneracy invariants", () => {
     const { assumptions, dcf } = buildDcfWithNetDebt(4200);
     const valuation: ValuationResult = {
       kind: "dcf", route: "general", assumptions, dcf, sensitivity: null, reverseDcf: null,
-      multiples: { multiples: [], sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
+      multiples: { multiples: [], enterpriseValue: { value: null, excludingLeases: null, includingLeases: null, leaseLiability: null, includeLeases: false, basis: "test" }, sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
       notes: [], gaps: [],
     };
     const r = computeScenarioTargets(makeInputs({ valuation, netDebt: 4200 }));
@@ -326,7 +326,7 @@ describe("scenarioTargets — ordering / floor / degeneracy invariants", () => {
     expect(dcf.perShare!).toBeLessThan(0); // precondition: base equity value < 0
     const valuation: ValuationResult = {
       kind: "dcf", route: "general", assumptions, dcf, sensitivity: null, reverseDcf: null,
-      multiples: { multiples: [], sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
+      multiples: { multiples: [], enterpriseValue: { value: null, excludingLeases: null, includingLeases: null, leaseLiability: null, includeLeases: false, basis: "test" }, sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
       notes: [], gaps: [],
     };
     const r = computeScenarioTargets(makeInputs({ valuation, netDebt: 4600 }));

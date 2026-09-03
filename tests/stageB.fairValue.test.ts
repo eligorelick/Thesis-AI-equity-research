@@ -49,7 +49,7 @@ function buildDcf(): { assumptions: DcfAssumptions; dcf: DcfResult } {
   return { assumptions, dcf };
 }
 
-const MULTIPLES = { multiples: [], sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] };
+const MULTIPLES = { multiples: [], enterpriseValue: { value: null, excludingLeases: null, includingLeases: null, leaseLiability: null, includeLeases: false, basis: "test" }, sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] };
 
 function dcfValuation(over: Partial<Extract<ValuationResult, { kind: "dcf" }>> = {}): ValuationResult {
   const { assumptions, dcf } = buildDcf();

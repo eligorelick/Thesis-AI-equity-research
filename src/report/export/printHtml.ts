@@ -573,12 +573,13 @@ function sectionValuation(v: Valuation, scenarioTargets?: ScenarioTargets, fairV
   parts.push(
     `<h3>Multiples</h3>`,
     table(
-      ["Multiple", "Current", "Peer median", "Own 5y pctile", "Sector"],
+      // WS6 (D-19): a rank among N quarters, not a percentile.
+      ["Multiple", "Current", "Peer median", "Own-history rank", "Sector"],
       v.multiples.map((m) => [
         esc(m.name),
         m.current === null ? DASH : num(m.current, 1),
         m.peerMedian === null ? DASH : num(m.peerMedian, 1),
-        m.own5yPercentile === null ? DASH : `${m.own5yPercentile.toFixed(0)}%`,
+        m.own5yPercentile === null ? DASH : esc(`rank ${m.own5yPercentile.toFixed(0)}/100`),
         m.sectorAppropriate ? "yes" : "no",
       ]),
     ),

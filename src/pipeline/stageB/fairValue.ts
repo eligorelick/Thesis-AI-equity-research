@@ -159,13 +159,33 @@ function big(v: number): string {
 function assumptionRows(a: DcfAssumptions): DcfAssumption[] {
   const g = a.growthPath.value;
   const m = a.ebitMarginPath.value;
+  // WS6: the discount rate and the growth anchor's range are report-visible
+  // rows, so a reader sees the WACC inputs and the method spread, not just the
+  // point estimate the fade starts from.
+  const anchor = a.growthAnchor;
+  const anchorValue =
+    anchor.rangePct === null
+      ? `${pct1(anchor.pointPct)} (single method)`
+      : `${pct1(anchor.pointPct)} (range ${pct1(anchor.rangePct[0])} – ${pct1(anchor.rangePct[1])})`;
   return [
     { name: "start revenue", value: big(a.startRevenue.value), basis: a.startRevenue.basis },
+    { name: "WACC (discount rate)", value: pct1(a.wacc.value), basis: a.wacc.basis },
+    { name: "near-term growth anchor (median of methods)", value: anchorValue, basis: anchor.basis },
     { name: "revenue growth (yr1 → yrN)", value: `${pct1(g[0])} → ${pct1(g[g.length - 1])}`, basis: a.growthPath.basis },
     { name: "EBIT margin (yr1 → yrN)", value: `${pct1(m[0])} → ${pct1(m[m.length - 1])}`, basis: a.ebitMarginPath.basis },
     { name: "sales-to-capital", value: num2(a.salesToCapital.value), basis: a.salesToCapital.basis },
     { name: "terminal growth", value: pct1(a.terminal.gTermPct.value), basis: a.terminal.gTermPct.basis },
     { name: "terminal ROIC", value: pct1(a.terminal.roicTermPct.value), basis: a.terminal.roicTermPct.basis },
+    {
+      name: "free cash flow, SBC treatment",
+      value:
+        a.sbc.value.beforeSbc === null
+          ? "n/a"
+          : a.sbc.value.afterSbc === null || a.sbc.value.sbc === null
+            ? `${big(a.sbc.value.beforeSbc)} (unadjusted)`
+            : `${big(a.sbc.value.beforeSbc)} → ${big(a.sbc.value.afterSbc)}`,
+      basis: a.sbc.basis,
+    },
   ];
 }
 

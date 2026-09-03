@@ -133,7 +133,7 @@ One new environment variable, documented in `.env.example`:
 
 | Key | Default | Effect |
 | --- | --- | --- |
-| `THESIS_EV_INCLUDE_LEASES` | unset (off) | `1` counts lease liabilities in enterprise value and in the DCF equity bridge. Any other value leaves the default in place. |
+| `THESIS_EV_INCLUDE_LEASES` | unset (off) | `1` keeps the **operating**-lease liability in enterprise value and in the DCF equity bridge. It never affects the finance-lease liability, which is debt in both frames either way. Any other value leaves the default in place. |
 
 ## 4. Docs link
 

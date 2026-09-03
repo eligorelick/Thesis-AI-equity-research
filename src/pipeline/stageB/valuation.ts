@@ -1673,16 +1673,19 @@ export interface MultiplesFrameworkInputs {
   ffoApprox?: number | null;
   affoApprox?: number | null;
   /**
-   * WS6 (D-19): include lease liabilities in enterprise value
+   * WS6 (D-19): keep the OPERATING-lease liability in enterprise value
    * (THESIS_EV_INCLUDE_LEASES=1). OFF by default, because under US GAAP
-   * (ASC 842) the operating-lease cost stays in operating expenses, so EBITDA
-   * is already AFTER it — adding the lease liability to EV as well would
-   * double-count the leases in EV/EBITDA.
+   * (ASC 842) the operating-lease cost stays in operating expenses, so EBIT and
+   * EBITDA are already AFTER it — adding that liability to EV as well would
+   * double-count the leases in EV/EBITDA. It never touches the FINANCE-lease
+   * liability (WS6 review, BLOCKER 1): EBIT and EBITDA are BEFORE finance-lease
+   * cost, so that liability is debt in every frame and never leaves EV.
    */
   includeLeasesInEv?: boolean;
 }
 
-/** WS6 (D-19): the EV bridge, both ways, with the convention stated. */
+/** WS6 (D-19): the EV bridge, both ways, with the convention stated. Only the
+ * OPERATING slice ever moves between the two (WS6 review, BLOCKER 1). */
 export interface EnterpriseValueBridge {
   /** The EV actually used by the EV multiples. */
   value: number | null;
@@ -3325,8 +3328,9 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
     if (assumptions !== null) {
       // WS6 (D-19): the DCF equity bridge follows the SAME lease convention as
       // the multiples EV. Net debt is built from totalDebt, which already
-      // contains the lease liability, so the default subtracts it back out and
-      // THESIS_EV_INCLUDE_LEASES=1 keeps it. Both bridges are stated.
+      // contains the lease liabilities, so the default subtracts the OPERATING
+      // slice back out and THESIS_EV_INCLUDE_LEASES=1 keeps it. Both bridges
+      // are stated.
       // WS6 review (BLOCKER 1): only the OPERATING slice leaves net debt. The
       // finance-lease liability stays, because EBIT and EBITDA are before
       // finance-lease cost and the DCF's FCFF is built on that EBIT.

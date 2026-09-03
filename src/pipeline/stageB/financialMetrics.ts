@@ -205,17 +205,35 @@ export const REAL_ESTATE_DEPRECIATION_TAGS = [
   "DepreciationAndAmortizationRealEstate",
   "RealEstateDepreciation",
 ] as const;
+/**
+ * Gains on property sales, which NAREIT subtracts from net income.
+ * `GainsLossesOnSalesOfInvestmentRealEstate` is the element most equity REITs
+ * use and was missing, so a REIT with a 300m disposition gain had FFO
+ * overstated by that amount while the note said only "none tagged; treated as
+ * zero". `GainLossOnDispositionOfAssets1` is gone: it covers disposals of any
+ * asset, and NAREIT excludes gains on sales of DEPRECIABLE REAL ESTATE, not
+ * gains on selling a subsidiary or a piece of equipment.
+ */
 export const PROPERTY_SALE_GAIN_TAGS = [
   "GainLossOnSaleOfPropertiesNetOfApplicableIncomeTaxes",
   "GainLossOnSaleOfProperties",
-  "GainLossOnDispositionOfAssets1",
+  "GainsLossesOnSalesOfInvestmentRealEstate",
   "GainLossOnSaleOfRealEstate",
 ] as const;
-export const REAL_ESTATE_IMPAIRMENT_TAGS = [
-  "ImpairmentOfRealEstate",
-  "AssetImpairmentCharges",
-  "ImpairmentOfInvestments",
-] as const;
+/**
+ * Impairments NAREIT adds back: those attributable to DEPRECIABLE REAL ESTATE.
+ * A goodwill or securities write-down is not one of them, which is why
+ * `AssetImpairmentCharges` is no longer chained in here and
+ * `ImpairmentOfInvestments` is gone entirely.
+ */
+export const REAL_ESTATE_IMPAIRMENT_TAGS = ["ImpairmentOfRealEstate"] as const;
+/**
+ * The generic charge, used only as a labeled stand-in when the real-estate
+ * element is untagged — it may carry goodwill or other non-real-estate
+ * write-downs, so adding it back puts FFO at or ABOVE the definition, the same
+ * direction the total-D&A stand-in errs in.
+ */
+export const GENERIC_IMPAIRMENT_TAGS = ["AssetImpairmentCharges"] as const;
 export const STRAIGHT_LINE_RENT_TAGS = [
   "StraightLineRent",
   "AmortizationOfDeferredLeasingFeesAndStraightLineRent",
@@ -988,7 +1006,12 @@ export interface NareitFfoResult {
   ffo: number | null;
   /** AFFO in currency; null when withheld. */
   affo: number | null;
-  /** True when FFO used total D&A because real-estate D&A is not separately tagged. */
+  /**
+   * True when a component stood in for the definition — total D&A where
+   * real-estate D&A is untagged, or the generic asset-impairment charge where
+   * the real-estate impairment is untagged. `ffoBasis` names which, and both
+   * stand-ins err in the same direction: FFO sits at or ABOVE the definition.
+   */
   ffoApproximate: boolean;
   /** True when AFFO could not subtract recurring capex / straight-line rent. */
   affoApproximate: boolean;
@@ -1099,7 +1122,13 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
   }
 
   const gains = flow === null ? null : resolveTag(facts, PROPERTY_SALE_GAIN_TAGS, flow);
-  const impairments = flow === null ? null : resolveTag(facts, REAL_ESTATE_IMPAIRMENT_TAGS, flow);
+  // NAREIT adds back only impairments attributable to depreciable real estate.
+  // The generic charge is a labeled stand-in, never the definition.
+  const reImpairment = flow === null ? null : resolveTag(facts, REAL_ESTATE_IMPAIRMENT_TAGS, flow);
+  const genericImpairment =
+    flow === null || reImpairment !== null ? null : resolveTag(facts, GENERIC_IMPAIRMENT_TAGS, flow);
+  const impairments = reImpairment ?? genericImpairment;
+  const impairmentIsGeneric = reImpairment === null && genericImpairment !== null;
   if (gains !== null) sources.push(gains.sourcePath);
   if (impairments !== null) sources.push(impairments.sourcePath);
 
@@ -1110,14 +1139,41 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
   const ffoParts = [
     `net income ${netIncome}`,
     `+ ${daIsRealEstate ? "real-estate" : "total"} depreciation and amortization ${daValue}`,
-    gains !== null ? `− gains on property sales ${gainsValue} (${gains.tag})` : "− gains on property sales (none tagged; treated as zero)",
-    impairments !== null ? `+ impairments ${impairmentsValue} (${impairments.tag})` : "+ impairments (none tagged; treated as zero)",
+    gains !== null
+      ? `− gains on property sales ${gainsValue} (${gains.tag})`
+      : "− gains on property sales (no property-sale-gain element tagged; treated as zero — a disposition gain the filer did not tag would leave FFO overstated by that gain)",
+    impairments !== null
+      ? `+ impairments ${impairmentsValue} (${impairments.tag})`
+      : "+ impairments (none tagged; treated as zero)",
   ];
+  const ffoApproximateReasons: string[] = [];
+  if (!daIsRealEstate) {
+    ffoApproximateReasons.push(
+      "the filer does not tag real-estate depreciation separately, so TOTAL depreciation and amortization is added back — NAREIT adds back only the real-estate portion",
+    );
+  }
+  if (impairmentIsGeneric) {
+    ffoApproximateReasons.push(
+      `the filer tags no ${REAL_ESTATE_IMPAIRMENT_TAGS[0]}, so the generic ${GENERIC_IMPAIRMENT_TAGS[0]} is added back — NAREIT adds back only impairments of depreciable real estate, and this charge may include goodwill or other non-real-estate write-downs`,
+    );
+  }
   const ffoBasis =
     `FFO (NAREIT) = ${ffoParts.join(" ")} = ${ffo}.` +
-    (daIsRealEstate
+    (ffoApproximateReasons.length === 0
       ? ""
-      : " APPROXIMATE: the filer does not tag real-estate depreciation separately, so TOTAL depreciation and amortization is added back — NAREIT adds back only the real-estate portion, so this figure sits at or above the definition.");
+      : ` APPROXIMATE: ${ffoApproximateReasons.join("; and ")} — so this figure sits at or above the definition.`);
+  if (impairmentIsGeneric) {
+    notes.push(
+      "FFO adds back the generic asset-impairment charge because the filer tags no real-estate impairment — labeled approximate: NAREIT adds back only impairments of depreciable real estate, so a goodwill or other non-real-estate write-down in that charge leaves FFO ABOVE the definition.",
+    );
+    gaps.push({
+      field: "valuation.reit.ffo.realEstateImpairment",
+      reason:
+        "real-estate impairment is not separately tagged — FFO adds back the generic asset-impairment charge instead and is labeled approximate (the figure sits at or above the definition)",
+      severity: "info",
+      attemptedSources: REAL_ESTATE_IMPAIRMENT_TAGS.map(tagPath),
+    });
+  }
   if (!daIsRealEstate) {
     notes.push(
       "FFO uses total depreciation and amortization because the filer tags no separate real-estate depreciation — labeled approximate (NAREIT adds back only real-estate depreciation).",
@@ -1192,7 +1248,7 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
   return {
     ffo,
     affo,
-    ffoApproximate: !daIsRealEstate,
+    ffoApproximate: ffoApproximateReasons.length > 0,
     affoApproximate,
     ffoBasis,
     affoBasis,

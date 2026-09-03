@@ -2876,8 +2876,10 @@ export function reitValuation(inputs: ReitInputs): ReitValuationResult {
   );
   if (inputs.ffoApproximate === true) {
     notes.push(
-      "FFO is labeled APPROXIMATE: total depreciation and amortization was added back because the filer tags no " +
-        "separate real-estate depreciation, so the figure sits at or above the NAREIT definition.",
+      "FFO is labeled APPROXIMATE: a component stood in for the NAREIT definition — the FFO basis above names which " +
+        "(total depreciation and amortization where real-estate depreciation is untagged, the generic asset-impairment " +
+        "charge where the real-estate impairment is untagged). Both stand-ins err the same way, so the figure sits at " +
+        "or above the NAREIT definition.",
     );
   }
   const price = posOrNull(inputs.sharePrice);

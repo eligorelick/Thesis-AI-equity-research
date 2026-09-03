@@ -195,7 +195,10 @@ naming the missing one, rather than published as a complete figure.
   decides.
 - Any claim that FFO is always "netIncome + D&A": it is the NAREIT definition
   where the filer's tags allow, and the approximation is labeled as such,
-  including which direction it errs in.
+  including which direction it errs in. Two components can stand in — total
+  depreciation for real-estate depreciation, and the generic asset-impairment
+  charge for the real-estate impairment — and both leave FFO at or above the
+  definition.
 
 ## 8. Follow-up for the integration owner
 

@@ -530,6 +530,103 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
     expect(r.gaps).toEqual([]);
   });
 
+  it("nets the disposition-gain element most equity REITs actually use", () => {
+    // GainsLossesOnSalesOfInvestmentRealEstate was missing from the chain, so a
+    // REIT with a 300 disposition gain had FFO overstated by 300 while the note
+    // said only "none tagged; treated as zero".
+    const r = computeNareitFfo({
+      companyFacts: okFacts({
+        NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
+        DepreciationAndAmortizationRealEstate: [{ ...REIT_FY, val: 900 }],
+        GainsLossesOnSalesOfInvestmentRealEstate: [{ ...REIT_FY, val: 300 }],
+      }),
+      periodEnd: "2025-12-31",
+      netIncome: 400,
+      depreciationAndAmortization: 900,
+    });
+
+    // 400 + 900 − 300 = 1,000
+    expect(r.ffo).toBe(1_000);
+    expect(r.ffoBasis).toContain("GainsLossesOnSalesOfInvestmentRealEstate");
+    expect(r.ffoApproximate).toBe(false);
+  });
+
+  it("does not subtract a generic asset-disposal gain, and names the direction of the untagged case", () => {
+    // GainLossOnDispositionOfAssets1 covers disposals of any asset; NAREIT
+    // excludes gains on sales of DEPRECIABLE REAL ESTATE, not a gain on selling
+    // a subsidiary or equipment.
+    const r = computeNareitFfo({
+      companyFacts: okFacts({
+        NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
+        DepreciationAndAmortizationRealEstate: [{ ...REIT_FY, val: 900 }],
+        GainLossOnDispositionOfAssets1: [{ ...REIT_FY, val: 300 }],
+      }),
+      periodEnd: "2025-12-31",
+      netIncome: 400,
+      depreciationAndAmortization: 900,
+    });
+
+    expect(r.ffo).toBe(1_300);
+    expect(r.ffoBasis).not.toContain("GainLossOnDispositionOfAssets1");
+    expect(r.ffoBasis).toContain("no property-sale-gain element tagged");
+    expect(r.ffoBasis).toContain("FFO overstated by that gain");
+  });
+
+  it("adds back only real-estate impairments, and labels the generic charge a stand-in", () => {
+    // NAREIT adds back impairments attributable to depreciable real estate. A
+    // goodwill write-down inside AssetImpairmentCharges is not one, so the
+    // stand-in is disclosed with the direction of the error rather than passed
+    // off as the definition.
+    const r = computeNareitFfo({
+      companyFacts: okFacts({
+        NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
+        DepreciationAndAmortizationRealEstate: [{ ...REIT_FY, val: 900 }],
+        AssetImpairmentCharges: [{ ...REIT_FY, val: 200 }],
+      }),
+      periodEnd: "2025-12-31",
+      netIncome: 400,
+      depreciationAndAmortization: 900,
+    });
+
+    expect(r.ffo).toBe(1_500);
+    expect(r.ffoApproximate).toBe(true);
+    expect(r.ffoBasis).toContain("APPROXIMATE");
+    expect(r.ffoBasis).toContain("AssetImpairmentCharges");
+    expect(r.ffoBasis).toContain("at or above the definition");
+    expect(r.gaps.some((g) => g.field === "valuation.reit.ffo.realEstateImpairment")).toBe(true);
+    // The real-estate element wins outright when it is on file.
+    const exact = computeNareitFfo({
+      companyFacts: okFacts({
+        NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
+        DepreciationAndAmortizationRealEstate: [{ ...REIT_FY, val: 900 }],
+        ImpairmentOfRealEstate: [{ ...REIT_FY, val: 60 }],
+        AssetImpairmentCharges: [{ ...REIT_FY, val: 200 }],
+      }),
+      periodEnd: "2025-12-31",
+      netIncome: 400,
+      depreciationAndAmortization: 900,
+    });
+    expect(exact.ffo).toBe(1_360);
+    expect(exact.ffoApproximate).toBe(false);
+  });
+
+  it("never adds a securities write-down back into FFO", () => {
+    // ImpairmentOfInvestments is not an impairment of depreciable real estate.
+    const r = computeNareitFfo({
+      companyFacts: okFacts({
+        NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
+        DepreciationAndAmortizationRealEstate: [{ ...REIT_FY, val: 900 }],
+        ImpairmentOfInvestments: [{ ...REIT_FY, val: 500 }],
+      }),
+      periodEnd: "2025-12-31",
+      netIncome: 400,
+      depreciationAndAmortization: 900,
+    });
+
+    expect(r.ffo).toBe(1_300);
+    expect(r.ffoApproximate).toBe(false);
+  });
+
   it("labels FFO approximate when only total D&A is on file, and says which way it errs", () => {
     const r = computeNareitFfo({
       companyFacts: okFacts({

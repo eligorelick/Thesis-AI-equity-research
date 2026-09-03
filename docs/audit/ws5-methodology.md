@@ -313,12 +313,26 @@ FFO = net income (GAAP)
     + impairments of depreciable real estate
 ```
 
-Applied exactly where the filer tags the components. Where **real-estate**
-depreciation is not tagged separately, total depreciation and amortization is
-added back instead, and the figure is labeled **approximate** with the direction
-of the error stated: NAREIT adds back only the real-estate portion, so the
-approximation sits at or above the definition. Untagged gains and impairments are
-treated as zero and the note says so, rather than being guessed.
+Applied exactly where the filer tags the components. Two stand-ins exist, and
+both err in the same direction — FFO sits at or **above** the definition — so
+both are labeled **approximate** with the direction stated:
+
+- Where **real-estate** depreciation is not tagged separately, total
+  depreciation and amortization is added back; NAREIT adds back only the
+  real-estate portion.
+- Where the **real-estate impairment** element is not tagged, the generic
+  `AssetImpairmentCharges` is added back; NAREIT adds back only impairments of
+  depreciable real estate, so a goodwill write-down inside that charge does not
+  belong in FFO. `ImpairmentOfInvestments` — a securities write-down — is not in
+  the chain at all.
+
+The gain the definition subtracts is a gain on selling **real estate**:
+`GainLossOnSaleOfProperties`, `GainsLossesOnSalesOfInvestmentRealEstate` (the
+element most equity REITs use), `GainLossOnSaleOfRealEstate` and the
+net-of-tax spelling. The generic `GainLossOnDispositionOfAssets1` is not one of
+them — it covers disposals NAREIT does not exclude. Untagged gains and
+impairments are treated as zero and the note says so, naming the direction: a
+disposition gain the filer did not tag leaves FFO overstated by that gain.
 
 AFFO subtracts recurring (maintenance) capital expenditure and straight-line
 rent where the filer tags them. Where it does not, AFFO falls back to

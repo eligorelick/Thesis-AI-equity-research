@@ -481,13 +481,34 @@ export function settleRequestCost(
         projectionError: null,
       } as unknown as SettlePaidPassResult);
     }
+    // A presumed row for this request (its lease expired earlier) is
+    // superseded by whatever is written below. Deleted BEFORE the insert
+    // because a presumed settlement now claims the same `presumedAttemptId`,
+    // which the presumed-attempt unique index would reject and which a delete
+    // afterwards would remove again.
+    tx.delete(costLog).where(and(
+      eq(costLog.jobId, lease.jobId),
+      eq(costLog.runGeneration, lease.runGeneration),
+      eq(costLog.presumedAttemptId, lease.attemptId),
+      eq(costLog.step, lease.pass),
+    )).run();
     if (settledMicro > 0n) {
+      const presumed = settlement.presumed === true;
       tx.insert(costLog).values({
         jobId: lease.jobId,
         runGeneration: lease.runGeneration,
         attemptId: lease.attemptId,
-        presumedAttemptId: null,
-        settlementKind: settlement.presumed === true ? "presumed" : "actual",
+        // A stalled stream settles reported usage plus the worst case for the
+        // remainder. That remainder is a presumed maximum like any other, so
+        // it must carry `presumedAttemptId` too: both reconciliation entry
+        // points select on that column, and without it the row could never be
+        // listed by `npm run costs:reconcile`, never lowered by a reported
+        // total, and never subtracted from that total while its neighbours
+        // were lowered against it (DECISIONS D-07, D-09). `attemptId` stays
+        // set — the request DID bill under it — so the billed-attempt index
+        // still fences a duplicate settlement for the same request.
+        presumedAttemptId: presumed ? lease.attemptId : null,
+        settlementKind: presumed ? "presumed" : "actual",
         step: lease.pass,
         model: settlement.model,
         inputTokens: settlement.inputTokens,
@@ -501,14 +522,6 @@ export function settleRequestCost(
         createdAt: authorityAt,
       }).run();
     }
-    // A presumed row for this request (its lease expired earlier) is
-    // superseded by the measurement that just arrived.
-    tx.delete(costLog).where(and(
-      eq(costLog.jobId, lease.jobId),
-      eq(costLog.runGeneration, lease.runGeneration),
-      eq(costLog.presumedAttemptId, lease.attemptId),
-      eq(costLog.step, lease.pass),
-    )).run();
     tx.delete(jobLlmLeases).where(exactLeaseWhere(lease)).run();
     return { recorded: settledMicro > 0n, costUsd: Number(settledMicro) / MICRO_USD };
   }, { behavior: "immediate" });

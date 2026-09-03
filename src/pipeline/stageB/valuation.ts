@@ -1925,6 +1925,34 @@ export interface ExcessReturnInputs {
   /** Reverse-solve target (market cap in same currency units as bookValue). */
   marketCap?: number | null;
   asOf?: string | null;
+  /**
+   * WS5: tangible common equity (equity − goodwill − other intangibles −
+   * preferred) for the P/TBV-against-ROTE pairing. Optional; without it the
+   * pairing is withheld with a reason rather than falling back to plain book
+   * value, which would flatter a goodwill-heavy acquirer.
+   */
+  tangibleCommonEquity?: number | null;
+  /** WS5: return on tangible common equity, percent — the return P/TBV is read against. */
+  rotePct?: number | null;
+}
+
+/** WS5: the multiple a financial's price is actually read on, beside the return that justifies it. */
+export interface PriceToTangibleBookVsRote {
+  /** market cap / tangible common equity. */
+  pTbv: number | null;
+  /** Return on tangible common equity, percent. */
+  rotePct: number | null;
+  /**
+   * The multiple the return justifies under the same residual-income identity
+   * the forward model uses: (ROTE − g) / (CoE − g), with g the sustainable
+   * growth rate ROTE × retention. Null when the identity does not hold.
+   */
+  justifiedPTbv: number | null;
+  /** pTbv − justifiedPTbv; positive = the market pays more than the return supports. */
+  premiumToJustified: number | null;
+  basis: string;
+  /** Non-null when the pairing (or the justified multiple) was withheld. */
+  withheldReason: string | null;
 }
 
 export interface ExcessReturnResult {
@@ -1934,6 +1962,14 @@ export interface ExcessReturnResult {
   impliedPToBv: number | null;
   roePathPct: Assumption<number[]>;
   payoutRatioPct: Assumption<number | null>;
+  /** WS5: the explicit horizon the excess returns are summed over. */
+  horizonYears: Assumption<number>;
+  /** WS5: the discount rate — the cost of EQUITY, never a WACC. */
+  costOfEquityPct: Assumption<number | null>;
+  /** WS5: opening book equity the model builds on. */
+  openingBookValue: Assumption<number | null>;
+  /** WS5: P/TBV against ROTE — the pairing a financial is actually judged on. */
+  priceToTangibleBookVsRote: PriceToTangibleBookVsRote;
   /** BV_0 .. BV_N under retention compounding. */
   bookValuePath: number[];
   /**
@@ -1986,11 +2022,140 @@ function excessReturnValue(
  * honestly in `terminalExcess` and the basis string. Also reverse-solves the
  * constant steady-state ROE that reproduces the current market cap.
  */
+/**
+ * WS5: P/TBV read against ROTE — the pair a bank, insurer or mortgage REIT is
+ * actually judged on, and the one the route's `lead` list has named all along.
+ *
+ * Tangible common equity is the denominator, not book equity: goodwill and
+ * other intangibles absorb losses only after common equity is gone, so a
+ * goodwill-heavy acquirer trading at 1.0x BOOK can be at 2.0x tangible book,
+ * and comparing that multiple against a return computed on tangible equity
+ * (ROTE) would be comparing two different denominators.
+ *
+ * The justified multiple is the residual-income identity the forward model
+ * already assumes, (ROTE − g) / (CoE − g), with g = ROTE × retention. It is
+ * withheld — never clamped — when CoE − g is not comfortably positive, because
+ * the ratio explodes through infinity there and any number it produced would be
+ * an artefact of the arithmetic rather than a valuation.
+ */
+export const JUSTIFIED_PTBV_MIN_SPREAD_PP = 0.5;
+
+function priceToTangibleBookVsRote(
+  inputs: ExcessReturnInputs,
+  coePct: number | null,
+  payoutPct: number | null,
+): PriceToTangibleBookVsRote {
+  const tce = posOrNull(inputs.tangibleCommonEquity);
+  const mcap = posOrNull(inputs.marketCap);
+  const rotePct = isNum(inputs.rotePct) ? inputs.rotePct : null;
+  const empty = (reason: string, basis: string): PriceToTangibleBookVsRote => ({
+    pTbv: null,
+    rotePct,
+    justifiedPTbv: null,
+    premiumToJustified: null,
+    basis,
+    withheldReason: reason,
+  });
+
+  if (tce === null) {
+    return empty(
+      "tangible common equity unavailable or not positive — P/TBV withheld rather than substituting book equity, which would flatter a goodwill-heavy balance sheet",
+      "market cap / tangible common equity, against return on tangible common equity",
+    );
+  }
+  if (mcap === null) {
+    return empty(
+      "market cap unavailable — P/TBV not computable",
+      "market cap / tangible common equity, against return on tangible common equity",
+    );
+  }
+  const pTbv = mcap / tce;
+
+  if (rotePct === null || coePct === null || payoutPct === null) {
+    const missing =
+      rotePct === null
+        ? "return on tangible common equity"
+        : coePct === null
+          ? "cost of equity"
+          : "payout history (needed for the retention rate in g)";
+    return {
+      pTbv,
+      rotePct,
+      justifiedPTbv: null,
+      premiumToJustified: null,
+      basis: `P/TBV = market cap ${mcap} / tangible common equity ${tce} = ${fmtNum(pTbv)}x`,
+      withheldReason: `${missing} unavailable — the justified multiple (ROTE − g)/(CoE − g) was not computed, so the multiple is shown without the return that would justify it`,
+    };
+  }
+
+  const retention = 1 - payoutPct / 100;
+  const g = (rotePct / 100) * retention * 100;
+  const spread = coePct - g;
+  if (spread < JUSTIFIED_PTBV_MIN_SPREAD_PP) {
+    return {
+      pTbv,
+      rotePct,
+      justifiedPTbv: null,
+      premiumToJustified: null,
+      basis:
+        `P/TBV = market cap ${mcap} / tangible common equity ${tce} = ${fmtNum(pTbv)}x, against ROTE ${fmtNum(rotePct)}%`,
+      withheldReason:
+        `sustainable growth g = ROTE ${fmtNum(rotePct)}% x retention ${fmtNum(retention * 100)}% = ${fmtNum(g)}% leaves ` +
+        `only ${fmtNum(spread)}pp below the cost of equity ${fmtNum(coePct)}% (floor ${JUSTIFIED_PTBV_MIN_SPREAD_PP}pp) — ` +
+        "the justified multiple (ROTE − g)/(CoE − g) diverges there, so it is withheld rather than reported as a very large number",
+    };
+  }
+  const justifiedPTbv = (rotePct - g) / spread;
+  return {
+    pTbv,
+    rotePct,
+    justifiedPTbv,
+    premiumToJustified: pTbv - justifiedPTbv,
+    basis:
+      `P/TBV = market cap ${mcap} / tangible common equity ${tce} = ${fmtNum(pTbv)}x, against ROTE ${fmtNum(rotePct)}%. ` +
+      `Justified P/TBV = (ROTE ${fmtNum(rotePct)}% − g ${fmtNum(g)}%) / (CoE ${fmtNum(coePct)}% − g ${fmtNum(g)}%) = ` +
+      `${fmtNum(justifiedPTbv)}x, where g = ROTE x retention ${fmtNum(retention * 100)}% — the same residual-income ` +
+      "identity the forward model assumes, so the two readings cannot disagree.",
+    withheldReason: null,
+  };
+}
+
 export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResult {
   const notes: string[] = [];
   const gaps: ManifestEntry[] = [];
   const years = inputs.years ?? EXCESS_RETURN_YEARS;
   const reverseNotes: string[] = [];
+  // WS5: the horizon, the discount rate and the opening book value are printed
+  // as assumptions in their own right — the model's shape was previously only
+  // inferable from the ROE-path basis string.
+  const horizonBasis = (built: boolean): string =>
+    built
+      ? `explicit ${years}-year horizon: the excess return (ROE − cost of equity) x prior-year book equity is ` +
+        `discounted year by year to year ${years}. ROE is faded LINEARLY to the cost of equity over exactly that ` +
+        "horizon, so the year-N excess is zero and NO continuing value is added beyond it."
+      : `explicit ${years}-year horizon (model not built)`;
+  const coeSupplied = isNum(inputs.costOfEquityPct) ? inputs.costOfEquityPct : null;
+  const unbuiltAssumptions = {
+    horizonYears: { value: years, basis: horizonBasis(false) },
+    costOfEquityPct: {
+      value: coeSupplied,
+      basis:
+        coeSupplied === null
+          ? "not supplied — the model is suppressed rather than discounting at a defaulted rate"
+          : `cost of equity ${fmtNum(coeSupplied)}% (CAPM, upstream); the model never uses a WACC`,
+    },
+    openingBookValue: {
+      value: posOrNull(inputs.bookValue),
+      basis:
+        posOrNull(inputs.bookValue) === null
+          ? "totalStockholdersEquity missing or non-positive"
+          : "latest total stockholders' equity (BV0)",
+    },
+    priceToTangibleBookVsRote: priceToTangibleBookVsRote(inputs, coeSupplied, null),
+  } satisfies Pick<
+    ExcessReturnResult,
+    "horizonYears" | "costOfEquityPct" | "openingBookValue" | "priceToTangibleBookVsRote"
+  >;
 
   // 2026-07-09 audit M5: a null cost of equity used to be silently defaulted to
   // 10% upstream. Suppress instead — the discount rate is load-bearing, exactly
@@ -2010,6 +2175,7 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
       roePathPct: { value: [], basis: "not built (no cost of equity)" },
       payoutRatioPct: { value: null, basis: "not built (no cost of equity)" },
       bookValuePath: [],
+      ...unbuiltAssumptions,
       terminalExcess: null,
       reverseSolve: { impliedCurrentRoePct: null, notes: ["skipped: no cost of equity"] },
       asOf: inputs.asOf ?? null,
@@ -2031,6 +2197,7 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
       roePathPct: { value: [], basis: "not built (no book value)" },
       payoutRatioPct: { value: null, basis: "not built (no book value)" },
       bookValuePath: [],
+      ...unbuiltAssumptions,
       terminalExcess: null,
       reverseSolve: { impliedCurrentRoePct: null, notes: ["skipped: no book value"] },
       asOf: inputs.asOf ?? null,
@@ -2054,6 +2221,7 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
       roePathPct: { value: [], basis: "not built (no payout history)" },
       payoutRatioPct: { value: null, basis: "not built (no payout history)" },
       bookValuePath: [],
+      ...unbuiltAssumptions,
       terminalExcess: null,
       reverseSolve: { impliedCurrentRoePct: null, notes: ["skipped: no payout history"] },
       asOf: inputs.asOf ?? null,
@@ -2090,6 +2258,7 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
       roePathPct: { value: [], basis: "not built (no current ROE)" },
       payoutRatioPct: { value: payout, basis: payoutBasis },
       bookValuePath: [],
+      ...unbuiltAssumptions,
       terminalExcess: null,
       reverseSolve: { impliedCurrentRoePct: null, notes: ["skipped: no current ROE"] },
       asOf: inputs.asOf ?? null,
@@ -2179,12 +2348,33 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
       ? `excess-return model: equity-only (CoE, never WACC); terminal ROE overridden to ${fmtNum(endRoe)}% — terminal excess ${fmtNum(terminalExcess)} (currency), NOT zero`
       : "excess-return model: equity-only (CoE, never WACC); ROE fades to CoE so terminal excess returns = 0",
   );
+  // WS5: the P/TBV-against-ROTE pairing, now that the payout (and hence the
+  // retention rate inside g) is known.
+  const pTbvVsRote = priceToTangibleBookVsRote(inputs, coe, payout);
+  if (pTbvVsRote.withheldReason !== null && pTbvVsRote.pTbv === null) {
+    gaps.push(
+      gapEntry("valuation.excessReturn.priceToTangibleBook", pTbvVsRote.withheldReason, "info"),
+    );
+  }
   return {
     equityValue,
     perShare,
     impliedPToBv,
     roePathPct: { value: roePath, basis: roeBasis },
     payoutRatioPct: { value: payout, basis: payoutBasis },
+    horizonYears: { value: years, basis: horizonBasis(true) },
+    costOfEquityPct: {
+      value: coe,
+      basis:
+        `cost of equity ${fmtNum(coe)}% (CAPM, upstream) — the ONLY discount rate in this model: the excess returns ` +
+        "are equity flows, so a WACC would discount them at a blended rate that includes the cost of deposits, " +
+        "policy reserves or repo, which are this company's raw material rather than its financing.",
+    },
+    openingBookValue: {
+      value: bv0,
+      basis: `opening book equity BV0 = latest total stockholders' equity ${bv0}${inputs.asOf != null ? ` as of ${inputs.asOf}` : ""}; each later year's book value compounds at ROE x retention`,
+    },
+    priceToTangibleBookVsRote: pTbvVsRote,
     bookValuePath,
     terminalExcess,
     reverseSolve: { impliedCurrentRoePct, notes: reverseNotes },
@@ -2199,9 +2389,13 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
 // ---------------------------------------------------------------------------
 
 export interface ReitInputs {
-  /** FFO approx = netIncome + D&A (labeled approximate upstream). */
+  /**
+   * FFO. When `ffoBasis` says so this is the NAREIT computation (net income +
+   * real-estate D&A − gains on property sales + impairments); otherwise it is
+   * the netIncome + D&A approximation.
+   */
   ffoApprox: number | null;
-  /** AFFO rough = FFO - |capex| (treats all capex as maintenance). */
+  /** AFFO — recurring capex and straight-line rent when tagged, else FFO − all capex. */
   affoApprox: number | null;
   sharePrice: number | null;
   shares: number | null;
@@ -2209,6 +2403,21 @@ export interface ReitInputs {
   /** NOI approx = operatingIncome + D&A, when derivable. */
   noiApprox?: number | null;
   asOf?: string | null;
+  /** WS5: how FFO was actually built, printed instead of the fixed disclaimer. */
+  ffoBasis?: string | null;
+  /** WS5: how AFFO was actually built. */
+  affoBasis?: string | null;
+  /** WS5: true when FFO added back total D&A because real-estate D&A is untagged. */
+  ffoApproximate?: boolean;
+  /** WS5: true when AFFO could not subtract recurring capex / straight-line rent. */
+  affoApproximate?: boolean;
+  /**
+   * WS5 (D-16): the REIT sub-map. "undetermined" withholds every FFO-based
+   * figure, because publishing them would assert an equity REIT on no evidence.
+   */
+  submap?: "equity" | "mortgage" | "undetermined" | null;
+  /** WS5: the routing reason for an undetermined sub-map, repeated on each withheld figure. */
+  submapReason?: string | null;
 }
 
 export interface ReitValuationResult {
@@ -2220,21 +2429,73 @@ export interface ReitValuationResult {
   impliedCapRatePct: number | null;
   enterpriseValue: number | null;
   asOf: string | null;
+  /** WS5: non-null when every FFO-based figure was withheld, with the reason. */
+  withheldReason: string | null;
   notes: string[];
   gaps: ManifestEntry[];
 }
 
 /**
- * REIT valuation block: P/FFO + P/AFFO + implied-cap-rate sketch. Every value
- * is approximate by construction (FMP lacks gains-on-sale / maintenance-capex
- * / straight-line-rent lines) and labeled as such.
+ * REIT valuation block: P/FFO + P/AFFO + implied-cap-rate sketch.
+ *
+ * WS5: FFO and AFFO now arrive already computed (see
+ * `computeNareitFfo` in stageB/financialMetrics.ts), which applies the NAREIT
+ * definition where the filer's tags allow and labels the figure approximate
+ * where they do not. This function prints the basis it is given rather than a
+ * fixed disclaimer that was wrong whenever the definition DID apply.
+ *
+ * When the equity-vs-mortgage sub-map is undetermined every FFO-based figure is
+ * withheld: P/FFO on a mortgage REIT is meaningless, and asserting an equity
+ * REIT on the strength of SIC 6798 alone is exactly what D-16 forbids.
  */
 export function reitValuation(inputs: ReitInputs): ReitValuationResult {
-  const notes: string[] = [
-    "FFO (approx.) = netIncome + D&A — gains on property sales / RE impairments not netted (FMP lacks the lines)",
-    "AFFO (rough) = FFO - |capex| — treats ALL capex as maintenance (conservative)",
-  ];
+  const notes: string[] = [];
   const gaps: ManifestEntry[] = [];
+
+  if (inputs.submap === "undetermined") {
+    const reason =
+      inputs.submapReason ??
+      "the REIT sub-map is undetermined (SIC 6798 covers equity and mortgage REITs alike and no XBRL evidence separated them)";
+    notes.push(
+      `FFO, AFFO, P/FFO, P/AFFO and the implied cap rate are all WITHHELD: ${reason}. FFO presumes an equity REIT — ` +
+        "on a mortgage REIT it is not a meaningful figure — so publishing it here would assert a business model the " +
+        "evidence does not support. The book-value metrics a mortgage REIT leads with are withheld for the mirror " +
+        "reason.",
+    );
+    gaps.push(
+      gapEntry(
+        "valuation.reit.submap",
+        `REIT valuation withheld: ${reason} — FFO/AFFO/P-FFO presume an equity REIT and book-value metrics presume a mortgage REIT; neither family is published`,
+        "warn",
+      ),
+    );
+    return {
+      pToFfo: null,
+      pToAffo: null,
+      ffoPerShare: null,
+      affoPerShare: null,
+      impliedCapRatePct: null,
+      enterpriseValue: null,
+      asOf: inputs.asOf ?? null,
+      withheldReason: reason,
+      notes,
+      gaps,
+    };
+  }
+
+  notes.push(
+    inputs.ffoBasis ??
+      "FFO (approx.) = netIncome + D&A — gains on property sales / RE impairments not netted (no tagged lines)",
+  );
+  notes.push(
+    inputs.affoBasis ?? "AFFO (rough) = FFO - |capex| — treats ALL capex as maintenance (conservative)",
+  );
+  if (inputs.ffoApproximate === true) {
+    notes.push(
+      "FFO is labeled APPROXIMATE: total depreciation and amortization was added back because the filer tags no " +
+        "separate real-estate depreciation, so the figure sits at or above the NAREIT definition.",
+    );
+  }
   const price = posOrNull(inputs.sharePrice);
   const shares = posOrNull(inputs.shares);
   const mcap = price !== null && shares !== null ? price * shares : null;
@@ -2244,7 +2505,7 @@ export function reitValuation(inputs: ReitInputs): ReitValuationResult {
   const ffo = posOrNull(inputs.ffoApprox);
   const affo = posOrNull(inputs.affoApprox);
   if (ffo === null) {
-    gaps.push(gapEntry("valuation.reit.ffo", "FFO (approx.) missing or non-positive — P/FFO n/m", "warn"));
+    gaps.push(gapEntry("valuation.reit.ffo", "FFO missing or non-positive — P/FFO n/m", "warn"));
   }
   const ev = mcap !== null && isNum(inputs.netDebt) ? mcap + inputs.netDebt : null;
   if (ev === null) {
@@ -2266,6 +2527,7 @@ export function reitValuation(inputs: ReitInputs): ReitValuationResult {
     impliedCapRatePct,
     enterpriseValue: ev,
     asOf: inputs.asOf ?? null,
+    withheldReason: null,
     notes,
     gaps,
   };
@@ -2370,6 +2632,33 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
 
   if (route.base === "bank" || route.base === "insurer" || route.base === "reit-mortgage") {
     notes.push("FCFF DCF and FCFF reverse-DCF suppressed for financials (debt is raw material) — excess-return model used");
+    // WS5 (V-10): the three FCFF-derived outputs and the ROIC−WACC spread are
+    // all withheld on this route, and each now says so in the manifest as well
+    // as the notes. They were structurally absent before — nothing computed
+    // them — but an absence with no stated reason reads to a report reader as
+    // missing data rather than as a deliberate methodological refusal.
+    gaps.push(
+      gapEntry(
+        "valuation.dcf",
+        `FCFF DCF withheld on the '${route.base}' route: free cash flow to the firm subtracts debt service from an operating cash flow that, for a deposit-, float- or repo-funded balance sheet, IS financing activity — the equity excess-return model is used instead`,
+        "info",
+      ),
+      gapEntry(
+        "valuation.reverseDcf",
+        `FCFF reverse DCF withheld on the '${route.base}' route: it inverts the same FCFF model, so the growth or margin it would solve for inherits the same category error — the excess-return model's reverse solve (the starting ROE that reproduces the market cap) is reported instead`,
+        "info",
+      ),
+      gapEntry(
+        "valuation.evEbitda",
+        `EV/EBITDA withheld on the '${route.base}' route: enterprise value adds debt and subtracts cash, both of which are operating items here, so the multiple is not defined (a profitable bank can show a negative EV)`,
+        "info",
+      ),
+      gapEntry(
+        "returns.roicVsWacc",
+        `ROIC − WACC withheld on the '${route.base}' route: invested capital (debt + equity − cash) is undefined when deposits, policy reserves or repo fund the assets and cash is itself an earning asset — return on tangible common equity against the cost of equity is the value-creation read instead`,
+        "info",
+      ),
+    );
     if (route.base === "reit-mortgage") {
       notes.push("mortgage REIT routed to the book-value (excess-return) map per SPEC §6");
     }
@@ -2432,7 +2721,19 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
   }
 
   if (route.base === "reit") {
-    notes.push("FCFF DCF suppressed for equity REITs — P/FFO / P/AFFO + cap-rate sketch used (all approximate)");
+    notes.push("FCFF DCF suppressed for equity REITs — P/FFO / P/AFFO + cap-rate sketch used");
+    // WS5 (criterion e): a net-income DCF is withheld on this route with the
+    // reason, not merely omitted. Real-estate depreciation is a large non-cash
+    // charge against a REIT's GAAP net income, so discounting that net income
+    // would value the company on an earnings figure the industry itself
+    // replaces with FFO.
+    gaps.push(
+      gapEntry(
+        "valuation.netIncomeDcf",
+        "net-income DCF withheld on the equity-REIT route: GAAP net income is struck after real-estate depreciation, a non-cash charge on assets that typically hold or gain value, so discounting it would understate the company — FFO/AFFO and P/FFO are used instead, per the NAREIT definition",
+        "info",
+      ),
+    );
     const reit = inputs.reit
       ? reitValuation(inputs.reit)
       : reitValuation({ ffoApprox: null, affoApprox: null, sharePrice: null, shares: null, netDebt: null });

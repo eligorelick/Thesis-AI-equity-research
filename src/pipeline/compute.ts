@@ -32,8 +32,13 @@ import {
   type RoutingIncomeRow,
   type RoutingCashflowRow,
 } from "@/pipeline/stageB/sectorRouting";
-// WS5: XBRL routing evidence (D-16).
+// WS5: XBRL routing evidence (D-16) and financial-route metrics (D-17).
 import { deriveRoutingEvidence } from "@/pipeline/stageB/routingEvidence";
+import {
+  computeFinancialMetrics,
+  computeNareitFfo,
+  type FinancialMetricsResult,
+} from "@/pipeline/stageB/financialMetrics";
 import {
   computeGrowth,
   type GrowthResult,
@@ -136,6 +141,12 @@ export interface ComputedMetrics {
   forensics: ForensicsReport;
   technicals: TechnicalsResult;
   valuation: ValuationResult;
+  /**
+   * WS5 (D-17): route metrics for bank / insurer / mortgage-REIT routes — the
+   * figures those routes lead with. Empty on every other route. Each metric is
+   * computed from the filer's tags or withheld with its reason.
+   */
+  financialMetrics: FinancialMetricsResult;
   /** Present only for the pre-revenue / unprofitable / recent-ipo overlays. */
   runway: RunwayResult | null;
   /** Deterministic aspect scores + weighted composite (feature 1.1.0). */
@@ -1107,8 +1118,39 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     wacc: returns.wacc,
     roic: returns.roic,
     dupont: returns.dupont,
+    // WS5: P/TBV against ROTE on the financial routes.
+    rote: returns.rote,
     profile,
     quote,
+  });
+
+  // --- Route metrics for financial companies (WS5, D-17) --------------------
+  // The bank, insurer and mortgage-REIT routes have led with NIM, the
+  // efficiency ratio, the combined ratio, book value per share, the spread and
+  // leverage since the route table was written, and nothing computed any of
+  // them. Each is now computed from the filer's own XBRL tags where its
+  // definition allows, and withheld with a stated reason where it does not.
+  const financialMetrics = computeFinancialMetrics(route.base, {
+    companyFacts: bundle.edgar?.companyFacts ?? null,
+    balance: balanceAnnual.map((r) => ({
+      date: String(r.date ?? ""),
+      totalAssets: num(r.totalAssets),
+      totalStockholdersEquity: num(r.totalStockholdersEquity),
+      totalEquity: num(r.totalEquity),
+      goodwill: num(r.goodwill),
+      intangibleAssets: num(r.intangibleAssets),
+      preferredStock: num(r.preferredStock),
+    })),
+    income: incomeAnnual.map((r) => ({
+      date: String(r.date ?? ""),
+      revenue: num(r.revenue),
+      netIncome: num(r.netIncome),
+      interestIncome: num(r.interestIncome),
+      interestExpense: num(r.interestExpense),
+      netInterestIncome: num(r.netInterestIncome),
+    })),
+    shares: num(incomeAnnual[0]?.weightedAverageShsOutDil),
+    sharesBasis: "statements:income.weightedAverageShsOutDil",
   });
 
   // --- Runway (overlay-gated) ------------------------------------------------
@@ -1283,6 +1325,9 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     projectionPeriodGaps,
     technicals.gaps,
     valuation.gaps,
+    // WS5: every withheld route metric reaches the missing-data manifest with
+    // the reason it was withheld.
+    financialMetrics.gaps,
     runway?.gaps ?? null,
   );
 
@@ -1301,6 +1346,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     forensics,
     technicals,
     valuation,
+    financialMetrics,
     runway,
     scores,
     projections,
@@ -1463,6 +1509,8 @@ interface ValuationCtx {
   roic: RoicResult;
   /** Latest fiscal-year DuPont decomposition — the excess-return ROE fallback. */
   dupont: DupontResult;
+  /** WS5: return on tangible common equity — the return P/TBV is read against. */
+  rote: RoteResult;
   profile: FmpRawRow | null;
   quote: FmpRawRow | null;
 }
@@ -1654,13 +1702,20 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
     enterpriseValue: num(r.enterpriseValue),
   }));
 
-  // REIT FFO/AFFO approximations (labeled approximate upstream).
+  // WS5: FFO/AFFO per the NAREIT definition where the filer's tags allow (net
+  // income + real-estate D&A − gains on property sales + impairments; AFFO less
+  // recurring capex and straight-line rent), falling back to the netIncome +
+  // D&A approximation and saying so. Read-only from EDGAR companyfacts.
   const da = ttmInc?.depreciationAndAmortization ?? null;
-  const ffoApprox = ttmInc && ttmInc.netIncome !== null && da !== null ? ttmInc.netIncome + da : null;
-  const affoApprox =
-    ffoApprox !== null && ttmCf && ttmCf.capitalExpenditure !== null
-      ? ffoApprox - Math.abs(ttmCf.capitalExpenditure)
-      : null;
+  const nareitFfo = computeNareitFfo({
+    companyFacts: bundle.edgar?.companyFacts ?? null,
+    periodEnd: isoDay(ctx.incomeAnnual[0]?.date),
+    netIncome: ttmInc?.netIncome ?? num(ctx.incomeAnnual[0]?.netIncome),
+    depreciationAndAmortization: da ?? num(ctx.incomeAnnual[0]?.depreciationAndAmortization),
+    capitalExpenditure: ttmCf?.capitalExpenditure ?? num(ctx.cashflowAnnual[0]?.capitalExpenditure),
+  });
+  const ffoApprox = nareitFfo.ffo;
+  const affoApprox = nareitFfo.affo;
 
   const multiples: MultiplesFrameworkInputs = {
     quote: multiplesQuote,
@@ -1704,11 +1759,19 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
           dilutedShares,
           marketCap,
           asOf: isoDay(balPoint?.date),
+          // WS5: P/TBV is read against ROTE, both on the tangible base the
+          // returns block already computes — never against plain book equity.
+          tangibleCommonEquity: ctx.rote?.latestTangibleCommonEquity ?? null,
+          rotePct: ctx.rote?.latestRotePct ?? null,
         }
       : null;
 
   // --- REIT inputs -----------------------------------------------------------
   const noiApprox = ttmInc && ttmInc.operatingIncome !== null && da !== null ? ttmInc.operatingIncome + da : null;
+  const reitSubmapReason =
+    route.reitSubmap === "undetermined"
+      ? (route.gaps.find((g) => g.field === "route.reitSubmap")?.reason ?? null)
+      : null;
   const reit: ReitInputs | null =
     route.base === "reit"
       ? {
@@ -1719,6 +1782,14 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
           netDebt: netDebtDerived,
           noiApprox,
           asOf: ttmInc?.date ?? isoDay(inc0?.date),
+          // WS5: print the basis FFO/AFFO were actually built on, and withhold
+          // the whole block when the equity-vs-mortgage sub-map is unproven.
+          ffoBasis: nareitFfo.ffoBasis,
+          affoBasis: nareitFfo.affoBasis,
+          ffoApproximate: nareitFfo.ffoApproximate,
+          affoApproximate: nareitFfo.affoApproximate,
+          submap: route.reitSubmap ?? null,
+          submapReason: reitSubmapReason,
         }
       : null;
 
@@ -1737,6 +1808,12 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
 
   void ratiosTtm; // reserved for future ratio cross-checks
   const result = valueCompany(route, bundleInputs);
+  // WS5: the FFO computation's own notes and gaps (which tags resolved, which
+  // stand-in was used) reach the report on the route that consumes them.
+  if (route.base === "reit") {
+    result.notes.push(...nareitFfo.notes);
+    result.gaps.push(...nareitFfo.gaps);
+  }
   // Basis disclosures for the point-in-time anchors chosen above (audit H2/M3).
   if (balanceAnchor.fallback !== null) {
     result.notes.push(balanceAnchor.fallback);

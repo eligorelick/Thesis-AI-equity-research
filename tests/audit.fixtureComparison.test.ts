@@ -841,6 +841,14 @@ const INTENDED_DELTAS: readonly IntendedDelta[] = [
     beforeMissing: true,
     after: null,
   },
+  // Added 2026-09-02 (WS5, D-17): route metrics for financial companies. DEMO
+  // is a Technology issuer on the general route, which has none, so the block
+  // is present and empty — the shape appears, no figure moves.
+  {
+    path: "stageB.financialMetrics",
+    beforeMissing: true,
+    after: { route: "general", metrics: [], notes: [], gaps: [], asOf: null },
+  },
   {
     path: "report.valuation.dcf.assumptions.3.basis",
     before: OLD_BALANCE_BASIS,

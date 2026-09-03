@@ -34,7 +34,11 @@ import type {
 import { sectorIndustryForSic } from "@/edgar/sic";
 import { deriveFcf } from "@/pipeline/stageB/financialValues";
 import { isFinancialForensicsSuppressed } from "@/pipeline/stageB/forensics";
-import { describeSignals, type RoutingEvidence } from "@/pipeline/stageB/routingEvidence";
+import {
+  describeSignals,
+  MORTGAGE_REIT_FUNDING_TAGS,
+  type RoutingEvidence,
+} from "@/pipeline/stageB/routingEvidence";
 
 /**
  * The signals `isFinancialForensicsSuppressed` nulls out in the forensic layer.
@@ -336,7 +340,22 @@ export function routeCompany(
   const financialCandidate =
     (baseMatched && base !== "general") || sicIsFinancial || sectorIsFinancial || evidenceSuggests !== null;
 
-  if (!baseMatched && evidenceSuggests !== null && evidence !== null) {
+  // The mortgage-REIT rule is the ONLY evidence rule that fires on a single tag
+  // group (bank needs deposits AND loans/NII; insurer needs premiums AND
+  // reserves), so on its own it is the weakest evidence the module produces.
+  // Before it may SET a base route — which suppresses the DCF, the reverse DCF,
+  // EV/EBITDA and ROIC−WACC, drops Piotroski to three signals and leads the
+  // report with book value per share — something has to corroborate it: the
+  // repo funding a levered mortgage book cannot run without, or a classification
+  // (SIC/sector) that already says "financial". Uncorroborated, the tags are
+  // DISCLOSED as a conflict and the route is left where it was.
+  const mortgageEvidenceCorroborated =
+    evidence !== null &&
+    (evidence.mortgageFunding.length > 0 || sicIsFinancial || sectorIsFinancial);
+  const uncorroboratedMortgageEvidence =
+    evidenceSuggests === "reit-mortgage" && !mortgageEvidenceCorroborated;
+
+  if (!baseMatched && evidenceSuggests !== null && evidence !== null && !uncorroboratedMortgageEvidence) {
     base = evidenceSuggests;
     baseMatched = true;
     notes.push(
@@ -344,6 +363,24 @@ export function routeCompany(
         `${evidence.basis ?? evidenceSignalsFor(evidenceSuggests)} — industry string ` +
         `${industryRaw === null ? "missing" : `'${industryRaw}'`} and SIC ${sicRaw ?? "missing"} gave no match.`,
     );
+  } else if (!baseMatched && uncorroboratedMortgageEvidence && evidence !== null) {
+    notes.push(
+      `routing evidence (${evidence.source}${evidenceAsOf}) suggests 'reit-mortgage' ` +
+        `(${evidence.basis ?? evidenceSignalsFor("reit-mortgage")}) but NOTHING corroborates it: no repurchase-agreement ` +
+        `funding (${MORTGAGE_REIT_FUNDING_TAGS[0]}) is tagged and neither the SIC ${sicRaw ?? "(missing)"} nor the ` +
+        `sector ${sectorRaw === null ? "(missing)" : `'${sectorRaw}'`} is financial. Mortgage assets are the one ` +
+        "evidence rule that fires on a single tag group, so on their own they are disclosed as a conflict rather " +
+        `than used to re-route — the '${base}' route stands.`,
+    );
+    gaps.push({
+      field: "route.evidence.conflict",
+      reason:
+        `XBRL tags suggest 'reit-mortgage' (${evidenceSignalsFor("reit-mortgage")}) but neither repo funding nor a ` +
+        `financial SIC/sector corroborates it — route left on '${base}' rather than changed on a single uncorroborated ` +
+        "tag group",
+      severity: "warn",
+      attemptedSources: [evidence.source, "fmp:/stable/profile", "edgar:submissions.sic"],
+    });
   } else if (financialCandidate && evidence !== null && !evidence.available) {
     notes.push(
       `routing evidence: ${evidence.unavailableReason ?? "EDGAR companyfacts unavailable"} — the route rests on ` +

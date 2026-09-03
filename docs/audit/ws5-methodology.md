@@ -47,13 +47,33 @@ code, and tag evidence read from EDGAR companyfacts.
 | deposits **and** (loans **or** net interest income) | bank |
 | premiums earned **and** loss or policy reserves | insurer |
 | `RealEstateInvestmentPropertyNet` / `…AtCost` | equity REIT |
-| mortgage-backed securities **or** loans held for investment, **and no** investment property | mortgage REIT |
+| mortgage-backed securities **or** mortgage loans held for investment, **and no** investment property, **corroborated** (see below) | mortgage REIT |
 
-Three deliberate properties:
+Four deliberate properties:
 
 - **A single line item is not a business model.** Deposits alone do not make a
   filer a bank; a loan or net-interest-income tag must accompany them. An
   industrial holding customer deposits is not misrouted.
+- **The tags in a group name the business model.** The mortgage-REIT groups
+  carry only elements whose names are mortgage-specific
+  (`MortgageBackedSecurities…`, `MortgageLoansOnRealEstate…`,
+  `LoansReceivableHeldForInvestmentNet`). Generic elements —
+  `AvailableForSaleSecuritiesDebtSecurities` and its two spellings, which is
+  what any corporate treasury tags for its bond portfolio, and
+  `NotesReceivableNet` / `LoansAndLeasesReceivableNetReportedAmount` /
+  `FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLoss`,
+  which is what a manufacturer with vendor financing tags — are **not** in them.
+  They were, and they routed ordinary industrials to the mortgage-REIT map,
+  which suppresses the DCF, the reverse DCF, EV/EBITDA and ROIC−WACC, drops
+  Piotroski to three signals and leads the report with book value per share.
+- **The one single-group rule needs corroboration before it may re-route.** Bank
+  evidence needs two groups and insurer evidence needs two; the mortgage-REIT
+  rule fires on one, so it is the weakest evidence the module produces. Before
+  it may SET a base route, either the repo funding a levered mortgage book
+  cannot run without (`SecuritiesSoldUnderAgreementsToRepurchase`) or an
+  already-financial SIC/sector must corroborate it. Uncorroborated, the tags are
+  filed as `route.evidence.conflict` (`warn`) and the route is left where it
+  was.
 - **A retired tag cannot classify a filer today.** A tag counts only when its
   newest non-zero fact, from a core form (10-K/10-Q/20-F and their amendments,
   after the max-`filed` dedup), falls within 24 months of the newest evidence

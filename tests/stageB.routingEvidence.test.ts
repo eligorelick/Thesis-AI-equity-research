@@ -307,6 +307,93 @@ describe("routeCompany — XBRL evidence decides when industry and SIC do not", 
   });
 });
 
+describe("mortgage-REIT evidence is specific, and needs corroboration to re-route", () => {
+  it("does not route an ordinary technology issuer to the mortgage-REIT map on a corporate bond portfolio", () => {
+    // AvailableForSaleSecuritiesDebtSecurities is what any corporate treasury
+    // tags for its bond portfolio. Routing Apple/Alphabet/Microsoft to
+    // 'reit-mortgage' on that tag suppressed the DCF, the reverse DCF,
+    // EV/EBITDA and ROIC−WACC and led the report with book value per share.
+    const e = deriveRoutingEvidence(
+      okFacts({
+        AvailableForSaleSecuritiesDebtSecurities: [{ end: "2025-12-31", val: 120_000_000_000 }],
+      }),
+    );
+    expect(e.suggests).toBeNull();
+    expect(e.reitSubmap).toBeNull();
+
+    const r = route(
+      { sector: "Technology", industry: "Computer Hardware", sic: "3571" },
+      okFacts({
+        AvailableForSaleSecuritiesDebtSecurities: [{ end: "2025-12-31", val: 120_000_000_000 }],
+      }),
+    );
+    expect(r.base).toBe("general");
+    expect(r.reitSubmap).toBeNull();
+  });
+
+  it("does not route an industrial to the mortgage-REIT map on vendor financing receivables", () => {
+    // NotesReceivableNet is vendor financing (Deere, Caterpillar); it is a bank
+    // /industrial receivable, not a mortgage-REIT loan book.
+    const e = deriveRoutingEvidence(
+      okFacts({ NotesReceivableNet: [{ end: "2025-12-31", val: 40_000_000_000 }] }),
+    );
+    expect(e.suggests).toBeNull();
+
+    const r = route(
+      { sector: "Industrials", industry: "Farm & Heavy Construction Machinery", sic: "3531" },
+      okFacts({ NotesReceivableNet: [{ end: "2025-12-31", val: 40_000_000_000 }] }),
+    );
+    expect(r.base).toBe("general");
+  });
+
+  it("still routes a genuine agency mortgage REIT on its MBS and repo funding", () => {
+    const e = deriveRoutingEvidence(okFacts(MORTGAGE_REIT_FACTS));
+    expect(e.suggests).toBe("reit-mortgage");
+    expect(e.mortgageFunding.map((s) => s.tag)).toContain(
+      "SecuritiesSoldUnderAgreementsToRepurchase",
+    );
+
+    const r = route({ sector: null, industry: null, sic: null }, okFacts(MORTGAGE_REIT_FACTS));
+    expect(r.base).toBe("reit-mortgage");
+    expect(r.reitSubmap).toBe("mortgage");
+  });
+
+  it("discloses uncorroborated mortgage-asset tags instead of re-routing on them", () => {
+    // Real MBS tags, but no repo funding and a non-financial SIC/sector: the one
+    // evidence rule that fires on a single tag group does not get to move the
+    // route by itself.
+    const r = route(
+      { sector: "Industrials", industry: "Conglomerates", sic: "3531" },
+      okFacts({
+        MortgageBackedSecuritiesAvailableForSaleFairValueDisclosure: [
+          { end: "2025-12-31", val: 3_000_000_000 },
+        ],
+      }),
+    );
+
+    expect(r.base).toBe("general");
+    expect(
+      r.notes.some((n) => n.includes("NOTHING corroborates it") && n.includes("reit-mortgage")),
+    ).toBe(true);
+    const gap = r.gaps.find((g) => g.field === "route.evidence.conflict");
+    expect(gap?.severity).toBe("warn");
+    expect(gap?.reason).toContain("uncorroborated");
+  });
+
+  it("lets a financial SIC corroborate mortgage assets even without repo funding", () => {
+    const r = route(
+      { sector: "Real Estate", industry: null, sic: "6798" },
+      okFacts({
+        MortgageBackedSecuritiesAvailableForSaleFairValueDisclosure: [
+          { end: "2025-12-31", val: 3_000_000_000 },
+        ],
+      }),
+    );
+    expect(r.base).toBe("reit-mortgage");
+    expect(r.reitSubmap).toBe("mortgage");
+  });
+});
+
 describe("routeCompany — SIC 6798 never decides the REIT sub-map alone (D-16)", () => {
   it("SIC 6798 with no evidence routes 'reit' with sub-map undetermined and withholds both families", () => {
     const r = route({ sector: null, industry: null, sic: "6798" }, factsGap);

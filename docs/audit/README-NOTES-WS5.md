@@ -19,11 +19,22 @@ Evidence rules (`src/pipeline/stageB/routingEvidence.ts`):
 | deposits **and** (loans **or** net interest income) | bank |
 | premiums earned **and** loss/policy reserves | insurer |
 | `RealEstateInvestmentPropertyNet` (or at cost) | equity REIT |
-| mortgage-backed securities **or** loans held for investment, **without** investment property | mortgage REIT |
+| mortgage-backed securities **or** mortgage loans held for investment, **without** investment property, **and** corroborated by repo funding or a financial SIC/sector | mortgage REIT |
+
+Every element in the mortgage-REIT groups names mortgage-backed securities or
+mortgage loans. Generic elements (`AvailableForSaleSecuritiesDebtSecurities`,
+`NotesReceivableNet` and their kin) are deliberately absent: a corporate
+treasury's bond portfolio and a manufacturer's vendor financing are not evidence
+of a mortgage REIT.
 
 How the three inputs combine:
 
-- Evidence **decides** when industry and SIC give no match.
+- Evidence **decides** when industry and SIC give no match — except for the
+  mortgage-REIT rule, the only rule that fires on a single tag group, which must
+  first be corroborated by repo funding
+  (`SecuritiesSoldUnderAgreementsToRepurchase`) or by an already-financial SIC or
+  sector. Uncorroborated, it is disclosed as `route.evidence.conflict` (`warn`)
+  and changes nothing.
 - Evidence **confirms** a match, and the routing note names the tags and values.
 - Evidence that **disagrees** never silently overrides the declared
   classification. The route stays on industry/SIC and the disagreement is a

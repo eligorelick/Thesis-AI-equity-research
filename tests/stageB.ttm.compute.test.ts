@@ -13,6 +13,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  routeMetricsBlock,
   runStageB,
   ttmCashFlow,
   ttmIncome,
@@ -497,6 +498,12 @@ interface WiringOpts {
   zeroQuarterlyShares?: boolean;
   /** Route a bank instead of a general company. */
   bank?: boolean;
+  /**
+   * Route an equity REIT, and make the trailing window differ from the fiscal
+   * year (quarterly net income 50 a quarter against FY 150) so a test can tell
+   * which period FFO was built on.
+   */
+  reit?: boolean;
   /** SEC SIC code carried on the EDGAR bundle (Altman variant selection). */
   sic?: string;
   /** Remove every risk-free-rate source (treasury + FRED DGS10). */
@@ -540,6 +547,11 @@ function wiringBundle(opts: WiringOpts = {}): DataBundle {
     { date: "2024-09-30", fiscalYear: "2024", period: "Q3", revenue: 230, operatingIncome: 46, ebit: 46, netIncome: 35, epsDiluted: 0.34, weightedAverageShsOutDil: qShs, interestExpense: 4, incomeBeforeTax: 44, incomeTaxExpense: 9, depreciationAndAmortization: 11.5, reportedCurrency: rc },
     { date: "2024-06-30", fiscalYear: "2024", period: "Q2", revenue: 225, operatingIncome: 45, ebit: 45, netIncome: 34, epsDiluted: 0.33, weightedAverageShsOutDil: qShs, interestExpense: 4, incomeBeforeTax: 43, incomeTaxExpense: 8.5, depreciationAndAmortization: 11, reportedCurrency: rc },
   ];
+  if (opts.reit) {
+    // TTM net income 4 x 50 = 200 against FY2025's 150, so the FFO figure names
+    // the period it was built on.
+    for (let i = 0; i < 4; i++) incomeQuarterly[i].netIncome = 50;
+  }
   if (opts.bigQuarterlyInterest) {
     for (let i = 0; i < 4; i++) incomeQuarterly[i].interestExpense = 25;
   }
@@ -584,20 +596,20 @@ function wiringBundle(opts: WiringOpts = {}): DataBundle {
     { date: "2025-06-30", operatingCashFlow: 55, capitalExpenditure: -10, freeCashFlow: 45, netIncome: 37.5, depreciationAndAmortization: 12.5 },
   ];
   const bundle = {
-    symbol: opts.bank ? "BNK" : "GEN",
+    symbol: opts.bank ? "BNK" : opts.reit ? "RET" : "GEN",
     builtAt: BUILT_AT,
     profile: fmpP(
       [{
-        companyName: opts.bank ? "Test Bancorp" : "Test General Co",
-        sector: opts.bank ? "Financial Services" : "Technology",
-        industry: opts.bank ? "Banks - Diversified" : "Consumer Electronics",
+        companyName: opts.bank ? "Test Bancorp" : opts.reit ? "Test Properties" : "Test General Co",
+        sector: opts.bank ? "Financial Services" : opts.reit ? "Real Estate" : "Technology",
+        industry: opts.bank ? "Banks - Diversified" : opts.reit ? "REIT - Industrial" : "Consumer Electronics",
         price: 100, marketCap: 10000 * M, beta: 1.0, currency: "USD", country: "US",
         ipoDate: "2000-01-01", isAdr: false, isEtf: false, isFund: false,
       }],
       "2026-07-01",
       "profile",
     ),
-    quote: fmpP([{ symbol: opts.bank ? "BNK" : "GEN", price: 100, marketCap: 10000 * M, timestamp: 1751731200 }], "2026-07-05", "quote"),
+    quote: fmpP([{ symbol: opts.bank ? "BNK" : opts.reit ? "RET" : "GEN", price: 100, marketCap: 10000 * M, timestamp: 1751731200 }], "2026-07-05", "quote"),
     statements: {
       incomeAnnual: fmpP(scaleRows(incomeAnnual), "2025-12-31", "income-statement"),
       incomeQuarterly: fmpP(scaleRows(incomeQuarterly), "2026-03-31", "income-statement"),
@@ -1266,5 +1278,56 @@ describe("payoutRatioPct3y — (dividends + net buybacks) / net income, 3y avera
       cfy("2022-12-31", 100, -1000, 0, 0), // outside the 3y window
     ];
     expect(payoutRatioPct3y(rows)).toBeCloseTo(50, 9);
+  });
+});
+
+describe("runStageB wiring — FFO is built on ONE period, and carries that period's as-of", () => {
+  it("builds FFO on the latest fiscal year and labels the REIT block with the FFO period end", () => {
+    // computeNareitFfo resolves its XBRL components at the ANNUAL period end,
+    // so passing trailing net income, D&A and capex as the fallbacks made the
+    // fallback path a hybrid — a fiscal-year figure where the tags resolved, a
+    // trailing one where they did not — while the block still carried the
+    // trailing income date as its as-of. Here FY2025 net income is 150 and the
+    // trailing window is 200, so the printed basis names the period used.
+    const computed = runStageB(wiringBundle({ reit: true }));
+
+    expect(computed.valuation.kind).toBe("reit");
+    if (computed.valuation.kind !== "reit") throw new Error("expected the REIT valuation branch");
+    // The as-of is the FFO period end (FY2025), not the trailing income date
+    // 2026-03-31 the block used to carry.
+    expect(computed.valuation.reit.asOf).toBe("2025-12-31");
+
+    const notes = [...computed.valuation.notes, ...computed.valuation.reit.notes].join(" ");
+    expect(notes).toContain("net income 150000000");
+    expect(notes).not.toContain("net income 200000000");
+    expect(notes).toContain("FISCAL YEAR ending 2025-12-31");
+    expect(notes).toContain("not on a trailing twelve months");
+  });
+});
+
+describe("routeMetricsBlock — the report-ready route metrics, and nothing on other routes", () => {
+  it("carries every computed bank metric plus the P/TBV-against-ROTE reading", () => {
+    const block = routeMetricsBlock(runStageB(wiringBundle({ bank: true })));
+
+    expect(block).not.toBeNull();
+    expect(block?.route).toBe("bank");
+    const keys = (block?.metrics ?? []).map((m) => m.key);
+    // The pairing a financial is actually judged on...
+    for (const key of ["pTbv", "rote", "justifiedPTbv", "premiumToJustified"]) {
+      expect(keys, key).toContain(key);
+    }
+    // ...and the route metrics themselves, computed or withheld with a reason.
+    for (const key of ["nim", "efficiencyRatio", "provisionsToLoans", "depositCost"]) {
+      expect(keys, key).toContain(key);
+    }
+    for (const m of block?.metrics ?? []) {
+      // Never a value AND a withholding, and never a blank with no reason.
+      if (m.value === null) expect(m.withheldReason, m.key).not.toBeNull();
+      else expect(m.withheldReason, m.key).toBeNull();
+    }
+  });
+
+  it("returns null on the general route, so an ordinary report gains no empty block", () => {
+    expect(routeMetricsBlock(runStageB(wiringBundle()))).toBeNull();
   });
 });

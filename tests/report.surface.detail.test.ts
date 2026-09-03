@@ -651,3 +651,80 @@ describe("Task 28 complete report surfaces", () => {
     expect(JSON.stringify(report)).toBe(before);
   });
 });
+
+describe("route metrics reach every rendered surface (WS5, D-17)", () => {
+  // `Report.routeMetrics` was defined in the schema and never populated, and
+  // the excess-return model's P/TBV-against-ROTE reading had no consumer in the
+  // payload, the schema population, the UI or the exporters — so a bank report
+  // could say a metric was withheld (through the missing-data manifest) but
+  // could never SHOW one.
+  function bankReport(): Report {
+    const report = task28SentinelReport();
+    report.routeMetrics = {
+      route: "bank",
+      asOf: "2025-12-31",
+      notes: ["Bank route metrics are computed from the filer's own XBRL tags."],
+      metrics: [
+        {
+          key: "pTbv",
+          label: "price / tangible book value",
+          value: 1.5,
+          unit: "x",
+          basis: "market cap / tangible common equity",
+          sources: ["computed.valuation.excessReturn.priceToTangibleBookVsRote"],
+          asOf: "2025-12-31",
+          withheldReason: null,
+          proxy: false,
+        },
+        {
+          key: "nim",
+          label: "net interest margin",
+          value: null,
+          unit: "%",
+          basis: "net interest income / average EARNING assets",
+          sources: ["edgar:companyfacts us-gaap/InterestEarningAssets"],
+          asOf: null,
+          withheldReason: "the filer tags no earning-assets element",
+          proxy: false,
+        },
+        {
+          key: "niiToAverageAssets",
+          label: "net interest income / average total assets",
+          value: 2.4,
+          unit: "%",
+          basis: "net interest income / average TOTAL assets",
+          sources: ["statements:balance.totalAssets"],
+          asOf: "2025-12-31",
+          withheldReason: null,
+          proxy: true,
+        },
+      ],
+    };
+    return report;
+  }
+
+  it("renders the value, the stand-in marker and the withheld REASON on live, markdown and print", () => {
+    const surfaces = renderSurfaces(bankReport());
+
+    for (const [surface, html] of entries(surfaces)) {
+      expect(html, `${surface}: route-metrics heading`).toMatch(/route metrics/i);
+      expect(html, `${surface}: P/TBV label`).toContain("price / tangible book value");
+      expect(html, `${surface}: P/TBV value`).toContain("1.5");
+      // A withheld metric never renders as a blank cell or a zero: the reason
+      // is the load-bearing half.
+      expect(html, `${surface}: withheld marker`).toContain("withheld");
+      expect(html, `${surface}: withheld reason`).toContain("no earning-assets element");
+      // A stand-in is labeled as one, beside the metric it does NOT replace.
+      expect(html, `${surface}: stand-in marker`).toContain("stand-in");
+      expect(html, `${surface}: route note`).toContain("Bank route metrics are computed");
+    }
+  });
+
+  it("leaves a report without route metrics exactly as it was", () => {
+    const surfaces = renderSurfaces(task28SentinelReport());
+
+    for (const [surface, html] of entries(surfaces)) {
+      expect(html.toLowerCase(), `${surface}`).not.toContain("route metrics");
+    }
+  });
+});

@@ -22,6 +22,7 @@ import {
   type FinancialMetricsInputs,
   type RouteMetric,
 } from "@/pipeline/stageB/financialMetrics";
+import { metricPolicy } from "@/pipeline/stageB/sectorRouting";
 import { RouteMetricsSchema } from "@/report/schema";
 import type { CompanyFacts } from "@/edgar/xbrl";
 import type { FetchResult } from "@/types/core";
@@ -343,6 +344,58 @@ describe("insurer route metrics", () => {
     expect(combined.withheldReason).toContain("understate underwriting cost");
   });
 
+  it("does not add commission and fee INCOME to underwriting expense", () => {
+    // InsuranceCommissionsAndFees is a credit-balance revenue element. Summing
+    // it into underwriting expense inflated both ratios: on these figures it
+    // published a 37% expense ratio and a 97% combined ratio instead of 28% and
+    // 92%. Tagging it must change nothing.
+    const r = computeFinancialMetrics(
+      "insurer",
+      insurerInputs({
+        companyFacts: okFacts({
+          PremiumsEarnedNet: [{ ...FY, val: 50_000 }],
+          PolicyholderBenefitsAndClaimsIncurredNet: [{ ...FY, val: 32_000 }],
+          OtherUnderwritingExpense: [{ ...FY, val: 9_000 }],
+          DeferredPolicyAcquisitionCostAmortizationExpense: [{ ...FY, val: 5_000 }],
+          InsuranceCommissionsAndFees: [{ ...FY, val: 4_500 }],
+        }),
+      }),
+    );
+
+    const expense = find(r.metrics, "expenseRatio");
+    expect(expense.value).toBeCloseTo(28, 9);
+    expect(expense.basis).not.toContain("InsuranceCommissionsAndFees");
+    expect(find(r.metrics, "combinedRatio").value).toBeCloseTo(92, 9);
+  });
+
+  it("withholds the expense ratio on a PARTIAL component sum, naming the missing component", () => {
+    // With only the deferred-acquisition-cost amortisation tagged, the old
+    // any-component-resolves rule published a 12% expense ratio and a 77%
+    // combined ratio — an underwriter that does not exist.
+    const r = computeFinancialMetrics(
+      "insurer",
+      insurerInputs({
+        companyFacts: okFacts({
+          PremiumsEarnedNet: [{ ...FY, val: 50_000 }],
+          PolicyholderBenefitsAndClaimsIncurredNet: [{ ...FY, val: 32_000 }],
+          DeferredPolicyAcquisitionCostAmortizationExpense: [{ ...FY, val: 6_000 }],
+        }),
+      }),
+    );
+
+    const expense = find(r.metrics, "expenseRatio");
+    expect(expense.value).toBeNull();
+    expect(expense.withheldReason).toContain("OtherUnderwritingExpense");
+    expect(expense.withheldReason).toContain("PARTIAL component sum");
+    // ...and the combined ratio follows it into the withheld column, never zero.
+    const combined = find(r.metrics, "combinedRatio");
+    expect(combined.value).toBeNull();
+    expect(combined.withheldReason).toContain("expense ratio");
+    expect(
+      r.gaps.some((g) => g.field === "financialMetrics.expenseRatio"),
+    ).toBe(true);
+  });
+
   it("reports prior-year reserve development with its sign convention stated", () => {
     const development = find(computeFinancialMetrics("insurer", insurerInputs()).metrics, "reserveDevelopment");
 
@@ -370,7 +423,7 @@ describe("mortgage-REIT route metrics", () => {
     };
   }
 
-  it("computes book value per share, leverage and the net interest spread over their own denominators", () => {
+  it("computes book value per share, leverage and the repo-funded spread over their own denominators", () => {
     const r = computeFinancialMetrics("reit-mortgage", mreitInputs());
 
     // (10,000 − 1,000) / 900 = 10.0
@@ -379,12 +432,96 @@ describe("mortgage-REIT route metrics", () => {
     expect(find(r.metrics, "leverageAssetsToEquity").value).toBeCloseTo(8, 9);
 
     // yield 3,000/78,000 = 3.846...%; cost 1,800/60,000 = 3.0%; spread 0.846...pp
-    const spread = find(r.metrics, "netInterestSpread");
+    const spread = find(r.metrics, "netInterestSpreadRepoFunded");
     expect(spread.value).toBeCloseTo((3_000 / 78_000) * 100 - 3, 9);
     expect(spread.basis).toContain("unlike at a bank");
   });
 
-  it("withholds the spread when a funding balance is missing rather than reporting one leg", () => {
+  it("divides period-end equity by PERIOD-END shares when the filer tags them", () => {
+    // The numerator is a period-end balance. Dividing it by the weighted-AVERAGE
+    // diluted count overstated book value per share for any REIT running a
+    // continuous at-the-market programme, and `proxy` was false while it did.
+    const r = computeFinancialMetrics(
+      "reit-mortgage",
+      mreitInputs({
+        companyFacts: okFacts({
+          InterestAndDividendIncomeOperating: [{ ...FY, val: 3_000 }],
+          InterestExpense: [{ ...FY, val: 1_800 }],
+          SecuritiesSoldUnderAgreementsToRepurchase: [{ end: "2025-12-31", val: 60_000 }],
+          CommonStockSharesOutstanding: [{ end: "2025-12-31", val: 1_000 }],
+        }),
+      }),
+    );
+    const bvps = find(r.metrics, "bookValuePerShare");
+
+    // (10,000 − 1,000) / 1,000 period-end shares = 9.0, not 10.0 on the 900
+    // weighted-average count.
+    expect(bvps.value).toBeCloseTo(9, 9);
+    expect(bvps.proxy).toBe(false);
+    expect(bvps.basis).toContain("period-end common shares outstanding");
+  });
+
+  it("marks the weighted-average share count a proxy and names the direction of the error", () => {
+    const bvps = find(
+      computeFinancialMetrics("reit-mortgage", mreitInputs()).metrics,
+      "bookValuePerShare",
+    );
+
+    expect(bvps.value).toBeCloseTo(10, 9);
+    expect(bvps.proxy).toBe(true);
+    expect(bvps.basis).toContain("PROXY denominator");
+    expect(bvps.basis).toContain("WEIGHTED-AVERAGE");
+    expect(bvps.basis).toContain("ABOVE the true book value per share");
+  });
+
+  it("withholds the NAMED spread because the funding denominator is repo alone", () => {
+    // The numerator is TOTAL interest expense (every borrowing) while the only
+    // interest-bearing-liability balance companyfacts exposes is repo, so the
+    // quotient overstates the cost of funds and can flip the sign of the spread
+    // (interest income 3.9bn on average assets 75bn against interest expense
+    // 3.0bn over 50bn of repo printed −0.8% for a REIT reporting a positive
+    // spread). The named metric is withheld; the stand-in carries its own name
+    // and is marked a proxy, the way NIM gives way to net interest income over
+    // average total assets.
+    const r = computeFinancialMetrics("reit-mortgage", mreitInputs());
+
+    const named = find(r.metrics, "netInterestSpread");
+    expect(named.value).toBeNull();
+    expect(named.withheldReason).toContain("average INTEREST-BEARING LIABILITIES");
+    expect(named.proxy).toBe(false);
+
+    const standIn = find(r.metrics, "netInterestSpreadRepoFunded");
+    expect(standIn.proxy).toBe(true);
+    expect(standIn.label).toContain("repo-funded");
+    expect(standIn.basis).toContain("NOT the net interest spread");
+    expect(standIn.basis).toContain("at or BELOW a true");
+  });
+
+  it("averages the repo balance with the prior period end, as the asset leg is averaged", () => {
+    // Both legs must use the same denominator convention: a full-year interest
+    // expense over a period-END balance is not comparable to interest income
+    // over an AVERAGE balance.
+    const r = computeFinancialMetrics(
+      "reit-mortgage",
+      mreitInputs({
+        companyFacts: okFacts({
+          InterestAndDividendIncomeOperating: [{ ...FY, val: 3_000 }],
+          InterestExpense: [{ ...FY, val: 1_800 }],
+          SecuritiesSoldUnderAgreementsToRepurchase: [
+            { end: "2025-12-31", val: 60_000 },
+            { end: "2024-12-31", val: 50_000 },
+          ],
+        }),
+      }),
+    );
+    const spread = find(r.metrics, "netInterestSpreadRepoFunded");
+
+    // average repo (60,000 + 50,000)/2 = 55,000; cost 1,800/55,000 = 3.2727...%
+    expect(spread.value).toBeCloseTo((3_000 / 78_000) * 100 - (1_800 / 55_000) * 100, 9);
+    expect(spread.basis).toContain("average of the current and prior period-end balances");
+  });
+
+  it("withholds the stand-in too when a funding balance is missing rather than reporting one leg", () => {
     const r = computeFinancialMetrics(
       "reit-mortgage",
       mreitInputs({
@@ -394,10 +531,10 @@ describe("mortgage-REIT route metrics", () => {
         }),
       }),
     );
-    const spread = find(r.metrics, "netInterestSpread");
+    const spread = find(r.metrics, "netInterestSpreadRepoFunded");
 
     expect(spread.value).toBeNull();
-    expect(spread.withheldReason).toContain("repurchase agreements");
+    expect(spread.withheldReason).toContain("repurchase-agreement funding balance");
     // The balance-sheet metrics are unaffected.
     expect(find(r.metrics, "bookValuePerShare").value).toBeCloseTo(10, 9);
   });
@@ -429,6 +566,103 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
     expect(r.affo).toBe(1_050);
     expect(r.affoApproximate).toBe(false);
     expect(r.gaps).toEqual([]);
+  });
+
+  it("nets the disposition-gain element most equity REITs actually use", () => {
+    // GainsLossesOnSalesOfInvestmentRealEstate was missing from the chain, so a
+    // REIT with a 300 disposition gain had FFO overstated by 300 while the note
+    // said only "none tagged; treated as zero".
+    const r = computeNareitFfo({
+      companyFacts: okFacts({
+        NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
+        DepreciationAndAmortizationRealEstate: [{ ...REIT_FY, val: 900 }],
+        GainsLossesOnSalesOfInvestmentRealEstate: [{ ...REIT_FY, val: 300 }],
+      }),
+      periodEnd: "2025-12-31",
+      netIncome: 400,
+      depreciationAndAmortization: 900,
+    });
+
+    // 400 + 900 − 300 = 1,000
+    expect(r.ffo).toBe(1_000);
+    expect(r.ffoBasis).toContain("GainsLossesOnSalesOfInvestmentRealEstate");
+    expect(r.ffoApproximate).toBe(false);
+  });
+
+  it("does not subtract a generic asset-disposal gain, and names the direction of the untagged case", () => {
+    // GainLossOnDispositionOfAssets1 covers disposals of any asset; NAREIT
+    // excludes gains on sales of DEPRECIABLE REAL ESTATE, not a gain on selling
+    // a subsidiary or equipment.
+    const r = computeNareitFfo({
+      companyFacts: okFacts({
+        NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
+        DepreciationAndAmortizationRealEstate: [{ ...REIT_FY, val: 900 }],
+        GainLossOnDispositionOfAssets1: [{ ...REIT_FY, val: 300 }],
+      }),
+      periodEnd: "2025-12-31",
+      netIncome: 400,
+      depreciationAndAmortization: 900,
+    });
+
+    expect(r.ffo).toBe(1_300);
+    expect(r.ffoBasis).not.toContain("GainLossOnDispositionOfAssets1");
+    expect(r.ffoBasis).toContain("no property-sale-gain element tagged");
+    expect(r.ffoBasis).toContain("FFO overstated by that gain");
+  });
+
+  it("adds back only real-estate impairments, and labels the generic charge a stand-in", () => {
+    // NAREIT adds back impairments attributable to depreciable real estate. A
+    // goodwill write-down inside AssetImpairmentCharges is not one, so the
+    // stand-in is disclosed with the direction of the error rather than passed
+    // off as the definition.
+    const r = computeNareitFfo({
+      companyFacts: okFacts({
+        NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
+        DepreciationAndAmortizationRealEstate: [{ ...REIT_FY, val: 900 }],
+        AssetImpairmentCharges: [{ ...REIT_FY, val: 200 }],
+      }),
+      periodEnd: "2025-12-31",
+      netIncome: 400,
+      depreciationAndAmortization: 900,
+    });
+
+    expect(r.ffo).toBe(1_500);
+    expect(r.ffoApproximate).toBe(true);
+    expect(r.ffoBasis).toContain("APPROXIMATE");
+    expect(r.ffoBasis).toContain("AssetImpairmentCharges");
+    expect(r.ffoBasis).toContain("at or above the definition");
+    expect(r.gaps.some((g) => g.field === "valuation.reit.ffo.realEstateImpairment")).toBe(true);
+    // The real-estate element wins outright when it is on file.
+    const exact = computeNareitFfo({
+      companyFacts: okFacts({
+        NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
+        DepreciationAndAmortizationRealEstate: [{ ...REIT_FY, val: 900 }],
+        ImpairmentOfRealEstate: [{ ...REIT_FY, val: 60 }],
+        AssetImpairmentCharges: [{ ...REIT_FY, val: 200 }],
+      }),
+      periodEnd: "2025-12-31",
+      netIncome: 400,
+      depreciationAndAmortization: 900,
+    });
+    expect(exact.ffo).toBe(1_360);
+    expect(exact.ffoApproximate).toBe(false);
+  });
+
+  it("never adds a securities write-down back into FFO", () => {
+    // ImpairmentOfInvestments is not an impairment of depreciable real estate.
+    const r = computeNareitFfo({
+      companyFacts: okFacts({
+        NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
+        DepreciationAndAmortizationRealEstate: [{ ...REIT_FY, val: 900 }],
+        ImpairmentOfInvestments: [{ ...REIT_FY, val: 500 }],
+      }),
+      periodEnd: "2025-12-31",
+      netIncome: 400,
+      depreciationAndAmortization: 900,
+    });
+
+    expect(r.ffo).toBe(1_300);
+    expect(r.ffoApproximate).toBe(false);
   });
 
   it("labels FFO approximate when only total D&A is on file, and says which way it errs", () => {
@@ -479,5 +713,41 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
     expect(r.ffo).toBeNull();
     expect(r.affo).toBeNull();
     expect(r.gaps.some((g) => g.field === "valuation.reit.ffo" && g.severity === "warn")).toBe(true);
+  });
+});
+
+describe("route-metric keys match the lead ids the schema says they match", () => {
+  // RouteMetricSchema documents `key` as "matching the route policy's lead
+  // ids". The bank route listed `nimApprox`, `provisionForCreditLosses` and
+  // `depositMix` while the metrics emit `nim`, `provisionsToLoans` and
+  // `depositCost`, so three of the ids named nothing at all.
+  const ROUTE_METRIC_LEAD_IDS: Record<string, string[]> = {
+    bank: ["nim", "efficiencyRatio", "provisionsToLoans", "cet1Reported", "depositCost"],
+    insurer: ["combinedRatio", "lossRatio", "expenseRatio", "reserveDevelopment"],
+    "reit-mortgage": ["bookValuePerShare", "netInterestSpread", "leverageAssetsToEquity"],
+  };
+
+  for (const [route, ids] of Object.entries(ROUTE_METRIC_LEAD_IDS)) {
+    it(`emits every route-metric lead id on the ${route} route`, () => {
+      const lead = metricPolicy(route as "bank" | "insurer" | "reit-mortgage").lead;
+      const emitted = computeFinancialMetrics(route as "bank" | "insurer" | "reit-mortgage", {
+        companyFacts: null,
+        balance: [{ date: "2025-12-31", totalAssets: 100, totalStockholdersEquity: 10 }],
+        income: [{ date: "2025-12-31", revenue: 10, netIncome: 1 }],
+        shares: 10,
+      }).metrics.map((m) => m.key);
+
+      for (const id of ids) {
+        expect(lead, `${route} lead is missing ${id}`).toContain(id);
+        expect(emitted, `${route} emits no metric keyed ${id}`).toContain(id);
+      }
+    });
+  }
+
+  it("no longer carries lead ids that name no metric", () => {
+    const lead = metricPolicy("bank").lead;
+    for (const stale of ["nimApprox", "provisionForCreditLosses", "depositMix"]) {
+      expect(lead, stale).not.toContain(stale);
+    }
   });
 });

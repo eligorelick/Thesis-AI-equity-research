@@ -5,9 +5,10 @@
  * faded path; what a reader could not see was the model's shape — the horizon,
  * the fade and the discount rate were only inferable from one basis string —
  * or the pairing a financial is actually judged on, P/TBV against ROTE. Both
- * are now explicit, and the justified multiple comes from the SAME
- * residual-income identity the forward model assumes, so the two readings
- * cannot disagree.
+ * are now explicit. The justified multiple is a STABLE-GROWTH cross-check: it
+ * assumes ROTE persists in perpetuity while the forward model fades ROE to the
+ * cost of equity, so the two rest on different assumptions and can disagree —
+ * and its growth rate obeys the same cap the DCF terminal value obeys.
  *
  * Pure and offline.
  */
@@ -50,6 +51,23 @@ describe("excessReturnModel — the model's shape is stated, not implied", () =>
     expect(r.openingBookValue.basis).toContain("BV0");
   });
 
+  it("branches the horizon basis on a caller-supplied terminal ROE instead of asserting a zero excess", () => {
+    // The default fade lands on the cost of equity, so the year-N excess is
+    // zero. An override asserts persistent excess and makes it non-zero — the
+    // basis string used to claim otherwise regardless. Production supplies no
+    // override, so this was latent, not wrong in a report.
+    const overridden = excessReturnModel({ ...BASE, analystImpliedRoePct: 14 });
+
+    expect(overridden.terminalExcess).not.toBe(0);
+    expect(overridden.horizonYears.basis).toContain("caller-supplied terminal ROE of 14%");
+    expect(overridden.horizonYears.basis).toContain("NOT to the cost of equity");
+    expect(overridden.horizonYears.basis).toContain("year-N excess is NOT zero");
+    expect(overridden.horizonYears.basis).not.toContain("the year-N excess is zero");
+
+    // ...and the default keeps saying what it has always correctly said.
+    expect(excessReturnModel(BASE).horizonYears.basis).toContain("the year-N excess is zero");
+  });
+
   it("keeps the horizon assumption on a suppressed model so the reader sees what was not built", () => {
     const r = excessReturnModel({ ...BASE, costOfEquityPct: null });
 
@@ -87,11 +105,72 @@ describe("excessReturnModel — P/TBV against ROTE", () => {
     // 1,800 / 900 = 2.0x against ROTE 16%.
     expect(p.pTbv).toBeCloseTo(2, 9);
     expect(p.rotePct).toBe(16);
-    // g = ROTE 16% x retention 50% = 8%; justified = (16 − 8)/(10 − 8) = 4.0x.
-    expect(p.justifiedPTbv).toBeCloseTo(4, 9);
-    expect(p.premiumToJustified).toBeCloseTo(-2, 9);
+    // g = ROTE 16% x retention 50% = 8%, CAPPED at the 2.5% terminal-growth
+    // ceiling (no risk-free rate supplied); justified = (16 − 2.5)/(10 − 2.5)
+    // = 1.80x. Uncapped this read 4.00x against a forward-model equity value of
+    // 1.26x tangible book — a multiple the model on the same page contradicts.
+    expect(p.justifiedPTbv).toBeCloseTo(1.8, 9);
+    expect(p.premiumToJustified).toBeCloseTo(0.2, 9);
     expect(p.withheldReason).toBeNull();
     expect(p.basis).toContain("Justified P/TBV");
+  });
+
+  it("caps the sustainable growth rate at the risk-free rate, as the DCF terminal value does", () => {
+    const r = excessReturnModel({
+      ...BASE,
+      marketCap: 1_800,
+      tangibleCommonEquity: 900,
+      rotePct: 16,
+      riskFreePct: 2,
+    });
+    const p = r.priceToTangibleBookVsRote;
+
+    // g = min(ROTE 16% x retention 50% = 8%, cap 2.5%, risk-free 2%) = 2%;
+    // justified = (16 − 2)/(10 − 2) = 1.75x.
+    expect(p.justifiedPTbv).toBeCloseTo(1.75, 9);
+    expect(p.basis).toContain("risk-free 2%");
+    expect(p.basis).toContain("nothing grows faster than rf forever");
+    expect(p.basis).toContain("capped");
+  });
+
+  it("does not claim the stable-growth cross-check and the fading forward model must agree", () => {
+    // The basis used to assert they use "the same residual-income identity the
+    // forward model assumes, so the two readings cannot disagree". They do not:
+    // the forward model fades ROE to the cost of equity over ten years and adds
+    // no continuing value, while this identity assumes ROTE in perpetuity.
+    const r = excessReturnModel({
+      ...BASE,
+      marketCap: 1_800,
+      tangibleCommonEquity: 900,
+      rotePct: 16,
+    });
+    const p = r.priceToTangibleBookVsRote;
+
+    expect(p.basis).not.toContain("cannot disagree");
+    expect(p.basis).toContain("STABLE-GROWTH cross-check");
+    expect(p.basis).toContain("can disagree");
+  });
+
+  it("keeps a well-earning regional bank's justified multiple in the same world as its fair value", () => {
+    // The reviewer's worked case: ROTE 14%, CoE 10%, payout 33%. Uncapped,
+    // g = 9.38% gave a justified 7.45x, so a bank at 1.5x tangible book printed
+    // a premium of −5.95x while the pipeline's own excess-return fair value said
+    // it was roughly fairly priced.
+    const r = excessReturnModel({
+      ...BASE,
+      currentRoePct: 14,
+      payoutRatioPct: 33,
+      marketCap: 1_350,
+      tangibleCommonEquity: 900,
+      rotePct: 14,
+    });
+    const p = r.priceToTangibleBookVsRote;
+
+    expect(p.pTbv).toBeCloseTo(1.5, 9);
+    // g capped at 2.5%; justified = (14 − 2.5)/(10 − 2.5) = 1.5333x.
+    expect(p.justifiedPTbv).toBeCloseTo(11.5 / 7.5, 9);
+    expect(p.premiumToJustified).toBeCloseTo(1.5 - 11.5 / 7.5, 9);
+    expect(Math.abs(p.premiumToJustified as number)).toBeLessThan(0.1);
   });
 
   it("refuses plain book equity as a stand-in for the tangible base", () => {
@@ -110,15 +189,18 @@ describe("excessReturnModel — P/TBV against ROTE", () => {
   });
 
   it("withholds the justified multiple when growth approaches the cost of equity", () => {
-    // g = ROTE 19% x retention 50% = 9.5%, only 0.5pp below CoE 10% — the ratio
-    // (ROTE − g)/(CoE − g) diverges through infinity here, so any number it
-    // produced would be an artefact of the arithmetic.
+    // g = min(ROTE 5% x retention 50% = 2.5%, the 2.5% cap) = 2.5%, only 0.3pp
+    // below CoE 2.8% — the ratio (ROTE − g)/(CoE − g) diverges through infinity
+    // here, so any number it produced would be an artefact of the arithmetic.
+    // (Before g was capped, an ordinary 19% ROTE reached this guard; now only a
+    // cost of equity below the terminal-growth ceiling can.)
     const r = excessReturnModel({
       ...BASE,
-      currentRoePct: 19,
+      currentRoePct: 5,
+      costOfEquityPct: 2.8,
       marketCap: 1_800,
       tangibleCommonEquity: 900,
-      rotePct: 19.2,
+      rotePct: 5,
     });
     const p = r.priceToTangibleBookVsRote;
 

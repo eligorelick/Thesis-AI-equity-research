@@ -36,6 +36,7 @@
  */
 
 import { getConcept, type ChainStep, type CompanyFacts } from "@/edgar/xbrl";
+import { tangibleCommonEquity } from "@/pipeline/stageB/returns";
 import type { FetchResult, ManifestEntry, SectorRoute } from "@/types/core";
 
 // ---------------------------------------------------------------------------
@@ -168,10 +169,19 @@ export const INCURRED_CLAIMS_TAGS = [
   "PolicyholderBenefitsAndClaimsIncurredHealthCare",
   "LiabilityForClaimsAndClaimsAdjustmentExpenseIncurredClaims",
 ] as const;
+/**
+ * The two components a GAAP underwriting-expense figure is made of. BOTH are
+ * required before an expense ratio is published — see `insurerMetrics`.
+ *
+ * `InsuranceCommissionsAndFees` used to sit here and does not belong: it is a
+ * credit-balance REVENUE element (commission and fee income an insurer earns),
+ * so adding it inflated both the expense ratio and the combined ratio. us-gaap
+ * carries no unambiguous single underwriting-expense total to fall back on, so
+ * there is no third "total" element in this list.
+ */
 export const UNDERWRITING_EXPENSE_TAGS = [
   "OtherUnderwritingExpense",
   "DeferredPolicyAcquisitionCostAmortizationExpense",
-  "InsuranceCommissionsAndFees",
 ] as const;
 export const PRIOR_YEAR_DEVELOPMENT_TAGS = [
   "LiabilityForUnpaidClaimsAndClaimsAdjustmentExpenseIncurredClaimsPriorYears",
@@ -196,17 +206,35 @@ export const REAL_ESTATE_DEPRECIATION_TAGS = [
   "DepreciationAndAmortizationRealEstate",
   "RealEstateDepreciation",
 ] as const;
+/**
+ * Gains on property sales, which NAREIT subtracts from net income.
+ * `GainsLossesOnSalesOfInvestmentRealEstate` is the element most equity REITs
+ * use and was missing, so a REIT with a 300m disposition gain had FFO
+ * overstated by that amount while the note said only "none tagged; treated as
+ * zero". `GainLossOnDispositionOfAssets1` is gone: it covers disposals of any
+ * asset, and NAREIT excludes gains on sales of DEPRECIABLE REAL ESTATE, not
+ * gains on selling a subsidiary or a piece of equipment.
+ */
 export const PROPERTY_SALE_GAIN_TAGS = [
   "GainLossOnSaleOfPropertiesNetOfApplicableIncomeTaxes",
   "GainLossOnSaleOfProperties",
-  "GainLossOnDispositionOfAssets1",
+  "GainsLossesOnSalesOfInvestmentRealEstate",
   "GainLossOnSaleOfRealEstate",
 ] as const;
-export const REAL_ESTATE_IMPAIRMENT_TAGS = [
-  "ImpairmentOfRealEstate",
-  "AssetImpairmentCharges",
-  "ImpairmentOfInvestments",
-] as const;
+/**
+ * Impairments NAREIT adds back: those attributable to DEPRECIABLE REAL ESTATE.
+ * A goodwill or securities write-down is not one of them, which is why
+ * `AssetImpairmentCharges` is no longer chained in here and
+ * `ImpairmentOfInvestments` is gone entirely.
+ */
+export const REAL_ESTATE_IMPAIRMENT_TAGS = ["ImpairmentOfRealEstate"] as const;
+/**
+ * The generic charge, used only as a labeled stand-in when the real-estate
+ * element is untagged — it may carry goodwill or other non-real-estate
+ * write-downs, so adding it back puts FFO at or ABOVE the definition, the same
+ * direction the total-D&A stand-in errs in.
+ */
+export const GENERIC_IMPAIRMENT_TAGS = ["AssetImpairmentCharges"] as const;
 export const STRAIGHT_LINE_RENT_TAGS = [
   "StraightLineRent",
   "AmortizationOfDeferredLeasingFeesAndStraightLineRent",
@@ -220,6 +248,14 @@ export const DEPRECIATION_AMORTIZATION_TAGS = [
   "DepreciationAndAmortization",
 ] as const;
 export const NET_INCOME_TAGS = ["NetIncomeLoss", "ProfitLoss"] as const;
+/**
+ * Period-END common shares outstanding — the count book value per share must be
+ * divided by, because the equity in the numerator is a period-end balance. The
+ * weighted-average DILUTED count the statements carry is an average over the
+ * year, so for a REIT running a continuous at-the-market programme it is below
+ * the closing count and overstates book value per share by a few percent.
+ */
+export const SHARES_OUTSTANDING_TAGS = ["CommonStockSharesOutstanding"] as const;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -302,6 +338,14 @@ function average(current: number | null, prior: number | null): { value: number 
   return { value: (current + prior) / 2, basis: "average of the current and prior period-end balances" };
 }
 
+/**
+ * Tangible common equity and tangible assets for the leverage stand-in.
+ *
+ * The equity half is `tangibleCommonEquity` from the returns module — the same
+ * definition ROTE is computed on. Re-deriving it here would let the two drift
+ * apart, and a P/TBV read against a ROTE on a different denominator is exactly
+ * the mistake the pairing exists to avoid.
+ */
 function tangible(row: FinancialMetricsBalanceRow | undefined): {
   equity: number | null;
   assets: number | null;
@@ -309,11 +353,9 @@ function tangible(row: FinancialMetricsBalanceRow | undefined): {
   if (row === undefined) return { equity: null, assets: null };
   const goodwill = isNum(row.goodwill) ? row.goodwill : 0;
   const intangibles = isNum(row.intangibleAssets) ? row.intangibleAssets : 0;
-  const preferred = isNum(row.preferredStock) ? row.preferredStock : 0;
-  const equityRaw = isNum(row.totalStockholdersEquity) ? row.totalStockholdersEquity : null;
   const assetsRaw = isNum(row.totalAssets) ? row.totalAssets : null;
   return {
-    equity: equityRaw === null ? null : equityRaw - goodwill - intangibles - preferred,
+    equity: tangibleCommonEquity(row),
     assets: assetsRaw === null ? null : assetsRaw - goodwill - intangibles,
   };
 }
@@ -650,7 +692,18 @@ function insurerMetrics(
 
   const premiums = flow === null ? null : resolveTag(facts, PREMIUMS_EARNED_TAGS, flow);
   const claims = flow === null ? null : resolveTag(facts, INCURRED_CLAIMS_TAGS, flow);
-  const underwriting = flow === null ? null : resolveSum(facts, UNDERWRITING_EXPENSE_TAGS, flow);
+  // `resolveSum` returns a value as soon as ANY component resolves. A partial
+  // component sum is not an underwriting-expense total: an insurer tagging only
+  // its deferred-acquisition-cost amortisation would publish a 12% expense ratio
+  // and a 77% combined ratio — an underwriter that does not exist — which is the
+  // very failure the "combined ratio is withheld when either half is missing"
+  // rule exists to prevent. Both components are required, and the withholding
+  // names the one that is absent.
+  const underwritingSum = flow === null ? null : resolveSum(facts, UNDERWRITING_EXPENSE_TAGS, flow);
+  const underwritingMissing = UNDERWRITING_EXPENSE_TAGS.filter(
+    (tag) => !(underwritingSum?.hits ?? []).some((h) => h.tag === tag),
+  );
+  const underwriting = underwritingMissing.length === 0 ? underwritingSum : null;
 
   const premiumBase = premiums === null ? null : pos(premiums.value);
   const denomNote =
@@ -706,9 +759,11 @@ function insurerMetrics(
           "%",
           facts === null
             ? noFacts
-            : underwriting === null
+            : underwritingSum === null
               ? `the filer tags no underwriting-expense element for ${end} (acquisition costs and other underwriting expenses are often reported only in the expense footnote)`
-              : "premiums earned unavailable or not positive — expense ratio denominator missing",
+              : underwritingMissing.length > 0
+                ? `the filer tags ${underwritingSum.hits.map((h) => h.tag).join(" + ")} but not ${underwritingMissing.join(" or ")} for ${end} — a PARTIAL component sum is not an underwriting-expense total, and publishing it would understate the expense ratio and the combined ratio, so it is withheld`
+                : "premiums earned unavailable or not positive — expense ratio denominator missing",
           "underwriting expenses / premiums earned",
           [...UNDERWRITING_EXPENSE_TAGS.map(tagPath), ...PREMIUMS_EARNED_TAGS.slice(0, 1).map(tagPath)],
         ),
@@ -786,12 +841,28 @@ function mortgageReitMetrics(
   const end = bal0?.date ?? inc0?.date ?? null;
   const flow = end === null ? null : { end, durationHint: "FY" as const };
   const instant = end === null ? null : { end };
+  const priorInstant = bal1 === undefined ? null : { end: bal1.date };
   const noFacts = factsReason ?? "EDGAR companyfacts unavailable — XBRL line items could not be read";
 
   // --- book value per share (common)
   const equity = isNum(bal0?.totalStockholdersEquity) ? bal0.totalStockholdersEquity : null;
   const preferred = isNum(bal0?.preferredStock) ? bal0.preferredStock : 0;
-  const shares = pos(inputs.shares ?? null);
+  // Period-END shares where the filer tags them: the numerator is a period-end
+  // balance, so an average denominator mismatches it. The weighted-average
+  // diluted count is the fallback, and it is marked a PROXY with the direction
+  // of the error named rather than published as though it were the closing
+  // count.
+  const sharesOutstanding = instant === null ? null : resolveTag(facts, SHARES_OUTSTANDING_TAGS, instant);
+  const periodEndShares = sharesOutstanding === null ? null : pos(sharesOutstanding.value);
+  const shares = periodEndShares ?? pos(inputs.shares ?? null);
+  const sharesLabel =
+    periodEndShares !== null
+      ? `period-end common shares outstanding (${sharesOutstanding?.tag})`
+      : (inputs.sharesBasis ?? "shares");
+  const sharesSource =
+    periodEndShares !== null
+      ? (sharesOutstanding?.sourcePath ?? tagPath(SHARES_OUTSTANDING_TAGS[0]))
+      : (inputs.sharesBasis ?? "statements:income.weightedAverageShsOutDil");
   out.push(
     equity !== null && shares !== null
       ? metric({
@@ -800,15 +871,19 @@ function mortgageReitMetrics(
           unit: "currency/share",
           value: (equity - preferred) / shares,
           basis:
-            `(total stockholders' equity ${equity} − preferred ${preferred}) / ${inputs.sharesBasis ?? "shares"} ` +
+            `(total stockholders' equity ${equity} − preferred ${preferred}) / ${sharesLabel} ` +
             `${shares}. Book value is the mortgage REIT's headline: its assets are marked securities, so equity is ` +
-            "close to liquidation value and P/B is the primary multiple.",
+            "close to liquidation value and P/B is the primary multiple." +
+            (periodEndShares !== null
+              ? ""
+              : ` PROXY denominator: the filer tags no ${SHARES_OUTSTANDING_TAGS[0]} fact at ${bal0?.date ?? "the period end"}, so the WEIGHTED-AVERAGE diluted count stands in. It is an average over the year while the equity above is a period-end balance, so for a REIT issuing through a continuous at-the-market programme this figure sits ABOVE the true book value per share.`),
           sources: [
             "statements:balance.totalStockholdersEquity",
             "statements:balance.preferredStock",
-            inputs.sharesBasis ?? "statements:income.weightedAverageShsOutDil",
+            sharesSource,
           ],
           asOf: bal0?.date ?? null,
+          proxy: periodEndShares === null,
         })
       : withheld(
           "bookValuePerShare",
@@ -859,10 +934,41 @@ function mortgageReitMetrics(
           ? { value: inc0.interestExpense, tag: "interestExpense", end: inc0.date, sourcePath: "statements:income.interestExpense" }
           : null));
   const repo = instant === null ? null : resolveTag(facts, REPO_FUNDING_TAGS, instant);
+  const repoPrior = priorInstant === null ? null : resolveTag(facts, REPO_FUNDING_TAGS, priorInstant);
 
   const avgAssets = average(assets, isNum(bal1?.totalAssets) ? bal1.totalAssets : null);
   const assetDenom = pos(avgAssets.value);
-  const fundingDenom = repo === null ? null : pos(repo.value);
+  // The funding leg is averaged the same way the asset leg is. Dividing a
+  // full-year interest expense by a period-END balance while the other leg used
+  // an average made the two halves of the spread incomparable even before the
+  // numerator problem below.
+  const avgRepo = repo === null ? { value: null, basis: "" } : average(repo.value, repoPrior?.value ?? null);
+  const fundingDenom = pos(avgRepo.value);
+
+  // The NAMED metric is interest expense over average INTEREST-BEARING
+  // LIABILITIES. companyfacts exposes only the repurchase-agreement balance,
+  // while the interest-expense numerator covers every borrowing the REIT runs,
+  // so the two do not match and the quotient overstates the cost of funds —
+  // enough to flip the sign of the spread for a REIT with non-repo debt
+  // (interest income 3.9bn on average assets 75bn against interest expense
+  // 3.0bn over 50bn of repo printed -0.8% for a company reporting a positive
+  // spread). The named figure is therefore WITHHELD and the repo-funded
+  // computation is published under its own name, exactly as NIM is withheld in
+  // favour of net interest income over average total assets.
+  out.push(
+    withheld(
+      "netInterestSpread",
+      "net interest spread",
+      "%",
+      "the definition divides interest expense by average INTEREST-BEARING LIABILITIES; companyfacts exposes only the repurchase-agreement balance while the interest-expense numerator covers every borrowing the REIT runs, so that quotient overstates the cost of funds and can flip the sign of the spread — the named metric is withheld and the repo-funded computation is published under its own name instead",
+      "interest income / average earning assets − interest expense / average interest-bearing liabilities",
+      [
+        ...INTEREST_INCOME_OPERATING_TAGS.slice(0, 1).map(tagPath),
+        ...INTEREST_EXPENSE_TAGS.slice(0, 1).map(tagPath),
+        ...REPO_FUNDING_TAGS.map(tagPath),
+      ],
+    ),
+  );
 
   if (
     intIncome !== null &&
@@ -875,17 +981,27 @@ function mortgageReitMetrics(
     const costPct = (Math.abs(intExpense.value) / fundingDenom) * 100;
     out.push(
       metric({
-        key: "netInterestSpread",
-        label: "net interest spread",
+        key: "netInterestSpreadRepoFunded",
+        label: "net interest spread (repo-funded)",
         unit: "%",
         value: yieldPct - costPct,
         basis:
           `asset yield (interest income ${intIncome.value} / average total assets ${assetDenom}, ${avgAssets.basis}) ` +
-          `${yieldPct.toFixed(2)}% − funding cost (interest expense ${Math.abs(intExpense.value)} / repurchase ` +
-          `agreements ${fundingDenom}) ${costPct.toFixed(2)}%. A mortgage REIT's assets are interest-earning ` +
-          "securities and loans, so total assets is a fair yield denominator here — unlike at a bank.",
-        sources: [intIncome.sourcePath, intExpense.sourcePath, repo.sourcePath, "statements:balance.totalAssets"],
+          `${yieldPct.toFixed(2)}% − funding cost (TOTAL interest expense ${Math.abs(intExpense.value)} / average ` +
+          `repurchase agreements ${fundingDenom}, ${avgRepo.basis}) ${costPct.toFixed(2)}%. NOT the net interest ` +
+          "spread: interest on any borrowing other than repo sits in the numerator with no matching balance in the " +
+          "denominator, so the funding cost sits at or ABOVE a true cost of funds and this spread at or BELOW a true " +
+          "net interest spread. A mortgage REIT's assets are interest-earning securities and loans, so total assets " +
+          "is a fair yield denominator here — unlike at a bank.",
+        sources: [
+          intIncome.sourcePath,
+          intExpense.sourcePath,
+          repo.sourcePath,
+          ...(repoPrior !== null ? [repoPrior.sourcePath] : []),
+          "statements:balance.totalAssets",
+        ],
         asOf: end,
+        proxy: true,
       }),
     );
   } else {
@@ -893,16 +1009,16 @@ function mortgageReitMetrics(
     if (intIncome === null) missing.push("interest income");
     if (intExpense === null) missing.push("interest expense");
     if (assetDenom === null) missing.push("average total assets");
-    if (fundingDenom === null) missing.push("interest-bearing funding (repurchase agreements)");
+    if (fundingDenom === null) missing.push("repurchase-agreement funding balance");
     out.push(
       withheld(
-        "netInterestSpread",
-        "net interest spread",
+        "netInterestSpreadRepoFunded",
+        "net interest spread (repo-funded)",
         "%",
         facts === null && (intIncome === null || intExpense === null)
           ? noFacts
           : `${missing.join(", ")} unavailable — the spread needs both legs over their own average balances, and a one-legged figure would misstate it`,
-        "interest income / average assets − interest expense / interest-bearing funding",
+        "interest income / average total assets − total interest expense / average repurchase agreements",
         [
           ...INTEREST_INCOME_OPERATING_TAGS.slice(0, 1).map(tagPath),
           ...INTEREST_EXPENSE_TAGS.slice(0, 1).map(tagPath),
@@ -924,7 +1040,12 @@ export interface NareitFfoResult {
   ffo: number | null;
   /** AFFO in currency; null when withheld. */
   affo: number | null;
-  /** True when FFO used total D&A because real-estate D&A is not separately tagged. */
+  /**
+   * True when a component stood in for the definition — total D&A where
+   * real-estate D&A is untagged, or the generic asset-impairment charge where
+   * the real-estate impairment is untagged. `ffoBasis` names which, and both
+   * stand-ins err in the same direction: FFO sits at or ABOVE the definition.
+   */
   ffoApproximate: boolean;
   /** True when AFFO could not subtract recurring capex / straight-line rent. */
   affoApproximate: boolean;
@@ -938,13 +1059,18 @@ export interface NareitFfoResult {
 
 export interface NareitFfoInputs {
   companyFacts: FetchResult<CompanyFacts> | null | undefined;
-  /** Period end of the income statement FFO is computed for. */
+  /**
+   * Period end of the income statement FFO is computed for. Every XBRL
+   * component resolves at this period end, so the fallbacks below MUST be from
+   * the same period: a fiscal-year net income against trailing depreciation is
+   * a hybrid of two periods, not a figure.
+   */
   periodEnd: string | null;
-  /** Net income fallback when the tag does not resolve (FMP-shaped). */
+  /** Net income fallback when the tag does not resolve — same period as `periodEnd`. */
   netIncome: number | null;
-  /** Total D&A fallback (FMP-shaped). */
+  /** Total D&A fallback — same period as `periodEnd`. */
   depreciationAndAmortization: number | null;
-  /** Capex fallback (FMP-shaped; negative outflow) for the rough AFFO. */
+  /** Capex fallback (negative outflow) for the rough AFFO — same period as `periodEnd`. */
   capitalExpenditure?: number | null;
 }
 
@@ -1035,7 +1161,13 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
   }
 
   const gains = flow === null ? null : resolveTag(facts, PROPERTY_SALE_GAIN_TAGS, flow);
-  const impairments = flow === null ? null : resolveTag(facts, REAL_ESTATE_IMPAIRMENT_TAGS, flow);
+  // NAREIT adds back only impairments attributable to depreciable real estate.
+  // The generic charge is a labeled stand-in, never the definition.
+  const reImpairment = flow === null ? null : resolveTag(facts, REAL_ESTATE_IMPAIRMENT_TAGS, flow);
+  const genericImpairment =
+    flow === null || reImpairment !== null ? null : resolveTag(facts, GENERIC_IMPAIRMENT_TAGS, flow);
+  const impairments = reImpairment ?? genericImpairment;
+  const impairmentIsGeneric = reImpairment === null && genericImpairment !== null;
   if (gains !== null) sources.push(gains.sourcePath);
   if (impairments !== null) sources.push(impairments.sourcePath);
 
@@ -1046,14 +1178,41 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
   const ffoParts = [
     `net income ${netIncome}`,
     `+ ${daIsRealEstate ? "real-estate" : "total"} depreciation and amortization ${daValue}`,
-    gains !== null ? `− gains on property sales ${gainsValue} (${gains.tag})` : "− gains on property sales (none tagged; treated as zero)",
-    impairments !== null ? `+ impairments ${impairmentsValue} (${impairments.tag})` : "+ impairments (none tagged; treated as zero)",
+    gains !== null
+      ? `− gains on property sales ${gainsValue} (${gains.tag})`
+      : "− gains on property sales (no property-sale-gain element tagged; treated as zero — a disposition gain the filer did not tag would leave FFO overstated by that gain)",
+    impairments !== null
+      ? `+ impairments ${impairmentsValue} (${impairments.tag})`
+      : "+ impairments (none tagged; treated as zero)",
   ];
+  const ffoApproximateReasons: string[] = [];
+  if (!daIsRealEstate) {
+    ffoApproximateReasons.push(
+      "the filer does not tag real-estate depreciation separately, so TOTAL depreciation and amortization is added back — NAREIT adds back only the real-estate portion",
+    );
+  }
+  if (impairmentIsGeneric) {
+    ffoApproximateReasons.push(
+      `the filer tags no ${REAL_ESTATE_IMPAIRMENT_TAGS[0]}, so the generic ${GENERIC_IMPAIRMENT_TAGS[0]} is added back — NAREIT adds back only impairments of depreciable real estate, and this charge may include goodwill or other non-real-estate write-downs`,
+    );
+  }
   const ffoBasis =
     `FFO (NAREIT) = ${ffoParts.join(" ")} = ${ffo}.` +
-    (daIsRealEstate
+    (ffoApproximateReasons.length === 0
       ? ""
-      : " APPROXIMATE: the filer does not tag real-estate depreciation separately, so TOTAL depreciation and amortization is added back — NAREIT adds back only the real-estate portion, so this figure sits at or above the definition.");
+      : ` APPROXIMATE: ${ffoApproximateReasons.join("; and ")} — so this figure sits at or above the definition.`);
+  if (impairmentIsGeneric) {
+    notes.push(
+      "FFO adds back the generic asset-impairment charge because the filer tags no real-estate impairment — labeled approximate: NAREIT adds back only impairments of depreciable real estate, so a goodwill or other non-real-estate write-down in that charge leaves FFO ABOVE the definition.",
+    );
+    gaps.push({
+      field: "valuation.reit.ffo.realEstateImpairment",
+      reason:
+        "real-estate impairment is not separately tagged — FFO adds back the generic asset-impairment charge instead and is labeled approximate (the figure sits at or above the definition)",
+      severity: "info",
+      attemptedSources: REAL_ESTATE_IMPAIRMENT_TAGS.map(tagPath),
+    });
+  }
   if (!daIsRealEstate) {
     notes.push(
       "FFO uses total depreciation and amortization because the filer tags no separate real-estate depreciation — labeled approximate (NAREIT adds back only real-estate depreciation).",
@@ -1128,7 +1287,7 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
   return {
     ffo,
     affo,
-    ffoApproximate: !daIsRealEstate,
+    ffoApproximate: ffoApproximateReasons.length > 0,
     affoApproximate,
     ffoBasis,
     affoBasis,

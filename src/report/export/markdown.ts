@@ -33,6 +33,7 @@ import type {
   ProvenanceCoverage,
   Quality,
   Report,
+  RouteMetrics,
   FairValue,
   Scenario,
   ScenarioTargets,
@@ -534,7 +535,36 @@ function renderBalanceSheet(bs: BalanceSheet): string {
   return lines.join("\n");
 }
 
-function renderValuation(v: Valuation, scenarioTargets?: ScenarioTargets, fairValue?: FairValue): string {
+/**
+ * WS5 (D-17): the route metrics a bank, insurer or mortgage REIT leads with.
+ *
+ * `withheldReason` is the load-bearing column: a blank cell with no reason
+ * reads as a fetch that failed, when in fact the figure was REFUSED because the
+ * filer's tags cannot satisfy the metric's definition. `proxy` marks a labeled
+ * stand-in, which is always published under its own name.
+ */
+function renderRouteMetrics(rm: RouteMetrics): string {
+  const rows = rm.metrics.map((m) => [
+    markdownProse(m.label) + (m.proxy ? " _(stand-in)_" : ""),
+    m.value === null ? "withheld" : markdownProse(formatFinancialValue(m.value, m.unit)),
+    markdownProse(m.withheldReason ?? m.basis),
+  ]);
+  return [
+    `### Route metrics (${markdownHeading(rm.route)} route)${asOfSuffix(rm.asOf)}`,
+    "",
+    table(["Metric", "Value", "Basis / reason withheld"], rows),
+    "",
+    ...rm.notes.map((n) => `_${markdownProse(n)}_`),
+    "",
+  ].join("\n");
+}
+
+function renderValuation(
+  v: Valuation,
+  scenarioTargets?: ScenarioTargets,
+  fairValue?: FairValue,
+  routeMetrics?: RouteMetrics,
+): string {
   const lines: string[] = ["## 5. Valuation", ""];
   lines.push(gradeBlock("Valuation", v.graded), "");
 
@@ -655,6 +685,7 @@ function renderValuation(v: Valuation, scenarioTargets?: ScenarioTargets, fairVa
   for (const sc of v.scenarios) {
     lines.push(renderScenario(sc), "");
   }
+  if (routeMetrics) lines.push(renderRouteMetrics(routeMetrics), "");
   return lines.join("\n").trimEnd();
 }
 
@@ -1113,7 +1144,7 @@ export function reportToMarkdown(report: Report): string {
     renderBusiness(report.business),
     renderFundamentals(report.fundamentals),
     renderBalanceSheet(report.balanceSheet),
-    renderValuation(report.valuation, report.scenarioTargets, report.fairValue),
+    renderValuation(report.valuation, report.scenarioTargets, report.fairValue, report.routeMetrics),
     renderQuality(report.quality),
     renderTechnicals(report.technicals),
     renderLeadership(report.leadership),

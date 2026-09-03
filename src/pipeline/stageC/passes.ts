@@ -33,7 +33,7 @@
 
 import type { ManifestEntry } from "@/types/core";
 import { sourceManifestEntries, type DataBundle } from "@/pipeline/types";
-import type { ComputedMetrics } from "@/pipeline/compute";
+import { routeMetricsBlock, type ComputedMetrics } from "@/pipeline/compute";
 import { computeDcfDisplay } from "@/pipeline/stageB/fairValue";
 import type { MultipleKey } from "@/pipeline/stageB/valuation";
 import {
@@ -2261,6 +2261,7 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
   // biographical (not financial) and grounded in the payload's titleSince dates.
   const scenarioTargets = args.computed.scenarioTargets;
   const fairValue = args.computed.fairValue;
+  const routeMetrics = routeMetricsBlock(args.computed);
   const valuation = applyReverseDcf(
     applyMultiples(
       applyDcfDisplay(
@@ -2300,6 +2301,11 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
     ...(args.computed.projections ? { projections: args.computed.projections } : {}),
     ...(scenarioTargets ? { scenarioTargets } : {}),
     ...(fairValue ? { fairValue } : {}),
+    // WS5 (D-17): the bank / insurer / mortgage-REIT route metrics and the
+    // P/TBV-against-ROTE reading, pipeline-filled exactly like the blocks
+    // above. Absent entirely on routes that have none, so a general report is
+    // unchanged.
+    ...(routeMetrics ? { routeMetrics } : {}),
   };
 
   const parsed = ReportSchema.safeParse(candidate);

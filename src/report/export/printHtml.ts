@@ -35,6 +35,7 @@ import type {
   ProvenanceCoverage,
   Quality,
   Report,
+  RouteMetrics,
   FairValue,
   Scenario,
   ScenarioTargets,
@@ -509,7 +510,28 @@ function sectionBalanceSheet(bs: BalanceSheet): string {
     <h3>Capital allocation</h3>${claimList(bs.capitalAllocation)}</section>`;
 }
 
-function sectionValuation(v: Valuation, scenarioTargets?: ScenarioTargets, fairValue?: FairValue): string {
+/** WS5 (D-17): route metrics, with the withheld reason beside every blank. */
+function routeMetricsBlock(rm: RouteMetrics): string {
+  return [
+    `<h3>Route metrics (${esc(rm.route)} route)${asOfTag(rm.asOf)}</h3>`,
+    table(
+      ["Metric", "Value", "Basis / reason withheld"],
+      rm.metrics.map((m) => [
+        esc(m.label) + (m.proxy ? ' <span class="faint">(stand-in)</span>' : ""),
+        m.value === null ? "withheld" : esc(formatFinancialValue(m.value, m.unit)),
+        esc(m.withheldReason ?? m.basis),
+      ]),
+    ),
+    ...rm.notes.map((n) => `<p class="faint">${esc(n)}</p>`),
+  ].join("");
+}
+
+function sectionValuation(
+  v: Valuation,
+  scenarioTargets?: ScenarioTargets,
+  fairValue?: FairValue,
+  routeMetrics?: RouteMetrics,
+): string {
   const parts: string[] = [];
   parts.push(gradeBlock("Valuation", v.graded));
 
@@ -603,6 +625,7 @@ function sectionValuation(v: Valuation, scenarioTargets?: ScenarioTargets, fairV
     }
   }
   for (const sc of v.scenarios) parts.push(scenarioCard(sc));
+  if (routeMetrics) parts.push(routeMetricsBlock(routeMetrics));
 
   return `<section class="block">${sectionHeading("valuation")}${parts.join("")}</section>`;
 }
@@ -941,7 +964,7 @@ export function reportToPrintBody(report: Report): string {
     business: sectionBusiness(report.business),
     fundamentals: sectionFundamentals(report.fundamentals),
     balanceSheet: sectionBalanceSheet(report.balanceSheet),
-    valuation: sectionValuation(report.valuation, report.scenarioTargets, report.fairValue),
+    valuation: sectionValuation(report.valuation, report.scenarioTargets, report.fairValue, report.routeMetrics),
     quality: sectionQuality(report.quality),
     technicals: sectionTechnicals(report.technicals),
     leadership: sectionLeadership(report.leadership),

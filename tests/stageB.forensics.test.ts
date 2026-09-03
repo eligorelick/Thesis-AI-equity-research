@@ -1306,6 +1306,30 @@ describe("computePiotroski — financial route", () => {
     expect(gap?.reason).toContain("out of 3");
   });
 
+  it("counts the signals actually withheld, not the ones the route gate withholds", () => {
+    // With no prior-year net income the ΔROA signal is unavailable too, so
+    // SEVEN signals are missing. The label used to read "the six that presume a
+    // non-financial balance sheet are withheld" because the count came from the
+    // gate flag rather than from the withheld signal names.
+    const { current, prior, prior2 } = piotroskiPeriods();
+    const r = computePiotroski(
+      current,
+      {
+        ...prior,
+        income: { date: "2024-12-31", revenue: 100, grossProfit: 40, netIncomeFromContinuingOperations: null },
+      },
+      prior2,
+      { financialsSuppressed: true, balanceSheetFunded: true },
+    );
+
+    expect(r.outOf).toBe(2);
+    expect(r.signals.roaImproved.value).toBeNull();
+    expect(r.label).toContain("2 of 9 signals");
+    expect(r.label).toContain("7 withheld");
+    expect(r.label).toContain("roaImproved");
+    expect(r.label).not.toContain("six");
+  });
+
   it("keeps all nine signals, and the standard label, for a non-financial company", () => {
     const { current, prior, prior2 } = piotroskiPeriods();
     const r = computePiotroski(current, prior, prior2, { financialsSuppressed: false });

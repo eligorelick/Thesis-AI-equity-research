@@ -47,13 +47,33 @@ code, and tag evidence read from EDGAR companyfacts.
 | deposits **and** (loans **or** net interest income) | bank |
 | premiums earned **and** loss or policy reserves | insurer |
 | `RealEstateInvestmentPropertyNet` / `…AtCost` | equity REIT |
-| mortgage-backed securities **or** loans held for investment, **and no** investment property | mortgage REIT |
+| mortgage-backed securities **or** mortgage loans held for investment, **and no** investment property, **corroborated** (see below) | mortgage REIT |
 
-Three deliberate properties:
+Four deliberate properties:
 
 - **A single line item is not a business model.** Deposits alone do not make a
   filer a bank; a loan or net-interest-income tag must accompany them. An
   industrial holding customer deposits is not misrouted.
+- **The tags in a group name the business model.** The mortgage-REIT groups
+  carry only elements whose names are mortgage-specific
+  (`MortgageBackedSecurities…`, `MortgageLoansOnRealEstate…`,
+  `LoansReceivableHeldForInvestmentNet`). Generic elements —
+  `AvailableForSaleSecuritiesDebtSecurities` and its two spellings, which is
+  what any corporate treasury tags for its bond portfolio, and
+  `NotesReceivableNet` / `LoansAndLeasesReceivableNetReportedAmount` /
+  `FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLoss`,
+  which is what a manufacturer with vendor financing tags — are **not** in them.
+  They were, and they routed ordinary industrials to the mortgage-REIT map,
+  which suppresses the DCF, the reverse DCF, EV/EBITDA and ROIC−WACC, drops
+  Piotroski to three signals and leads the report with book value per share.
+- **The one single-group rule needs corroboration before it may re-route.** Bank
+  evidence needs two groups and insurer evidence needs two; the mortgage-REIT
+  rule fires on one, so it is the weakest evidence the module produces. Before
+  it may SET a base route, either the repo funding a levered mortgage book
+  cannot run without (`SecuritiesSoldUnderAgreementsToRepurchase`) or an
+  already-financial SIC/sector must corroborate it. Uncorroborated, the tags are
+  filed as `route.evidence.conflict` (`warn`) and the route is left where it
+  was.
 - **A retired tag cannot classify a filer today.** A tag counts only when its
   newest non-zero fact, from a core form (10-K/10-Q/20-F and their amendments,
   after the max-`filed` dedup), falls within 24 months of the newest evidence
@@ -66,7 +86,9 @@ Three deliberate properties:
 
 - Neither industry nor SIC matched → evidence **decides** the base route, and
   the note names the tags, their values, their period ends, and the industry and
-  SIC inputs that failed to decide.
+  SIC inputs that failed to decide. The one exception is the mortgage-REIT rule,
+  which fires on a single tag group and must first be corroborated (§1.2);
+  uncorroborated, it is filed as `route.evidence.conflict` and changes nothing.
 - Industry/SIC matched and evidence agrees → the note records the confirmation.
 - Industry/SIC matched and evidence disagrees → **the declared classification
   stands**, and the disagreement is filed as `route.evidence.conflict` (`warn`).
@@ -176,18 +198,38 @@ because goodwill absorbs losses only after common equity is gone, and pairing a
 book-value multiple with a tangible-equity return would compare two different
 bases. A goodwill-heavy acquirer at 1.0× book can be at 2.0× tangible book.
 
-The justified multiple is the residual-income identity the forward model already
-assumes:
+The justified multiple is a **stable-growth cross-check**, in the Gordon form of
+the residual-income identity:
 
 ```
-justified P/TBV = (ROTE − g) / (CoE − g),   g = ROTE × retention
+justified P/TBV = (ROTE − g) / (CoE − g),
+g = min(ROTE × retention, terminal-growth cap 2.5%, risk-free rate)
 ```
 
-It is **withheld, never clamped**, when `CoE − g` falls below 0.5pp: the ratio
-diverges through infinity there, and any number it produced would be an artefact
-of the arithmetic rather than a valuation. When ROTE, the cost of equity or the
-payout history is missing, the multiple is still shown and the justified figure
-is withheld with its reason.
+Two things it is **not**:
+
+- It is **not the forward model read as a multiple.** §2.2 fades ROE linearly to
+  the cost of equity over ten years and adds no continuing value; this identity
+  assumes ROTE persists in perpetuity. They rest on different assumptions and
+  can legitimately disagree — the difference is the value of persistence, and
+  the basis string says so. (An earlier version of this section, and of the
+  basis string, claimed the two "cannot disagree". That was false: at ROTE 16%,
+  CoE 10% and a 50% payout the forward model reads 1.26× tangible book while the
+  uncapped identity read 4.00×.)
+- It is **not exempt from the house growth rule.** `g` obeys the same ceiling the
+  DCF terminal value obeys — nothing grows faster than the risk-free rate
+  forever. Uncapped, `g = ROTE × retention` reached 9.4% for a regional bank at
+  ROTE 14% with a one-third payout, giving a justified 7.45×, so a bank at 1.5×
+  tangible book printed a premium of −5.95× while the pipeline's own fair value
+  called it roughly fairly priced. Capped, the same bank reads 1.53×. When no
+  risk-free rate is supplied the cap is the 2.5% terminal-growth ceiling alone,
+  and the basis string says which bound applied.
+
+The multiple is **withheld, never clamped**, when `CoE − g` falls below 0.5pp:
+the ratio diverges through infinity there, and any number it produced would be an
+artefact of the arithmetic rather than a valuation. When ROTE, the cost of equity
+or the payout history is missing, the multiple is still shown and the justified
+figure is withheld with its reason.
 
 ## 3. Route metrics
 
@@ -219,9 +261,18 @@ every metric:
 | Metric | Definition |
 | --- | --- |
 | Loss ratio | incurred claims / premiums earned |
-| Expense ratio | underwriting expenses / premiums earned |
+| Expense ratio | (other underwriting expense **+** deferred-policy-acquisition-cost amortisation) / premiums earned — **both** components required |
 | Combined ratio | loss ratio + expense ratio |
 | Reserve development | incurred claims attributable to prior accident years; positive is adverse, negative is a favourable release |
+
+The expense ratio's numerator is the sum of `OtherUnderwritingExpense` and
+`DeferredPolicyAcquisitionCostAmortizationExpense`, and **both** must resolve.
+A partial component sum is not a total: an insurer tagging only the
+acquisition-cost amortisation would publish a 12% expense ratio and a 77%
+combined ratio — an underwriter that does not exist — so the ratio is withheld
+naming the component that is missing. `InsuranceCommissionsAndFees` is not in
+the numerator: it is a credit-balance revenue element, and summing it inflated
+both the expense and combined ratios.
 
 The denominator is **GAAP premiums earned**. A statutory expense ratio divides by
 premiums *written*, so the computed figure is not directly comparable to a
@@ -236,12 +287,22 @@ reads materially flattering (64% where the real combined figure is 92%).
 | --- | --- |
 | Book value per share | (total equity − preferred) / shares |
 | Leverage | total assets / total equity |
-| Net interest spread | interest income / average total assets − interest expense / interest-bearing funding (repurchase agreements) |
+| Net interest spread | interest income / average earning assets − interest expense / average interest-bearing liabilities — **withheld**, see below |
+| Net interest spread (repo-funded) | interest income / average total assets − **total** interest expense / **average** repurchase agreements — the labeled stand-in |
 
 Total assets is a fair yield denominator here — unlike at a bank — because a
-mortgage REIT's assets are interest-earning securities and loans. The spread is
-withheld when either leg or its balance is missing; a one-legged figure would
-misstate it.
+mortgage REIT's assets are interest-earning securities and loans. The funding
+leg is a different matter: companyfacts exposes only the repurchase-agreement
+balance, while the interest-expense numerator covers every borrowing the REIT
+runs. Dividing one by the other overstates the cost of funds and can flip the
+sign of the spread — interest income 3.9bn on average assets 75bn against
+interest expense 3.0bn over 50bn of repo prints −0.8% for a company reporting a
+positive spread. So the named metric is **withheld** and the repo-funded
+computation is published under its own name and marked a proxy, exactly as NIM
+gives way to net interest income over average total assets. Both legs are
+averaged over the current and prior period ends, so the two halves use the same
+denominator convention. Either figure is withheld when a leg or its balance is
+missing; a one-legged figure would misstate it.
 
 ## 4. FFO and AFFO (NAREIT)
 
@@ -254,17 +315,39 @@ FFO = net income (GAAP)
     + impairments of depreciable real estate
 ```
 
-Applied exactly where the filer tags the components. Where **real-estate**
-depreciation is not tagged separately, total depreciation and amortization is
-added back instead, and the figure is labeled **approximate** with the direction
-of the error stated: NAREIT adds back only the real-estate portion, so the
-approximation sits at or above the definition. Untagged gains and impairments are
-treated as zero and the note says so, rather than being guessed.
+Applied exactly where the filer tags the components. Two stand-ins exist, and
+both err in the same direction — FFO sits at or **above** the definition — so
+both are labeled **approximate** with the direction stated:
+
+- Where **real-estate** depreciation is not tagged separately, total
+  depreciation and amortization is added back; NAREIT adds back only the
+  real-estate portion.
+- Where the **real-estate impairment** element is not tagged, the generic
+  `AssetImpairmentCharges` is added back; NAREIT adds back only impairments of
+  depreciable real estate, so a goodwill write-down inside that charge does not
+  belong in FFO. `ImpairmentOfInvestments` — a securities write-down — is not in
+  the chain at all.
+
+The gain the definition subtracts is a gain on selling **real estate**:
+`GainLossOnSaleOfProperties`, `GainsLossesOnSalesOfInvestmentRealEstate` (the
+element most equity REITs use), `GainLossOnSaleOfRealEstate` and the
+net-of-tax spelling. The generic `GainLossOnDispositionOfAssets1` is not one of
+them — it covers disposals NAREIT does not exclude. Untagged gains and
+impairments are treated as zero and the note says so, naming the direction: a
+disposition gain the filer did not tag leaves FFO overstated by that gain.
 
 AFFO subtracts recurring (maintenance) capital expenditure and straight-line
 rent where the filer tags them. Where it does not, AFFO falls back to
 `FFO − all capital expenditure` and is disclosed as a **conservative floor**,
 since development spending is subtracted too.
+
+FFO is measured on **one** period: the latest fiscal year. Every XBRL component
+resolves at that period end, so the statement fallbacks are read from the same
+fiscal year rather than from a trailing window — a fiscal-year net income against
+trailing depreciation is a hybrid of two periods, not a figure. The REIT
+valuation block carries that period end as its as-of, and the notes say that the
+share price in P/FFO is current while the FFO it divides is up to three quarters
+old.
 
 P/FFO and P/AFFO are computed from these figures. When the REIT sub-map is
 `undetermined` (§1.4) every FFO-based figure is withheld.
@@ -293,7 +376,9 @@ inventory, receivables and a working-capital cycle.
 
 The score is reported over the signals that remain, with its own denominator,
 and the result carries a variant and a label so a reduced score is never read
-against the 9-point scale.
+against the 9-point scale. The label's withheld count is derived from the
+signals that are actually null and names them, so a data gap that drops a
+further signal is never reported as one of the route's own withholdings.
 
 | Scale | Applies to | Signals withheld |
 | --- | --- | --- |

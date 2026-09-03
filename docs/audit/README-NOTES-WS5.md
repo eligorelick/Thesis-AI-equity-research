@@ -19,11 +19,22 @@ Evidence rules (`src/pipeline/stageB/routingEvidence.ts`):
 | deposits **and** (loans **or** net interest income) | bank |
 | premiums earned **and** loss/policy reserves | insurer |
 | `RealEstateInvestmentPropertyNet` (or at cost) | equity REIT |
-| mortgage-backed securities **or** loans held for investment, **without** investment property | mortgage REIT |
+| mortgage-backed securities **or** mortgage loans held for investment, **without** investment property, **and** corroborated by repo funding or a financial SIC/sector | mortgage REIT |
+
+Every element in the mortgage-REIT groups names mortgage-backed securities or
+mortgage loans. Generic elements (`AvailableForSaleSecuritiesDebtSecurities`,
+`NotesReceivableNet` and their kin) are deliberately absent: a corporate
+treasury's bond portfolio and a manufacturer's vendor financing are not evidence
+of a mortgage REIT.
 
 How the three inputs combine:
 
-- Evidence **decides** when industry and SIC give no match.
+- Evidence **decides** when industry and SIC give no match — except for the
+  mortgage-REIT rule, the only rule that fires on a single tag group, which must
+  first be corroborated by repo funding
+  (`SecuritiesSoldUnderAgreementsToRepurchase`) or by an already-financial SIC or
+  sector. Uncorroborated, it is disclosed as `route.evidence.conflict` (`warn`)
+  and changes nothing.
 - Evidence **confirms** a match, and the routing note names the tags and values.
 - Evidence that **disagrees** never silently overrides the declared
   classification. The route stays on industry/SIC and the disagreement is a
@@ -131,11 +142,19 @@ assets that typically hold or gain value.
   at the cost of equity` over an explicit 10-year horizon, with ROE faded
   linearly to the cost of equity so terminal excess is zero and **no continuing
   value is added**. The discount rate is the cost of equity, never a WACC. The
-  report also shows **P/TBV against ROTE**, both on the tangible base, with the
-  justified multiple `(ROTE − g) / (CoE − g)` from the same residual-income
-  identity — withheld rather than clamped when `g` approaches the cost of equity
-  and the ratio diverges.
-- **Equity REIT** — FFO and AFFO per the NAREIT definition, and P/FFO.
+  report also shows **P/TBV against ROTE**, both on the tangible base, beside a
+  stable-growth cross-check `(ROTE − g) / (CoE − g)` with
+  `g = min(ROTE × retention, 2.5% terminal-growth cap, risk-free rate)` — the
+  same growth ceiling the DCF terminal value obeys. That cross-check assumes
+  ROTE persists in perpetuity while the forward model fades ROE to the cost of
+  equity, so the two can disagree and the report says so rather than claiming
+  they cannot. It is withheld rather than clamped when `g` approaches the cost of
+  equity and the ratio diverges.
+- **Equity REIT** — FFO and AFFO per the NAREIT definition, and P/FFO. Both are
+  measured on the latest **fiscal year** — every component, including the
+  statement fallbacks, so the figure is never a hybrid of a fiscal-year net
+  income and a trailing depreciation — and the REIT block's as-of is that
+  period end.
 
 ## 6. Route metrics are computed now, not merely listed
 
@@ -149,8 +168,8 @@ the manifest as `financialMetrics.<key>`.
 | Route | Metrics |
 | --- | --- |
 | Bank | NIM, net interest income / average total assets (labeled stand-in), efficiency ratio, CET1 as reported **or** tangible common equity / tangible assets (labeled stand-in), NPL ratio, provisions / loans, cost of deposits |
-| Insurer | loss ratio, expense ratio, combined ratio, prior-year reserve development |
-| Mortgage REIT | book value per share, leverage (assets / equity), net interest spread |
+| Insurer | loss ratio, expense ratio (both `OtherUnderwritingExpense` **and** `DeferredPolicyAcquisitionCostAmortizationExpense` required; commission and fee INCOME is not an expense), combined ratio, prior-year reserve development |
+| Mortgage REIT | book value per share, leverage (assets / equity), net interest spread — withheld, because the interest-expense numerator covers every borrowing while the only funding balance on file is repo — with a repo-funded stand-in published under its own name and marked a proxy |
 
 Two rules the README should state, because they are what make the figures
 trustworthy:
@@ -166,26 +185,43 @@ trustworthy:
    assets appears as a *leverage* ratio and never as a capital ratio.
 
 The combined ratio is withheld outright when either half is missing: a
-loss-ratio-only figure reads materially flattering.
+loss-ratio-only figure reads materially flattering. The expense ratio applies
+the same rule one level down — a partial sum of its two components is withheld
+naming the missing one, rather than published as a complete figure.
 
 ## 7. Statements that are now wrong in the README
 
 - Any claim that the Piotroski financial variant withholds *four* signals: it
   withholds four for FIN-OTHER issuers and **six** on the deposit-, float- or
-  repo-funded routes.
+  repo-funded routes. The rendered label counts and names the signals that are
+  actually withheld, so a data gap dropping a further signal shows up in the
+  count rather than hiding behind the route's own number.
 - Any claim that SIC 6798 routes to the equity-REIT map: it now routes to `reit`
   with an `undetermined` sub-map unless evidence or an explicit vendor sub-type
   decides.
 - Any claim that FFO is always "netIncome + D&A": it is the NAREIT definition
   where the filer's tags allow, and the approximation is labeled as such,
-  including which direction it errs in.
+  including which direction it errs in. Two components can stand in — total
+  depreciation for real-estate depreciation, and the generic asset-impairment
+  charge for the real-estate impairment — and both leave FFO at or above the
+  definition.
 
-## 8. Follow-up for the integration owner
+## 8. Where the route metrics reach a reader
 
 `Report.routeMetrics` (optional, `RouteMetricsSchema` in `src/report/schema.ts`)
-is the contract for section 6 above, and Stage B already produces the data as
-`computed.financialMetrics`. Populating it at report assembly lives in
-`src/pipeline/stageC/passes.ts` (`assembleReport`), which WS5 does not own — so
-the field is defined and unpopulated until that hunk lands. Until then the route
-metrics reach a reader through the missing-data manifest (withheld ones) and the
-Stage B computed object.
+is populated at report assembly from `computed.financialMetrics` plus the
+excess-return model's P/TBV-against-ROTE reading, by `routeMetricsBlock` in
+`src/pipeline/compute.ts`. Both assembly paths fill it —
+`assembleReport` (`src/pipeline/stageC/passes.ts`) and `enrichDataOnlyReport`
+(`src/pipeline/stageC/dataOnlyReport.ts`) — and the field is absent entirely on
+routes with no route metrics, so a general report is unchanged.
+
+It renders inside the Valuation section on all three surfaces: the live report
+(`ValuationSection` in `src/components/report/sections.tsx`), the Markdown export
+and the print HTML. Every row shows its value or the word **withheld** beside the
+REASON it was withheld, and a stand-in is marked as one. The same figures reach
+the analyst payload: the excess-return horizon, the cost of equity, the opening
+book value, P/TBV, ROTE and the justified multiple are all payload figures.
+
+Withheld metrics also continue to reach the missing-data manifest as
+`financialMetrics.<key>`.

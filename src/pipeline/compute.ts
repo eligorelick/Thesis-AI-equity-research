@@ -122,7 +122,14 @@ import {
 // WS6 (D-19): THESIS_EV_INCLUDE_LEASES.
 import { getConfig } from "@/config/env";
 import { mergeManifest } from "@/pipeline/stageA/manifest";
-import type { Scoring, Projections, ScenarioTargets, FairValue } from "@/report/schema";
+import type {
+  Scoring,
+  Projections,
+  ScenarioTargets,
+  FairValue,
+  RouteMetrics,
+  RouteMetricRow,
+} from "@/report/schema";
 
 // ---------------------------------------------------------------------------
 // Public result contract
@@ -1385,6 +1392,103 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   };
 }
 
+/**
+ * WS5 (D-17): the report-ready route-metrics block, or null on a route that has
+ * none.
+ *
+ * `Report.routeMetrics` was defined and never populated, and the excess-return
+ * model's P/TBV-against-ROTE reading had no consumer anywhere downstream, so a
+ * bank report could say a metric was WITHHELD (through the missing-data
+ * manifest) but could never show one. This assembles both into the single
+ * schema surface: every computed route metric, and the multiple a financial is
+ * actually read on beside the return that justifies it.
+ *
+ * Pure and deterministic — it copies figures Stage B already computed, with
+ * their own basis strings, source paths and as-of dates.
+ */
+export function routeMetricsBlock(computed: ComputedMetrics): RouteMetrics | null {
+  // The verify pass can lose its WeakMap context and fall back to a MINIMAL
+  // stand-in ({ gaps: [] } cast to ComputedMetrics), so neither member is
+  // guaranteed to exist here even though the type says so. A missing Stage B
+  // object means no route metrics, never a thrown assembly.
+  const fm = computed.financialMetrics as FinancialMetricsResult | undefined;
+  const rows: RouteMetricRow[] = [];
+  const notes = [...(fm?.notes ?? [])];
+  const val = computed.valuation as ComputedMetrics["valuation"] | undefined;
+
+  if (val !== undefined && val.kind === "excess-return") {
+    const er = val.excessReturn;
+    const p = er.priceToTangibleBookVsRote;
+    const src = ["computed.valuation.excessReturn.priceToTangibleBookVsRote"];
+    const unavailable = p.withheldReason ?? "not computed";
+    rows.push(
+      {
+        key: "pTbv",
+        label: "price / tangible book value",
+        unit: "x",
+        value: p.pTbv,
+        basis: p.basis,
+        sources: src,
+        asOf: er.asOf,
+        withheldReason: p.pTbv === null ? unavailable : null,
+        proxy: false,
+      },
+      {
+        key: "rote",
+        label: "return on tangible common equity",
+        unit: "%",
+        value: p.rotePct,
+        basis:
+          "net income available to common / average tangible common equity — the return the P/TBV multiple above is read against, on the SAME tangible denominator",
+        sources: ["computed.returns.rote"],
+        asOf: computed.returns?.rote?.asOf ?? null,
+        withheldReason:
+          p.rotePct === null
+            ? "return on tangible common equity unavailable — see the returns block for the reason"
+            : null,
+        proxy: false,
+      },
+      {
+        key: "justifiedPTbv",
+        label: "justified P/TBV (stable-growth cross-check)",
+        unit: "x",
+        value: p.justifiedPTbv,
+        basis: p.basis,
+        sources: src,
+        asOf: er.asOf,
+        withheldReason: p.justifiedPTbv === null ? unavailable : null,
+        proxy: false,
+      },
+      {
+        key: "premiumToJustified",
+        label: "P/TBV premium to the justified multiple",
+        unit: "x",
+        value: p.premiumToJustified,
+        basis:
+          "P/TBV − justified P/TBV; positive means the market pays more than the return supports under the stable-growth cross-check, which rests on a different assumption than the fading forward model",
+        sources: src,
+        asOf: er.asOf,
+        withheldReason: p.premiumToJustified === null ? unavailable : null,
+        proxy: false,
+      },
+    );
+    notes.push(
+      "P/TBV is read against ROTE on the same tangible denominator (equity less goodwill, other intangibles and " +
+        "preferred): a goodwill-heavy acquirer at 1.0x book can be at 2.0x tangible book, and pairing a book multiple " +
+        "with a tangible-equity return would compare two different bases.",
+    );
+  }
+
+  rows.push(...(fm?.metrics ?? []));
+  if (rows.length === 0 || fm === undefined) return null;
+
+  const asOf = rows.reduce<string | null>(
+    (acc, m) => (m.asOf !== null && (acc === null || m.asOf > acc) ? m.asOf : acc),
+    null,
+  );
+  return { route: fm.route, metrics: rows, notes, asOf };
+}
+
 // ---------------------------------------------------------------------------
 // Returns block
 // ---------------------------------------------------------------------------
@@ -1795,12 +1899,21 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
   // recurring capex and straight-line rent), falling back to the netIncome +
   // D&A approximation and saying so. Read-only from EDGAR companyfacts.
   const da = ttmInc?.depreciationAndAmortization ?? null;
+  // The FFO period is the latest FISCAL YEAR, and every input is read at that
+  // same period end. The NAREIT components (real-estate depreciation, gains on
+  // property sales, impairments) resolve as annual XBRL facts at `periodEnd`,
+  // so passing TRAILING net income, D&A or capex as the fallbacks made the
+  // fallback path a hybrid of two periods — a fiscal-year XBRL net income
+  // against trailing depreciation — while the primary path was already all
+  // fiscal year. A hybrid is worse than a stale-but-coherent figure, so the
+  // trailing fallbacks are refused; the REIT block carries the computed as-of
+  // and the note below states the basis.
   const nareitFfo = computeNareitFfo({
     companyFacts: bundle.edgar?.companyFacts ?? null,
     periodEnd: isoDay(ctx.incomeAnnual[0]?.date),
-    netIncome: ttmInc?.netIncome ?? num(ctx.incomeAnnual[0]?.netIncome),
-    depreciationAndAmortization: da ?? num(ctx.incomeAnnual[0]?.depreciationAndAmortization),
-    capitalExpenditure: ttmCf?.capitalExpenditure ?? num(ctx.cashflowAnnual[0]?.capitalExpenditure),
+    netIncome: num(ctx.incomeAnnual[0]?.netIncome),
+    depreciationAndAmortization: num(ctx.incomeAnnual[0]?.depreciationAndAmortization),
+    capitalExpenditure: num(ctx.cashflowAnnual[0]?.capitalExpenditure),
   });
   const ffoApprox = nareitFfo.ffo;
   const affoApprox = nareitFfo.affo;
@@ -1853,6 +1966,11 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
           // returns block already computes — never against plain book equity.
           tangibleCommonEquity: ctx.rote?.latestTangibleCommonEquity ?? null,
           rotePct: ctx.rote?.latestRotePct ?? null,
+          // The justified-P/TBV cross-check caps its growth rate at the same
+          // ceiling the DCF terminal value uses: nothing grows faster than the
+          // risk-free rate forever. Null leaves the house terminal-growth cap
+          // as the only bound, which the basis string discloses.
+          riskFreePct: rf.pct,
         }
       : null;
 
@@ -1871,7 +1989,10 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
           shares: dilutedShares,
           netDebt: netDebtDerived,
           noiApprox,
-          asOf: ttmInc?.date ?? isoDay(inc0?.date),
+          // The FFO computation's own period end, never the trailing income
+          // date: labelling a fiscal-year FFO with a TTM as-of asserted a
+          // freshness the figure does not have.
+          asOf: nareitFfo.asOf ?? isoDay(inc0?.date),
           // WS5: print the basis FFO/AFFO were actually built on, and withhold
           // the whole block when the equity-vs-mortgage sub-map is unproven.
           ffoBasis: nareitFfo.ffoBasis,
@@ -1906,6 +2027,13 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
   if (route.base === "reit") {
     result.notes.push(...nareitFfo.notes);
     result.gaps.push(...nareitFfo.gaps);
+    result.notes.push(
+      `FFO, AFFO and everything derived from them (P/FFO, P/AFFO, the AFFO payout ratio) are measured on the latest ` +
+        `FISCAL YEAR${nareitFfo.asOf !== null ? ` ending ${nareitFfo.asOf}` : ""}, not on a trailing twelve months: ` +
+        "the NAREIT components resolve as annual XBRL facts, and mixing a fiscal-year net income with trailing " +
+        "depreciation would make the figure a hybrid of two periods. The share price in P/FFO is current, so for a " +
+        "REIT compounding FFO the multiple is measured against a figure up to three quarters old.",
+    );
   }
   // Basis disclosures for the point-in-time anchors chosen above (audit H2/M3).
   if (balanceAnchor.fallback !== null) {

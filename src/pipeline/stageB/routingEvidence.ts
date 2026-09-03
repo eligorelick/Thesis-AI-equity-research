@@ -13,6 +13,13 @@
  * - mortgage-backed securities or loans held for investment WITHOUT investment
  *   property                                          → mortgage REIT
  *
+ * The mortgage-REIT rule is the one rule that fires on a single tag group, so
+ * its elements must be specific to that business model (they are: every tag
+ * below names mortgage-backed securities or mortgage loans) AND the routing
+ * layer requires corroboration — repo funding, or an already-financial SIC or
+ * sector — before the tags alone may set a base route. Uncorroborated, the
+ * disagreement is disclosed as a routing-evidence conflict instead.
+ *
  * A tag counts as present only when it carries a non-zero core-form fact whose
  * period end is within `recencyMonths` of the newest evidence fact on file, so
  * a legacy tag a filer stopped using a decade ago cannot classify it today.
@@ -54,6 +61,14 @@ export interface RoutingEvidence {
   insurer: EvidenceSignal[];
   equityReit: EvidenceSignal[];
   mortgageReit: EvidenceSignal[];
+  /**
+   * Repo funding (`SecuritiesSoldUnderAgreementsToRepurchase`) on its own, so
+   * the routing layer can ask whether anything CORROBORATES a mortgage-asset
+   * read before letting it set a base route. These signals are also included in
+   * `mortgageReit` when that group fires; this field is populated whenever the
+   * tag is present and recent, even when it does not.
+   */
+  mortgageFunding: EvidenceSignal[];
   /**
    * The base route the tags alone support, in precedence order bank > insurer
    * > equity REIT > mortgage REIT; null when no financial tags are present.
@@ -122,21 +137,37 @@ export const EQUITY_REIT_PROPERTY_TAGS = [
   "RealEstateAccumulatedDepreciation",
 ] as const;
 
+/**
+ * Mortgage-backed securities. Every element here NAMES mortgage-backed
+ * securities: a generic debt-securities element
+ * (`AvailableForSaleSecuritiesDebtSecurities`,
+ * `DebtSecuritiesAvailableForSaleExcludingAccruedInterest`,
+ * `AvailableForSaleSecuritiesDebtSecuritiesAmortizedCostBasis`) is what an
+ * ordinary corporate treasury tags for its bond portfolio, so those three used
+ * to route Apple, Alphabet or Microsoft to the mortgage-REIT map. Evidence
+ * about a business model has to be specific to that business model.
+ */
 export const MORTGAGE_REIT_MBS_TAGS = [
   "MortgageBackedSecuritiesAvailableForSaleFairValueDisclosure",
   "MortgageBackedSecuritiesHeldToMaturityFairValueDisclosure",
-  "AvailableForSaleSecuritiesDebtSecurities",
-  "DebtSecuritiesAvailableForSaleExcludingAccruedInterest",
-  "AvailableForSaleSecuritiesDebtSecuritiesAmortizedCostBasis",
+  "MortgageBackedSecuritiesIssuedByUSGovernmentSponsoredEnterprisesFairValueDisclosure",
+  "MortgageBackedSecuritiesIssuedByPrivateEnterprisesFairValueDisclosure",
 ] as const;
 
+/**
+ * Loans a mortgage REIT holds for investment. The generic receivable elements
+ * that used to sit here — `NotesReceivableNet`,
+ * `LoansAndLeasesReceivableNetReportedAmount`,
+ * `FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLoss` —
+ * are what any manufacturer with vendor financing tags, and any bank; none of
+ * them is mortgage-REIT-specific. They stay in {@link BANK_LOAN_TAGS}, where a
+ * deposit tag has to accompany them before they classify anything.
+ */
 export const MORTGAGE_REIT_LOAN_TAGS = [
   "LoansReceivableHeldForInvestmentNet",
   "MortgageLoansOnRealEstate",
   "MortgageLoansOnRealEstateCarryingAmountOfMortgages",
-  "LoansAndLeasesReceivableNetReportedAmount",
-  "FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLoss",
-  "NotesReceivableNet",
+  "MortgageLoansOnRealEstateCommercialAndConsumer",
 ] as const;
 
 /** Repo funding is the hallmark mortgage-REIT liability; supporting evidence only. */
@@ -182,6 +213,7 @@ function empty(reason: string | null, available: boolean): RoutingEvidence {
     insurer: [],
     equityReit: [],
     mortgageReit: [],
+    mortgageFunding: [],
     suggests: null,
     reitSubmap: null,
     basis: null,
@@ -297,6 +329,7 @@ export function deriveRoutingEvidence(
     insurer,
     equityReit,
     mortgageReit,
+    mortgageFunding: repo,
     suggests,
     reitSubmap,
     basis,

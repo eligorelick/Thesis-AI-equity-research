@@ -1341,10 +1341,10 @@ export function computePiotroski(
       score = (score ?? 0) + s.value;
     }
   }
+  const missing = (Object.entries(signals) as [PiotroskiSignalName, PiotroskiSignal][])
+    .filter(([, s]) => s.value === null)
+    .map(([name]) => name);
   if (outOf < 9) {
-    const missing = (Object.entries(signals) as [PiotroskiSignalName, PiotroskiSignal][])
-      .filter(([, s]) => s.value === null)
-      .map(([name]) => name);
     gaps.push(
       gapEntry(
         "forensics.piotroski",
@@ -1357,9 +1357,12 @@ export function computePiotroski(
   // WS5: the label carries the scale. A 3-of-3 on a bank must never be read
   // against the paper's 9-point scale, and the payload/UI render this string.
   const variant: PiotroskiResult["variant"] = finSuppressed ? "financial" : "standard";
-  const withheldCount = balanceSheetFunded ? "six" : "four";
+  // The count comes from the signals actually withheld, never from the gate
+  // flag: a DATA gap can drop a seventh signal, and saying "six" while seven
+  // are missing describes a score the reader is not looking at. Naming them
+  // costs a few words and cannot go stale.
   const label = finSuppressed
-    ? `Piotroski F (financial variant, ${outOf} of 9 signals — the ${withheldCount} that presume a non-financial balance sheet are withheld)`
+    ? `Piotroski F (financial variant, ${outOf} of 9 signals — ${missing.length} withheld: ${missing.join(", ")})`
     : `Piotroski F (${outOf} signals)`;
   if (finSuppressed) {
     notes.push(

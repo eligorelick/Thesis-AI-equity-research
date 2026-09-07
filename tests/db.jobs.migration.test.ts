@@ -153,7 +153,9 @@ afterEach(() => {
  * tens of milliseconds; on the shared Windows CI runner the same work has taken
  * 5-14 s (file locking plus on-access scanning of the temp database), which is
  * an environment cost, not a regression. Budget for it explicitly, as the
- * concurrent-bootstrap test below already does.
+ * concurrent-bootstrap test below already does. Every test here opens real
+ * files, so every one carries the budget (a third one timed out at the 5 s
+ * default on 2026-09-07 after two had been budgeted on 2026-09-01).
  */
 const SQLITE_IO_TIMEOUT_MS = 30_000;
 
@@ -219,7 +221,7 @@ describe("durable job schema migration", () => {
     } finally {
       sqlite.close();
     }
-  });
+  }, SQLITE_IO_TIMEOUT_MS);
 
   it("preserves a real linked report as done while terminalizing an older duplicate once", () => {
     const dbPath = tempDbPath();
@@ -279,7 +281,7 @@ describe("durable job schema migration", () => {
     } finally {
       sqlite.close();
     }
-  });
+  }, SQLITE_IO_TIMEOUT_MS);
 
   it("rolls duplicate cleanup back rather than overflowing a maximum safe revision", () => {
     const dbPath = tempDbPath();
@@ -304,7 +306,7 @@ describe("durable job schema migration", () => {
     } finally {
       sqlite.close();
     }
-  });
+  }, SQLITE_IO_TIMEOUT_MS);
 
   it("idempotently upgrades the audited legacy schema with safe defaults and preserves rows", () => {
     const dbPath = tempDbPath();
@@ -364,7 +366,7 @@ describe("durable job schema migration", () => {
     } finally {
       sqlite.close();
     }
-  });
+  }, SQLITE_IO_TIMEOUT_MS);
 
   /**
    * A FRESH database is created by the base DDL alone, so its column order has
@@ -412,7 +414,7 @@ describe("durable job schema migration", () => {
     } finally {
       sqlite.close();
     }
-  });
+  }, SQLITE_IO_TIMEOUT_MS);
 
   it("enforces exact artifact, billed-attempt, and paid-pass lease uniqueness", () => {
     const dbPath = tempDbPath();
@@ -449,7 +451,7 @@ describe("durable job schema migration", () => {
     } finally {
       sqlite.close();
     }
-  });
+  }, SQLITE_IO_TIMEOUT_MS);
 
   it("keeps permits and spend reservations durable across reopen and exposes reclaim indexes", () => {
     const dbPath = tempDbPath();

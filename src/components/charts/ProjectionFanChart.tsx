@@ -77,6 +77,8 @@ interface FanDatum {
   weighted: number | null;
   bull: number | null;
   bear: number | null;
+  /** Drawing bridge: the last actual row copied into the scenario keys so the lines connect; never a scenario point. */
+  bridge?: boolean;
 }
 
 function buildData(series: ProjectionSeries): { data: FanDatum[]; firstForward: string | null } {
@@ -114,6 +116,10 @@ function buildData(series: ProjectionSeries): { data: FanDatum[]; firstForward: 
     anchor.band = [value, value];
     anchor.bull = value;
     anchor.bear = value;
+    // A drawing convenience only: the schema carries no scenario point at a
+    // historical period, and the tooltip must not show one (audit
+    // 2026-09-06, F212).
+    anchor.bridge = true;
   }
   return { data, firstForward };
 }
@@ -138,7 +144,7 @@ function tooltip(metric: ProjectionSeries["metric"]) {
     const rows = PROJECTION_PATHS.map((descriptor) => ({
       descriptor,
       value: fanValue(d, descriptor.key),
-    })).filter((row) => row.value !== null);
+    })).filter((row) => row.value !== null && (d.bridge !== true || row.descriptor.key === "historical"));
     return (
       <div style={{ background: THEME.bgRaised, border: `1px solid ${THEME.borderStrong}`, padding: "6px 8px", fontFamily: MONO, fontSize: 11 }}>
         <div style={{ color: THEME.fgFaint, marginBottom: 2 }}>{d.period}</div>

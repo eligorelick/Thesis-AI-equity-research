@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+
+import { isEntryPoint } from "./lib/entrypoint.mjs";
 
 class SecurityAuditFailure extends Error {
   constructor(message, exitCode) {
@@ -58,22 +59,9 @@ export function main() {
   });
 }
 
-// Node resolves symlinks when it builds `import.meta.url`, so comparing it to a
-// merely path.resolve()d argv[1] fails whenever the checkout is reached through
-// a symlink or junction (CI caches, macOS /tmp). This gate must never silently
-// no-op and exit 0, so resolve argv[1] the same way before comparing.
-function realpathOrSelf(target) {
-  try {
-    return realpathSync(target);
-  } catch {
-    return target;
-  }
-}
-
-const invokedPath = process.argv[1]
-  ? pathToFileURL(realpathOrSelf(path.resolve(process.argv[1]))).href
-  : undefined;
-if (invokedPath === import.meta.url) {
+// A release gate must never silently no-op: the entry test resolves symlinks
+// the way Node resolves them for `import.meta.url` (scripts/lib/entrypoint.mjs).
+if (isEntryPoint(import.meta.url)) {
   try {
     main();
   } catch (error) {

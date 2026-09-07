@@ -1,3 +1,8 @@
+// A worker thread has its own `fetch`; the suite's no-live-network guard is
+// installed here explicitly so a scheduler-side provider call could never
+// open a socket unnoticed (audit 2026-09-06, F204).
+import "../setup/noLiveNetwork";
+
 import { parentPort, workerData } from "node:worker_threads";
 
 import { createDatabase } from "@/db";

@@ -51,11 +51,11 @@ rate)` row) and in the report's computed-returns notes.
 | --- | --- | --- |
 | Risk-free rate | FMP treasury rates (`year10`), else **FRED `DGS10`** | The series id and the observation date are both stated. |
 | Equity risk premium | FMP market-risk-premium (US `totalEquityRiskPremium`), else the dated **Damodaran** implied-ERP fallback | The fallback carries its own publication date and is rejected once it is older than 210 days rather than used stale. A value outside [3%, 25%] is treated as implausible and falls back. |
-| Beta | Provider profile beta, **mean-reversion adjusted** (0.67·raw + 0.33 — the Bloomberg weighting of Blume's finding, not his fitted 0.371 + 0.635·β; see [RESEARCH §7.1](RESEARCH.md)), clamped to [0.6, 2.0] | Raw beta outside (0, 4] is unusable and the WACC fails closed rather than inventing market exposure. |
+| Beta | Provider profile beta, **mean-reversion adjusted** (0.667·raw + 0.333 — the Bloomberg 2/3–1/3 weighting of Blume's finding, not his fitted 0.371 + 0.635·β; see [RESEARCH §7.1](RESEARCH.md)), clamped to [0.6, 2.0] | Raw beta outside (0, 4] is unusable and the WACC fails closed rather than inventing market exposure. One set of constants serves the WACC and the keyless beta estimate, so a report prints one adjusted beta. |
 | Cost of equity | rf + beta × ERP | Clamped to [rf + 2.5%, 25%]. |
-| Cost of debt | `effective` (interest expense ÷ average total debt), `historical` (the issuer's last year that still disclosed interest), or `synthetic` (rf + rating spread from interest coverage, Damodaran's January 2026 table) | The method actually used is named. An effective rate outside [rf − 1, rf + 19] is rejected in favour of the synthetic rating. Debt below 2% of assets is treated as noise. |
+| Cost of debt | `effective` (interest expense ÷ average debt), `historical` (the issuer's last year that still disclosed interest), or `synthetic` (rf + rating spread from interest coverage, Damodaran's January 2026 table) | The method actually used is named. An effective rate outside [rf − 1, rf + 19] is rejected in favour of the synthetic rating. Debt below 2% of assets is treated as noise, and the note says whether a synthetic rating then ran. Interest expense and the EBIT it is scored against come from **one** statement basis — the trailing twelve months when both are available, else the latest annual statement for both legs — and the basis is named; a mixed pair is the last resort and is labelled as such. |
 | Tax rate | Observed effective rate (ratios TTM, else annual ratios, else TTM tax expense ÷ pre-tax income) | Clamped to [0%, 35%]. Where it came from is named. No universal statutory rate is ever assumed. |
-| Weights | Market value of equity (market capitalisation) and book total debt as a market-value proxy, averaged over the latest two balance sheets | Stated as E% / D%. When the statements' currency differs from the quote currency (the ADR case) the weights are suppressed rather than silently mixed. |
+| Weights | Market value of equity (market capitalisation) and book debt as a market-value proxy: total debt **less the operating-lease liability** where the balance sheet discloses it (the EV bridge's lease rule, below), averaged over the two quarter-ends of the trailing-twelve-month window when the interest figure is TTM, else over the latest two fiscal-year ends | Stated as E% / D%, with the pair of balances and the lease basis named. When the statements' currency differs from the quote currency (the ADR case) the weights are suppressed rather than silently mixed. On the financial routes, which value on the cost of equity alone, a WACC-only shortfall is disclosed as a warning rather than blocking the report. |
 
 The final WACC is clamped to [max(6%, rf + 1%), 20%]; a clamp that moves the
 rate by 0.5pp or more is disclosed in the manifest, because it materially
@@ -127,8 +127,19 @@ Growth fades linearly from the anchor in year 1 to the terminal rate in year
 is held flat thereafter; the target is the five-year median, or the better/
 worse of median and current under a dated improving/declining margin regime
 (a slope of more than ±0.5pp per year). The tax rate fades from the observed
-effective rate to the company's own historical median. Cash flows are
-discounted on the **mid-year convention**.
+effective rate to the company's own historical median; when no current rate
+can be observed (a pre-tax loss, a missing tax line) the path is held at that
+median and the basis says so. Cash flows are discounted on the **mid-year
+convention**.
+
+**Two guards bound the paths.** The EBIT-margin path is held inside
+[−20%, ceiling], where the ceiling is 45% or the highest margin in the
+issuer's own five-year history, whichever is higher — a cap that never binds
+below a margin the company has demonstrably earned (the TTM figure is not
+evidence for its own cap), and one note when it binds. Sales-to-capital is
+held inside [0.5, 5]. Both are broken-input guards in the sense of
+[RESEARCH §7.5](RESEARCH.md), not views on what a company can earn: they exist
+so that a mis-scaled statement cannot print a confident number.
 
 EBIT itself is the issuer's operating income: the filed line where the filer
 reports one, otherwise a derivation from pre-tax income that adds back interest
@@ -185,6 +196,12 @@ rates come from different series, not because the rate moved.
 Terminal reinvestment is g ÷ ROIC_terminal, Damodaran's consistency rule.
 
 ---
+
+**The sensitivity grid keeps the excess, not the level.** Each cell of the
+WACC × g grid re-runs the DCF with the terminal ROIC at that cell's WACC plus
+the base case's evidenced excess, so a row one point below the base WACC does
+not earn a phantom point of excess return and the g-axis reads the same way in
+every row; the grid note states the excess it held.
 
 ## FCF and SBC
 
@@ -303,6 +320,18 @@ denominator and is not comparable to the default basis. The DCF equity bridge
 follows the identical convention through net debt, so the two can never
 disagree.
 
+**Invested capital and the WACC's debt leg share the lease basis.** ROIC's
+invested capital (debt + equity − cash and short-term investments) and the
+average debt behind the effective cost of debt and the E/D weights remove the
+same operating-lease slice by default and keep it when the option is on, so
+the discount rate, the return on capital and the enterprise value are on one
+basis: NOPAT and interest expense are both after operating-lease cost under
+ASC 842, and a lease-inclusive denominator understated ROIC for every
+lease-heavy issuer (a discount retailer: 6% on the inclusive base against 11%
+on the consistent one) and could push the effective rate below the acceptance
+band. Where no split is disclosed the ROIC notes say the provider's total
+debt, lease liabilities included, was used unadjusted.
+
 **The own-history enterprise value carries the same adjustment.** Each
 historical quarter window removes *its own* operating-lease liability whenever
 the current EV removed one, so the rank compares like with like. A window whose
@@ -333,9 +362,10 @@ description, every rendered label, the basis strings and the missing-data
 reason all say rank.
 
 **N is rendered beside the rank**, not left in a note: the multiples row carries
-`ownHistoryObservations`, and every surface prints it — "rank 62/100 of 12
-quarters" in the Markdown and print-HTML exports, "rank 62 of 12 quarters" on
-the app's own-history bar. A report persisted before that field existed still parses and
+`ownHistoryObservations`, and every surface prints it the same way — "rank
+62/100 of 12 quarters" in the Markdown and print-HTML exports and on the app's
+own-history bar (the app had dropped the "/100", so a 0–100 rank read as a rank
+among the quarters; audit 2026-09-06, F214). A report persisted before that field existed still parses and
 still renders, without inventing an N. The field is optional in Zod for exactly
 that reason and is stripped from the judge's request schema — the judge never
 authors this table (`applyMultiples` replaces it wholesale from computed
@@ -376,10 +406,17 @@ code, and tag evidence read from EDGAR companyfacts.
 1. **Industry prefix** (case-insensitive, trimmed): `Banks…` → bank,
    `Insurance…` → insurer (except `Insurance - Brokers`, which is fee-based and
    goes to the general map), `REIT…` → REIT.
-2. **SIC fallback**, consulted only when the industry string gives no match:
-   6020-6199 → bank, 6300-6499 → insurer, 6798 → REIT (sub-map undecided, see
-   §1.3), sector "Financial Services" without a matching industry → the general
-   map (the FIN-OTHER treatment).
+2. **SIC fallback**, consulted only when there is no industry string at all. A
+   known industry that matched no prefix — credit services, mortgage finance,
+   capital markets, asset management, exchanges, conglomerates, and every
+   non-financial industry — is a decided classification and goes to the
+   general map (the FIN-OTHER treatment); the SIC is not consulted behind it.
+   With no industry: 6020-6036 (depository institutions; major group 61,
+   non-depository credit, has no deposits and stays FIN-OTHER) → bank,
+   6300-6399 (insurance carriers) → insurer, 6400-6499 (agents, brokers and
+   service) → the general map, 6798 → REIT (sub-map undecided; see *The REIT
+   sub-map* below),
+   sector "Financial Services" → the general map.
 3. **XBRL evidence** (`src/pipeline/stageB/routingEvidence.ts`), read-only from
    the bundle's companyfacts payload.
 
@@ -409,16 +446,21 @@ Four deliberate properties:
   They were, and they routed ordinary industrials to the mortgage-REIT map,
   which suppresses the DCF, the reverse DCF, EV/EBITDA and ROIC−WACC, drops
   Piotroski to three signals and leads the report with book value per share.
-- **The one single-group rule needs corroboration before it may re-route.** Bank
-  evidence needs two groups and insurer evidence needs two; the mortgage-REIT
-  rule fires on one, so it is the weakest evidence the module produces. Before
-  it may SET a base route, either the repo funding a levered mortgage book
-  cannot run without (`SecuritiesSoldUnderAgreementsToRepurchase`) or an
-  already-financial SIC/sector must corroborate it. Uncorroborated, the tags are
-  filed as `route.evidence.conflict` (`warn`) and the route is left where it
-  was.
+- **Two rules fire on a single tag group, and evidence sets a route only where
+  nothing else has decided one.** Bank evidence needs two groups and insurer
+  evidence needs two; the equity-REIT rule (investment property) and the
+  mortgage-REIT rule fire on one. The mortgage rule is the weakest evidence the
+  module produces: before it may SET a base route, either the repo funding a
+  levered mortgage book cannot run without
+  (`SecuritiesSoldUnderAgreementsToRepurchase`) or an already-financial
+  SIC/sector must corroborate it. Either single-group rule may set a route
+  only on a profile with no industry string, or one whose SIC or sector already
+  says "financial"; against a declared non-financial industry and SIC (a
+  taxable real-estate operator that tags investment property, an industrial
+  with vendor financing) the tags are filed as `route.evidence.conflict`
+  (`warn`) and the route is left where it was.
 - **A retired tag cannot classify a filer today.** A tag counts only when its
-  newest non-zero fact, from a core form (10-K/10-Q/20-F and their amendments,
+  newest non-zero fact, from a core form (10-K/10-Q/20-F/40-F and their amendments,
   after the max-`filed` dedup), falls within 24 months of the newest evidence
   fact on file.
 - **The property tag wins for hybrids.** A REIT that files investment property
@@ -429,9 +471,15 @@ Four deliberate properties:
 
 - Neither industry nor SIC matched → evidence **decides** the base route, and
   the note names the tags, their values, their period ends, and the industry and
-  SIC inputs that failed to decide. The one exception is the mortgage-REIT rule,
-  which fires on a single tag group and must first be corroborated (§1.2);
-  uncorroborated, it is filed as `route.evidence.conflict` and changes nothing.
+  SIC inputs that failed to decide. Two qualifications: the mortgage-REIT rule
+  fires on a single tag group and must first be corroborated (*What the tags
+  decide*); and
+  "neither matched" means there is no industry string, or the SIC or sector
+  already says "financial" — a known non-financial industry beside a
+  non-financial SIC is itself a classification (major groups 65 and 66,
+  real-estate operators and developers, are not financial for this purpose),
+  and evidence against it is filed as `route.evidence.conflict` and changes
+  nothing.
 - Industry/SIC matched and evidence agrees → the note records the confirmation.
 - Industry/SIC matched and evidence disagrees → **the declared classification
   stands**, and the disagreement is filed as `route.evidence.conflict` (`warn`).
@@ -551,8 +599,9 @@ g = min(ROTE × retention, terminal-growth cap 2.5%, risk-free rate)
 
 Two things it is **not**:
 
-- It is **not the forward model read as a multiple.** §2.2 fades ROE linearly to
-  the cost of equity over ten years and adds no continuing value; this identity
+- It is **not the forward model read as a multiple.** *The excess-return equity
+  model* fades ROE linearly to the cost of equity over ten years and adds no
+  continuing value; this identity
   assumes ROTE persists in perpetuity. They rest on different assumptions and
   can legitimately disagree — the difference is the value of persistence, and
   the basis string says so. (An earlier version of this section, and of the
@@ -684,6 +733,16 @@ rent where the filer tags them. Where it does not, AFFO falls back to
 `FFO − all capital expenditure` and is disclosed as a **conservative floor**,
 since development spending is subtracted too.
 
+The implied cap rate divides NOI by the **house enterprise value** — market
+capitalisation + net debt + preferred + minority interest, less the
+operating-lease slice by default — the same definition the multiples and the
+DCF bridge use, so a report carries one EV. The own-history P/FFO and P/AFFO
+bands are built from net income + D&A per rolling four quarters, the only
+construction quarterly statements support; when the current FFO is the NAREIT
+figure (a property-sale gain, an impairment or real-estate-only depreciation
+netted) the bands are withheld with `valuation.multiples.ownHistory.ffoBasis`
+rather than rank one definition inside another.
+
 FFO is measured on **one** period: the latest fiscal year. Every XBRL component
 resolves at that period end, so the statement fallbacks are read from the same
 fiscal year rather than from a trailing window — a fiscal-year net income against
@@ -693,7 +752,7 @@ share price in P/FFO is current while the FFO it divides is up to three quarters
 old.
 
 P/FFO and P/AFFO are computed from these figures. When the REIT sub-map is
-`undetermined` (§1.4) every FFO-based figure is withheld.
+`undetermined` (*The REIT sub-map*, above) every FFO-based figure is withheld.
 
 ### Forensic batteries by route
 
@@ -721,7 +780,11 @@ The score is reported over the signals that remain, with its own denominator,
 and the result carries a variant and a label so a reduced score is never read
 against the 9-point scale. The label's withheld count is derived from the
 signals that are actually null and names them, so a data gap that drops a
-further signal is never reported as one of the route's own withholdings.
+further signal is never reported as one of the route's own withholdings. In the
+composite score the Piotroski signal is banded on the fraction achieved but
+weighted by the share of the nine signals that were evaluable, and the
+shortfall counts against the quality aspect's data completeness — two
+coin-flip signals cannot swing the aspect the way nine do.
 
 | Scale | Applies to | Signals withheld |
 | --- | --- | --- |

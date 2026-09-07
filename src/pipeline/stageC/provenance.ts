@@ -114,11 +114,19 @@ export function canonicalizeTracedUnit(
   const declaredCurrency = explicitCurrency?.toUpperCase() ?? null;
   if (declaredCurrency !== null && !ISO_CURRENCY.test(declaredCurrency)) return null;
 
+  // A bare ISO code in the unit ("EUR", "EUR/share") names the currency
+  // itself; when the number ALSO declares a currency, the two must agree — a
+  // figure labelled EUR with currency USD is a conflict, not a USD figure, and
+  // fails closed like any other unreadable unit (audit 2026-09-06, F181).
   const currencyPerShare = /^([A-Z]{3})\/share$/.exec(raw);
   if (currencyPerShare) {
+    if (declaredCurrency !== null && declaredCurrency !== currencyPerShare[1]) return null;
     return { unit: "currency-per-share", currency: currencyPerShare[1] };
   }
-  if (/^[A-Z]{3}$/.test(raw)) return { unit: "currency", currency: raw };
+  if (/^[A-Z]{3}$/.test(raw)) {
+    if (declaredCurrency !== null && declaredCurrency !== raw) return null;
+    return { unit: "currency", currency: raw };
+  }
 
   if (normalized === "currency" || normalized === "currency mkt cap") {
     return { unit: "currency", currency: declaredCurrency };
@@ -280,8 +288,14 @@ export function matchProvenanceRecord(
     return { ok: false, reason: "date-mismatch", record };
   }
 
+  // Half a unit of the last displayed decimal — the largest error a faithful
+  // rounding can carry. A tie (a fifth decimal of exactly 5 against a 4-dp
+  // rendering) sits ON the bound, and binary float noise in the subtraction
+  // used to push it a few ulps over (audit 2026-09-06, F180/F196); the slack
+  // is relative and ~1e-9, far below any display precision the registry uses.
   const tolerance = 0.5 * 10 ** -record.displayPrecision;
-  if (Math.abs(record.value - candidate.value) > tolerance) {
+  const slack = 1e-9 * Math.max(1, Math.abs(record.value), Math.abs(candidate.value));
+  if (Math.abs(record.value - candidate.value) > tolerance + slack) {
     return { ok: false, reason: "value-mismatch", record };
   }
   return { ok: true, record };

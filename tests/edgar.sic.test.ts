@@ -34,6 +34,13 @@ describe("sectorIndustryForSic", () => {
     expect(sectorIndustryForSic("7370")).toMatchObject({ sector: "Technology" });
     expect(sectorIndustryForSic("3720")).toMatchObject({ sector: "Industrials", industry: "Aerospace & Defense" });
     expect(sectorIndustryForSic("4512")).toMatchObject({ sector: "Industrials", industry: "Airlines" });
+    // Major group 49 is "Electric, Gas AND Sanitary Services": refuse and
+    // hazardous-waste collection (Waste Management 4953, Clean Harbors 4955)
+    // are industrials, not rate-base utilities.
+    expect(sectorIndustryForSic("4953")).toEqual({ sic: 4953, sector: "Industrials", industry: "Waste Management" });
+    expect(sectorIndustryForSic("4955")).toMatchObject({ sector: "Industrials", industry: "Waste Management" });
+    expect(sectorIndustryForSic("4959")).toMatchObject({ sector: "Industrials", industry: "Waste Management" });
+    expect(sectorIndustryForSic("4961")).toMatchObject({ sector: "Utilities" });
   });
 
   it("accepts the '6021 NATIONAL COMMERCIAL BANKS' spelling and rejects garbage", () => {
@@ -46,7 +53,7 @@ describe("sectorIndustryForSic", () => {
   });
 
   it("never returns an industry that would misroute to a financial map for a non-financial", () => {
-    for (const code of [3571, 7372, 2834, 5411, 4911, 1311, 8731, 7389]) {
+    for (const code of [3571, 7372, 2834, 5411, 4911, 4953, 1311, 8731, 7389]) {
       const { industry } = sectorIndustryForSic(code);
       expect(industry ?? "").not.toMatch(/^(banks|insurance|reit)/i);
     }

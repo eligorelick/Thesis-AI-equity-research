@@ -385,7 +385,10 @@ export function ShareCountChart({ rows }: { rows: readonly ShareCountRow[] }) {
               axisLine={{ stroke: THEME.border }}
               tickLine={{ stroke: THEME.border }}
               width={44}
-              domain={["auto", "auto"]}
+              // Bars encode magnitude by length, so the baseline is zero (the
+              // recharts default the revenue and FCF charts already use). An
+              // auto domain started every bar at the niced minimum, so a 16%
+              // buyback read as an 87% collapse (audit 2026-09-06, F211).
             />
             <Tooltip
               cursor={{ fill: "#ffffff08" }}

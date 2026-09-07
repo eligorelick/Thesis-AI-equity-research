@@ -6,7 +6,7 @@
  * module-evaluation time through Next's `server-only` marker, with the runtime
  * `typeof window` guard retained as defense in depth outside Next builds.
  *
- * No key present is a designed-for state (the application contract Phase 1 entry): keyed
+ * No key present is a designed-for state (the keyless entry state): keyed
  * providers run in fixture mode / return explicit gaps, keyless providers
  * (EDGAR, FINRA, fredgraph.csv) stay fully live.
  */
@@ -132,7 +132,7 @@ const envSchema = z.object({
    * read on a report path.
    */
   ANTHROPIC_ADMIN_KEY: optionalSecret,
-  /** "auto" = best available, resolved via the Models API (the application contract §5). */
+  /** "auto" = best available, resolved via the Models API. */
   ANALYSIS_MODEL: z
     .string()
     .optional()
@@ -156,8 +156,11 @@ const envSchema = z.object({
    *    periods are backfilled from SEC EDGAR companyfacts, with per-row
    *    provenance and a manifest entry naming the depth each source served. No
    *    period ever mixes sources.
-   *  - `fmp`: FMP only; a truncated history stays truncated.
-   *  - `edgar`: EDGAR companyfacts only; FMP's statement rows are ignored.
+   *  - `fmp`: FMP only; a truncated history stays truncated, and a successor
+   *    registrant's predecessor history is not appended either.
+   *  - `edgar`: EDGAR companyfacts only; FMP's statement rows are set aside,
+   *    and a member EDGAR cannot build is left as a gap that names the
+   *    withheld vendor rows rather than quietly served from them.
    * An unrecognized value is rejected at parse, like every other key here.
    */
   THESIS_STATEMENT_SOURCE: z
@@ -178,8 +181,8 @@ const envSchema = z.object({
     MIN_PAID_PASS_LEASE_SECONDS - 1,
     MAX_NODE_TIMER_SECONDS,
   ),
-  // Must cover at least two job-claim heartbeats, and must never be shorter
-  // than the paid-pass lease it parents.
+  // Floored at MIN_JOB_LEASE_SECONDS (leaseTiming invariant 1), and must never
+  // be shorter than the paid-pass lease it parents.
   THESIS_JOB_LEASE_SECONDS: positiveIntegerEnv(
     900,
     MIN_JOB_LEASE_SECONDS - 1,
@@ -191,6 +194,12 @@ const envSchema = z.object({
    * this config rather than re-reading and re-parsing the environment with a
    * second, wider range. 0 is accepted and disables the idle guard, which is
    * why the exclusive minimum is -1.
+   *
+   * The value is a BASE that the provider scales by analysis effort
+   * (STREAM_IDLE_EFFORT_MULTIPLIER): reasoning is silent on the wire, effort is
+   * what sets how long that silence lasts, and one flat limit cannot serve both
+   * `low` and `max`. The default sits at undici's body-timeout window so this
+   * guard never pre-empts the transport's own, ping-aware detection.
    */
   THESIS_STREAM_IDLE_SECONDS: positiveIntegerEnv(DEFAULT_STREAM_IDLE_SECONDS, -1, 3_600),
   /**
@@ -247,7 +256,7 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((v) => blank(v) === "1"),
-  // VERIFY_MODEL was removed (SPEC §12): verification is deterministic
+  // VERIFY_MODEL was removed: verification is deterministic
   // numeric-source tracing and never calls a model. A leftover env var is
   // simply ignored.
 }).superRefine((parsed, ctx) => {
@@ -261,7 +270,7 @@ const envSchema = z.object({
     ctx.addIssue({
       code: "custom",
       path: ["THESIS_JOB_LEASE_SECONDS"],
-      message: `must be at least ${MIN_JOB_LEASE_SECONDS} seconds: two job-claim heartbeats of ${JOB_HEARTBEAT_MS / 1_000}s`,
+      message: `must be at least ${MIN_JOB_LEASE_SECONDS} seconds (the job-claim lease floor; the claim itself is renewed every quarter of the TTL)`,
     });
   }
   if (paidMs < 2 * (paidMs / PAID_LEASE_RENEWAL_DIVISOR)) {

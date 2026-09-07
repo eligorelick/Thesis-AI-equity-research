@@ -4,9 +4,9 @@
  * cross-check comparator.
  *
  * Research basis (all live-verified 2026-07-05):
- *   - the EDGAR extraction contract §4 (companyfacts structure, dedup, revenue pitfall)
- *   - the EDGAR extraction contract §4 (JPM bank chains, F14 DEF 14A trap)
- *   - the bank-filing extraction contract §2.6-2.8 (BAC/WFC/C matrix,
+ *   - the EDGAR extraction contract (companyfacts structure, dedup, revenue pitfall)
+ *   - the EDGAR extraction contract (JPM bank chains, F14 DEF 14A trap)
+ *   - the bank-filing extraction contract (BAC/WFC/C matrix,
  *     F22-F25, revised chains)
  *
  * THE CRITICAL DEDUP RULE (F14 + F24): filter facts to audited/core forms
@@ -69,11 +69,13 @@ export const companyFactsSchema = z.looseObject({
 });
 
 /**
- * Forms whose facts are trusted for dedup. Form 20-F is the audited annual
- * counterpart to a 10-K for foreign private issuers; 6-K remains excluded
- * because its interim content is not a standardized quarterly statement.
+ * Forms whose facts are trusted for dedup. Forms 20-F and 40-F are the audited
+ * annual counterparts to a 10-K for foreign private issuers (40-F under the
+ * US–Canada multijurisdictional disclosure system; a Canadian filer reporting
+ * under US GAAP tags its facts on it); 6-K remains excluded because its interim
+ * content is not a standardized quarterly statement.
  */
-export const CORE_FACT_FORMS = new Set(["10-K", "10-Q", "10-K/A", "10-Q/A", "20-F", "20-F/A"]);
+export const CORE_FACT_FORMS = new Set(["10-K", "10-Q", "10-K/A", "10-Q/A", "20-F", "20-F/A", "40-F", "40-F/A"]);
 
 // ---------------------------------------------------------------------------
 // Concept chains
@@ -102,16 +104,25 @@ const t = (tag: string, unit?: string): ChainStep => ({ kind: "tag", tag, unit }
  * that yields a fact for the requested period wins, so stale-but-present tags
  * (WFC `Revenues`, last point 2020-09-30) fall through naturally.
  *
- * Chain evidence: the bank-filing extraction contract §2.6-2.7 and
+ * Chain evidence: the bank-filing extraction contract and
  * fixtures/edgar/bank_xbrl_tag_matrix.json.
  */
 export const CONCEPT_CHAINS: Record<ConceptName, ChainStep[]> = {
   revenue: [
-    // Post-ASC-606 industrials (AAPL). us-gaap:Revenues alone silently stops at FY2018 for AAPL.
+    // `Revenues` is the taxonomy's TOTAL (goods, services, interest and other
+    // income "recognized as a component of revenue"); the ASC-606 elements are
+    // the performance-obligation subset. A filer that tags both for one period
+    // (a lessor's rental income, an oil major's "total revenues and other
+    // income") reports the total on its income statement — and that is the
+    // figure the vendor's `revenue` carries, so the cross-check compares like
+    // with like only when the total comes first. Resolution is period-scoped,
+    // so an issuer whose `Revenues` stops at FY2018 (AAPL) still falls through
+    // to the ASC-606 tag for every later period.
+    t("Revenues"),
+    // Post-ASC-606 industrials (AAPL).
     t("RevenueFromContractWithCustomerExcludingAssessedTax"),
     t("RevenueFromContractWithCustomerIncludingAssessedTax"),
     // Banks: JPM tags total net revenue under Revenues (annual only) AND RevenuesNetOfInterestExpense.
-    t("Revenues"),
     t("RevenuesNetOfInterestExpense"),
     // Bank computed fallback — identity verified exactly at JPM/BAC/WFC/C.
     { kind: "sum", tags: ["InterestIncomeExpenseNet", "NoninterestIncome"], label: "NII+NonII" },
@@ -153,9 +164,10 @@ export const CONCEPT_CHAINS: Record<ConceptName, ChainStep[]> = {
  * FIRST so a bank that ALSO tags entity-level ASC-606 fee revenue under
  * RevenueFromContractWithCustomer* is not mis-resolved to that FEE-ONLY figure
  * (which excludes net interest income and understates a bank's revenue by the
- * whole NII line). The default CONCEPT_CHAINS.revenue (RFC first) is correct
- * for non-financials; getConcept switches to this chain only when the caller
- * passes `bankRevenue: true` (validate.ts routes it by sector / bank tagging).
+ * whole NII line). The default CONCEPT_CHAINS.revenue (`Revenues`, then the
+ * ASC-606 tags) is correct for non-financials; getConcept switches to this
+ * chain only when the caller passes `bankRevenue: true` (validate.ts routes
+ * it by sector / bank tagging).
  * RFC tags remain as a trailing fallback for financials that report no bank
  * total-revenue tag at all. Order matches research §2.6-2.7 (Revenues /
  * RevenuesNetOfInterestExpense / NII+NonII are the verified total-revenue tags).
@@ -207,12 +219,20 @@ function durationDays(p: FactPoint): number | null {
  * Whether a fact's own period length is consistent with an FY/Q hint.
  * Instants (no `start` — balance-date concepts like Assets/StockholdersEquity)
  * are ALWAYS compatible: their length is unknowable, so the hint cannot reject
- * them. FY ≈ 300–400 d (52/53-week calendars), Q ≈ 70–110 d.
+ * them. FY ≈ 300–400 d (52/53-week calendars); Q ≈ 70–125 d — the band has to
+ * hold a 12-12-12-16/17-week calendar (Costco's fourth quarter is 16 or 17
+ * weeks), and nothing standardized is four months long, so the upper bound
+ * admits no other period. Mirrors QUARTER_MIN_DAYS/QUARTER_MAX_DAYS in
+ * statements.ts.
  */
+export const QUARTER_DURATION_DAYS: readonly [number, number] = [70, 125];
+
 function durationMatchesHint(p: FactPoint, hint: "FY" | "Q"): boolean {
   const dur = durationDays(p);
   if (dur === null) return true;
-  return hint === "FY" ? dur >= 300 && dur <= 400 : dur >= 70 && dur <= 110;
+  return hint === "FY"
+    ? dur >= 300 && dur <= 400
+    : dur >= QUARTER_DURATION_DAYS[0] && dur <= QUARTER_DURATION_DAYS[1];
 }
 
 /** Parse the raw unit array of a concept into validated FactPoints (invalid rows skipped). */
@@ -329,7 +349,18 @@ export function findPointForPeriod(points: FactPoint[], q: PeriodQuery): { point
 
   if (matches.length === 1) return { point: matches[0] };
 
-  // Multiple duration groups still share the end date.
+  // Several candidates survive the dedup: either duration groups sharing an
+  // end date, or (with an explicit start) copies of one period whose context
+  // dates differ by a day or two between filings — the dedup keys on exact
+  // dates, so those never collapse. Latest filed wins in both cases, and the
+  // latest is the amendment on a same-day tie, as everywhere else.
+  const byFiling = (a: FactPoint, b: FactPoint): number => {
+    if (a.filed !== b.filed) return b.filed.localeCompare(a.filed);
+    const aAmend = a.form.endsWith("/A") ? 1 : 0;
+    const bAmend = b.form.endsWith("/A") ? 1 : 0;
+    if (aAmend !== bAmend) return bAmend - aAmend;
+    return b.accn.localeCompare(a.accn);
+  };
   let note: string | undefined;
   if (q.start === undefined) {
     // Deterministic but flagged: prefer the longest duration (annual over quarter), then latest filed.
@@ -337,9 +368,11 @@ export function findPointForPeriod(points: FactPoint[], q: PeriodQuery): { point
       const da = a.start !== undefined ? dateMs(a.end) - dateMs(a.start) : -1;
       const db = b.start !== undefined ? dateMs(b.end) - dateMs(b.start) : -1;
       if (db !== da) return db - da;
-      return b.filed.localeCompare(a.filed);
+      return byFiling(a, b);
     });
     note = `ambiguous period match (${matches.length} duration groups end near ${q.end}); pass start or durationHint`;
+  } else {
+    matches = [...matches].sort(byFiling);
   }
   return { point: matches[0], note };
 }
@@ -511,7 +544,7 @@ export interface CrossCheckResult {
 
 /**
  * Compare an FMP-reported value with the XBRL-filed value.
- * Default tolerance 0.5% (DATA_MAP §2.3; use 2% for bank provision lines).
+ * Default tolerance 0.5% (use 2% for bank provision lines).
  */
 export function crossCheck(fmpValue: number, xbrlValue: number, tolerancePct = 0.5): CrossCheckResult {
   if (fmpValue === xbrlValue) return { match: true, deltaPct: 0 };
@@ -522,8 +555,13 @@ export function crossCheck(fmpValue: number, xbrlValue: number, tolerancePct = 0
 }
 
 /**
- * Bank-tagging detection (re-confirmed at JPM/BAC/WFC/C):
- * RevenueFromContractWithCustomer* absent AND a bank revenue/NII tag present.
+ * Bank-tagging detection: RevenueFromContractWithCustomer* absent AND a bank
+ * revenue/NII tag present. True at JPM, whose companyfacts carry no ASC-606
+ * revenue element (fixtures/edgar/jpm_companyfacts_revenue_tags.json). It is
+ * a tagging heuristic, not a bank test: a bank that tags its fee revenue under
+ * an ASC-606 element as well is NOT detected here, which is why every caller
+ * that routes revenue also consults the issuer's industry (validate.ts
+ * `routesAsFinancial`, keyless.ts `bankStatementRouting`).
  */
 export function looksLikeBankTagging(facts: CompanyFacts): boolean {
   const g = usGaap(facts);

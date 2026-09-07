@@ -32,7 +32,7 @@ interface DeltaScript {
     targetGroup?: string;
     generatedAt: string;
     contract: unknown;
-  }): { file: IntendedDeltaFile; added: string[]; dropped: string[] };
+  }): { file: IntendedDeltaFile; added: string[]; reclassified: string[]; dropped: string[] };
   projectionSha256(canonical: string): string;
 }
 
@@ -214,7 +214,7 @@ describe("the manifest identity view", () => {
 });
 
 describe("the regenerator", () => {
-  it("refreshes pinned values, drops leaves that stopped differing, and keeps each path in its group", async () => {
+  it("drops leaves that stopped differing and keeps an unchanged path in its group", async () => {
     const { regenerate } = await loadScript();
     const contract = await import("./helpers/auditDeltaContract");
     const existing = file([
@@ -223,19 +223,52 @@ describe("the regenerator", () => {
         { path: "stale", before: 1, after: 2 },
       ]),
     ]);
-    const { file: rebuilt, added, dropped } = regenerate({
+    const { file: rebuilt, added, reclassified, dropped } = regenerate({
       baseline: { a: 1, stale: 1 },
-      current: { a: 99, stale: 1 },
+      current: { a: 2, stale: 1 },
       existing,
       generatedAt: "2026-09-03",
       contract,
     });
     expect(added).toEqual([]);
+    expect(reclassified).toEqual([]);
     expect(dropped).toEqual(["stale"]);
     expect(rebuilt.groups).toHaveLength(1);
-    expect(rebuilt.groups[0].deltas).toEqual([{ path: "a", before: 1, after: 99 }]);
+    expect(rebuilt.groups[0].deltas).toEqual([{ path: "a", before: 1, after: 2 }]);
     expect(rebuilt.groups[0].reason).toBe(existing.groups[0].reason);
     expect(rebuilt.generatedAt).toBe("2026-09-03");
+  });
+
+  it("will not re-bless a classified path whose value moved under the old reason (audit 2026-09-06, F199)", async () => {
+    // D-23's guarantee — nothing is blessed without somebody saying why — held
+    // only for a path's first appearance: a later move was re-pinned silently.
+    const { regenerate } = await loadScript();
+    const contract = await import("./helpers/auditDeltaContract");
+    const existing = file([group([{ path: "a", before: 1, after: 2 }])]);
+    expect(() =>
+      regenerate({
+        baseline: { a: 1 },
+        current: { a: 99 },
+        existing,
+        generatedAt: "2026-09-03",
+        contract,
+      }),
+    ).toThrow(/moved since they were blessed/);
+
+    const { file: rebuilt, added, reclassified } = regenerate({
+      baseline: { a: 1 },
+      current: { a: 99 },
+      existing,
+      targetGroup: "moved-again",
+      generatedAt: "2026-09-03",
+      contract,
+    });
+    expect(added).toEqual([]);
+    expect(reclassified).toEqual(["a"]);
+    expect(rebuilt.groups).toHaveLength(1);
+    expect(rebuilt.groups[0].name).toBe("moved-again");
+    expect(rebuilt.groups[0].deltas).toEqual([{ path: "a", before: 1, after: 99 }]);
+    expect(rebuilt.groups[0].reason).toBe("");
   });
 
   it("will not classify a newly differing leaf on its own", async () => {

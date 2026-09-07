@@ -2,7 +2,7 @@
 
 /**
  * ExportButtons — the "Export MD" / "Export PDF" pair the integrator mounts on
- * the report/company pages (the application contract §8 export).
+ * the report/company pages .
  *
  *   - Export MD  → navigates to /api/export/[reportId]?format=md, which returns
  *     a text/markdown attachment (the browser downloads it).

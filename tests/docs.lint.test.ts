@@ -9,7 +9,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { MODEL_REGISTRY } from "@/models/registry";
+import { MODEL_REGISTRY, isHighOrAboveEffort } from "@/models/registry";
+import { ANALYST_MAX_TOKENS, JUDGE_MAX_TOKENS } from "@/pipeline/stageC/passes";
 import {
   PASS_MAX_REQUESTS,
   maximumRequestCostUsd,
@@ -76,6 +77,9 @@ describe("the README's generated blocks", () => {
       maximumRequestCostUsd,
       passWorstCaseCostUsd,
       maxRequestsPerPass: PASS_MAX_REQUESTS,
+      isHighOrAboveEffort,
+      analystMaxTokens: ANALYST_MAX_TOKENS,
+      judgeMaxTokens: JUDGE_MAX_TOKENS,
     });
     expect(blockBetween(readme(), script.BEGIN_MARKER, script.END_MARKER)).toBe(expected);
   });
@@ -86,14 +90,27 @@ describe("the README's prose", () => {
    * A front door someone will actually read, not a manual.
    *
    * Raised from 250 to 260 on 2026-09-03 to make room for the handoff to
-   * `docs/RESEARCH.md`, the forensic models' evidence base. The alternative was
-   * to delete a true statement or compress prose until it read badly, and the
-   * cap exists to keep the README readable — not to hold it at a round number.
-   * It is still a hard cap: the next addition earns its space by removing
-   * something, or moves the number again on the record, as this one did.
+   * `docs/RESEARCH.md`, the forensic models' evidence base. Raised again from
+   * 260 to 264 the same day for the pricing block's analyst-output-ceiling
+   * column and the paragraph that reads it: effort is the app's cost knob, and
+   * the table published one figure for all five levels while the ceiling it
+   * bills against doubles at `high`. The surrounding prose was compressed
+   * first; four lines is what the column could not give back. The alternative
+   * was to delete a true statement or compress prose until it read badly, and
+   * the cap exists to keep the README readable — not to hold it at a round
+   * number. It is still a hard cap: the next addition earns its space by
+   * removing something, or moves the number again on the record, as these did.
+   *
+   * Raised from 264 to 270 on 2026-09-06 by the full-codebase audit, for six
+   * lines that each make a sentence true: the NEXT_TELEMETRY_DISABLED row of
+   * the configuration table and the two lines that disclose the Next.js CLI
+   * telemetry (F1), the routing bullet that no longer claims tags decide the
+   * route (F2), the pricing sentence that names the reservation mode the
+   * "reported, not reserved" claim holds in (F3), and the sample-report line
+   * that stops promising a manifest entry the sample does not carry (F5).
    */
   it("stays short enough to be read", () => {
-    expect(readme().trimEnd().split("\n").length).toBeLessThanOrEqual(260);
+    expect(readme().trimEnd().split("\n").length).toBeLessThanOrEqual(270);
   });
 
   it("links only to files that exist", () => {

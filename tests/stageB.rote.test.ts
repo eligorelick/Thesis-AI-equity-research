@@ -180,4 +180,40 @@ describe("ROTE nets preferred earnings out of the common return", () => {
     expect(r.asOf).toBe("2025-12-31");
     expect(r.latestRotePct).toBeCloseTo((96 / 775) * 100, 9);
   });
+
+  // Audit 2026-09-06: a vendor 0 beside outstanding preferred is the
+  // zero-for-undisclosed placeholder, not a coupon of nothing; crediting the
+  // whole preferred coupon to common overstated ROTE on exactly the issuers
+  // the metric exists for.
+  it("treats a reported 0 preferred dividend as undisclosed while preferred is outstanding, and withholds", () => {
+    const r = computeRote([income(100, "2025-12-31", 0)], [balance()]);
+    expect(r.latestRotePct).toBeNull();
+    expect(r.notes.join(" ")).toMatch(/reported as 0 \(treated as undisclosed/);
+  });
+
+  it("nets nothing when a 0 preferred dividend sits beside NO preferred stock", () => {
+    const r = computeRote([income(100, "2025-12-31", 0)], [balance({ preferredStock: 0 })]);
+    // TCE = 1000 − 100 − 50 − 0 = 850
+    expect(r.latestRotePct).toBeCloseTo((100 / 850) * 100, 9);
+  });
+
+  it("collapses a restated fiscal year to its latest filing", () => {
+    const filed = <T extends object>(row: T, date: string) => ({ ...row, acceptedDate: date, filingDate: date });
+    const r = computeRote(
+      [
+        filed(income(100), "2026-02-01"),
+        filed(income(90, "2024-12-31"), "2025-02-01"), // superseded
+        filed(income(80, "2024-12-31"), "2025-06-01"), // restated
+      ],
+      [
+        filed(balance(), "2026-02-01"),
+        filed(balance({ totalStockholdersEquity: 900 }, "2024-12-31"), "2025-02-01"),
+        filed(balance({ totalStockholdersEquity: 950 }, "2024-12-31"), "2025-06-01"),
+      ],
+    );
+    expect(r.series.map((y) => y.date)).toEqual(["2024-12-31", "2025-12-31"]);
+    // FY2024 (oldest first) on the RESTATED rows: (80 − 4) / (950 − 175) single-period.
+    expect(r.series[0]!.rotePct).toBeCloseTo((76 / 775) * 100, 9);
+    expect(r.notes.join(" ")).toMatch(/restated\/duplicate annual income period/);
+  });
 });

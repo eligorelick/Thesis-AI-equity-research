@@ -1,7 +1,7 @@
 /**
  * Stage A validation — pure unit tests on synthetic bundles (no network/db).
  *
- * Anchor values from Phase 0 research (the application contract §11):
+ * Anchor values from Phase 0 research:
  *  - AAPL FY2025: revenue 416.161B, net income 112.010B (accn 0000320193-25-000079)
  *  - JPM FY2025: net revenue 182.447B = NII 95.443B + NonII 87.004B (identity
  *    exact); net income 57.048B — the 57.000B DEF-14A rounded value is the
@@ -536,7 +536,7 @@ describe("FMP↔XBRL cross-check", () => {
 
   it("resolves JPM FY2025 revenue via the bank chain (NII 95.443B + NonII 87.004B = 182.447B)", () => {
     // No RevenueFromContractWithCustomer*, no Revenues → chain must fall
-    // through to the computed NII+NonII sum (verified identity, SPEC §11).
+    // through to the computed NII+NonII sum (verified identity).
     const facts = makeFacts({
       InterestIncomeExpenseNet: [
         xp({ start: "2025-01-01", end: "2025-12-31", val: 95_443_000_000, filed: "2026-02-20", accn: "jpm-10k" }),
@@ -739,12 +739,18 @@ describe("FMP↔XBRL cross-check", () => {
     expect(report.flags.some((f) => f.includes("bank revenue chain"))).toBe(true);
   });
 
-  it("L1: the SAME bank facts WITHOUT financial routing false-warn on RFC fee-only revenue (proves the fix is load-bearing)", () => {
+  it("L1: a bank that tags no total-revenue element false-warns WITHOUT financial routing (proves the fix is load-bearing)", () => {
+    // The default chain now reaches `Revenues` first, so a bank that tags the
+    // total needs no routing. The bank that does is one tagging fee revenue
+    // under ASC 606 with net interest and noninterest income beside it and no
+    // `Revenues` at all: the default chain stops at the ASC-606 element, the
+    // bank chain reaches the NII + NonII identity.
     const bankFacts = makeFacts({
       RevenueFromContractWithCustomerExcludingAssessedTax: [
         xp({ start: "2024-01-01", end: "2024-12-31", val: 1_200_000_000 }),
       ],
-      Revenues: [xp({ start: "2024-01-01", end: "2024-12-31", val: 5_000_000_000 })],
+      InterestIncomeExpenseNet: [xp({ start: "2024-01-01", end: "2024-12-31", val: 3_800_000_000 })],
+      NoninterestIncome: [xp({ start: "2024-01-01", end: "2024-12-31", val: 1_200_000_000 })],
       NetIncomeLoss: [xp({ start: "2024-01-01", end: "2024-12-31", val: 900_000_000 })],
     });
     const report = validateBundle(
@@ -759,8 +765,8 @@ describe("FMP↔XBRL cross-check", () => {
       { now: NOW },
     );
     const rev = report.checks.find((c) => c.id === "xbrlCrossCheck.revenue.FY.2024-12-31");
-    // No profile + RFC present (so looksLikeBankTagging is also false) → default
-    // RFC-first chain resolves fee-only 1.2B → 5.0B vs 1.2B mismatch → fail.
+    // No profile + RFC present (so looksLikeBankTagging is also false) → the
+    // default chain resolves fee-only 1.2B → 5.0B vs 1.2B mismatch → fail.
     expect(rev?.status).toBe("fail");
   });
 });
@@ -998,5 +1004,36 @@ describe("reporting currency stability across periods", () => {
     expect(c?.status).toBe("fail");
     expect(result.flags.join(" ")).toMatch(/REPORTING CURRENCY CHANGED/);
     expect(result.gaps.some((g) => g.field === "validation.currencyStability")).toBe(true);
+  });
+});
+
+describe("staleness — foreign private issuers file 20-F/6-K, not 10-Q (audit 2026-09-06)", () => {
+  const adrProfile = ok({ rows: [{ symbol: "X", isAdr: true }] }, "2026-07-05");
+
+  it("does not flag a semi-annual 20-F filer whose newest period is a half-year plus the filing window old", () => {
+    // Newest statement 2025-09-27 is 282 days before 2026-07-06: stale on the
+    // 10-Q cadence (the test above), inside the 313-day semi-annual expectation.
+    const bundle = { ...makeBundle({ incomeQuarterly: gap("fmp.incomeStatement(AAPL,quarter)") }), profile: adrProfile };
+    const report = validateBundle(bundle, { now: NOW });
+    const c = report.checks.find((x) => x.id === "staleness.fundamentals");
+    expect(c?.status).toBe("pass");
+    expect(c?.detail).toMatch(/foreign private issuer/);
+    expect(report.flags.some((f) => f.startsWith("STALE FUNDAMENTALS"))).toBe(false);
+  });
+
+  it("still flags a foreign private issuer more than a semi-annual cycle plus the 20-F window behind", () => {
+    const rows: ValidateIncomeRow[] = [{ date: "2025-06-30", period: "FY", revenue: 1e9, netIncome: 1e8 }];
+    const bundle = {
+      ...makeBundle({
+        incomeAnnual: ok({ rows }, "2025-06-30"),
+        incomeQuarterly: gap("fmp.incomeStatement(AAPL,quarter)"),
+        companyFacts: gap("edgar.companyFacts(AAPL)"),
+      }),
+      profile: adrProfile,
+    };
+    const report = validateBundle(bundle, { now: NOW });
+    expect(report.checks.find((x) => x.id === "staleness.fundamentals")?.status).toBe("fail");
+    expect(report.flags.some((f) => /semi-annual filing cycle/.test(f))).toBe(true);
+    expect(report.gaps.some((g) => g.field === "validation.staleness.fundamentals")).toBe(true);
   });
 });

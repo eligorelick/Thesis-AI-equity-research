@@ -16,6 +16,7 @@ import {
   PROJECTION_HORIZON_YEARS,
   PROJECTION_WEIGHTS_VERSION,
   scenarioDispersion,
+  type ProjectionIncomeRow,
   type ProjectionsInputs,
 } from "@/pipeline/stageB/projections";
 import {
@@ -89,7 +90,6 @@ function makeInputs(over: Partial<ProjectionsInputs> = {}): ProjectionsInputs {
     route: route(),
     valuation: dcfValuation(),
     waccPct: 9,
-    netDebt: -100,
     dilutedShares: 100,
     incomeHistory: INCOME_HISTORY,
     fcfHistory: [
@@ -335,5 +335,37 @@ describe("projections — not applicable", () => {
     (val as { dcf: DcfResult | null }).dcf = null;
     const p = computeProjections(makeInputs({ valuation: val }));
     expect(p.notApplicableReason).toMatch(/unavailable/i);
+  });
+});
+
+describe("projections — provenance wording (audit 2026-09-06)", () => {
+  it("names the growth anchor's actual methods and never claims an analyst anchor that does not exist", () => {
+    // No analyst estimates in the fixture: the basis string still NAMES the
+    // analyst method as unavailable, and a substring test on it printed
+    // "anchored to analyst consensus" for every keyless report.
+    const p = computeProjections(makeInputs());
+    const line = byMetric(p, "revenue").assumptions[0]!;
+    expect(line).not.toMatch(/analyst consensus/);
+    expect(line).toMatch(/median of 2 methods \(3y revenue CAGR, 5y revenue CAGR\)/);
+    expect(line).toMatch(/unavailable: .*analyst-consensus case/);
+  });
+
+  it("discloses excluded off-annual pairs as an info entry while still producing the fan", () => {
+    const gapped: ProjectionIncomeRow[] = [
+      { date: "2015-12-31", revenue: 100, ebit: 20, netIncome: 14, epsDiluted: 0.14 },
+      { date: "2016-12-31", revenue: 120, ebit: 26, netIncome: 18, epsDiluted: 0.18 },
+      { date: "2017-12-31", revenue: 132, ebit: 27, netIncome: 19, epsDiluted: 0.19 },
+      { date: "2018-12-31", revenue: 160, ebit: 35, netIncome: 25, epsDiluted: 0.25 },
+      { date: "2019-12-31", revenue: 168, ebit: 36, netIncome: 26, epsDiluted: 0.26 },
+      { date: "2024-12-31", revenue: 200, ebit: 41, netIncome: 30, epsDiluted: 0.3 },
+      { date: "2025-12-31", revenue: 230, ebit: 49, netIncome: 36, epsDiluted: 0.36 },
+    ];
+    const p = computeProjections(makeInputs({ incomeHistory: gapped }));
+    expect(p.notApplicableReason).toBeNull();
+    expect(p.series.length).toBeGreaterThan(0);
+    const entry = byMetric(p, "revenue").disclosures.find((d) => d.field === "projections.dispersion.spacing");
+    expect(entry?.severity).toBe("info");
+    expect(entry?.reason).toMatch(/1 nonconsecutive fiscal interval excluded/);
+    expect(entry?.reason).not.toMatch(/suppressed/);
   });
 });

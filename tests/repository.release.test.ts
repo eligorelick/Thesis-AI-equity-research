@@ -25,7 +25,6 @@ const publicFiles = () => trackedFiles();
 
 const REQUIRED_RELEASE_FILES = [
   ".github/workflows/ci.yml",
-  "docs/superpowers/plans/2026-08-07-audit-remediation.md",
   "docs/superpowers/specs/2026-08-07-audit-remediation-design.md",
   "config/models.json",
   "scripts/check-dependency-shape.mjs",
@@ -46,41 +45,30 @@ const REQUIRED_RELEASE_FILES = [
   "vitest.risk.config.ts",
   "vitest.shared.ts",
 ] as const;
+/**
+ * Every tracked Markdown document. The design specs are kept as the record of
+ * intent (each carries its deviations); the executed plans, the earlier audit
+ * records, the README handover notes, the Phase 0 reconciliation and the
+ * remediation progress board were retired by the audit of 2026-09-06, whose
+ * record supersedes them.
+ */
 const ALLOWED_MARKDOWN = new Set([
   "README.md",
-  "docs/superpowers/plans/2026-08-07-audit-remediation.md",
+  "CHANGELOG.md",
   "docs/superpowers/specs/2026-08-07-audit-remediation-design.md",
-  "docs/superpowers/audits/2026-08-07-remediation-verification.md",
-  "docs/superpowers/plans/2026-08-09-provider-temporal-integrity.md",
   "docs/superpowers/specs/2026-08-09-provider-temporal-integrity-design.md",
-  "docs/superpowers/audits/2026-08-30-code-and-docs-audit.md",
-  "docs/superpowers/plans/2026-08-31-outstanding-audit-items.md",
-  "docs/superpowers/audits/2026-08-31-analytical-integrity-verification.md",
-  "docs/superpowers/plans/2026-09-02-keyless-data-path.md",
   "docs/superpowers/specs/2026-09-02-keyless-data-path-design.md",
   "docs/superpowers/specs/2026-09-02-analysis-quality-design.md",
-  "CHANGELOG.md",
-  "docs/audit/README-RECONCILIATION.md",
+  "docs/superpowers/audits/2026-09-06-full-codebase-audit.md",
   "docs/audit/DECISIONS.md",
-  "docs/audit/PROGRESS.md",
   "docs/audit/REMEDIATION-REPORT.md",
-  // WS8
   "docs/PRIVACY.md",
   "docs/DATA-RIGHTS.md",
-  "docs/audit/README-NOTES-WS8.md",
-  // end WS8
-  // WS5
-  "docs/audit/README-NOTES-WS5.md",
-  "docs/METHODOLOGY.md", // WS6
+  "docs/METHODOLOGY.md",
   // The evidence base the forensic code cites by section. `research §N` was
   // cited from three source files for months with no such document in the
   // repository; docs.lint now asserts every citation resolves to a heading.
   "docs/RESEARCH.md",
-  "docs/audit/README-NOTES-WS6.md", // WS6
-  // WS4: the data-layer handover notes for the README rewrite.
-  "docs/audit/README-NOTES-WS4.md",
-  "docs/audit/README-NOTES-WS7.md", // WS7
-  "docs/audit/README-NOTES-WS123.md", // WS1-3
 ]);
 const VERIFY_GATES = [
   "npm run check:dependencies",

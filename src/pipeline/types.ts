@@ -7,7 +7,7 @@
  * EVERY externally sourced member of the bundle is a FetchResult<...> whose
  * ok-branch carries Sourced provenance (src/types/core.ts): as-of date,
  * provider, endpoint, fetch time, staleness. Failures are ManifestEntry gaps —
- * missing inputs NEVER throw (the application contract §3, non-negotiable rule #4).
+ * missing inputs NEVER throw (non-negotiable rule #4).
  */
 
 import type { DataSource, FetchResult, ManifestEntry } from "@/types/core";
@@ -384,7 +384,7 @@ export function derive13FCoverage(
 }
 
 /**
- * 13F quarter-resolution rule (DATA_MAP §2.8): the latest calendar quarter
+ * 13F quarter-resolution rule: the latest calendar quarter
  * whose end is >= 45 days ago — i.e. whose 13F filing deadline has passed, so
  * FMP's Ultimate 13F endpoints (which require explicit year+quarter) should
  * have data. Deterministic given `now`.

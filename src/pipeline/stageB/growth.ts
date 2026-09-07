@@ -2,8 +2,8 @@
  * Stage B — Growth: revenue/EPS/FCF CAGRs, margin series + trends,
  * revenue acceleration.
  *
- * Pure, deterministic TypeScript: no network, no DB, no LLM (the application contract §4).
- * Input rows use FMP's exact field names (the provider data contract §2.3); the integration
+ * Pure, deterministic TypeScript: no network, no DB, no LLM.
+ * Input rows use FMP's exact field names; the integration
  * layer wires the DataBundle into these interfaces.
  *
  * Contract rules honored here:
@@ -19,7 +19,7 @@ import { deriveFcf } from "@/pipeline/stageB/financialValues";
 import { normalizeQuarterRows } from "@/pipeline/stageB/quarterWindows";
 
 // ---------------------------------------------------------------------------
-// Input interfaces — field names exactly as FMP returns them (the provider data contract §2.3)
+// Input interfaces — field names exactly as FMP returns them
 // ---------------------------------------------------------------------------
 
 export interface GrowthIncomeRow {
@@ -139,12 +139,20 @@ export interface GrowthResult {
 // House-rule constants (annotated in notes whenever they bite)
 // ---------------------------------------------------------------------------
 
-/** Margin series depth (house rule per the application contract §4: "up to 10yr"). */
+/** Margin series depth (house rule: up to ten years). */
 export const MARGIN_SERIES_MAX_YEARS = 10;
 /** Minimum non-null points for a regression slope (house rule). */
 export const REGRESSION_MIN_POINTS = 3;
-/** Tolerance (years) between index-implied and date-implied spans before we flag irregular spacing. */
-export const IRREGULAR_SPACING_TOLERANCE_YEARS = 0.6;
+/**
+ * Tolerance (years) between index-implied and date-implied spans before the
+ * date-based span is used and the irregularity is flagged. Wide enough for a
+ * 52/53-week calendar (a week, ≈0.02y) and a fiscal-year-end shift of a few
+ * weeks; narrow enough that a six- or seven-month transition period the
+ * vendor serves as an "annual" row is compounded over its real span, not
+ * annualised as a full year (the previous 0.6 let a half-year stub print a
+ * one-year CAGR with no caveat).
+ */
+export const IRREGULAR_SPACING_TOLERANCE_YEARS = 0.1;
 
 const MS_PER_YEAR = 365.25 * 24 * 3600 * 1000;
 
@@ -552,7 +560,7 @@ export function computeGrowth(
       : null;
   const threeYearCagrPct = threeYearPoint.cagrPct;
   const accelNotes: string[] = [
-    "revenue acceleration = latest YoY minus 3y CAGR (house framing per the application contract §4)",
+    "revenue acceleration = latest YoY minus 3y CAGR (house framing)",
   ];
   if (latestYoyPct === null) accelNotes.push("latest YoY unavailable");
   if (threeYearCagrPct === null) accelNotes.push("3y revenue CAGR unavailable");

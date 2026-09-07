@@ -25,13 +25,16 @@ import {
 } from "@/db";
 import { costLog, jobLlmLeases, jobPassArtifacts, jobs } from "@/db/schema";
 import type { PassSettlement } from "@/pipeline/jobArtifacts";
+import { getJobSnapshot } from "@/pipeline/events";
 import { initialSteps } from "@/pipeline/jobRunner";
 import {
   acquirePaidPassLease,
   claimNextQueuedJob,
   listPresumedCosts,
+  PaidPassOverReservationError,
   reconcileExpiredJobClaims,
   reconcilePresumedCostsAgainstReportedTotals,
+  resizePaidPassLease,
   settlePaidPassLease,
   settleRequestCost,
   type ClaimedJob,
@@ -39,6 +42,20 @@ import {
   type SchedulerLimits,
 } from "@/pipeline/jobScheduler";
 import type { AnalystCase } from "@/report/schema";
+
+function requestSettlement(costUsd: number, presumed = false): Parameters<typeof settleRequestCost>[1] {
+  return {
+    model: "claude-sonnet-5",
+    inputTokens: 20_000,
+    outputTokens: 800,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    webSearches: 0,
+    costUsd,
+    fallbackUsed: false,
+    ...(presumed ? { presumed: true } : {}),
+  };
+}
 
 const NOW = new Date("2026-08-08T12:00:00.000Z");
 const WORKER_TIMEOUT_MS = 30_000;
@@ -383,12 +400,255 @@ describe("reconciling presumed spend downward", () => {
     ]);
   });
 
+  /**
+   * The evidence for a call is the reported total of the day it billed on,
+   * which is bounded by when it was authorized. A crash in the evening and a
+   * sweep the next morning used to date the presumption at the sweep, compare
+   * it with the next day's $0 and lower a real charge to nothing.
+   */
+  it("dates a presumption at the lease's acquisition so a later sweep still reconciles against the right day", () => {
+    const acquiredAt = new Date("2026-08-08T23:50:00.000Z");
+    const sweptAt = new Date("2026-08-09T09:00:00.000Z");
+    seedJob(first.db, "job-night", "AAPL");
+    reserve(first.db, "job-night", "attempt-night", 12.5, acquiredAt);
+    first.db.update(jobs).set({ status: "queued", leaseOwner: null, leaseExpiresAt: null })
+      .where(eq(jobs.id, "job-night")).run();
+    sweepAt(second.db, sweptAt);
+
+    const [row] = second.db.select().from(costLog).where(eq(costLog.jobId, "job-night")).all();
+    expect(row).toMatchObject({
+      presumedAttemptId: "attempt-night",
+      settlementKind: "presumed",
+      costUsd: 12.5,
+      createdAt: acquiredAt.toISOString(),
+    });
+
+    // Anthropic reports $11.80 for the 8th and nothing for the 9th: the row
+    // is lowered to the 8th's remainder, not to the 9th's zero.
+    const applied = reconcilePresumedCostsAgainstReportedTotals([
+      { startTime: "2026-08-08T00:00:00Z", endTime: "2026-08-09T00:00:00Z", reportedUsd: 11.8 },
+      { startTime: "2026-08-09T00:00:00Z", endTime: "2026-08-10T00:00:00Z", reportedUsd: 0 },
+    ], sweptAt, second.db);
+    expect(applied).toEqual([
+      expect.objectContaining({ attemptId: "attempt-night", fromUsd: 12.5, toUsd: 11.8 }),
+    ]);
+  });
+
+  /**
+   * The Cost API's bucket bounds arrive without milliseconds while every
+   * `createdAt` carries them; compared as raw text the first second of a day
+   * sorted into the previous day's bucket.
+   */
+  it("keeps a row from the first second of a day in that day's bucket when the bounds omit milliseconds", () => {
+    seedJob(first.db, "job-midnight", "AAPL");
+    first.db.insert(costLog).values({
+      jobId: "job-midnight",
+      runGeneration: 0,
+      attemptId: null,
+      presumedAttemptId: "attempt-midnight",
+      settlementKind: "presumed",
+      step: "bull",
+      model: "claude-sonnet-5",
+      costUsd: 10,
+      createdAt: "2026-08-09T00:00:00.500Z",
+    }).run();
+
+    const applied = reconcilePresumedCostsAgainstReportedTotals([
+      { startTime: "2026-08-08T00:00:00Z", endTime: "2026-08-09T00:00:00Z", reportedUsd: 0 },
+      { startTime: "2026-08-09T00:00:00Z", endTime: "2026-08-10T00:00:00Z", reportedUsd: 7 },
+    ], NOW, first.db);
+    expect(applied).toEqual([
+      expect.objectContaining({ attemptId: "attempt-midnight", fromUsd: 10, toUsd: 7 }),
+    ]);
+  });
+
+  /**
+   * A presumption an earlier run already lowered is spend the bucket accounts
+   * for. Leaving it out of the accounted total handed its amount back to the
+   * remainder, so a second run over the same day (a new lease expired in
+   * between) raised the bucket above what Anthropic reported.
+   */
+  it("subtracts already-reconciled presumptions from the bucket before sharing out the remainder", () => {
+    seedJob(first.db, "job-twice", "AAPL");
+    const at = NOW.toISOString();
+    const presumedRow = (attempt: string, costUsd: number, reconciledAt: string | null): void => {
+      first.db.insert(costLog).values({
+        jobId: "job-twice",
+        runGeneration: 0,
+        attemptId: null,
+        presumedAttemptId: attempt,
+        settlementKind: "presumed",
+        step: "bull",
+        model: "claude-sonnet-5",
+        costUsd,
+        reconciledAt,
+        createdAt: at,
+      }).run();
+    };
+    presumedRow("attempt-earlier", 3, at); // lowered by an earlier run
+    presumedRow("attempt-later", 10, null);
+    first.db.insert(costLog).values({
+      jobId: "job-twice",
+      runGeneration: 0,
+      attemptId: "settled-attempt",
+      step: "synthesize",
+      model: "claude-sonnet-5",
+      costUsd: 1,
+      createdAt: at,
+    }).run();
+
+    const bucket = {
+      startTime: NOW.toISOString(),
+      endTime: new Date(NOW.getTime() + 60_000).toISOString(),
+      reportedUsd: 5,
+    };
+    // $5 reported, $1 actual and $3 already reconciled: $1 remains.
+    expect(reconcilePresumedCostsAgainstReportedTotals([bucket], NOW, first.db)).toEqual([
+      expect.objectContaining({ attemptId: "attempt-later", fromUsd: 10, toUsd: 1 }),
+    ]);
+    const total = first.db.select().from(costLog).where(eq(costLog.jobId, "job-twice")).all()
+      .reduce((sum, row) => sum + row.costUsd, 0);
+    expect(total).toBeCloseTo(5, 10);
+  });
+
   it("rejects a malformed reported bucket rather than guessing a window", () => {
     expect(() => reconcilePresumedCostsAgainstReportedTotals([{
       startTime: NOW.toISOString(),
       endTime: NOW.toISOString(),
       reportedUsd: 1,
     }], NOW, first.db)).toThrow(/invalid reported cost bucket/);
+  });
+});
+
+describe("settling one provider request", () => {
+  /**
+   * A measured charge above the reservation is evidence and is COMMITTED
+   * before the invariant is raised (the pass-level path has always done
+   * this). Refusing the write left the lease to expire and the sweep to
+   * presume the request at the smaller reserved figure.
+   */
+  it("commits a measured cost above the reservation before throwing the invariant", () => {
+    seedJob(first.db, "job-over", "AAPL");
+    const { lease } = reserve(first.db, "job-over", "attempt-1#r1", 0.1);
+
+    let thrown: unknown;
+    try {
+      settleRequestCost(lease, requestSettlement(0.25), NOW, first.db);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(PaidPassOverReservationError);
+    expect((thrown as PaidPassOverReservationError).result.inserted).toBe(true);
+    expect(first.db.select().from(costLog).where(eq(costLog.jobId, "job-over")).all()).toEqual([
+      expect.objectContaining({
+        attemptId: "attempt-1#r1",
+        settlementKind: "actual",
+        presumedAttemptId: null,
+        costUsd: 0.25,
+      }),
+    ]);
+    expect(first.db.select().from(jobLlmLeases).all()).toEqual([]);
+    // Nothing is left for a sweep to presume at the lower figure.
+    sweepAt(first.db, new Date(NOW.getTime() + LIMITS.paidPassLeaseTtlMs + 1));
+    expect(listPresumedCosts(first.db)).toEqual([]);
+  });
+
+  /**
+   * `settlementsPending` and the cost total on the wire are derived from the
+   * rows this writes, and both the SSE route and the client drop a snapshot
+   * whose revision has not moved — so a settlement that did not version the
+   * snapshot left the page saying "settlements pending" on a canceled job
+   * until some unrelated write happened by.
+   */
+  it("versions the snapshot so a canceled job's pending settlement and cost reach the client", () => {
+    seedJob(first.db, "job-cancel", "AAPL");
+    const { lease } = reserve(first.db, "job-cancel", "attempt-1#r1", 0.5);
+    first.db.update(jobs).set({ status: "canceled", leaseOwner: null, leaseExpiresAt: null })
+      .where(eq(jobs.id, "job-cancel")).run();
+    const before = getJobSnapshot("job-cancel")!;
+    expect(before).toMatchObject({ status: "canceled", settlementsPending: true, totalCostUsd: 0 });
+
+    expect(settleRequestCost(lease, requestSettlement(0.1), NOW, first.db))
+      .toEqual({ recorded: true, costUsd: 0.1 });
+
+    const after = getJobSnapshot("job-cancel")!;
+    expect(after.revision).toBeGreaterThan(before.revision);
+    expect(after).toMatchObject({ settlementsPending: false, totalCostUsd: 0.1 });
+  });
+
+  it("versions a running job's snapshot for the new cost as well", () => {
+    seedJob(first.db, "job-live", "AAPL");
+    const { lease } = reserve(first.db, "job-live", "attempt-1#r1", 0.5);
+    const before = getJobSnapshot("job-live")!;
+
+    settleRequestCost(lease, requestSettlement(0.2), NOW, first.db);
+
+    const after = getJobSnapshot("job-live")!;
+    expect(after.revision).toBeGreaterThan(before.revision);
+    expect(after.totalCostUsd).toBeCloseTo(0.2, 10);
+  });
+});
+
+describe("a late pass settlement", () => {
+  /**
+   * In request-reservation mode the pass lease is resized to $0 after its
+   * first request and, holding nothing, is swept without a presumed marker.
+   * The requests settled beneath the attempt are still proof that it was
+   * authorized and billed; without them as authority the pass artifact was
+   * lost, the resume reader saw a cost row without its artifact, and a retry
+   * re-ran and re-billed a pass whose output had already been paid for.
+   */
+  it("accepts a request-mode pass whose $0 lease was swept, on the strength of its settled requests", () => {
+    seedJob(first.db, "job-req", "AAPL");
+    const { claim, lease } = reserve(first.db, "job-req", "attempt-1", 12.5);
+    const resized = resizePaidPassLease(lease, 0, NOW, first.db);
+    if (resized === null) throw new Error("fixture pass lease could not be resized");
+    const request = acquirePaidPassLease(
+      claim, "bull", "attempt-1#r1", 0.5, NOW, LIMITS, first.db, "claude-sonnet-5",
+    );
+    if (!request.acquired) throw new Error(`fixture request lease failed: ${request.reason}`);
+    expect(settleRequestCost(request.lease, requestSettlement(0.1), NOW, first.db))
+      .toEqual({ recorded: true, costUsd: 0.1 });
+
+    const afterExpiry = new Date(NOW.getTime() + LIMITS.paidPassLeaseTtlMs + 1);
+    sweepAt(second.db, afterExpiry);
+    expect(second.db.select().from(jobLlmLeases).all()).toEqual([]);
+    expect(listPresumedCosts(second.db)).toEqual([]);
+
+    // The pass artifact carries the figure without charging it again (D-10).
+    const unbillable = analystSettlement(0.1);
+    unbillable.telemetry = { ...unbillable.telemetry, billable: false };
+    const settled = settlePaidPassLease(resized, {
+      settlement: unbillable,
+      payloadFingerprint: "1.3.0:test",
+      settledAt: afterExpiry.toISOString(),
+    }, second.db, afterExpiry);
+    expect(settled).toMatchObject({ inserted: true, overReservation: false });
+    expect(second.db.select().from(jobPassArtifacts).all()).toEqual([
+      expect.objectContaining({ attemptId: "attempt-1", pass: "bull" }),
+    ]);
+    expect(second.db.select().from(costLog).where(eq(costLog.jobId, "job-req")).all()).toEqual([
+      expect.objectContaining({ attemptId: "attempt-1#r1", settlementKind: "actual", costUsd: 0.1 }),
+    ]);
+  });
+
+  it("accepts an expired exact lease before any sweep has presumed it", () => {
+    seedJob(first.db, "job-unswept", "AAPL");
+    const { lease } = reserve(first.db, "job-unswept", "attempt-1", 12.5);
+    const afterExpiry = new Date(NOW.getTime() + LIMITS.paidPassLeaseTtlMs + 1);
+
+    const settled = settlePaidPassLease(lease, {
+      settlement: analystSettlement(0.87),
+      payloadFingerprint: "1.3.0:test",
+      settledAt: afterExpiry.toISOString(),
+    }, first.db, afterExpiry);
+
+    expect(settled).toMatchObject({ inserted: true, overReservation: false });
+    expect(listPresumedCosts(first.db)).toEqual([]);
+    expect(first.db.select().from(costLog).where(eq(costLog.jobId, "job-unswept")).all()).toEqual([
+      expect.objectContaining({ attemptId: "attempt-1", settlementKind: "actual", costUsd: 0.87 }),
+    ]);
+    expect(first.db.select().from(jobLlmLeases).all()).toEqual([]);
   });
 });
 

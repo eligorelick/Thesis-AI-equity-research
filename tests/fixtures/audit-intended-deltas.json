@@ -3,7 +3,7 @@
     "auditedBaseCommit": "524d09e81b00b08fe6af386011d34759a5e02fc0",
     "projectionSha256": "68222fc50a0b264723163fd76b7555dbff8fbf1e3269e82d4e36f4d3673d0376"
   },
-  "generatedAt": "2026-09-03",
+  "generatedAt": "2026-09-07",
   "keyedArrays": [
     "report.appendix.missingData",
     "stageB.gaps"
@@ -2278,12 +2278,12 @@
         {
           "path": "report.fairValue.perShare.value",
           "before": 146.23,
-          "after": 152.05
+          "after": 152.08
         },
         {
           "path": "report.fairValue.upsidePct",
           "before": 265.575,
-          "after": 280.12500000000006
+          "after": 280.20000000000005
         },
         {
           "path": "report.meta.disclaimer",
@@ -2293,12 +2293,7 @@
         {
           "path": "report.scores.aspects.valuation.drivers.0.value",
           "before": 265.58,
-          "after": 280.13
-        },
-        {
-          "path": "report.valuation.dcf.assumptions.1.basis",
-          "before": "linear fade from 7.89% (analyst consensus revenue, avg implied growth over next 2 fiscal years (through 2027-12-31)) to terminal 2.5% by year 10",
-          "after": "WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)"
+          "after": 280.19
         },
         {
           "path": "report.valuation.dcf.assumptions.1.name",
@@ -2380,7 +2375,7 @@
           "after": {
             "name": "terminal ROIC",
             "value": "9.3%",
-            "basis": "terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, \"Terminal value house convention\"); ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC"
+            "basis": "terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, \"Terminal value house convention\"); ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.25% — no per-year risk-free observation was available to recompute a year-specific WACC"
           }
         },
         {
@@ -2395,137 +2390,137 @@
         {
           "path": "report.valuation.dcf.perShare.value",
           "before": 146.23,
-          "after": 152.05
+          "after": 152.08
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.0.perShare",
           "before": 166.376092292583,
-          "after": 173.31719497414153
+          "after": 171.17652187933075
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.1.perShare",
           "before": 167.7149851175111,
-          "after": 174.7346564277419
+          "after": 171.62287512445917
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.2.perShare",
           "before": 169.2211734983775,
-          "after": 176.329230640098
+          "after": 172.0692283695876
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.3.perShare",
           "before": 170.9424020912171,
-          "after": 178.15146400916245
+          "after": 172.51558161471607
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.4.perShare",
           "before": 172.94649343185347,
-          "after": 180.27315901861843
+          "after": 172.9619348598445
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.5.perShare",
           "before": 155.24133879734714,
-          "after": 161.5593302903874
+          "after": 160.67486965090202
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.6.perShare",
           "before": 156.0003561762538,
-          "after": 162.36288816834582
+          "after": 161.07770353954095
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.7.perShare",
           "before": 156.82318027878264,
-          "after": 163.23399706273446
+          "after": 161.48053742817984
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.8.perShare",
           "before": 157.72643914234646,
-          "after": 164.1902607739791
+          "after": 161.88337131681882
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.9.perShare",
           "before": 158.73308812865395,
-          "after": 165.25598172552236
+          "after": 162.28620520545778
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.10.perShare",
           "before": 145.54397447067558,
-          "after": 151.32249055005084
+          "after": 151.34786648122474
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.11.perShare",
           "before": 145.888476635414,
-          "after": 151.6872087187548
+          "after": 151.71268717941817
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.12.perShare",
           "before": 146.23297880015247,
-          "after": 152.05192688745873
+          "after": 152.0775078776116
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.13.perShare",
           "before": 146.57748096489092,
-          "after": 152.4166450561627
+          "after": 152.44232857580502
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.14.perShare",
           "before": 146.92198312962938,
-          "after": 152.78136322486668
+          "after": 152.80714927399842
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.15.perShare",
           "before": 137.02303327015306,
-          "after": 142.33041820222823
+          "after": 143.0133061337876
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.16.perShare",
           "before": 137.07019569277645,
-          "after": 142.38034820027016
+          "after": 143.34473391676735
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.17.perShare",
           "before": 137.07839478363584,
-          "after": 142.3890284284642
+          "after": 143.67616169974713
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.18.perShare",
           "before": 137.03897964504117,
-          "after": 142.34730033895167
+          "after": 144.0075894827269
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.19.perShare",
           "before": 136.940533723176,
-          "after": 142.24307743409335
+          "after": 144.33901726570664
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.20.perShare",
           "before": 129.477139616909,
-          "after": 134.36994217687254
+          "after": 135.5245909520963
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.21.perShare",
           "before": 129.31120340693457,
-          "after": 134.19426853293618
+          "after": 135.82653505742016
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.22.perShare",
           "before": 129.08313762406544,
-          "after": 133.95281944150534
+          "after": 136.12847916274404
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.23.perShare",
           "before": 128.78009840764705,
-          "after": 133.63199734118118
+          "after": 136.43042326806793
         },
         {
           "path": "report.valuation.dcf.sensitivityGrid.24.perShare",
           "before": 128.38543965803257,
-          "after": 133.21417930937966
+          "after": 136.73236737339184
         },
         {
           "path": "report.valuation.dcf.upsidePct",
           "before": 265.575,
-          "after": 280.12500000000006
+          "after": 280.20000000000005
         },
         {
           "path": "stageB.capital.dilution",
@@ -2642,12 +2637,12 @@
         {
           "path": "stageB.fairValue.perShare.value",
           "before": 146.23,
-          "after": 152.05
+          "after": 152.08
         },
         {
           "path": "stageB.fairValue.upsidePct",
           "before": 265.575,
-          "after": 280.12500000000006
+          "after": 280.20000000000005
         },
         {
           "path": "stageB.growth.revenueLogLinear",
@@ -2663,11 +2658,6 @@
               "$auditUndefined": true
             }
           }
-        },
-        {
-          "path": "stageB.returns.notes.0",
-          "beforeMissing": true,
-          "after": "WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)"
         },
         {
           "path": "stageB.returns.notes.1",
@@ -2730,48 +2720,9 @@
           }
         },
         {
-          "path": "stageB.returns.waccInputs",
-          "beforeMissing": true,
-          "after": {
-            "waccPct": 9.255946000000002,
-            "riskFree": {
-              "pct": 4,
-              "seriesId": "fmp:treasury-rates.year10",
-              "asOf": "2025-12-31"
-            },
-            "erp": {
-              "pct": 5,
-              "source": "FMP market-risk-premium (US totalEquityRiskPremium)",
-              "asOf": "2026-07-06"
-            },
-            "beta": {
-              "raw": 1.1,
-              "adjusted": 1.0670000000000002,
-              "final": 1.0670000000000002,
-              "method": "Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2]"
-            },
-            "costOfEquityPct": 9.335,
-            "costOfDebt": {
-              "pct": 12,
-              "method": "effective",
-              "syntheticRating": null
-            },
-            "taxRate": {
-              "fraction": 0.2708333,
-              "basis": "FMP ratios effectiveTaxRate (observed effective rate)"
-            },
-            "weights": {
-              "equity": 0.8648648648648649,
-              "debt": 0.13513513513513514,
-              "basis": "market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy"
-            },
-            "summary": "WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)"
-          }
-        },
-        {
           "path": "stageB.scores.aspects.valuation.drivers.0.value",
           "before": 265.58,
-          "after": 280.13
+          "after": 280.19
         },
         {
           "path": "stageB.valuation.assumptions.growthAnchor",
@@ -2871,7 +2822,7 @@
         {
           "path": "stageB.valuation.assumptions.notes.3",
           "beforeMissing": true,
-          "after": "ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC"
+          "after": "ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.25% — no per-year risk-free observation was available to recompute a year-specific WACC"
         },
         {
           "path": "stageB.valuation.assumptions.notes.4",
@@ -2895,50 +2846,42 @@
         {
           "path": "stageB.valuation.assumptions.terminal.roicTermPct.basis",
           "before": "terminal ROIC = WACC (zero excess returns in perpetuity, house-rule default)",
-          "after": "terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, \"Terminal value house convention\"); ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC"
-        },
-        {
-          "path": "stageB.valuation.assumptions.wacc",
-          "beforeMissing": true,
-          "after": {
-            "value": 9.255946000000002,
-            "basis": "WACC 9.2559%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.067 (Blume-adjusted (0.67·raw + 0.33), clamped [0.6, 2], raw 1.1); cost of equity 9.335%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy)"
-          }
+          "after": "terminal ROIC = WACC (zero excess returns in perpetuity, HOUSE CONVENTION default — see docs/METHODOLOGY.md, \"Terminal value house convention\"); ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.25% — no per-year risk-free observation was available to recompute a year-specific WACC"
         },
         {
           "path": "stageB.valuation.dcf.enterpriseValue",
           "before": 28677760654.031258,
-          "after": 29870645011.92904
+          "after": 29875889114.910378
         },
         {
           "path": "stageB.valuation.dcf.equityValue",
           "before": 29977760654.031258,
-          "after": 31170645011.92904
+          "after": 31175889114.910378
         },
         {
           "path": "stageB.valuation.dcf.perShare",
           "before": 146.23297880015247,
-          "after": 152.05192688745873
+          "after": 152.0775078776116
         },
         {
           "path": "stageB.valuation.dcf.pvExplicit",
           "before": 14200057180.89785,
-          "after": 14543363972.145136
+          "after": 14544299273.331322
         },
         {
           "path": "stageB.valuation.dcf.pvTerminal",
           "before": 14477703473.133406,
-          "after": 15327281039.783903
+          "after": 15331589841.579054
         },
         {
           "path": "stageB.valuation.dcf.terminalShare",
           "before": 0.5048407945024906,
-          "after": 0.5131218637449192
+          "after": 0.5131760190503387
         },
         {
           "path": "stageB.valuation.dcf.terminalValue",
           "before": 33568192262.428688,
-          "after": 35538033898.713974
+          "after": 35543569148.54664
         },
         {
           "path": "stageB.valuation.dcf.yearRows.0.ebit",
@@ -2963,7 +2906,7 @@
         {
           "path": "stageB.valuation.dcf.yearRows.0.pv",
           "before": 1526848189.0941052,
-          "after": 1493352963.9068303
+          "after": 1493362815.0967543
         },
         {
           "path": "stageB.valuation.dcf.yearRows.0.reinvestment",
@@ -2998,7 +2941,7 @@
         {
           "path": "stageB.valuation.dcf.yearRows.1.pv",
           "before": 1524733847.0201824,
-          "after": 1512206225.9867628
+          "after": 1512236152.8614557
         },
         {
           "path": "stageB.valuation.dcf.yearRows.1.reinvestment",
@@ -3033,7 +2976,7 @@
         {
           "path": "stageB.valuation.dcf.yearRows.2.pv",
           "before": 1513976278.1400638,
-          "after": 1520695656.1614122
+          "after": 1520745814.6294184
         },
         {
           "path": "stageB.valuation.dcf.yearRows.2.reinvestment",
@@ -3068,7 +3011,7 @@
         {
           "path": "stageB.valuation.dcf.yearRows.3.pv",
           "before": 1494715972.3478506,
-          "after": 1518583788.0981958
+          "after": 1518653912.8953037
         },
         {
           "path": "stageB.valuation.dcf.yearRows.3.reinvestment",
@@ -3103,7 +3046,7 @@
         {
           "path": "stageB.valuation.dcf.yearRows.4.pv",
           "before": 1467237408.5221174,
-          "after": 1505852569.8890462
+          "after": 1505941975.0619354
         },
         {
           "path": "stageB.valuation.dcf.yearRows.4.reinvestment",
@@ -3138,7 +3081,7 @@
         {
           "path": "stageB.valuation.dcf.yearRows.5.pv",
           "before": 1431962215.2504165,
-          "after": 1482706164.5607312
+          "after": 1482813758.6284273
         },
         {
           "path": "stageB.valuation.dcf.yearRows.5.reinvestment",
@@ -3173,7 +3116,7 @@
         {
           "path": "stageB.valuation.dcf.yearRows.6.pv",
           "before": 1389438480.1567645,
-          "after": 1449566044.012765
+          "after": 1449690359.3672657
         },
         {
           "path": "stageB.valuation.dcf.yearRows.6.reinvestment",
@@ -3208,7 +3151,7 @@
         {
           "path": "stageB.valuation.dcf.yearRows.7.pv",
           "before": 1340326582.9243398,
-          "after": 1407058506.9150107
+          "after": 1407197742.3235748
         },
         {
           "path": "stageB.valuation.dcf.yearRows.7.reinvestment",
@@ -3243,7 +3186,7 @@
         {
           "path": "stageB.valuation.dcf.yearRows.8.pv",
           "before": 1285382062.9140253,
-          "after": 1355995120.5995789
+          "after": 1356147195.027486
         },
         {
           "path": "stageB.valuation.dcf.yearRows.8.reinvestment",
@@ -3273,7 +3216,7 @@
         {
           "path": "stageB.valuation.dcf.yearRows.9.pv",
           "before": 1225436144.5279837,
-          "after": 1297346932.014801
+          "after": 1297509547.4397001
         },
         {
           "path": "stageB.valuation.dcf.yearRows.9.reinvestment",
@@ -3331,7 +3274,7 @@
         {
           "path": "stageB.valuation.notes.3",
           "beforeMissing": true,
-          "after": "ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.26% — no per-year risk-free observation was available to recompute a year-specific WACC"
+          "after": "ROIC-vs-WACC history compares every fiscal year to the CURRENT WACC 9.25% — no per-year risk-free observation was available to recompute a year-specific WACC"
         },
         {
           "path": "stageB.valuation.notes.4",
@@ -3351,127 +3294,127 @@
         {
           "path": "stageB.valuation.sensitivity.perShare.0.0",
           "before": 166.376092292583,
-          "after": 173.31719497414153
+          "after": 171.17652187933075
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.0.1",
           "before": 167.7149851175111,
-          "after": 174.7346564277419
+          "after": 171.62287512445917
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.0.2",
           "before": 169.2211734983775,
-          "after": 176.329230640098
+          "after": 172.0692283695876
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.0.3",
           "before": 170.9424020912171,
-          "after": 178.15146400916245
+          "after": 172.51558161471607
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.0.4",
           "before": 172.94649343185347,
-          "after": 180.27315901861843
+          "after": 172.9619348598445
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.1.0",
           "before": 155.24133879734714,
-          "after": 161.5593302903874
+          "after": 160.67486965090202
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.1.1",
           "before": 156.0003561762538,
-          "after": 162.36288816834582
+          "after": 161.07770353954095
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.1.2",
           "before": 156.82318027878264,
-          "after": 163.23399706273446
+          "after": 161.48053742817984
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.1.3",
           "before": 157.72643914234646,
-          "after": 164.1902607739791
+          "after": 161.88337131681882
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.1.4",
           "before": 158.73308812865395,
-          "after": 165.25598172552236
+          "after": 162.28620520545778
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.2.0",
           "before": 145.54397447067558,
-          "after": 151.32249055005084
+          "after": 151.34786648122474
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.2.1",
           "before": 145.888476635414,
-          "after": 151.6872087187548
+          "after": 151.71268717941817
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.2.2",
           "before": 146.23297880015247,
-          "after": 152.05192688745873
+          "after": 152.0775078776116
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.2.3",
           "before": 146.57748096489092,
-          "after": 152.4166450561627
+          "after": 152.44232857580502
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.2.4",
           "before": 146.92198312962938,
-          "after": 152.78136322486668
+          "after": 152.80714927399842
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.3.0",
           "before": 137.02303327015306,
-          "after": 142.33041820222823
+          "after": 143.0133061337876
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.3.1",
           "before": 137.07019569277645,
-          "after": 142.38034820027016
+          "after": 143.34473391676735
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.3.2",
           "before": 137.07839478363584,
-          "after": 142.3890284284642
+          "after": 143.67616169974713
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.3.3",
           "before": 137.03897964504117,
-          "after": 142.34730033895167
+          "after": 144.0075894827269
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.3.4",
           "before": 136.940533723176,
-          "after": 142.24307743409335
+          "after": 144.33901726570664
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.4.0",
           "before": 129.477139616909,
-          "after": 134.36994217687254
+          "after": 135.5245909520963
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.4.1",
           "before": 129.31120340693457,
-          "after": 134.19426853293618
+          "after": 135.82653505742016
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.4.2",
           "before": 129.08313762406544,
-          "after": 133.95281944150534
+          "after": 136.12847916274404
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.4.3",
           "before": 128.78009840764705,
-          "after": 133.63199734118118
+          "after": 136.43042326806793
         },
         {
           "path": "stageB.valuation.sensitivity.perShare.4.4",
           "before": 128.38543965803257,
-          "after": 133.21417930937966
+          "after": 136.73236737339184
         }
       ]
     },
@@ -3571,7 +3514,7 @@
         {
           "path": "report.scores.aspects.quality.note",
           "before": "Value creation (ROIC−WACC) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
-          "after": "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, plus Altman, accruals and Beneish where the route computes them — all three are withheld for financial classifications, whose balance sheets those models were not estimated on)."
+          "after": "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, weighted by the share of its nine signals that were evaluable; plus Altman — banded after an affine map of the variant's zones onto the original 1.81/2.99 scale, which is the value the altmanZOriginalScale driver carries — accruals and Beneish where the route computes them — all three are withheld for financial classifications, whose balance sheets those models were not estimated on)."
         },
         {
           "path": "report.scores.aspects.valuation.drivers.1.value",
@@ -3581,7 +3524,7 @@
         {
           "path": "report.scores.composite.score",
           "before": 77.59,
-          "after": 77.53
+          "after": 77.19
         },
         {
           "path": "report.valuation.dcf.assumptions.3.basis",
@@ -3601,27 +3544,27 @@
         {
           "path": "stageB.forensics.notes.2",
           "beforeMissing": true,
-          "after": "TATA uses the cash-flow construction (NI from continuing ops − CFO)/TA_t (Hribar–Collins 2002); balance-sheet construction reported as diagnostic only."
+          "after": "DEPI: rate built from combined depreciation AND amortisation over (D&A + net PP&E) — the statements do not separate depreciation; Beneish's index is on depreciation of PP&E alone, so an acquisitive issuer's intangible amortisation moves this index for reasons unrelated to depreciation policy (research §2.1)."
         },
         {
           "path": "stageB.forensics.notes.3",
           "beforeMissing": true,
-          "after": "Diagnostic balance-sheet TATA uses shortTermDebt as a proxy for current maturities of LTD (broader — includes notes payable)."
+          "after": "TATA uses the cash-flow construction (NI from continuing ops − CFO)/TA_t (Hribar–Collins 2002); balance-sheet construction reported as diagnostic only."
         },
         {
           "path": "stageB.forensics.notes.4",
           "beforeMissing": true,
-          "after": "The model detects overstatement, not understatement — a very negative M does not prove conservative accounting."
+          "after": "Diagnostic balance-sheet TATA uses shortTermDebt as a proxy for current maturities of LTD (broader — includes notes payable)."
         },
         {
           "path": "stageB.forensics.notes.5",
           "beforeMissing": true,
-          "after": "ΔLEVER: prior-year average TA proxied by end-of-year TA (no t−2 balance sheet) — annotated proxy."
+          "after": "The model detects overstatement, not understatement — a very negative M does not prove conservative accounting."
         },
         {
           "path": "stageB.forensics.notes.6",
           "beforeMissing": true,
-          "after": "House-rule bands: |ratio| < 10% unremarkable, 10–20% elevated, > 20% red flag (heuristic — Sloan 1996 is a decile-ranking result with no canonical bright line)."
+          "after": "ΔLEVER: prior-year average TA proxied by end-of-year TA (no t−2 balance sheet) — annotated proxy."
         },
         {
           "path": "stageB.growth.notes.0",
@@ -3716,12 +3659,12 @@
         {
           "path": "stageB.returns.roicVsWacc.note",
           "before": "spread = ROIC 36.4583% − WACC 9.2559% (positive = returns above cost of capital)",
-          "after": "spread = ROIC 40.0641% − WACC 9.2559% (positive = returns above cost of capital)"
+          "after": "spread = ROIC 40.0641% − WACC 9.2545% (positive = returns above cost of capital)"
         },
         {
           "path": "stageB.returns.roicVsWacc.spreadPctPts",
           "before": 27.202387333333334,
-          "after": 30.808156564102568
+          "after": 30.80959800554401
         },
         {
           "path": "stageB.returns.rote",
@@ -3833,7 +3776,7 @@
         {
           "path": "stageB.scores.aspects.quality.note",
           "before": "Value creation (ROIC−WACC) and accounting integrity (Piotroski, Altman, accruals, Beneish).",
-          "after": "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, plus Altman, accruals and Beneish where the route computes them — all three are withheld for financial classifications, whose balance sheets those models were not estimated on)."
+          "after": "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, weighted by the share of its nine signals that were evaluable; plus Altman — banded after an affine map of the variant's zones onto the original 1.81/2.99 scale, which is the value the altmanZOriginalScale driver carries — accruals and Beneish where the route computes them — all three are withheld for financial classifications, whose balance sheets those models were not estimated on)."
         },
         {
           "path": "stageB.scores.aspects.valuation.drivers.1.value",
@@ -3843,7 +3786,7 @@
         {
           "path": "stageB.scores.composite.score",
           "before": 77.59,
-          "after": 77.53
+          "after": 77.19
         },
         {
           "path": "stageB.technicals.gaps.1.reason",
@@ -4236,6 +4179,454 @@
           "path": "stageB.valuation.multiples.multiples.3.basis",
           "before": "marketCap / (operatingCashFlow + capitalExpenditure) (latest annual FY 2025-12-31 — TTM suppressed; FMP capex negative)",
           "after": "marketCap / (operatingCashFlow + capitalExpenditure) (latest annual FY 2025-12-31 — TTM suppressed; FMP capex negative) — free cash flow BEFORE stock-based compensation, the vendor convention, which is also the basis of the own-history distribution this multiple is ranked in. The capital block's house-default free cash flow subtracts SBC and is a DIFFERENT figure; the two are never mixed (WS6 review, SHOULD-FIX 4)"
+        }
+      ]
+    },
+    {
+      "name": "forensics-and-grading-audit-2026-09-06",
+      "decisions": [
+        "D-24"
+      ],
+      "reason": "The 2026-09-06 audit of the forensics and grading modules (D-24). The Piotroski signal now enters the quality aspect at outOf/9 of its weight, so this fixture, whose F-score is reported out of eight, grades quality at 88.24 instead of 88.62 with data completeness 0.95, and the composite methodology sentence prints the lower completeness. The Altman driver is renamed altmanZOriginalScale because the band grades the original-scale Z, not the route-selected variant. Beneish gains a leading DEPI note saying the rate was built on combined depreciation and amortisation, shifting the three existing notes down one slot; the accrual-band note appears at the end of the forensics notes because the two-year notes now follow the tally. The Altman market-cap as-of date is the quote date the figure actually comes from rather than the balance-sheet date it was previously labelled with.",
+      "deltas": [
+        {
+          "path": "report.scores.aspects.quality.dataCompleteness",
+          "before": 1,
+          "after": 0.95
+        },
+        {
+          "path": "report.scores.aspects.quality.drivers.2.source",
+          "before": "computed.scores.quality.altmanZ",
+          "after": "computed.scores.quality.altmanZOriginalScale"
+        },
+        {
+          "path": "report.scores.aspects.quality.score",
+          "before": 88.62,
+          "after": 88.24
+        },
+        {
+          "path": "report.scores.composite.methodology",
+          "before": "Route-adjusted, completeness-weighted mean of the seven aspect scores: each aspect enters at route weight × data completeness. The unsupported fraction is then shrunk to the neutral midpoint (50); completeness 89.5% is measured over route-applicable evidence (metrics the route suppresses or that are meaningless for it are excluded, not counted as missing). Fully observed scores are unchanged on any route, while sparse favorable data cannot create an extreme grade. Bands remain versioned house rules pending outcome backtesting.",
+          "after": "Route-adjusted, completeness-weighted mean of the seven aspect scores: each aspect enters at route weight × data completeness. The unsupported fraction is then shrunk to the neutral midpoint (50); completeness 88.75% is measured over route-applicable evidence (metrics the route suppresses or that are meaningless for it are excluded, not counted as missing). Fully observed scores are unchanged on any route, while sparse favorable data cannot create an extreme grade. Bands remain versioned house rules pending outcome backtesting."
+        },
+        {
+          "path": "stageB.forensics.altman.asOf.marketCap",
+          "before": "2025-12-31",
+          "after": "2026-07-06"
+        },
+        {
+          "path": "stageB.forensics.beneish.notes.0",
+          "before": "TATA uses the cash-flow construction (NI from continuing ops − CFO)/TA_t (Hribar–Collins 2002); balance-sheet construction reported as diagnostic only.",
+          "after": "DEPI: rate built from combined depreciation AND amortisation over (D&A + net PP&E) — the statements do not separate depreciation; Beneish's index is on depreciation of PP&E alone, so an acquisitive issuer's intangible amortisation moves this index for reasons unrelated to depreciation policy (research §2.1)."
+        },
+        {
+          "path": "stageB.forensics.beneish.notes.1",
+          "before": "Diagnostic balance-sheet TATA uses shortTermDebt as a proxy for current maturities of LTD (broader — includes notes payable).",
+          "after": "TATA uses the cash-flow construction (NI from continuing ops − CFO)/TA_t (Hribar–Collins 2002); balance-sheet construction reported as diagnostic only."
+        },
+        {
+          "path": "stageB.forensics.beneish.notes.2",
+          "before": "The model detects overstatement, not understatement — a very negative M does not prove conservative accounting.",
+          "after": "Diagnostic balance-sheet TATA uses shortTermDebt as a proxy for current maturities of LTD (broader — includes notes payable)."
+        },
+        {
+          "path": "stageB.forensics.beneish.notes.3",
+          "beforeMissing": true,
+          "after": "The model detects overstatement, not understatement — a very negative M does not prove conservative accounting."
+        },
+        {
+          "path": "stageB.forensics.notes.7",
+          "beforeMissing": true,
+          "after": "House-rule bands: |ratio| < 10% unremarkable, 10–20% elevated, > 20% red flag (heuristic — Sloan 1996 is a decile-ranking result with no canonical bright line)."
+        },
+        {
+          "path": "stageB.scores.aspects.quality.dataCompleteness",
+          "before": 1,
+          "after": 0.95
+        },
+        {
+          "path": "stageB.scores.aspects.quality.drivers.2.source",
+          "before": "computed.scores.quality.altmanZ",
+          "after": "computed.scores.quality.altmanZOriginalScale"
+        },
+        {
+          "path": "stageB.scores.aspects.quality.score",
+          "before": 88.62,
+          "after": 88.24
+        },
+        {
+          "path": "stageB.scores.composite.methodology",
+          "before": "Route-adjusted, completeness-weighted mean of the seven aspect scores: each aspect enters at route weight × data completeness. The unsupported fraction is then shrunk to the neutral midpoint (50); completeness 89.5% is measured over route-applicable evidence (metrics the route suppresses or that are meaningless for it are excluded, not counted as missing). Fully observed scores are unchanged on any route, while sparse favorable data cannot create an extreme grade. Bands remain versioned house rules pending outcome backtesting.",
+          "after": "Route-adjusted, completeness-weighted mean of the seven aspect scores: each aspect enters at route weight × data completeness. The unsupported fraction is then shrunk to the neutral midpoint (50); completeness 88.75% is measured over route-applicable evidence (metrics the route suppresses or that are meaningless for it are excluded, not counted as missing). Fully observed scores are unchanged on any route, while sparse favorable data cannot create an extreme grade. Bands remain versioned house rules pending outcome backtesting."
+        }
+      ]
+    },
+    {
+      "name": "returns-capital-audit-2026-09-06",
+      "decisions": [
+        "D-25"
+      ],
+      "reason": "The 2026-09-06 audit of the returns and capital modules (D-25). The WACC now uses the single Blume constant pair betaEstimate.ts owns (2/3 and 1/3 instead of the rounded 0.67 and 0.33), so this fixture's adjusted beta moves from 1.067 to 1.0667, the cost of equity from 9.335 to 9.3333 and the WACC from 9.2559 to 9.2545, and with it the terminal ROIC, the terminal reinvestment rate, every DCF discount factor and every column of the WACC sensitivity grid. The WACC result carries a debtBasis string and its notes print the Blume formula to three decimals and the debt basis actually averaged (this fixture discloses no operating-lease split and no quarter-end balance four quarters back, so the fiscal-year-end pair is used unadjusted). The ROIC notes state the basis that ran — cash plus short-term investments, NET_DEBT_V1, the lease rule — and add that no balance sheet discloses an operating-lease liability, replacing a note that described a cash-only definition and cited a methodology section that does not exist.",
+      "deltas": [
+        {
+          "path": "report.valuation.dcf.assumptions.1.basis",
+          "before": "linear fade from 7.89% (analyst consensus revenue, avg implied growth over next 2 fiscal years (through 2027-12-31)) to terminal 2.5% by year 10",
+          "after": "WACC 9.2545%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.0667 (Blume-adjusted (0.667·raw + 0.333), clamped [0.6, 2], raw 1.1); cost of equity 9.3333%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (no operating-lease liability disclosed separately, so lease liabilities remain inside it), average of the latest two fiscal-year-end balances as the market-value proxy)"
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.0.waccPct",
+          "before": 8.255946000000002,
+          "after": 8.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.1.waccPct",
+          "before": 8.255946000000002,
+          "after": 8.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.2.waccPct",
+          "before": 8.255946000000002,
+          "after": 8.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.3.waccPct",
+          "before": 8.255946000000002,
+          "after": 8.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.4.waccPct",
+          "before": 8.255946000000002,
+          "after": 8.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.5.waccPct",
+          "before": 8.755946000000002,
+          "after": 8.754504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.6.waccPct",
+          "before": 8.755946000000002,
+          "after": 8.754504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.7.waccPct",
+          "before": 8.755946000000002,
+          "after": 8.754504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.8.waccPct",
+          "before": 8.755946000000002,
+          "after": 8.754504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.9.waccPct",
+          "before": 8.755946000000002,
+          "after": 8.754504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.10.waccPct",
+          "before": 9.255946000000002,
+          "after": 9.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.11.waccPct",
+          "before": 9.255946000000002,
+          "after": 9.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.12.waccPct",
+          "before": 9.255946000000002,
+          "after": 9.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.13.waccPct",
+          "before": 9.255946000000002,
+          "after": 9.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.14.waccPct",
+          "before": 9.255946000000002,
+          "after": 9.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.15.waccPct",
+          "before": 9.755946000000002,
+          "after": 9.754504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.16.waccPct",
+          "before": 9.755946000000002,
+          "after": 9.754504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.17.waccPct",
+          "before": 9.755946000000002,
+          "after": 9.754504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.18.waccPct",
+          "before": 9.755946000000002,
+          "after": 9.754504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.19.waccPct",
+          "before": 9.755946000000002,
+          "after": 9.754504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.20.waccPct",
+          "before": 10.255946000000002,
+          "after": 10.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.21.waccPct",
+          "before": 10.255946000000002,
+          "after": 10.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.22.waccPct",
+          "before": 10.255946000000002,
+          "after": 10.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.23.waccPct",
+          "before": 10.255946000000002,
+          "after": 10.254504558558558
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.24.waccPct",
+          "before": 10.255946000000002,
+          "after": 10.254504558558558
+        },
+        {
+          "path": "stageB.returns.notes.0",
+          "beforeMissing": true,
+          "after": "WACC 9.2545%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.0667 (Blume-adjusted (0.667·raw + 0.333), clamped [0.6, 2], raw 1.1); cost of equity 9.3333%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (no operating-lease liability disclosed separately, so lease liabilities remain inside it), average of the latest two fiscal-year-end balances as the market-value proxy)"
+        },
+        {
+          "path": "stageB.returns.roic.notes.0",
+          "before": "invested capital = totalDebt + totalStockholdersEquity − cashAndCashEquivalents (house definition per the valuation methodology §2.2)",
+          "after": "invested capital = totalDebt (less the operating-lease liability where the balance sheet discloses it) + totalStockholdersEquity − (cash + short-term investments): the house net-debt basis (NET_DEBT_V1; cash-only where short-term investments are unreported, disclosed per year) and the EV bridge's lease rule (METHODOLOGY \"EV bridge\")"
+        },
+        {
+          "path": "stageB.returns.roic.notes.1",
+          "beforeMissing": true,
+          "after": "no balance sheet discloses an operating-lease liability separately (the provider publishes no split) — invested capital carries totalDebt, lease liabilities included, unadjusted; for a lease-heavy issuer ROIC is understated against the lease-consistent basis"
+        },
+        {
+          "path": "stageB.returns.wacc.betaAdjusted",
+          "before": 1.0670000000000002,
+          "after": 1.0666666666666667
+        },
+        {
+          "path": "stageB.returns.wacc.betaFinal",
+          "before": 1.0670000000000002,
+          "after": 1.0666666666666667
+        },
+        {
+          "path": "stageB.returns.wacc.costOfEquityPct",
+          "before": 9.335,
+          "after": 9.333333333333332
+        },
+        {
+          "path": "stageB.returns.wacc.debtBasis",
+          "beforeMissing": true,
+          "after": "book totalDebt (no operating-lease liability disclosed separately, so lease liabilities remain inside it), average of the latest two fiscal-year-end balances"
+        },
+        {
+          "path": "stageB.returns.wacc.notes.0",
+          "before": "Blume adjustment: beta_adj = 0.67·raw + 0.33",
+          "after": "Blume adjustment: beta_adj = 0.667·raw + 0.333 (the Bloomberg 2/3–1/3 weighting, research §7.1)"
+        },
+        {
+          "path": "stageB.returns.wacc.notes.2",
+          "before": "debt weight uses book totalDebt (avg of latest two periods) as market-value proxy",
+          "after": "debt weight uses book totalDebt (no operating-lease liability disclosed separately, so lease liabilities remain inside it), average of the latest two fiscal-year-end balances as market-value proxy"
+        },
+        {
+          "path": "stageB.returns.wacc.waccPct",
+          "before": 9.255946000000002,
+          "after": 9.254504558558558
+        },
+        {
+          "path": "stageB.returns.wacc.waccRawPct",
+          "before": 9.255946000000002,
+          "after": 9.254504558558558
+        },
+        {
+          "path": "stageB.returns.waccInputs",
+          "beforeMissing": true,
+          "after": {
+            "waccPct": 9.254504558558558,
+            "riskFree": {
+              "pct": 4,
+              "seriesId": "fmp:treasury-rates.year10",
+              "asOf": "2025-12-31"
+            },
+            "erp": {
+              "pct": 5,
+              "source": "FMP market-risk-premium (US totalEquityRiskPremium)",
+              "asOf": "2026-07-06"
+            },
+            "beta": {
+              "raw": 1.1,
+              "adjusted": 1.0666666666666667,
+              "final": 1.0666666666666667,
+              "method": "Blume-adjusted (0.667·raw + 0.333), clamped [0.6, 2]"
+            },
+            "costOfEquityPct": 9.333333333333332,
+            "costOfDebt": {
+              "pct": 12,
+              "method": "effective",
+              "syntheticRating": null
+            },
+            "taxRate": {
+              "fraction": 0.2708333,
+              "basis": "FMP ratios effectiveTaxRate (observed effective rate)"
+            },
+            "weights": {
+              "equity": 0.8648648648648649,
+              "debt": 0.13513513513513514,
+              "basis": "market-value weights: equity = current market capitalization, debt = book totalDebt (no operating-lease liability disclosed separately, so lease liabilities remain inside it), average of the latest two fiscal-year-end balances as the market-value proxy"
+            },
+            "summary": "WACC 9.2545%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.0667 (Blume-adjusted (0.667·raw + 0.333), clamped [0.6, 2], raw 1.1); cost of equity 9.3333%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (no operating-lease liability disclosed separately, so lease liabilities remain inside it), average of the latest two fiscal-year-end balances as the market-value proxy)"
+          }
+        },
+        {
+          "path": "stageB.valuation.assumptions.terminal.reinvestmentRate.value",
+          "before": 0.27009664922418514,
+          "after": 0.27013871830534697
+        },
+        {
+          "path": "stageB.valuation.assumptions.terminal.roicTermPct.value",
+          "before": 9.255946000000002,
+          "after": 9.254504558558558
+        },
+        {
+          "path": "stageB.valuation.assumptions.wacc",
+          "beforeMissing": true,
+          "after": {
+            "value": 9.254504558558558,
+            "basis": "WACC 9.2545%: risk-free 4% (fmp:treasury-rates.year10, observation 2025-12-31); ERP 5% (FMP market-risk-premium (US totalEquityRiskPremium), as of 2026-07-06); beta 1.0667 (Blume-adjusted (0.667·raw + 0.333), clamped [0.6, 2], raw 1.1); cost of equity 9.3333%; pre-tax cost of debt 12% (effective); tax rate 27.0833% (FMP ratios effectiveTaxRate (observed effective rate)); E 86.4865% / D 13.5135% (market-value weights: equity = current market capitalization, debt = book totalDebt (no operating-lease liability disclosed separately, so lease liabilities remain inside it), average of the latest two fiscal-year-end balances as the market-value proxy)"
+          }
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.discountFactor",
+          "before": 1.0452556912067017,
+          "after": 1.0452487960220693
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.discountFactor",
+          "before": 1.1420039935467208,
+          "after": 1.1419813934982104
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.discountFactor",
+          "before": 1.2477072665072486,
+          "after": 1.2476661136173928
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.discountFactor",
+          "before": 1.3631943773332356,
+          "after": 1.363131430977705
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.discountFactor",
+          "before": 1.489370912774236,
+          "after": 1.4892824913966811
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.discountFactor",
+          "before": 1.6272262802003263,
+          "after": 1.6271082074528016
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.discountFactor",
+          "before": 1.7778414659934771,
+          "after": 1.7776890106842016
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.discountFactor",
+          "before": 1.9423975120514416,
+          "after": 1.9422053212149655
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.discountFactor",
+          "before": 2.1221847768722664,
+          "after": 2.1219468012033715
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.discountFactor",
+          "before": 2.3186130538397838,
+          "after": 2.318322464650925
+        },
+        {
+          "path": "stageB.valuation.sensitivity.waccPcts.0",
+          "before": 8.255946000000002,
+          "after": 8.254504558558558
+        },
+        {
+          "path": "stageB.valuation.sensitivity.waccPcts.1",
+          "before": 8.755946000000002,
+          "after": 8.754504558558558
+        },
+        {
+          "path": "stageB.valuation.sensitivity.waccPcts.2",
+          "before": 9.255946000000002,
+          "after": 9.254504558558558
+        },
+        {
+          "path": "stageB.valuation.sensitivity.waccPcts.3",
+          "before": 9.755946000000002,
+          "after": 9.754504558558558
+        },
+        {
+          "path": "stageB.valuation.sensitivity.waccPcts.4",
+          "before": 10.255946000000002,
+          "after": 10.254504558558558
+        }
+      ]
+    },
+    {
+      "name": "valuation-routing-audit-2026-09-06",
+      "decisions": [
+        "D-26"
+      ],
+      "reason": "The 2026-09-06 audit of the valuation, projection and routing modules (D-26). The DCF result now carries the equity bridge it was computed with (net debt, diluted shares, minority interest, preferred) so the scenario-target and projection re-runs bridge on the same figures as the base per-share; the fixture gains that leaf. The sensitivity grid holds the base case terminal excess over the WACC fixed in every cell rather than the terminal ROIC level, and its notes say so; this fixture has zero excess, so its cell values are unchanged and only the note is new. The routing changes (depository-only SIC band, decided industries, the non-financial evidence rule), the margin ceiling, the tax-basis wording, the REIT enterprise value and the fair-value floor move no leaf of this fixture.",
+      "deltas": [
+        {
+          "path": "stageB.valuation.dcf.bridge",
+          "beforeMissing": true,
+          "after": {
+            "netDebt": -1300000000,
+            "dilutedShares": 205000000,
+            "minorityInterest": 0,
+            "preferred": 0
+          }
+        },
+        {
+          "path": "stageB.valuation.sensitivity.notes.1",
+          "beforeMissing": true,
+          "after": "terminal ROIC held at WACC + 0pp in every cell (the house convention defines it relative to the discount rate)"
+        }
+      ]
+    },
+    {
+      "name": "docs-references-audit-2026-09-06",
+      "decisions": [
+        "D-27"
+      ],
+      "reason": "The 2026-09-06 audit (D-27): report-facing text no longer cites section numbers of design documents that are not in the repository. Two Stage B notes carried such a citation — the revenue-acceleration framing note (\"the application contract §4\") and the sensitivity grid's Gordon-guard note (\"spec §3\") — and now cite docs/METHODOLOGY.md by heading or nothing. No number changed.",
+      "deltas": [
+        {
+          "path": "stageB.growth.revenueAcceleration.note",
+          "before": "revenue acceleration = latest YoY minus 3y CAGR (house framing per the application contract §4)",
+          "after": "revenue acceleration = latest YoY minus 3y CAGR (house framing)"
+        },
+        {
+          "path": "stageB.valuation.sensitivity.notes.0",
+          "before": "grid cells with WACC - gTerm < 1.5pp rendered null (Gordon TV guard, spec §3)",
+          "after": "grid cells with WACC - gTerm < 1.5pp rendered null (Gordon TV guard; docs/METHODOLOGY.md, Fade and horizon)"
         }
       ]
     }

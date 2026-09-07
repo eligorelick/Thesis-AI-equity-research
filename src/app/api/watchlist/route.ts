@@ -1,5 +1,5 @@
 /**
- * /api/watchlist — CRUD over the watchlist table (the application contract §8 sidebar).
+ * /api/watchlist — CRUD over the watchlist table .
  *
  * Contract:
  *   GET                         → 200 { watchlist: WatchlistEntry[] }   (raw rows)

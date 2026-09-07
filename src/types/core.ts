@@ -70,7 +70,7 @@ export interface StepProgress {
   costUsd?: number;
 }
 
-/** Sector routing result (see the application contract §6). Overlays compose over the base. */
+/** Sector routing result . Overlays compose over the base. */
 export type SectorRoute =
   | "general"
   | "bank"

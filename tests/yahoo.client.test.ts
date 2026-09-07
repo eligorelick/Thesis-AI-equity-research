@@ -424,7 +424,10 @@ describe("YahooClient.dailyHistory", () => {
 });
 
 describe("YahooClient.quote and meta", () => {
-  it("builds an FMP-shaped quote from the chart meta", async () => {
+  it("builds an FMP-shaped quote from the chart meta, with the prior SESSION's close (audit 2026-09-06, F225/F226)", async () => {
+    // The fixture's closes are 100.5, 101.5, 102.5 and the latest bar is the
+    // current session; `chartPreviousClose` (99.5) is the close before the
+    // chart RANGE. The daily change is measured from the penultimate bar.
     const { impl, calls } = fakeFetch(() => ({ status: 200, body: chart({ bars: 3 }) }));
     const res = await client(impl).quote("AAPL");
     expect(res.ok).toBe(true);
@@ -438,7 +441,7 @@ describe("YahooClient.quote and meta", () => {
       dayLow: 101,
       yearHigh: 130,
       yearLow: 80,
-      previousClose: 99.5,
+      previousClose: 101.5,
       volume: 1002,
       exchange: "NMS",
       currency: "USD",
@@ -446,8 +449,8 @@ describe("YahooClient.quote and meta", () => {
     // FmpQuoteRow spells "the vendor did not send this" as an absent key, so a
     // keyless market cap is omitted rather than nulled into later arithmetic.
     expect(row.marketCap).toBeUndefined();
-    expect(row.change as number).toBeCloseTo(3, 10);
-    expect(row.changePercentage as number).toBeCloseTo((102.5 / 99.5 - 1) * 100, 10);
+    expect(row.change as number).toBeCloseTo(1, 10);
+    expect(row.changePercentage as number).toBeCloseTo((102.5 / 101.5 - 1) * 100, 10);
     expect(typeof row.timestamp).toBe("number");
     expect(res.value.asOf).toBe("2026-08-26");
     expect(res.value.source).toBe("yahoo");
@@ -475,7 +478,30 @@ describe("YahooClient.quote and meta", () => {
       fiftyTwoWeekHigh: 130,
       fiftyTwoWeekLow: 80,
       chartPreviousClose: 99.5,
+      previousSessionClose: 103.5,
     });
+  });
+
+  it("takes the last close when the latest bar is not the current session, and skips null closes", async () => {
+    // regularMarketTime on a later session than the last bar: the last bar IS
+    // the prior session. A null penultimate close is skipped, not read as 0.
+    const body = chart({ bars: 3, nullAt: [1] });
+    const meta = metaOf(body);
+    meta["regularMarketTime"] = (meta["regularMarketTime"] as number) + 3 * 86400;
+    const { impl } = fakeFetch(() => ({ status: 200, body }));
+    const res = await client(impl).meta("AAPL");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.value.data.previousSessionClose).toBe(102.5);
+
+    const current = chart({ bars: 3, nullAt: [1] });
+    const { impl: impl2 } = fakeFetch(() => ({ status: 200, body: current }));
+    const res2 = await client(impl2).meta("AAPL");
+    expect(res2.ok).toBe(true);
+    if (!res2.ok) return;
+    // Latest bar is the current session; the penultimate close is null, so the
+    // one before it is the prior settled close.
+    expect(res2.value.data.previousSessionClose).toBe(100.5);
   });
 
   it("nulls every absent meta field and falls back to the fetch date for asOf", async () => {
@@ -514,12 +540,17 @@ describe("YahooClient.quote and meta", () => {
       fiftyTwoWeekHigh: null,
       fiftyTwoWeekLow: null,
       chartPreviousClose: null,
+      // With regularMarketTime null the latest bar cannot be identified as the
+      // current session, so the last close is the prior settled close.
+      previousSessionClose: 101.5,
     });
     expect(res.value.asOf).toBe("2026-09-01");
   });
 
-  it("omits change and changePercentage when Yahoo gives no previous close", async () => {
-    const body = chart({ bars: 2 });
+  it("omits change and changePercentage when the chart holds no earlier bar and Yahoo gives no previous close", async () => {
+    // One bar (a first trading day) and no chartPreviousClose: nothing to
+    // measure a change from.
+    const body = chart({ bars: 1 });
     metaOf(body)["chartPreviousClose"] = null;
     const { impl } = fakeFetch(() => ({ status: 200, body }));
     const res = await client(impl).quote("AAPL");
@@ -531,8 +562,26 @@ describe("YahooClient.quote and meta", () => {
     expect(row.previousClose).toBeUndefined();
   });
 
+  it("falls back to chartPreviousClose only when the chart holds a single bar", async () => {
+    // One bar in range: the close before the range IS the prior session.
+    const single = chart({ bars: 1 });
+    const { impl } = fakeFetch(() => ({ status: 200, body: single }));
+    const res = await client(impl).quote("AAPL");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.value.data.rows[0]!.previousClose).toBe(99.5);
+    // Two bars: the penultimate close wins even when chartPreviousClose disagrees.
+    const two = chart({ bars: 2 });
+    metaOf(two)["chartPreviousClose"] = 50;
+    const { impl: impl2 } = fakeFetch(() => ({ status: 200, body: two }));
+    const res2 = await client(impl2).quote("AAPL");
+    expect(res2.ok).toBe(true);
+    if (!res2.ok) return;
+    expect(res2.value.data.rows[0]!.previousClose).toBe(100.5);
+  });
+
   it("never divides by a zero previous close", async () => {
-    const body = chart({ bars: 2 });
+    const body = chart({ bars: 1 });
     metaOf(body)["chartPreviousClose"] = 0;
     const { impl } = fakeFetch(() => ({ status: 200, body }));
     const res = await client(impl).quote("AAPL");
@@ -540,7 +589,7 @@ describe("YahooClient.quote and meta", () => {
     if (!res.ok) return;
     const row = res.value.data.rows[0]!;
     expect(row.previousClose).toBe(0); // reported faithfully, however implausible
-    expect(row.change).toBe(101.5);
+    expect(row.change).toBe(100.5);
     expect(row.changePercentage).toBeUndefined();
   });
 

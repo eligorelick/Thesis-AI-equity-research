@@ -31,6 +31,7 @@ import {
   predecessorFromFilers,
   predecessorManifestEntry,
   predecessorUnresolvedEntry,
+  hasOwnAnnualHistory,
   usGaapConceptCount,
   type PredecessorFacts,
 } from "@/edgar/successor";
@@ -154,6 +155,34 @@ describe("predecessorFromFilers", () => {
     expect(usGaapConceptCount(null)).toBe(0);
     expect(usGaapConceptCount({ cik: 1, entityName: "X", facts: {} })).toBe(0);
     expect(usGaapConceptCount({ cik: 1, entityName: "X", facts: { "us-gaap": { Assets: {} } } })).toBe(1);
+  });
+
+  it("recognises a history of the registrant's own only from an ANNUAL core-form fact", () => {
+    const point = (start: string | undefined, end: string, form: string) => ({
+      start,
+      end,
+      val: 1,
+      accn: "0000000000-26-000001",
+      fy: 2026,
+      fp: "FY",
+      form,
+      filed: "2026-08-01",
+    });
+    const withPoints = (points: unknown[]): CompanyFacts => ({
+      cik: 1,
+      entityName: "X",
+      facts: { "us-gaap": { Revenues: { label: "Revenues", units: { USD: points } } } },
+    });
+    expect(hasOwnAnnualHistory(null)).toBe(false);
+    expect(hasOwnAnnualHistory({ cik: 1, entityName: "X", facts: {} })).toBe(false);
+    // The first 10-Q after a reorganization: one quarter, dozens of concepts, no history.
+    expect(hasOwnAnnualHistory(withPoints([point("2026-04-01", "2026-06-30", "10-Q")]))).toBe(false);
+    // An instant proves nothing about duration either.
+    expect(hasOwnAnnualHistory(withPoints([point(undefined, "2026-06-30", "10-Q")]))).toBe(false);
+    // An annual fact on a non-core form is not history the builder can use.
+    expect(hasOwnAnnualHistory(withPoints([point("2025-01-01", "2025-12-31", "8-K")]))).toBe(false);
+    expect(hasOwnAnnualHistory(withPoints([point("2025-01-01", "2025-12-31", "10-K")]))).toBe(true);
+    expect(hasOwnAnnualHistory(withPoints([point("2025-01-01", "2025-12-31", "40-F")]))).toBe(true);
   });
 });
 

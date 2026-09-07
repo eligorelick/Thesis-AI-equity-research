@@ -93,6 +93,16 @@ describe("dedup rule: form filter BEFORE max(filed)", () => {
     expect(kept[0].val).toBe(57_048_000_000);
   });
 
+  it("retains a 40-F filer's audited facts: the multijurisdictional annual report is a core form", () => {
+    const points: FactPoint[] = [
+      pt({ start: "2025-01-01", end: "2025-12-31", val: 100, form: "40-F", filed: "2026-03-01" }),
+      pt({ start: "2025-01-01", end: "2025-12-31", val: 101, form: "40-F/A", filed: "2026-03-15" }),
+      pt({ start: "2026-01-01", end: "2026-03-31", val: 30, form: "6-K", filed: "2026-05-01" }),
+    ];
+    expect(filterToCoreForms(points).map((p) => p.form)).toEqual(["40-F", "40-F/A"]);
+    expect(dedupFactPoints(points).map((p) => p.val)).toEqual([101]);
+  });
+
   it("retains audited 20-F facts but still rejects unstandardized 6-K points", () => {
     const points: FactPoint[] = [
       pt({ start: "2025-01-01", end: "2025-12-31", val: 100, form: "20-F", filed: "2026-03-01" }),
@@ -189,6 +199,69 @@ describe("revenue chain on JPM companyfacts", () => {
 // ---------------------------------------------------------------------------
 // Computed fallback compatibility
 // ---------------------------------------------------------------------------
+
+describe("revenue chain — the taxonomy total comes before the ASC-606 subset", () => {
+  it("resolves `Revenues` when a filer tags both it and the ASC-606 element for one period", () => {
+    // A lessor or an oil major reports "total revenues and other income" on
+    // the face of the income statement and tags it `Revenues`; the ASC-606
+    // element carries the performance-obligation subset. The vendor's revenue
+    // is the total, so the cross-check has to resolve the same figure.
+    const both = facts({
+      Revenues: [pt({ ...FY2025, val: 344_582_000_000 })],
+      RevenueFromContractWithCustomerExcludingAssessedTax: [pt({ ...FY2025, val: 334_697_000_000 })],
+    });
+    const r = getConcept(both, "revenue", { period: FY2025 });
+    expect(r.ok && r.value.data.value).toBe(344_582_000_000);
+    expect(r.ok && r.value.data.tag).toBe("Revenues");
+  });
+
+  it("still falls through to the ASC-606 element for a period whose `Revenues` was never tagged (AAPL after FY2018)", () => {
+    const apple = facts({
+      Revenues: [pt({ start: "2017-10-01", end: "2018-09-29", val: 265_595_000_000, fy: 2018, filed: "2018-11-05" })],
+      RevenueFromContractWithCustomerExcludingAssessedTax: [pt({ start: "2024-09-29", end: "2025-09-27", val: 416_161_000_000 })],
+    });
+    const r = getConcept(apple, "revenue", { period: { start: "2024-09-29", end: "2025-09-27" } });
+    expect(r.ok && r.value.data.value).toBe(416_161_000_000);
+    expect(r.ok && r.value.data.tag).toBe("RevenueFromContractWithCustomerExcludingAssessedTax");
+  });
+
+  it("prefers the latest filing between two copies of one period whose context dates differ by a day", () => {
+    // The dedup keys on exact dates, so a 52/53-week filer's re-report of the
+    // same period a day off survives beside the original; the pick used to be
+    // whichever came first in the payload.
+    const f = facts({
+      Revenues: [
+        pt({ start: "2024-12-30", end: "2025-12-28", val: 101, form: "10-Q", filed: "2026-05-01" }),
+        pt({ start: "2025-01-01", end: "2025-12-31", val: 100, filed: "2026-02-20" }),
+      ],
+    });
+    const r = getConcept(f, "revenue", { period: { start: "2025-01-01", end: "2025-12-31" } });
+    expect(r.ok && r.value.data.value).toBe(101);
+    const reversed = facts({
+      Revenues: [
+        pt({ start: "2025-01-01", end: "2025-12-31", val: 100, filed: "2026-02-20" }),
+        pt({ start: "2024-12-30", end: "2025-12-28", val: 101, form: "10-Q", filed: "2026-05-01" }),
+      ],
+    });
+    const same = getConcept(reversed, "revenue", { period: { start: "2025-01-01", end: "2025-12-31" } });
+    expect(same.ok && same.value.data.value).toBe(101);
+  });
+
+  it("accepts a 16-week fourth quarter under a Q duration hint", () => {
+    // Costco's 12-12-12-16 calendar: the fourth quarter runs 111 days
+    // end-to-start (118 in a 53-week year), which the old 70–110 band rejected.
+    const f = facts({
+      Revenues: [pt({ start: "2025-05-12", end: "2025-08-31", val: 86_156_000_000, form: "10-K", filed: "2025-10-15" })],
+    });
+    const r = getConcept(f, "revenue", { period: { end: "2025-08-31", durationHint: "Q" } });
+    expect(r.ok && r.value.data.value).toBe(86_156_000_000);
+    // A full year still does not pass as a quarter.
+    const fy = facts({
+      Revenues: [pt({ start: "2024-09-02", end: "2025-08-31", val: 275_235_000_000, form: "10-K", filed: "2025-10-15" })],
+    });
+    expect(getConcept(fy, "revenue", { period: { end: "2025-08-31", durationHint: "Q" } }).ok).toBe(false);
+  });
+});
 
 describe("computed fallback compatibility", () => {
   const sumChain = [{ kind: "sum" as const, tags: ["PartA", "PartB"], label: "A+B" }];
@@ -537,10 +610,29 @@ describe("bank revenue chain (L1)", () => {
       NoninterestIncome: [pt({ ...FY2025, val: 1_200_000_000 })],
     });
 
-  it("default chain resolves the RFC fee-only figure (the L1 pitfall)", () => {
+  it("default chain resolves the `Revenues` total when the bank tags one", () => {
     const r = getConcept(regionalBank(), "revenue", { period: FY2025 });
-    expect(r.ok && r.value.data.value).toBe(1_200_000_000);
-    expect(r.ok && r.value.data.tag).toBe("RevenueFromContractWithCustomerExcludingAssessedTax");
+    expect(r.ok && r.value.data.value).toBe(5_000_000_000);
+    expect(r.ok && r.value.data.tag).toBe("Revenues");
+  });
+
+  it("default chain resolves the RFC fee-only figure when the bank tags no total-revenue element (the L1 pitfall)", () => {
+    // This is the bank the routing exists for: fee revenue under ASC 606,
+    // net interest income and noninterest income tagged, no `Revenues` and no
+    // `RevenuesNetOfInterestExpense`. The default chain reaches the ASC-606
+    // element before the computed identity; the bank chain reaches the
+    // identity first.
+    const feeTaggingBank = facts({
+      RevenueFromContractWithCustomerExcludingAssessedTax: [pt({ ...FY2025, val: 1_200_000_000 })],
+      InterestIncomeExpenseNet: [pt({ ...FY2025, val: 3_800_000_000 })],
+      NoninterestIncome: [pt({ ...FY2025, val: 1_200_000_000 })],
+    });
+    const plain = getConcept(feeTaggingBank, "revenue", { period: FY2025 });
+    expect(plain.ok && plain.value.data.value).toBe(1_200_000_000);
+    expect(plain.ok && plain.value.data.tag).toBe("RevenueFromContractWithCustomerExcludingAssessedTax");
+    const routed = getConcept(feeTaggingBank, "revenue", { period: FY2025, bankRevenue: true });
+    expect(routed.ok && routed.value.data.value).toBe(5_000_000_000);
+    expect(routed.ok && routed.value.data.computed).toBe(true);
   });
 
   it("bankRevenue mode prefers the total-revenue Revenues tag over RFC fee-only", () => {

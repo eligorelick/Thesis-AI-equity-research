@@ -23,9 +23,10 @@
 
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 import Database from "better-sqlite3";
+
+import { isEntryPoint } from "./lib/entrypoint.mjs";
 
 import { MAINTENANCE_LAST_RUN_KEY } from "@/cache/maintenance";
 import { defaultDbPath } from "@/db/paths";
@@ -182,10 +183,7 @@ export function runSettingsResetCli(
   return summary;
 }
 
-const invokedPath = process.argv[1]
-  ? pathToFileURL(path.resolve(process.argv[1])).href
-  : undefined;
-if (invokedPath === import.meta.url) {
+if (isEntryPoint(import.meta.url)) {
   try {
     runSettingsResetCli(process.argv.slice(2));
   } catch (error) {

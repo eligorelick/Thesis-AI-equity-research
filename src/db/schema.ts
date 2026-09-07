@@ -1,5 +1,5 @@
 /**
- * Drizzle SQLite schema for Thesis (the application contract §2: watchlist, reports, api_cache,
+ * Drizzle SQLite schema for Thesis (watchlist, reports, api_cache,
  * jobs, cost_log — plus settings).
  *
  * Conventions:
@@ -36,7 +36,7 @@ export const watchlist = sqliteTable("watchlist", {
   addedAt: text("addedAt").notNull(),
 });
 
-/** Saved reports, versioned by row (the application contract §8 report history + diffing). */
+/** Saved reports, versioned by row (report history + diffing). */
 export const reports = sqliteTable(
   "reports",
   {
@@ -61,7 +61,7 @@ export const reports = sqliteTable(
 );
 
 /**
- * API response cache (the provider data contract §3): serve-stale-while-revalidate with
+ * API response cache : serve-stale-while-revalidate with
  * per-endpoint TTLs. `cacheKey` = provider|endpoint|stable-sorted-params-JSON
  * (see src/cache/apiCache.ts buildCacheKey).
  */
@@ -91,7 +91,7 @@ export const apiCache = sqliteTable(
   ],
 );
 
-/** Async report-generation jobs (the application contract §2: fetch → ... → verify, SSE-streamed). */
+/** Async report-generation jobs (fetch → ... → verify, SSE-streamed). */
 export const jobs = sqliteTable(
   "jobs",
   {
@@ -224,7 +224,7 @@ export const jobLlmLeases = sqliteTable(
   ],
 );
 
-/** Per-LLM-call cost ledger (the application contract §2/§5; fallback events logged here too). */
+/** Per-LLM-call cost ledger (fallback events logged here too). */
 export const costLog = sqliteTable(
   "cost_log",
   {
@@ -232,7 +232,13 @@ export const costLog = sqliteTable(
     jobId: text("jobId").notNull(),
     /** Job generation billed by this row; legacy rows belong to generation zero. */
     runGeneration: integer("runGeneration").notNull().default(0),
-    /** Durable paid-attempt identity. Nullable until Task-19-era writers are upgraded. */
+    /**
+     * Durable paid-attempt identity of a REAL settlement. NULL on rows written
+     * before the column existed and, deliberately, on presumed rows (DECISIONS
+     * D-07), which carry their attempt in `presumedAttemptId` so the
+     * billed-attempt unique index stays free for a late settlement; the resume
+     * reader also keeps presumed rows out of artifact pairing by this NULL.
+     */
     attemptId: text("attemptId"),
     /** Pipeline step attribution (e.g. "bull" | "bear" | "synthesize" | "verify"). */
     step: text("step").notNull(),
@@ -243,7 +249,7 @@ export const costLog = sqliteTable(
     cacheWriteTokens: integer("cacheWriteTokens").notNull().default(0),
     webSearches: integer("webSearches").notNull().default(0),
     costUsd: real("costUsd").notNull().default(0),
-    /** 1 when a server-side refusal fallback model handled the request (SPEC §5). */
+    /** 1 when a server-side refusal fallback model handled the request. */
     fallbackUsed: integer("fallbackUsed", { mode: "boolean" }).notNull().default(false),
     /**
      * "actual": settled from a provider `usage` block.

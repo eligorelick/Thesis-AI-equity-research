@@ -1,5 +1,5 @@
 /**
- * Watchlist sidebar (the application contract §8): the app-wide left rail. Renders, per watched
+ * Watchlist sidebar : the app-wide left rail. Renders, per watched
  * symbol, a dense scannable row — ticker (mono, links to /company/SYMBOL),
  * price + colored change%, a compact grade chip strip (n/a when no report),
  * last-report date, and next-earnings date. An AddTicker control sits at the
@@ -102,13 +102,21 @@ function WatchRow({ row, active }: { row: WatchlistRowView; active: boolean }) {
     change === null ? "text-faint" : change >= 0 ? "text-pos" : "text-neg";
 
   return (
-    <li className="group border-b border-edge last:border-b-0">
+    <li className="group relative border-b border-edge last:border-b-0">
+      {/* The remove control is a SIBLING of the row link, not a child: HTML
+          forbids interactive content inside <a>, and a nested button folded
+          "remove AAPL" into the link's accessible name (audit 2026-09-06,
+          F218). It sits at the top-right, over the padding the price row
+          leaves for it. */}
+      <div className="absolute right-3 top-2">
+        <RemoveButton symbol={row.symbol} />
+      </div>
       <Link
         href={`/company/${encodeURIComponent(row.symbol)}`}
         className="block px-3 py-2 hover:bg-raised"
       >
-        {/* ticker + price + remove */}
-        <div className="flex items-baseline justify-between gap-2">
+        {/* ticker + price */}
+        <div className="flex items-baseline justify-between gap-2 pr-5">
           <div className="flex min-w-0 items-baseline gap-2">
             <span className="mono text-[13px] font-semibold tracking-[0.06em] text-fg">
               {row.symbol}
@@ -117,12 +125,9 @@ function WatchRow({ row, active }: { row: WatchlistRowView; active: boolean }) {
               <span className="truncate text-[10px] text-faint">{row.companyName}</span>
             ) : null}
           </div>
-          <div className="flex shrink-0 items-baseline gap-1.5">
-            <span className="mono text-[12px] text-fg">
-              {price === null ? "—" : fmtPrice(price)}
-            </span>
-            <RemoveButton symbol={row.symbol} />
-          </div>
+          <span className="mono shrink-0 text-[12px] text-fg">
+            {price === null ? "—" : fmtPrice(price)}
+          </span>
         </div>
 
         {/* change% + grade strip */}

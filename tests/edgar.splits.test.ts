@@ -286,4 +286,62 @@ describe("discoverStockSplits — repeated and near-duplicate tags", () => {
     expect(splits.events.map((e) => [e.date, e.ratio])).toEqual([["2024-06-07", 10]]);
     expect(splits.notes[1]!.text).toMatch(/tagged again for 2025-01-26 .* is the 10-for-1 split of 2024-06-07 restated/);
   });
+
+  it("reads a ratio re-tagged in every later filing as the same split, however long the chain runs", () => {
+    // 2026-01-25 is 597 days after the split: outside the repeat window
+    // measured from the EVENT, inside it measured from the previous re-tag.
+    // Measured from the event, the sixth re-tag was applied as a second
+    // 10-for-1 and every pre-2024 share count was scaled by 100.
+    const retags = ["2024-10-27", "2025-01-26", "2025-04-27", "2025-07-27", "2025-10-26", "2026-01-25"];
+    const splits = discoverStockSplits(
+      split2024({
+        [SPLIT_RATIO_TAG]: [
+          { end: "2024-06-07", val: 10, filed: "2024-08-28", form: "10-Q" },
+          ...retags.map((end) => ({ end, val: 10, filed: end, form: "10-Q" })),
+        ],
+      }),
+    );
+    expect(splits.events.map((e) => [e.date, e.ratio])).toEqual([["2024-06-07", 10]]);
+    expect(splits.factorFor("2024-02-21")).toBe(10);
+    expect(splits.notes.filter((n) => /tagged again/.test(n.text))).toHaveLength(retags.length);
+  });
+
+  it("does not apply the same ratio again, years later, when no restated share count can tell a further split from a stale re-tag", () => {
+    const splits = discoverStockSplits(
+      split2024({
+        [SPLIT_RATIO_TAG]: [
+          { end: "2024-06-07", val: 10, filed: "2024-08-28", form: "10-Q" },
+          { end: "2026-06-07", val: 10, filed: "2026-08-28", form: "10-Q" },
+        ],
+      }),
+    );
+    expect(splits.events.map((e) => [e.date, e.ratio])).toEqual([["2024-06-07", 10]]);
+    expect(splits.factorFor("2024-02-21")).toBe(10);
+    const later = splits.notes.find((n) => n.date === "2026-06-07")!;
+    expect(later.severity).toBe("warn");
+    expect(later.text).toMatch(/NOT applied: the same ratio was already applied for 2024-06-07/);
+  });
+
+  it("applies a second split of the same ratio when restated share counts confirm it", () => {
+    const FY2025 = { start: "2024-01-29", end: "2025-01-26" };
+    const splits = discoverStockSplits(
+      split2024({
+        [SPLIT_RATIO_TAG]: [
+          { end: "2024-06-07", val: 10, filed: "2024-08-28", form: "10-Q" },
+          { end: "2026-06-07", val: 10, filed: "2026-08-28", form: "10-Q" },
+        ],
+        [DILUTED]: [
+          { ...FY2024, val: 2_494_000_000, filed: "2024-02-21" },
+          { ...FY2024, val: 24_940_000_000, filed: "2025-02-26" },
+          { ...FY2025, val: 24_500_000_000, filed: "2025-02-26" },
+          { ...FY2025, val: 245_000_000_000, filed: "2026-08-28", form: "10-Q" },
+        ],
+      }),
+    );
+    expect(splits.events.map((e) => [e.date, e.ratio, e.evidence])).toEqual([
+      ["2024-06-07", 10, 10],
+      ["2026-06-07", 10, 10],
+    ]);
+    expect(splits.factorFor("2024-02-21")).toBe(100);
+  });
 });

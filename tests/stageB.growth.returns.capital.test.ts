@@ -2,7 +2,8 @@
  * Stage B tests — growth, returns (WACC/ROIC/DuPont), cash & capital.
  * Pure, no network. Anchors from the valuation methodology:
  * - SPREADS_2026_01 (Damodaran Jan-2026 ratings.html, verbatim)
- * - Blume example: beta 1.42 → 1.2814 → 1.28; Re ≈ 10.19% at rf 4.48 / ERP 4.46
+ * - Blume example: beta 1.42 → 2/3·1.42 + 1/3 = 1.28; Re ≈ 10.19% at rf 4.48 / ERP 4.46
+ *   (audit 2026-09-06: one Blume constant pair, owned by betaEstimate.ts)
  */
 
 import { describe, expect, it } from "vitest";
@@ -303,7 +304,7 @@ describe("computeWacc — happy path and research anchor", () => {
     expect(res.clampsApplied).toHaveLength(0);
   });
 
-  it("matches the research assumption-block anchor: beta 1.42 → 1.2814, Re ≈ 10.19%", () => {
+  it("matches the research assumption-block anchor: beta 1.42 → 1.28, Re ≈ 10.19%", () => {
     const res = computeWacc({
       ...waccBase,
       beta: 1.42,
@@ -311,9 +312,11 @@ describe("computeWacc — happy path and research anchor", () => {
       erpPct: 4.46,
       totalDebtAvg: 0,
     });
-    expect(res.betaAdjusted).toBeCloseTo(1.2814, 10);
-    expect(res.betaFinal).toBeCloseTo(1.2814, 10);
-    expect(res.costOfEquityPct).toBeCloseTo(10.195044, 6); // research renders "10.19%"
+    // The Bloomberg 2/3–1/3 weighting (RESEARCH §7.1), shared with betaEstimate.ts.
+    expect(res.betaAdjusted).toBeCloseTo((2 / 3) * 1.42 + 1 / 3, 10);
+    expect(res.betaFinal).toBeCloseTo(1.28, 10);
+    expect(res.costOfEquityPct).toBeCloseTo(4.48 + 1.28 * 4.46, 6); // 10.1888 — research renders "10.19%"
+    expect(res.notes.join(" ")).toContain("0.667·raw + 0.333");
   });
 });
 
@@ -358,14 +361,14 @@ describe("computeWacc — beta pipeline", () => {
 
   it("clamps the Blume-adjusted beta at the 0.6 floor", () => {
     const res = computeWacc({ ...waccBase, beta: 0.2 });
-    expect(res.betaAdjusted).toBeCloseTo(0.464, 10);
+    expect(res.betaAdjusted).toBeCloseTo((2 / 3) * 0.2 + 1 / 3, 10);
     expect(res.betaFinal).toBe(0.6);
     expect(res.clampsApplied.join(" ")).toContain("beta clamped");
   });
 
   it("clamps the Blume-adjusted beta at the 2.0 ceiling", () => {
     const res = computeWacc({ ...waccBase, beta: 3.5 });
-    expect(res.betaAdjusted).toBeCloseTo(2.675, 10);
+    expect(res.betaAdjusted).toBeCloseTo((2 / 3) * 3.5 + 1 / 3, 10);
     expect(res.betaFinal).toBe(2.0);
     expect(res.clampsApplied.join(" ")).toContain("beta clamped");
   });
@@ -403,7 +406,7 @@ describe("computeWacc — ERP fallback", () => {
 describe("computeWacc — clamp boundaries", () => {
   it("cost-of-equity floor rf + 2.5 fires", () => {
     const res = computeWacc({ ...waccBase, beta: 0.2, erpPct: 3, totalDebtAvg: 0 });
-    // beta 0.2 → Blume 0.464 → clamp 0.6; Re raw = 4 + 0.6·3 = 5.8 < 6.5
+    // beta 0.2 → Blume 0.4667 → clamp 0.6; Re raw = 4 + 0.6·3 = 5.8 < 6.5
     expect(res.costOfEquityPct).toBeCloseTo(6.5, 12);
     expect(res.clampsApplied.join(" ")).toContain("cost of equity clamped");
   });
@@ -1321,5 +1324,268 @@ describe("waccByFiscalYear — each year's own risk-free rate", () => {
     expect(res.points).toHaveLength(0);
     expect(res.basis).toContain("per-fiscal-year WACC unavailable");
     expect(res.missing[0].date).toBe("2024-12-31");
+  });
+});
+
+// ===========================================================================
+// Audit 2026-09-06 — returns: lease basis, restatements, financial-route
+// severities, the de-minimis note, coverage/debt basis labels
+// ===========================================================================
+
+describe("audit 2026-09-06 — invested capital and the WACC debt leg share the EV bridge's lease basis", () => {
+  // A discount retailer: EBIT 2,000 after operating-lease cost, equity 7,000,
+  // financial debt 7,000, operating-lease liability 11,000 inside totalDebt,
+  // cash 500, tax 25%.
+  const leaseBalance: ReturnsBalanceRow[] = [
+    {
+      date: "2025-12-31",
+      totalDebt: 18_000,
+      operatingLeaseLiability: 11_000,
+      totalStockholdersEquity: 7_000,
+      cashAndCashEquivalents: 500,
+      shortTermInvestments: 0,
+      totalAssets: 30_000,
+    },
+    {
+      date: "2024-12-31",
+      totalDebt: 18_000,
+      operatingLeaseLiability: 11_000,
+      totalStockholdersEquity: 7_000,
+      cashAndCashEquivalents: 500,
+      shortTermInvestments: 0,
+      totalAssets: 30_000,
+    },
+  ];
+  const leaseIncome: ReturnsIncomeRow[] = [
+    { date: "2025-12-31", operatingIncome: 2_000, incomeBeforeTax: 1_600, incomeTaxExpense: 400, netIncome: 1_200 },
+    { date: "2024-12-31", operatingIncome: 2_000, incomeBeforeTax: 1_600, incomeTaxExpense: 400, netIncome: 1_200 },
+  ];
+
+  it("excludes the operating-lease liability from invested capital by default and says so on the year", () => {
+    const r = computeRoic(leaseIncome, leaseBalance);
+    const latest = r.series[r.series.length - 1]!;
+    // IC = (18,000 − 11,000) + 7,000 − 500 = 13,500; NOPAT = 2,000 × 0.75 = 1,500 → 11.1%,
+    // not the 6.1% a lease-inclusive base of 24,500 produced.
+    expect(latest.investedCapitalAvg).toBeCloseTo(13_500, 9);
+    expect(latest.roicPct).toBeCloseTo((1_500 / 13_500) * 100, 9);
+    expect(latest.notes.join(" ")).toMatch(/operating-lease liability 11000 excluded from invested capital/);
+  });
+
+  it("keeps the lease inside invested capital when the EV bridge keeps it (THESIS_EV_INCLUDE_LEASES=1)", () => {
+    const r = computeRoic(leaseIncome, leaseBalance, { includeOperatingLeases: true });
+    const latest = r.series[r.series.length - 1]!;
+    expect(latest.investedCapitalAvg).toBeCloseTo(24_500, 9);
+    expect(r.notes.join(" ")).toMatch(/kept inside invested capital \(THESIS_EV_INCLUDE_LEASES=1\)/);
+  });
+
+  it("says when no balance sheet discloses the split, and states the basis that actually ran", () => {
+    const r = computeRoic(roicIncome, roicBalance);
+    const notes = r.notes.join(" ");
+    expect(notes).toMatch(/no balance sheet discloses an operating-lease liability/);
+    expect(notes).toMatch(/cash \+ short-term investments/);
+    expect(notes).toMatch(/NET_DEBT_V1/);
+    expect(notes).not.toMatch(/§2\.2/);
+  });
+});
+
+describe("audit 2026-09-06 — restated fiscal years are collapsed before any returns series is built", () => {
+  const filed = <T extends object>(row: T, date: string) => ({ ...row, acceptedDate: date, filingDate: date });
+  const income: ReturnsIncomeRow[] = [
+    filed({ date: "2025-12-31", revenue: 1000, operatingIncome: 200, incomeBeforeTax: 100, incomeTaxExpense: 20, netIncome: 80 }, "2026-02-01"),
+    // FY2024 twice: the SUPERSEDED original first, then the restatement.
+    filed({ date: "2024-12-31", revenue: 900, operatingIncome: 180, incomeBeforeTax: 90, incomeTaxExpense: 18, netIncome: 72 }, "2025-02-01"),
+    filed({ date: "2024-12-31", revenue: 850, operatingIncome: 150, incomeBeforeTax: 75, incomeTaxExpense: 15, netIncome: 60 }, "2025-06-01"),
+  ];
+  const balance: ReturnsBalanceRow[] = [
+    filed({ date: "2025-12-31", totalDebt: 300, totalStockholdersEquity: 700, cashAndCashEquivalents: 100, shortTermInvestments: 0, totalAssets: 2200 }, "2026-02-01"),
+    filed({ date: "2024-12-31", totalDebt: 300, totalStockholdersEquity: 500, cashAndCashEquivalents: 0, shortTermInvestments: 0, totalAssets: 1800 }, "2025-02-01"),
+    filed({ date: "2024-12-31", totalDebt: 300, totalStockholdersEquity: 550, cashAndCashEquivalents: 0, shortTermInvestments: 0, totalAssets: 1900 }, "2025-06-01"),
+  ];
+
+  it("ROIC: one entry per fiscal year, computed on the restated rows", () => {
+    const r = computeRoic(income, balance);
+    expect(r.series.map((y) => y.date)).toEqual(["2024-12-31", "2025-12-31"]);
+    // FY2024 on the RESTATED row: NOPAT 150 × (1 − 15/75) = 120; single-period IC 300 + 550 − 0 = 850.
+    expect(r.series[0]!.nopat).toBeCloseTo(120, 9);
+    expect(r.series[0]!.investedCapitalAvg).toBeCloseTo(850, 9);
+    expect(r.notes.join(" ")).toMatch(/1 restated\/duplicate annual income period collapsed/);
+    expect(r.notes.join(" ")).toMatch(/1 restated\/duplicate annual balance period collapsed/);
+  });
+
+  it("DuPont: one entry per fiscal year", () => {
+    const r = computeDupont(income, balance);
+    expect(r.series.map((y) => y.date)).toEqual(["2024-12-31", "2025-12-31"]);
+  });
+
+  it("rejects an ambiguous duplicate as a gap rather than guessing", () => {
+    const r = computeRoic(
+      [income[0]!, { ...income[1]!, acceptedDate: null, filingDate: null }, { ...income[2]!, acceptedDate: null, filingDate: null }],
+      balance,
+    );
+    expect(r.series.map((y) => y.date)).toEqual(["2025-12-31"]);
+    expect(r.gaps.some((g) => g.field === "returns.roic.income.period" && /ambiguous/.test(g.reason))).toBe(true);
+  });
+});
+
+describe("audit 2026-09-06 — WACC-only shortfalls on a financial route are disclosed, not blocking", () => {
+  it("files the tax-shield, weights and currency gaps as warnings on a financial route and critical elsewhere", () => {
+    const noTax = { ...waccBase, effectiveTaxRate: null };
+    expect(computeWacc(noTax).gaps.find((g) => g.field === "returns.wacc.effectiveTaxRate")?.severity).toBe("critical");
+    const finTax = computeWacc({ ...noTax, isFinancial: true }).gaps.find((g) => g.field === "returns.wacc.effectiveTaxRate");
+    expect(finTax?.severity).toBe("warn");
+    expect(finTax?.reason).toMatch(/financial route does not consume a WACC/);
+
+    const noMcap = { ...waccBase, marketCap: null };
+    expect(computeWacc(noMcap).gaps.find((g) => g.field === "returns.wacc.weights")?.severity).toBe("critical");
+    expect(computeWacc({ ...noMcap, isFinancial: true }).gaps.find((g) => g.field === "returns.wacc.weights")?.severity).toBe("warn");
+
+    const adr = { ...waccBase, reportedCurrency: "EUR", quoteCurrency: "USD" };
+    expect(computeWacc(adr).gaps.find((g) => g.field === "returns.wacc.weights.currency")?.severity).toBe("critical");
+    expect(computeWacc({ ...adr, isFinancial: true }).gaps.find((g) => g.field === "returns.wacc.weights.currency")?.severity).toBe("warn");
+    // The cost of equity — what the financial route DOES consume — is still reported.
+    expect(computeWacc({ ...adr, isFinancial: true }).costOfEquityPct).toBeCloseTo(9, 9);
+  });
+});
+
+describe("audit 2026-09-06 — WACC notes state the method and the basis that actually ran", () => {
+  it("de-minimis note names whether a synthetic rating ran", () => {
+    // Debt 100 < 2% of 100,000 → the effective rate is noise; ICR 50/5 = 10 → synthetic.
+    const ran = computeWacc({ ...waccBase, totalAssets: 100_000 });
+    expect(ran.costOfDebtMethod).toBe("synthetic");
+    expect(ran.notes.join(" ")).toMatch(/effective Rd treated as noise; synthetic rating used/);
+
+    // Interest reported as 0 and no prior year: nothing to score coverage on.
+    const none = computeWacc({ ...waccBase, totalAssets: 100_000, interestExpenseTtm: 0 });
+    expect(none.costOfDebtMethod).toBe("unavailable");
+    expect(none.notes.join(" ")).not.toMatch(/synthetic rating used/);
+    expect(none.notes.join(" ")).toMatch(/no synthetic rating computable/);
+  });
+
+  it("prints the caller's coverage basis and debt basis instead of assuming TTM and fiscal-year-end debt", () => {
+    const debtBasis =
+      "book totalDebt less the operating-lease liability (the EV bridge's lease rule), average of the quarter-end balances at the TTM window's ends (2026-06-30 and 2025-06-30)";
+    const res = computeWacc({
+      ...waccBase,
+      interestExpenseTtm: 40, // 40% effective → outside the band → synthetic on ICR 50/40
+      currentCoverageBasis: "FY 2025-12-31 annual statement",
+      totalDebtBasis: debtBasis,
+    });
+    expect(res.costOfDebtMethod).toBe("synthetic");
+    expect(res.notes.join(" ")).toMatch(/on FY 2025-12-31 annual statement/);
+    expect(res.notes.join(" ")).toMatch(/debt weight uses book totalDebt less the operating-lease liability/);
+    expect(res.debtBasis).toBe(debtBasis);
+    const disclosure = waccDisclosure(res);
+    expect(disclosure.weights.basis).toMatch(/quarter-end balances at the TTM window's ends/);
+    expect(disclosure.summary).toMatch(/quarter-end balances at the TTM window's ends/);
+  });
+
+  it("keeps the default labels when the caller states no basis", () => {
+    const res = computeWacc({ ...waccBase, interestExpenseTtm: 40 });
+    expect(res.notes.join(" ")).toMatch(/on TTM \(/);
+    expect(res.notes.join(" ")).toMatch(/debt weight uses book totalDebt \(avg of latest two periods\)/);
+    expect(waccDisclosure(res).weights.basis).toMatch(/average of the latest two balance sheets/);
+  });
+});
+
+// ===========================================================================
+// Audit 2026-09-06 — capital: restatements, tolerant joins, the EBITDA gate,
+// the ADR/currency guard on the buyback proxy
+// ===========================================================================
+
+describe("audit 2026-09-06 — computeCapital", () => {
+  const filed = <T extends object>(row: T, date: string) => ({ ...row, acceptedDate: date, filingDate: date });
+
+  it("collapses a restated fiscal year: buyback dollars counted once, one entry per date", () => {
+    const cfRows: CapitalCashFlowRow[] = [
+      filed(capCashflow[0]!, "2026-02-01"),
+      filed(capCashflow[1]!, "2025-02-01"), // FY2024 superseded: repurchased 0
+      filed({ ...capCashflow[1]!, commonStockRepurchased: -80 }, "2025-06-01"), // FY2024 restated
+    ];
+    const incRows = capIncome.map((r, i) => filed(r, i === 0 ? "2026-02-01" : "2025-06-01"));
+    const res = computeCapital(incRows, cfRows, capBalance, capMcapHistory, { price: 20 });
+    expect(res.buybackPriceAnalysis.totalRepurchased).toBe(180);
+    expect(res.fcf.series.map((r) => r.date)).toEqual(["2024-12-31", "2025-12-31"]);
+    expect(res.capexIntensity.series.map((r) => r.date)).toEqual(["2024-12-31", "2025-12-31"]);
+    expect(res.notes.join(" ")).toMatch(/1 restated\/duplicate annual cashFlow period collapsed/);
+  });
+
+  it("joins cash-flow rows to income rows within ±5 days instead of by exact string", () => {
+    const drifted = capCashflow.map((r) => ({ ...r, date: r.date === "2025-12-31" ? "2025-12-30" : r.date }));
+    const res = computeCapital(capIncome, drifted, capBalance, capMcapHistory, { price: 20 });
+    const latest = res.capexIntensity.series[res.capexIntensity.series.length - 1]!;
+    expect(latest.capexToRevenuePct).toBeCloseTo(15, 9); // 30 / 200
+    expect(res.sbc.pctOfRevenue).toBeCloseTo(5, 9); // 10 / 200
+    expect(res.netDebtToEbitda.note).toMatch(/operatingIncome \+ cash-flow D&A/);
+    expect(res.buybackPriceAnalysis.avgPricePaidProxy).not.toBeNull();
+    expect(res.gaps.some((g) => g.field === "capital.statementJoin")).toBe(false);
+  });
+
+  it("names a cash-flow year with no income counterpart once", () => {
+    const orphan = capCashflow.map((r) => ({ ...r, date: r.date === "2025-12-31" ? "2025-11-30" : r.date }));
+    const res = computeCapital(capIncome, orphan, capBalance, capMcapHistory, { price: 20 });
+    const joins = res.gaps.filter((g) => g.field === "capital.statementJoin");
+    expect(joins).toHaveLength(1);
+    expect(joins[0]!.reason).toMatch(/2025-11-30/);
+  });
+
+  it("treats a zero cash-flow D&A as undisclosed for EBITDA and consults the vendor field", () => {
+    const zeroDa = capCashflow.map((r, i) => (i === 0 ? { ...r, depreciationAndAmortization: 0 } : r));
+    const inc = capIncome.map((r, i) => (i === 0 ? { ...r, ebitda: 250 } : r));
+    const res = computeCapital(inc, zeroDa, capBalance, capMcapHistory, { price: 20 });
+    expect(res.netDebtToEbitda.ebitda).toBe(250);
+    expect(res.netDebtToEbitda.note).toMatch(/vendor ebitda field used \(cash-flow D&A 0 treated as undisclosed\)/);
+  });
+
+  it("suppresses the buyback price proxy for an ADR or a currency mismatch, and says why", () => {
+    const adr = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20 }, {
+      reportedCurrency: "USD",
+      quoteCurrency: "USD",
+      isAdr: true,
+    });
+    expect(adr.buybackPriceAnalysis.totalRepurchased).toBe(100);
+    expect(adr.buybackPriceAnalysis.avgPricePaidProxy).toBeNull();
+    expect(adr.buybackPriceAnalysis.premiumDiscountPct).toBeNull();
+    expect(adr.buybackPriceAnalysis.years[0]!.note).toMatch(/price proxy suppressed: the instrument is an ADR/);
+    expect(adr.gaps.some((g) => g.field === "capital.buybackPriceAnalysis" && /ADS/.test(g.reason))).toBe(true);
+
+    const fx = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20 }, {
+      reportedCurrency: "TWD",
+      quoteCurrency: "USD",
+    });
+    expect(fx.buybackPriceAnalysis.avgPricePaidProxy).toBeNull();
+    expect(fx.notes.join(" ")).toMatch(/repurchases are in TWD while the market cap and quote are in USD/);
+
+    // Same currency, ordinary listing: the proxy is published as before.
+    const plain = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20 }, {
+      reportedCurrency: "USD",
+      quoteCurrency: "usd",
+      isAdr: false,
+    });
+    expect(plain.buybackPriceAnalysis.avgPricePaidProxy).not.toBeNull();
+  });
+});
+
+describe("audit 2026-09-06 — a transition period is compounded over its real span", () => {
+  it("does not annualise a six-month stub as a full year", () => {
+    const points = [
+      { date: "2024-12-31", value: 60 }, // six-month transition period after a June year end
+      { date: "2024-06-30", value: 100 },
+      { date: "2023-06-30", value: 90 },
+    ];
+    const one = cagrForWindow(points, 1);
+    expect(one.actualYears).toBeCloseTo(0.5, 1);
+    expect(one.note).toMatch(/irregular fiscal spacing/);
+    expect(one.cagrPct).toBeCloseTo((Math.pow(0.6, 1 / one.actualYears!) - 1) * 100, 9);
+  });
+
+  it("still treats a 52/53-week calendar as regular", () => {
+    const points = [
+      { date: "2025-02-01", value: 121 },
+      { date: "2024-02-03", value: 110 },
+      { date: "2023-01-28", value: 100 },
+    ];
+    const one = cagrForWindow(points, 1);
+    expect(one.actualYears).toBe(1);
+    expect(one.note ?? "").not.toMatch(/irregular/);
   });
 });

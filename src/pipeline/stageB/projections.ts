@@ -1,5 +1,5 @@
 /**
- * Stage B — weighted forward projections (the application contract §4; feature 1.1.0).
+ * Stage B — weighted forward projections.
  *
  * PURE, deterministic TypeScript: no network, no DB, no LLM. Projects revenue,
  * operating margin, free cash flow (unlevered/FCFF) and diluted EPS forward, in
@@ -19,7 +19,7 @@
  * EPS is the one series not directly a DcfYearRow: it is derived from the
  * forward operating path (EBIT × historical net-income/EBIT ratio) over a
  * buyback-trended diluted-share count, and is disclosed + skipped when those
- * inputs are missing (the application contract §1 rule #4).
+ * inputs are missing.
  *
  * Every forward number is a TracedNumber sourced "computed.projections.<metric>.
  * <scenario>" (an ESTIMATE by construction — it never comes from model memory).
@@ -131,8 +131,10 @@ export interface ProjectionsInputs {
   /** The valuation result — projections only run on the general DCF route. */
   valuation: ValuationResult;
   waccPct: number | null;
-  netDebt: number | null;
-  /** Latest diluted share count (for the EPS series). */
+  /**
+   * Latest diluted share count (for the EPS series). The per-share DCF bridge
+   * for the bull/bear re-runs is `valuation.dcf.bridge`, the base result's own.
+   */
   dilutedShares: number | null;
   /** Annual income history (any order). */
   incomeHistory: ProjectionIncomeRow[];
@@ -233,6 +235,8 @@ export interface ScenarioDispersion {
   marginDefaulted: boolean;
   /** True when any measured series contained a nonconsecutive fiscal interval. */
   irregularHistory: boolean;
+  /** How many adjacent revenue pairs were skipped as off-annual (disclosed, never suppressing). */
+  skippedPairs: number;
 }
 
 /**
@@ -296,6 +300,7 @@ export function scenarioDispersion(incomeHistory: ProjectionIncomeRow[]): Scenar
     // and the reader should know some pairs were excluded — but it no longer
     // suppresses the estimate built from the pairs that were usable.
     irregularHistory: growth.skippedPairs > 0,
+    skippedPairs: growth.skippedPairs,
   };
 }
 
@@ -352,7 +357,7 @@ function notApplicable(reason: string): Projections {
 export function computeProjections(inputs: ProjectionsInputs): Projections {
   const { valuation, asOf, currency } = inputs;
 
-  // Projections run only on the general FCFF-DCF route (SPEC §6: financials /
+  // Projections run only on the general FCFF-DCF route (docs/METHODOLOGY.md "Financial-company routes": financials /
   // REITs use book-value models; pre-revenue uses runway framing).
   if (valuation.kind !== "dcf") {
     return notApplicable(
@@ -385,10 +390,13 @@ export function computeProjections(inputs: ProjectionsInputs): Projections {
   const sigmaGrowth = rawDisp.sigmaGrowth;
   const sigmaMargin = rawDisp.sigmaMargin;
   if (rawDisp.irregularHistory) {
+    // Off-annual pairs are skipped individually since 2026-08-31; the fan IS
+    // built from the surviving annual steps, and the disclosure says so (it
+    // used to claim the fan was suppressed beside four published series).
     disclosures.push({
       field: "projections.dispersion.spacing",
-      reason: "nonconsecutive fiscal history rejected from dispersion estimates — scenario fan suppressed",
-      severity: "warn",
+      reason: `${rawDisp.skippedPairs} nonconsecutive fiscal interval${rawDisp.skippedPairs === 1 ? "" : "s"} excluded from the growth and correlation dispersion — the scenario fan is built from the remaining annual steps`,
+      severity: "info",
     });
   }
   if (rawDisp.growthMarginCorrelation === null) {
@@ -406,8 +414,10 @@ export function computeProjections(inputs: ProjectionsInputs): Projections {
   const runScenario = (growthDelta: number, marginDelta: number): DcfYearRow[] =>
     runDcf(perturbScenarioAssumptions(assumptions, growthDelta, marginDelta), {
       waccPct: inputs.waccPct as number,
-      netDebt: inputs.netDebt,
-      dilutedShares: inputs.dilutedShares,
+      netDebt: baseDcf.bridge.netDebt,
+      dilutedShares: baseDcf.bridge.dilutedShares,
+      minorityInterest: baseDcf.bridge.minorityInterest,
+      preferred: baseDcf.bridge.preferred,
     }).yearRows;
 
   const bullRows = runScenario(dg, dm);
@@ -424,8 +434,19 @@ export function computeProjections(inputs: ProjectionsInputs): Projections {
   const lastFy = Number.parseInt(baseDate.slice(0, 4), 10);
   const fwdPeriod = (t: number): string => (Number.isFinite(lastFy) ? `FY${lastFy + t}` : `Y+${t}`);
 
+  // The anchor is described from the growth-anchor record, never from a
+  // substring of the basis string: that string names every method including
+  // the unavailable ones, so "analyst consensus" was printed for every
+  // keyless report that had no analyst estimates at all.
+  const anchorMethods = assumptions.growthAnchor.methods.filter((m) => m.valuePct !== null);
+  const anchorText =
+    `${round2(assumptions.growthAnchor.pointPct)}%, the median of ${anchorMethods.length} method${anchorMethods.length === 1 ? "" : "s"}` +
+    ` (${anchorMethods.map((m) => m.name).join(", ")})` +
+    (assumptions.growthAnchor.unavailable.length > 0
+      ? `; unavailable: ${assumptions.growthAnchor.unavailable.join(", ")}`
+      : "");
   const assumptionLines: string[] = [
-    `Base path is the DCF forward trajectory (near-term anchored to ${assumptions.growthPath.basis.includes("analyst") ? "analyst consensus" : "historical CAGR"}, fading to ${round2(assumptions.terminal.gTermPct.value)}% terminal growth).`,
+    `Base path is the DCF forward trajectory (near-term growth ${anchorText}, fading to ${round2(assumptions.terminal.gTermPct.value)}% terminal growth).`,
     `Bull/bear shift growth by ±${round2(dg)}pp and margin by ±${round2(dm)}pp; the margin shift is sample σ scaled by the company's observed growth/margin correlation (${rawDisp.growthMarginCorrelation === null ? "unavailable" : round2(rawDisp.growthMarginCorrelation)}).`,
     `Weighted path uses the coarse unbacktested display prior ${PROJECTION_WEIGHTS.bull}·bull + ${PROJECTION_WEIGHTS.base}·base + ${PROJECTION_WEIGHTS.bear}·bear; these are not empirical probabilities.`,
   ];

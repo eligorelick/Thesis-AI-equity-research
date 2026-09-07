@@ -3,7 +3,7 @@
  * send the declared User-Agent (403 without it on both www.sec.gov and
  * data.sec.gov, live-verified).
  *
- * Conventions per the provider data contract §1.2:
+ * Conventions:
  *   - Hosts: www.sec.gov (Archives, tickers), data.sec.gov (submissions/XBRL),
  *     efts.sec.gov (full-text search).
  *   - Client-side throttle ≤5 req/s with jitter.
@@ -153,7 +153,7 @@ export function archivesUrl(cik: number | string, accession: string, filename = 
   return filename === "" ? base : `${base}/${filename}`;
 }
 
-/** Machine-readable exhibit-type map source (research gap-edgar-exhibit-and-banks.md §1.2). */
+/** Machine-readable exhibit-type map source (from the exhibit-type research note). */
 export function indexHeadersUrl(cik: number | string, accession: string): string {
   return archivesUrl(cik, accession, `${dashAccession(accession)}-index-headers.html`);
 }

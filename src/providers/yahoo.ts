@@ -78,7 +78,21 @@ export interface YahooMeta {
   regularMarketVolume: number | null;
   fiftyTwoWeekHigh: number | null;
   fiftyTwoWeekLow: number | null;
+  /**
+   * Yahoo's `chartPreviousClose`: the close BEFORE THE CHART RANGE, not the
+   * prior session's. Under `range=5d` it is the close five sessions back
+   * (verified live 2026-09-06: AAPL gave 319.7 under 5d and 309.38 under 1mo
+   * while the true prior-session close was 328.21). Kept under its real name;
+   * the quote uses {@link YahooMeta.previousSessionClose}.
+   */
   chartPreviousClose: number | null;
+  /**
+   * The last settled close before the session `regularMarketTime` falls in,
+   * read from the chart's own bars: the penultimate close when the latest bar
+   * is the current session, else the last close. Null when the chart carries
+   * no earlier bar (a first day of trading).
+   */
+  previousSessionClose: number | null;
 }
 
 export interface YahooClientConfig {
@@ -198,6 +212,33 @@ function num(value: number | null | undefined): number | null {
   return typeof value === "number" ? value : null;
 }
 
+/**
+ * The prior session's close from the chart bars (see
+ * {@link YahooMeta.previousSessionClose}); `chartPreviousClose` is anchored to
+ * the range and gave a five-session move labelled as the daily change (audit
+ * 2026-09-06, F225).
+ */
+function previousSessionClose(result: ChartResult): number | null {
+  const stamps = result.timestamp ?? [];
+  const closes = result.indicators.quote[0]?.close ?? [];
+  const m = result.meta;
+  const currentSession =
+    typeof m.regularMarketTime === "number" ? sessionDate(m.regularMarketTime, m.gmtoffset) : null;
+  let end = stamps.length;
+  if (
+    currentSession !== null &&
+    stamps.length > 0 &&
+    sessionDate(stamps[stamps.length - 1]!, m.gmtoffset) === currentSession
+  ) {
+    end = stamps.length - 1;
+  }
+  for (let i = end - 1; i >= 0; i -= 1) {
+    const close = closes[i];
+    if (typeof close === "number") return close;
+  }
+  return null;
+}
+
 function metaOf(result: ChartResult): YahooMeta {
   const m = result.meta;
   return {
@@ -220,6 +261,7 @@ function metaOf(result: ChartResult): YahooMeta {
     fiftyTwoWeekHigh: num(m.fiftyTwoWeekHigh),
     fiftyTwoWeekLow: num(m.fiftyTwoWeekLow),
     chartPreviousClose: num(m.chartPreviousClose),
+    previousSessionClose: previousSessionClose(result),
   };
 }
 
@@ -368,8 +410,14 @@ export class YahooClient {
       const low = quote?.low?.[i] ?? null;
       const close = quote?.close?.[i] ?? null;
       const volume = quote?.volume?.[i] ?? null;
-      // A halted or not-yet-settled session comes back as nulls. Emitting it as
-      // a zero bar would poison every return, drawdown and moving average.
+      // A halted session comes back as nulls. Emitting it as a zero bar would
+      // poison every return, drawdown and moving average. An IN-PROGRESS
+      // session during market hours is reported to arrive as an ordinary bar
+      // (timestamp at the last trade, partial volume); it is kept here and
+      // dated to its session, which the FMP path's "no bar until the close"
+      // premise does not share — a limitation of the unofficial endpoint,
+      // recorded rather than filtered because it could not be verified
+      // against a live session during the 2026-09-06 audit (F228).
       if (close === null || open === null || high === null || low === null) continue;
       rows.push({
         symbol: ySymbol,
@@ -447,7 +495,10 @@ export class YahooClient {
         metaRes.value.endpoint,
       ]);
     }
-    const prev = m.chartPreviousClose;
+    // The prior SESSION's close from the chart bars; `chartPreviousClose` is
+    // the close before the chart RANGE and is only the right figure when the
+    // chart holds a single bar (a first trading day), which is the fallback.
+    const prev = m.previousSessionClose ?? m.chartPreviousClose;
     // The FMP row types spell "the vendor did not send this" as `undefined`,
     // and consumers are written against that. A `null` in a declared numeric
     // field would survive an `!== undefined` guard and then arithmetic would

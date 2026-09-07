@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+
+import { isEntryPoint } from "./lib/entrypoint.mjs";
 
 export const APPROVED_VERSIONS = {
   next: ["16.3.0"],
@@ -262,10 +263,9 @@ export function main(argv = process.argv.slice(2)) {
   process.stdout.write("dependency shape verified\n");
 }
 
-const invokedPath = process.argv[1]
-  ? pathToFileURL(path.resolve(process.argv[1])).href
-  : undefined;
-if (invokedPath === import.meta.url) {
+// A release gate must never silently no-op: the entry test resolves symlinks
+// the way Node resolves them for `import.meta.url` (scripts/lib/entrypoint.mjs).
+if (isEntryPoint(import.meta.url)) {
   try {
     main();
   } catch (error) {

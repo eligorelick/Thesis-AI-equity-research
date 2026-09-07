@@ -89,7 +89,10 @@ export function sanitizeLegacyEntityConflicts(
   }
 
   const issues: EntityIssue[] = [];
-  let withheldCount = 0;
+  // Distinct withheld STATEMENTS. The verification log carries a copy of every
+  // checked sentence, so counting each withheld string once per occurrence
+  // reported "2 legacy statements" for one (audit 2026-09-06, F194).
+  const withheldTexts = new Set<string>();
   let invalidCitationCount = 0;
   const walk = (value: unknown): unknown => {
     if (typeof value === "string") {
@@ -98,13 +101,22 @@ export function sanitizeLegacyEntityConflicts(
       );
       if (found.length === 0) return value;
       issues.push(...found);
-      withheldCount += 1;
+      withheldTexts.add(value);
       const canonical = [...new Set(found.map((issue) => issue.canonicalName))].join(", ");
       const codes = [...new Set(found.map((issue) => issue.code))].join(", ");
       return `Legacy statement withheld: unresolved ${codes} conflict. Canonical primary-source reference: ${canonical}. See the missing-data manifest.`;
     }
     if (Array.isArray(value)) return value.map(walk);
     if (value === null || typeof value !== "object") return value;
+    // The judge's own entity-conflict record is the RESOLUTION of a conflict,
+    // not a claim: its bull/bear views restate the disputed association by
+    // design (prompts.ts: "every supplied deterministic entity conflict must
+    // appear as kind=entity"). Withholding it (before the 2026-09-06 audit,
+    // F184) blocked every clean report whose judge had done exactly that.
+    const entry = value as { kind?: unknown; judgeResolution?: unknown };
+    if (entry.kind === "entity" && typeof entry.judgeResolution === "string") {
+      return structuredClone(value);
+    }
     const carrier = value as CitationCarrier;
     const hasCitationShape = typeof carrier.source === "string" && "asOf" in value;
     const normalizedSource = hasCitationShape ? citationSourceId(carrier) : null;
@@ -136,6 +148,7 @@ export function sanitizeLegacyEntityConflicts(
   };
 
   const safe = walk(cloned) as Report;
+  const withheldCount = withheldTexts.size;
   if (withheldCount > 0 || invalidCitationCount > 0) {
     safe.appendix.missingData = [
       ...(withheldCount > 0 ? [{

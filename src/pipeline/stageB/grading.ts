@@ -1,5 +1,5 @@
 /**
- * Stage B — deterministic aspect scoring (the application contract §4; feature 1.1.0).
+ * Stage B — deterministic aspect scoring.
  *
  * PURE, deterministic TypeScript: no network, no DB, no LLM. Turns the other
  * Stage B module outputs into a 0–100 sub-score per aspect plus a route-adjusted
@@ -15,7 +15,7 @@
  *  - Aspect score = weighted mean over the signals that had data. Missing signals
  *    are dropped and `dataCompleteness` (0–1) records the fraction of intended
  *    weight actually available — an aspect scored on half its inputs is disclosed,
- *    not silently defaulted (the application contract §1 rule #4).
+ *    not silently defaulted.
  *  - Sector routing is honoured: a signal whose metric is in `metricPolicy.suppress`
  *    is skipped (a bank is never scored on Altman/Beneish/DCF/net-debt). An aspect
  *    with no valid signals for the route is `notApplicable`, not a forced grade.
@@ -109,6 +109,15 @@ interface Signal {
   band: readonly BandPoint[];
   /** metricPolicy.suppress key that removes this signal for the route, if any. */
   suppressedBy?: string;
+  /**
+   * Share of the signal's evidence that was actually observed (0–1, default
+   * 1). The signal's CONTRIBUTION and its used weight are scaled by it while
+   * `totalWeight` keeps the full weight, so a reduced battery (a Piotroski
+   * score over 2 of 9 signals) moves the aspect less than a full one and the
+   * shortfall shows in `dataCompleteness` instead of hiding behind a full
+   * weight.
+   */
+  evidenceFraction?: number;
 }
 
 const round2 = (v: number): number => Math.round(v * 100) / 100;
@@ -168,8 +177,10 @@ function scoreAspect(
     applicableWeight += s.weight;
     if (!isNum(s.raw)) continue;
     const sub = bandScore(s.raw, s.band);
-    acc += sub * s.weight;
-    usedWeight += s.weight;
+    const evidence = Math.min(1, Math.max(0, s.evidenceFraction ?? 1));
+    if (evidence === 0) continue;
+    acc += sub * s.weight * evidence;
+    usedWeight += s.weight * evidence;
     drivers.push({
       value: round2(s.raw),
       unit: s.unit,
@@ -677,8 +688,24 @@ export function computeScores(inputs: ScoringInputs): Scoring {
     "quality",
     [
       { name: "roicVsWaccSpread", raw: roicVsWacc.spreadPctPts, unit: "pp", weight: 0.35, band: SPREAD_BAND, suppressedBy: "roicVsWacc" },
-      { name: "piotroskiF", raw: piotroskiFrac, unit: "frac", weight: 0.22, band: PIOTROSKI_BAND, suppressedBy: "piotroskiF" },
-      { name: "altmanZ", raw: forensics.altman && isNum(forensics.altman.score) ? normalizeAltmanForBanding(forensics.altman.score, forensics.altman.variant) : null, unit: "z", weight: 0.16, band: ALTMAN_Z_BAND, suppressedBy: "altmanZ" },
+      // A reduced battery (7 signals on two years, 3-5 on a financial route)
+      // is banded on the same fraction but carries only its share of the
+      // evidence: two coin-flip signals must not swing the aspect the way nine
+      // do (forensics.ts, METHODOLOGY "Piotroski F, on three scales").
+      {
+        name: "piotroskiF",
+        raw: piotroskiFrac,
+        unit: "frac",
+        weight: 0.22,
+        band: PIOTROSKI_BAND,
+        suppressedBy: "piotroskiF",
+        evidenceFraction: forensics.piotroski && forensics.piotroski.outOf > 0 ? Math.min(1, forensics.piotroski.outOf / 9) : 1,
+      },
+      // The driver is the score AFTER the affine map onto the original
+      // variant's 1.81/2.99 zones (normalizeAltmanForBanding) — the number the
+      // band was calibrated to, not the Z the forensic table prints — and its
+      // name says so.
+      { name: "altmanZOriginalScale", raw: forensics.altman && isNum(forensics.altman.score) ? normalizeAltmanForBanding(forensics.altman.score, forensics.altman.variant) : null, unit: "z", weight: 0.16, band: ALTMAN_Z_BAND, suppressedBy: "altmanZ" },
       // suppressedBy, like its three sibling accounting-integrity signals: the
       // Sloan accrual ratio is scaled by net operating assets, and NOA subtracts
       // (totalLiabilities − totalDebt) — for a bank that is deposits, its raw
@@ -691,7 +718,7 @@ export function computeScores(inputs: ScoringInputs): Scoring {
     ],
     weights.quality,
     inputs.asOf,
-    "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, plus Altman, accruals and Beneish where the route computes them — all three are withheld for financial classifications, whose balance sheets those models were not estimated on).",
+    "Value creation (ROIC−WACC, dropped where the route suppresses it — financial routes are costed on equity alone) and accounting integrity (Piotroski, weighted by the share of its nine signals that were evaluable; plus Altman — banded after an affine map of the variant's zones onto the original 1.81/2.99 scale, which is the value the altmanZOriginalScale driver carries — accruals and Beneish where the route computes them — all three are withheld for financial classifications, whose balance sheets those models were not estimated on).",
     policy,
   );
 

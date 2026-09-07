@@ -10,7 +10,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildDataBundle } from "@/pipeline/dataBundle";
+import { buildDataBundle, planLimitManifestEntry } from "@/pipeline/dataBundle";
 import {
   createEdgarClient,
   type EdgarTransport,
@@ -108,6 +108,37 @@ function noNetworkConfigs(): { fred: FredConfig; finnhub: FinnhubConfig; finra: 
 
 afterEach(() => {
   resetFmpPlanLimits();
+});
+
+describe("the plan-limit manifest entry", () => {
+  const planLimit = { requested: 10, applied: 5 };
+
+  it("calls the history truncated while nothing has filled it", () => {
+    const entry = planLimitManifestEntry("statements.incomeAnnual", {
+      endpoint: "/stable/income-statement?symbol=X&limit=5",
+      data: { planLimit, rows: new Array(5) },
+    });
+    expect(entry).toMatchObject({ field: "fmp.planLimit(statements.incomeAnnual)", severity: "info", expected: true });
+    expect(entry.reason).toBe(
+      "FMP subscription caps 'limit' at 5; served 5 of 10 requested periods, so history depth is truncated",
+    );
+  });
+
+  /**
+   * After the keyless backfill has appended the older periods from EDGAR the
+   * member is no longer short; the entry used to still say "truncated" beside
+   * the backfill entry that said it was filled.
+   */
+  it("says the depth was backfilled once the member's endpoint carries the older periods", () => {
+    const entry = planLimitManifestEntry("statements.incomeAnnual", {
+      endpoint: "/stable/income-statement?symbol=X&limit=5 + companyfacts→income-statement(annual) (older periods)",
+      data: { planLimit, rows: new Array(10) },
+    });
+    expect(entry.reason).toBe(
+      "FMP subscription caps 'limit' at 5; 5 of 10 requested periods arrived from FMP and the older periods were backfilled from SEC EDGAR companyfacts (10 period(s) held now) — see the matching backfill entry",
+    );
+    expect(entry.reason).not.toMatch(/truncated/);
+  });
 });
 
 describe("buildDataBundle under an FMP subscription limit cap", () => {

@@ -192,9 +192,10 @@ export function SettingsPageView({
             <div className="flex flex-col">
               {settings.capabilities.fixtureMode && (
                 <div className="mb-2 border border-warn/40 bg-warn/10 px-2 py-1.5 text-[11px] text-warn">
-                  synthetic fixture mode — no FMP key and no current market data.
-                  Use fictional ticker <Link href="/company/DEMO" className="font-semibold underline">DEMO</Link>{" "}
-                  or DBNK; unsupported symbols become disclosed gaps.
+                  synthetic fixture mode — no FMP key, so FMP-backed fields are gaps and no current market data
+                  is shown here; real US filers are served live from SEC EDGAR and Yahoo once EDGAR_CONTACT is set.
+                  Fictional ticker <Link href="/company/DEMO" className="font-semibold underline">DEMO</Link>{" "}
+                  and DBNK are synthetic fixtures; unsupported symbols become disclosed gaps.
                 </div>
               )}
               <CapabilityRow name="FMP_API_KEY" ok={settings.capabilities.hasFmpKey} />

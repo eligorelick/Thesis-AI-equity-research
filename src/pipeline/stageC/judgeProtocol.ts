@@ -156,6 +156,15 @@ export function oppositeOrder(order: JudgeOrder): JudgeOrder {
 export const ANALYST_CASE_CHAR_CAP = 24_000;
 
 /**
+ * Floor on the per-claim text budget of the shortening stage. The truncation
+ * marker alone is ~60 characters; a floor of 40 (before the 2026-09-06 audit,
+ * F164) left every claim as a marker and nothing else — the thesis included —
+ * and a case whose bulk sat OUTSIDE the claim texts (sources, price target)
+ * was made longer by the "shortening". A claim keeps at least this much.
+ */
+export const MIN_CLAIM_TEXT_CHARS = 160;
+
+/**
  * Order in which whole entries are dropped when a case exceeds the cap: least
  * load-bearing first. `thesis` is last and never emptied — a case with no thesis
  * is not a case. `priceTarget` is never dropped (it is one small object and the
@@ -248,19 +257,41 @@ export function capAnalystCase(
   if (serializedLength(value) > capChars) {
     // Every remaining claim shares what is left of the budget equally. The
     // structural overhead (keys, sources, price target) is what serializing
-    // costs regardless, so measure it once and divide the remainder.
+    // costs regardless, so measure it once and divide the remainder. A claim
+    // is only ever made SHORTER: truncateWithDisclosure honours its budget
+    // even when the budget is smaller than the marker, and a text already
+    // inside the budget is left alone. Lengths are measured SERIALIZED — the
+    // marker's line breaks escape to two characters each — and the budget is
+    // tightened from the original texts (never re-truncating a marker) until
+    // the case fits or the per-claim floor is reached.
     const texts = claimTexts(value);
-    const textChars = texts.reduce((sum, claim) => sum + claim.text.length, 0);
+    const originals = texts.map((claim) => claim.text);
+    const serializedTextLength = (text: string): number => JSON.stringify(text).length - 2;
+    const textChars = originals.reduce((sum, text) => sum + serializedTextLength(text), 0);
     const overhead = serializedLength(value) - textChars;
-    const budgetPerText = Math.max(
-      40,
+    let budgetPerText = Math.max(
+      MIN_CLAIM_TEXT_CHARS,
       Math.floor((capChars - overhead) / Math.max(1, texts.length)),
     );
-    for (const claim of texts) {
-      if (claim.text.length <= budgetPerText) continue;
-      claim.text = truncateWithDisclosure(claim.text, budgetPerText).text;
-      textsTruncated += 1;
+    const shortened = new Set<number>();
+    for (let attempt = 0; attempt < 8; attempt++) {
+      texts.forEach((claim, index) => {
+        const original = originals[index];
+        if (serializedTextLength(original) <= budgetPerText) {
+          claim.text = original;
+          return;
+        }
+        claim.text = truncateWithDisclosure(original, budgetPerText).text;
+        shortened.add(index);
+      });
+      const over = serializedLength(value) - capChars;
+      if (over <= 0 || budgetPerText <= MIN_CLAIM_TEXT_CHARS) break;
+      budgetPerText = Math.max(
+        MIN_CLAIM_TEXT_CHARS,
+        budgetPerText - Math.ceil(over / Math.max(1, shortened.size)) - 1,
+      );
     }
+    textsTruncated = shortened.size;
   }
 
   const chars = serializedLength(value);
@@ -272,6 +303,15 @@ export function capAnalystCase(
   }
   if (textsTruncated > 0) {
     parts.push(`${textsTruncated} claim text${textsTruncated === 1 ? " was" : "s were"} shortened`);
+  }
+  if (chars > capChars) {
+    // The two stages bound the claim TEXTS, down to a per-claim floor; bulk
+    // that sits outside them (source lists, the price-target object) is not
+    // trimmed, because dropping a claim's sources would leave a claim with no
+    // citation. Say so rather than let the presentation imply the cap held.
+    parts.push(
+      `the case is still ${chars - capChars} chars over the cap: what remains is the ${MIN_CLAIM_TEXT_CHARS}-char per-claim floor or bulk outside the claim texts (sources, price target), neither of which is trimmed further`,
+    );
   }
   parts.push(`the judge received ${chars} chars`);
   return {
@@ -636,17 +676,28 @@ export function buildJudgeProtocolNote(
   const first = protocol.order === "bull-first" ? "bull" : "bear";
   const second = protocol.order === "bull-first" ? "bear" : "bull";
   const { bull, bear } = protocol;
+  // A pinned order (THESIS_JUDGE_ORDER=bull-first / bear-first) is FIXED to one
+  // side by configuration and the seed played no part; saying it was "drawn
+  // from seed" and "not fixed to one side" was false in exactly that setting
+  // (audit 2026-09-06, F174). The sentence is a function of the setting, as
+  // the judge's own order sentence already is.
+  const pinned = protocol.setting === "bull-first" || protocol.setting === "bear-first";
+  const orderOrigin = pinned
+    ? `${JUDGE_ORDER_ENV_KEY}=${protocol.setting} pins that order, so first position was fixed to the ${first} side by configuration; seed ${judgeSeedFingerprint(protocol.seed)} is recorded but was not drawn`
+    : `${JUDGE_ORDER_ENV_KEY}=${protocol.setting}, drawn from seed ${judgeSeedFingerprint(protocol.seed)}, so first position was not fixed to one side`;
   const sentences =
     bull === null || bear === null
       ? [
           // A RECOVERED protocol: reconstructed, not recorded. Saying "the judge
           // read X first" outright would assert something this process did not
           // observe, so the sentence says where the order came from instead.
-          `The judge output was replayed from a durable artifact, so this protocol was reconstructed rather than recorded: with ${JUDGE_ORDER_ENV_KEY}=${protocol.setting} and seed ${judgeSeedFingerprint(protocol.seed)} the ${first} case is drawn to be read first and the ${second} case second.`,
+          pinned
+            ? `The judge output was replayed from a durable artifact, so this protocol was reconstructed rather than recorded: ${JUDGE_ORDER_ENV_KEY}=${protocol.setting} pins the ${first} case to be read first and the ${second} case second.`
+            : `The judge output was replayed from a durable artifact, so this protocol was reconstructed rather than recorded: with ${JUDGE_ORDER_ENV_KEY}=${protocol.setting} and seed ${judgeSeedFingerprint(protocol.seed)} the ${first} case is drawn to be read first and the ${second} case second.`,
           "Neither case's length against the shared cap, whether either was truncated, nor either analyst's self-assessed case strength was recoverable, so none of them is reported here.",
         ]
       : [
-          `The judge read the ${first} case first and the ${second} case second (${JUDGE_ORDER_ENV_KEY}=${protocol.setting}, drawn from seed ${judgeSeedFingerprint(protocol.seed)}), so first position was not fixed to one side.`,
+          `The judge read the ${first} case first and the ${second} case second (${orderOrigin}).`,
           `Both cases were capped at ${bull.capChars} characters: the bull case ran ${bull.chars}${bull.truncated ? " after truncation" : ""} and the bear case ${bear.chars}${bear.truncated ? " after truncation" : ""}, and the judge was told both lengths.`,
           `Self-assessed case strength (1-5, the analyst's own score for its own side): bull ${bull.caseStrength ?? "not supplied"}, bear ${bear.caseStrength ?? "not supplied"}.`,
         ];

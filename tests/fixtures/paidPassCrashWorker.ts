@@ -4,6 +4,10 @@
  * survive. It posts the claim and lease identities back so the surviving
  * process can assert on them; nothing else is shared but the SQLite file.
  */
+// A worker thread has its own `fetch`; the suite's no-live-network guard is
+// installed here explicitly (audit 2026-09-06, F204).
+import "../setup/noLiveNetwork";
+
 import { parentPort, workerData } from "node:worker_threads";
 
 import { createDatabase } from "@/db";

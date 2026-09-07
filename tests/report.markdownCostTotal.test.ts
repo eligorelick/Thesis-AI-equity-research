@@ -53,6 +53,19 @@ describe("Markdown cost appendix", () => {
     expect(section).not.toContain("$0.0000\n");
   });
 
+  it("shows the same figure in the header as in its own appendix total", () => {
+    // meta.costUsd is stored at four decimals; the rows are settled at
+    // micro-USD. The header used to print the former and disagree with the
+    // Total printed beside the rows (and with the print/live headers).
+    const report = reportWithCosts([0.001234, 0.002345]);
+    report.meta.costUsd = 0.0036;
+    const markdown = reportToMarkdown(report);
+    const expected = formatCostUsd(roundedDisplayedCostTotal([0.001234, 0.002345]));
+    expect(markdown).toContain(`| Cost (USD) | ${expected} |`);
+    expect(costSection(markdown)).toContain(`Total: **${expected}**`);
+    expect(markdown).not.toContain("| Cost (USD) | $0.003600 |");
+  });
+
   it("renders costs identically to the shared formatter", () => {
     const section = costSection(reportToMarkdown(reportWithCosts([1.234567, 2])));
 

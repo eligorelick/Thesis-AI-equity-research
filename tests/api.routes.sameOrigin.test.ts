@@ -405,6 +405,37 @@ describe("assertSameOrigin", () => {
 });
 
 describe("assertAllowedHost", () => {
+  it("folds an explicit default port in THESIS_ALLOWED_HOST, as browsers omit it from Host", () => {
+    process.env.THESIS_ALLOWED_HOST = "192.168.1.50:80";
+    try {
+      // The browser sends the bare host over http …
+      expect(assertAllowedHost(guardReq({ host: "192.168.1.50" }, "http://192.168.1.50/api/report"))).toBeNull();
+      // … and a client that does write the default port is the same authority.
+      expect(assertAllowedHost(guardReq({ host: "192.168.1.50:80" }, "http://192.168.1.50/api/report"))).toBeNull();
+      // Only the DEFAULT port folds: 80 is not 443, and https has its own.
+      expect(assertAllowedHost(guardReq({ host: "192.168.1.50" }, "https://192.168.1.50/api/report"))?.status).toBe(403);
+      // The whole same-origin gate accepts the request the browser actually sends.
+      expect(
+        assertSameOrigin(
+          guardReq(
+            { host: "192.168.1.50", origin: "http://192.168.1.50", "sec-fetch-site": "same-origin" },
+            "http://192.168.1.50/api/report",
+          ),
+        ),
+      ).toBeNull();
+    } finally {
+      delete process.env.THESIS_ALLOWED_HOST;
+    }
+    // A non-default port still needs an exact match.
+    process.env.THESIS_ALLOWED_HOST = "192.168.1.50:8080";
+    try {
+      expect(assertAllowedHost(guardReq({ host: "192.168.1.50" }, "http://192.168.1.50/api/report"))?.status).toBe(403);
+      expect(assertAllowedHost(guardReq({ host: "192.168.1.50:8080" }, "http://192.168.1.50:8080/api/report"))).toBeNull();
+    } finally {
+      delete process.env.THESIS_ALLOWED_HOST;
+    }
+  });
+
   it("matches an exact configured IDNA hostname and port after canonicalization", () => {
     process.env.THESIS_ALLOWED_HOST = "b\u00fccher.local:3000";
     expect(

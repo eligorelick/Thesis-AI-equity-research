@@ -12,14 +12,18 @@
  *    figure must match the sign of that figure, when the figure is a signed
  *    change rather than a level. Only words whose sign is fixed by the word
  *    itself count; see {@link DIRECTION_WORDS}.
- *  - PERIOD: a period phrase that names a year ("in Q3 2025", "in FY2025") must
- *    name the period the cited record carries, under the SAME fiscal-spelling
- *    tolerance the citation check already uses ({@link periodsAgree}).
+ *  - PERIOD: a period phrase that names a year ("in FY2024", "in Q3 2024") must
+ *    name the year the cited record's period carries, under the SAME
+ *    fiscal-spelling tolerance the citation check already uses
+ *    ({@link periodsAgree}). The check compares YEARS: a bare quarter is not
+ *    checked (no fiscal calendar), and "Q3 2025" against a 2025-12-31 record
+ *    agrees — the quarter itself is never adjudicated.
  *  - UNIT: the unit token attached to the cited figure ("%", "bps", "billion")
  *    must belong to the family the record's registry unit can express.
- *  - NAMED INDIVIDUAL: a claim that names a person may cite filings, transcripts
- *    or registry figures — never a web-search result, never any other web
- *    citation (news, a press release), and never nothing.
+ *  - NAMED INDIVIDUAL: a claim that names a person may cite filings, transcripts,
+ *    registry figures or the payload's own key-executive / insider-trade rows —
+ *    never a web-search result, never any other web citation (news, a press
+ *    release), and never nothing.
  *
  * DESIGN RULE — precision over recall. Every check first has to LOCATE the cited
  * figure inside the sentence (a number in the text whose magnitude, after any
@@ -85,6 +89,13 @@ export interface ConsistencyInput {
   fetchedUrls: ReadonlySet<string>;
   /** Person names known from the payload and from the report's own exec cards. */
   personNames: readonly string[];
+  /**
+   * Organisation names the report may mention — the issuer and its peers.
+   * An honorific-plus-name match that sits inside one of these ("Dr Pepper"
+   * inside "Keurig Dr Pepper Inc.", "Dr. Reddy's" inside "Dr. Reddy's
+   * Laboratories") is a company, not a person (audit 2026-09-06, F187).
+   */
+  organizationNames?: readonly string[];
 }
 
 export interface ConsistencyResult {
@@ -143,7 +154,13 @@ const SCALE_WORDS: Record<string, number> = {
   trillions: 1e12,
 };
 
-type UnitFamily = "percent" | "money" | "multiple" | "shares";
+/**
+ * `magnitude` is a bare scale word ("15.2 billion") with no unit token and no
+ * currency prefix: it names how big the number is, not what it counts, so it
+ * is admissible wherever a money OR a share figure is (audit 2026-09-06,
+ * F185: it was read as money and failed correct share-count prose).
+ */
+type UnitFamily = "percent" | "money" | "multiple" | "shares" | "magnitude";
 
 const PERCENT_TOKENS = new Set([
   "%",
@@ -309,9 +326,8 @@ function unitFamilyOf(parsed: ParsedNumber): UnitFamily | null {
     if (MONEY_TOKENS.has(token)) return "money";
   }
   if (parsed.hadCurrencyPrefix) return "money";
-  // A bare scale word ("416.2 billion") names a magnitude, not a unit — it only
-  // implies money when nothing else claimed the number.
-  if (parsed.scaleWord !== null) return "money";
+  // A bare scale word ("416.2 billion") names a magnitude, not a unit.
+  if (parsed.scaleWord !== null) return "magnitude";
   return null;
 }
 
@@ -325,7 +341,7 @@ function admissibleFamilies(unit: CanonicalUnit): ReadonlySet<UnitFamily> {
   switch (unit) {
     case "currency":
     case "currency-per-share":
-      return new Set<UnitFamily>(["money"]);
+      return new Set<UnitFamily>(["money", "magnitude"]);
     case "percent":
     case "percentage-points":
     case "percentage-points-per-year":
@@ -333,7 +349,7 @@ function admissibleFamilies(unit: CanonicalUnit): ReadonlySet<UnitFamily> {
     case "ratio":
       return new Set<UnitFamily>(["multiple"]);
     case "shares":
-      return new Set<UnitFamily>(["shares"]);
+      return new Set<UnitFamily>(["shares", "magnitude"]);
     default:
       return new Set<UnitFamily>();
   }
@@ -378,8 +394,13 @@ const DIRECTION_WORDS: Record<string, 1 | -1> = {
   lower: -1, down: -1,
 };
 
-/** Words between a direction verb and its number that break the delta reading. */
-const DELTA_BREAKERS = /\b(?:to|toward|towards|at|from|versus|vs|than|of|near|around|about)\b/i;
+/**
+ * Words — and punctuation — between a direction word and its number that break
+ * the delta reading. A comma, colon or dash makes the number an apposition
+ * ("growth came in lower, 6.4%": 6.4 is the level, "lower" is second-order),
+ * not the size of the move (audit 2026-09-06, F191).
+ */
+const DELTA_BREAKERS = /\b(?:to|toward|towards|at|from|versus|vs|than|of|near|around|about)\b|[,;:—–(]/i;
 
 const DIRECTION_WINDOW_CHARS = 40;
 
@@ -390,12 +411,27 @@ interface DirectionHit {
   end: number;
 }
 
+/**
+ * A capitalised direction word beside another capitalised word is part of a
+ * proper noun — "Advanced Micro Devices", "Rising Sun Holdings" — not a verb
+ * (audit 2026-09-06, F192). Sentence-initial "Advanced 5%…" is the price of
+ * that rule and is rare in analyst prose.
+ */
+function insideProperNoun(sentence: string, start: number, end: number): boolean {
+  if (!/^[A-Z]/.test(sentence.slice(start, end))) return false;
+  const before = /([A-Z][A-Za-z.&'’-]*)\s+$/.exec(sentence.slice(0, start));
+  const after = /^\s+([A-Z][A-Za-z.&'’-]*)/.exec(sentence.slice(end));
+  return before !== null || after !== null;
+}
+
 function findDirectionWords(sentence: string): DirectionHit[] {
   const hits: DirectionHit[] = [];
   for (const match of sentence.matchAll(/[A-Za-z]+/g)) {
     const word = match[0].toLowerCase();
     const polarity = DIRECTION_WORDS[word];
     if (polarity === undefined) continue;
+    const start = match.index ?? 0;
+    if (insideProperNoun(sentence, start, start + match[0].length)) continue;
     hits.push({
       word,
       polarity,
@@ -408,9 +444,17 @@ function findDirectionWords(sentence: string): DirectionHit[] {
 
 /**
  * A registry record is a SIGNED DELTA when its unit is a change in a percentage,
- * or when its identity names a change series. Level records (a revenue, a
+ * or when its own NAME names a change series. Level records (a revenue, a
  * margin, an ROIC) are excluded on purpose: "margin rose to 30%" says nothing
  * about the sign of 30, so there is no delta to disagree with.
+ *
+ * Only the record's final id segment — the slug of the figure's own label — is
+ * read. The section and origin are not: every margin LEVEL the payload
+ * registers lives under `computed.growth-margins.*` with origin
+ * `computed.growth.margins.*`, and reading "growth" there made "gross margin
+ * (latest)" a delta, so "gross margin climbed to 46%"-style prose about a
+ * positive level was checked as if 46 could be a decline (audit 2026-09-06,
+ * F186). A uniqueId suffix (".2") is ignored.
  *
  * `return`/`momentum` are NOT treated as deltas even though they can be
  * negative: `computed.returns.*` in this pipeline is ROIC/ROE (levels), and
@@ -423,9 +467,11 @@ export function isDeltaRecord(record: NumericProvenanceRecord): boolean {
   ) {
     return true;
   }
-  const identity = `${record.id} ${record.origin}`.toLowerCase();
-  return /(?:^|[.\-_ /])(growth|cagr|change|delta|chg|yoy|qoq|expansion|contraction|revision)/.test(
-    identity,
+  const segments = record.id.toLowerCase().split(".");
+  while (segments.length > 1 && /^\d+$/.test(segments[segments.length - 1])) segments.pop();
+  const name = segments[segments.length - 1] ?? "";
+  return /(?:^|-)(growth|cagr|change|delta|chg|yoy|qoq|expansion|contraction|revision)(?:-|$)/.test(
+    name,
   );
 }
 
@@ -537,14 +583,26 @@ export function collectPersonNames(sources: {
 }
 
 /** Does this sentence name an identifiable person? */
-export function namesIndividual(sentence: string, knownNames: readonly string[]): string | null {
+export function namesIndividual(
+  sentence: string,
+  knownNames: readonly string[],
+  organizationNames: readonly string[] = [],
+): string | null {
   for (const name of knownNames) {
     if (sentence.includes(name)) return name;
   }
+  const organisations = organizationNames.map((name) => name.toLowerCase());
+  const isOrganisation = (candidate: string): boolean => {
+    const lower = candidate.toLowerCase();
+    return organisations.some((org) => org.includes(lower));
+  };
   for (const pattern of PERSON_PATTERNS) {
     pattern.lastIndex = 0;
-    const match = pattern.exec(sentence);
-    if (match) return match[0].trim();
+    for (const match of sentence.matchAll(pattern)) {
+      const candidate = match[0].trim();
+      if (isOrganisation(candidate)) continue;
+      return candidate;
+    }
   }
   return null;
 }
@@ -565,6 +623,17 @@ export function isCredibilityPath(path: string): boolean {
 /** A citation-registry id that is a filing or an earnings-call transcript. */
 export function isFilingOrTranscriptSource(id: string): boolean {
   return /^edgar:/i.test(id) || /transcript/i.test(id);
+}
+
+/**
+ * The payload's own rows ABOUT people: key-executive and insider-trade notes,
+ * registered as citations under these tags (payload.ts). They are the rows the
+ * person names are harvested from, so a claim about a person that cites one
+ * cites the payload itself (audit 2026-09-06, F188: they were rejected as
+ * "neither a registry figure nor a filing or transcript").
+ */
+export function isPayloadPersonRowSource(id: string): boolean {
+  return /^fmp:(?:key-executives|insider-trades)$/i.test(id);
 }
 
 /* ------------------------------------------------------------------------ *
@@ -607,7 +676,7 @@ export function runConsistencyChecks(input: ConsistencyInput): ConsistencyResult
     };
 
     /* ---- named individuals (applies to every claim, cited or not) -------- */
-    const person = namesIndividual(sentence, input.personNames);
+    const person = namesIndividual(sentence, input.personNames, input.organizationNames ?? []);
     const credibility = isCredibilityPath(path);
     if (person !== null || credibility) {
       const citation = sourceId === null
@@ -625,7 +694,8 @@ export function runConsistencyChecks(input: ConsistencyInput): ConsistencyResult
       // a person.
       const allowed =
         record !== undefined ||
-        (citation !== undefined && isFilingOrTranscriptSource(citation.id));
+        (citation !== undefined &&
+          (isFilingOrTranscriptSource(citation.id) || isPayloadPersonRowSource(citation.id)));
       if (allowed) {
         namedIndividual.pass();
       } else {
@@ -647,7 +717,7 @@ export function runConsistencyChecks(input: ConsistencyInput): ConsistencyResult
           fail(
             "named-individual",
             "named-individual-unsourced",
-            `The claim names ${person ?? "an individual"} but cites ${sourceId === null ? "nothing" : `"${sourceId}"`}, which is neither a registry figure nor a filing or transcript.`,
+            `The claim names ${person ?? "an individual"} but cites ${sourceId === null ? "nothing" : `"${sourceId}"`}, which is neither a registry figure, a filing or transcript, nor a payload executive or insider row.`,
           );
         }
       }
@@ -657,6 +727,11 @@ export function runConsistencyChecks(input: ConsistencyInput): ConsistencyResult
     if (record === undefined) continue;
     const numbers = parseNumbers(sentence);
     const located = locateNumbers(numbers, record);
+    // The module's design rule: a check applies only to a sentence in which
+    // the cited figure was LOCATED. The period check used to run before this
+    // guard (audit 2026-09-06, F189), so a sentence that named a year around
+    // some other number was judged against a figure it never wrote.
+    if (located.length === 0) continue;
 
     /* ---- period ---------------------------------------------------------- */
     if (record.period !== null) {
@@ -674,8 +749,6 @@ export function runConsistencyChecks(input: ConsistencyInput): ConsistencyResult
         }
       }
     }
-
-    if (located.length === 0) continue;
 
     /* ---- unit ------------------------------------------------------------ */
     const admissible = admissibleFamilies(record.unit);
@@ -755,7 +828,7 @@ const CHECK_MANIFEST_TEXT: Record<keyof ConsistencyChecks, string> = {
   period: "sentence(s) naming a period the figure they cite is not registered for",
   unit: "sentence(s) writing a cited figure in a unit the registry does not record it in",
   namedIndividual:
-    "claim(s) about a named individual, or in the executive-credibility section, resting on a source outside filings and transcripts",
+    "claim(s) about a named individual, or in the executive-credibility section, resting on a source that is neither a filing, a transcript, a registry figure nor a payload executive or insider row",
 };
 
 /**

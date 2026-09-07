@@ -910,7 +910,7 @@ describe("computeTechnicals", () => {
     const res = computeTechnicals(rows, [], [], null);
     expect(res.smaCross.sma200).toBeNull();
     expect(res.read.keyLevels.sma200).toBeNull();
-    expect(res.gaps.some((g) => g.field === "technicals.sma200" && /recent-IPO/.test(g.reason))).toBe(true);
+    expect(res.gaps.some((g) => g.field === "technicals.sma200" && /insufficient price history/.test(g.reason))).toBe(true);
     expect(res.read.flags.some((f) => /SMA200 and long-window technicals unavailable/.test(f))).toBe(true);
     // SPY benchmark missing → warn gap; sector unrouted → info gap
     expect(res.gaps.some((g) => g.field === "technicals.relativeStrength.SPY" && g.severity === "warn")).toBe(true);
@@ -989,5 +989,26 @@ describe("shiftMonths", () => {
     expect(shiftMonths("2024-03-31", -1)).toBe("2024-02-29"); // leap year
     expect(shiftMonths("2026-01-15", -3)).toBe("2025-10-15");
     expect(shiftMonths("2026-06-30", -12)).toBe("2025-06-30");
+  });
+});
+
+describe("technicals — window labels never overstate the history (audit 2026-09-06)", () => {
+  it("labels a deep drawdown measured over three months as such, not as a 1y statistic", () => {
+    // 90 sessions: rise 100 → 200, then fall to ~92 (−54%). The same rule
+    // range52w applies: three months presented as a year is a false statement.
+    const closes = [
+      ...range(40, (i) => 100 + (i * 100) / 39),
+      ...range(50, (i) => 200 - (i + 1) * 2.16),
+    ];
+    const res = computeTechnicals(mkRows(closes), [], [], null);
+    const flag = res.read.flags.find((f) => /drawdown/i.test(f));
+    expect(flag).toMatch(/Max drawdown over the available 90-session history \(does not span 1y\)/);
+    expect(flag).not.toMatch(/Max 1y drawdown/);
+  });
+
+  it("never calls a short price history a recent IPO", () => {
+    const res = computeTechnicals(mkRows(range(150, (i) => 100 + i)), [], [], null);
+    expect([...res.read.flags, ...res.gaps.map((g) => g.reason)].join(" ")).not.toMatch(/IPO/);
+    expect(res.read.flags.some((f) => /insufficient price history/.test(f))).toBe(true);
   });
 });

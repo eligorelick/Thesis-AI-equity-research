@@ -15,7 +15,9 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+
+import { isEntryPoint } from "./lib/entrypoint.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REGISTRY_PATH = path.join(HERE, "..", "config", "models.json");
@@ -173,7 +175,7 @@ async function main(argv) {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntryPoint(import.meta.url)) {
   main(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (error) => {

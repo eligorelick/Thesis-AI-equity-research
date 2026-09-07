@@ -10,14 +10,15 @@
 
 > **Status: complete and merged.** Every finding below (H1-H6, M1-M13, L1-L3,
 > and the adjacent A1-A4 risks) was implemented on `codex/audit-remediation`,
-> whose head `7b2eb51` is an ancestor of `main`. Evidence is in
-> [`../audits/2026-08-07-remediation-verification.md`](../audits/2026-08-07-remediation-verification.md),
-> which records every row GREEN and two independent final reviews at
-> C0 / I0 / M0 — READY. Two residual limitations recorded there remain open and
-> are tracked in
-> [`../plans/2026-08-31-outstanding-audit-items.md`](../plans/2026-08-31-outstanding-audit-items.md):
-> the external audit report this design names is absent from the workspace, and
-> branch protection requiring `CI / full` is documented but still NOT OBSERVED.
+> whose head `7b2eb51` is an ancestor of `main`. The verification record of
+> 2026-08-07 (every row GREEN, two independent final reviews at C0 / I0 / M0 —
+> READY) and the outstanding-items plan of 2026-08-31 were retired by the
+> audit of 2026-09-06
+> ([`../audits/2026-09-06-full-codebase-audit.md`](../audits/2026-09-06-full-codebase-audit.md)),
+> which re-verified this work from the tree. Two residual limitations they
+> recorded stand: the external audit report this design names is absent from
+> the workspace, and branch protection requiring `CI / full` is documented but
+> NOT OBSERVED.
 
 ## Goal
 

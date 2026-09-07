@@ -1342,6 +1342,173 @@ describe("buildStatementsFromCompanyFacts — stock splits", () => {
   });
 });
 
+/* ---------------------------------------------------------------------------
+ * Audit 2026-09-06 — bank routing by industry, signed originals, own-period
+ * quarter labels, 16-week quarters, Form 40-F, the common-dividend chain.
+ * ------------------------------------------------------------------------- */
+
+describe("buildStatementsFromCompanyFacts — audit 2026-09-06", () => {
+  const FY = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-20" } as const;
+  const y = (val: number): Pt[] => [{ start: "2025-01-01", end: "2025-12-31", val, ...FY }];
+  const inst = (val: number): Pt[] => [{ end: "2025-12-31", val, ...FY }];
+
+  it("routes a bank that tags its fee revenue under ASC 606 through the bank chain only when told it is a bank", () => {
+    const feeTaggingBank = (): CompanyFacts =>
+      facts({
+        RevenueFromContractWithCustomerExcludingAssessedTax: y(1200), // fee revenue only
+        InterestIncomeExpenseNet: y(3800),
+        NoninterestIncome: y(1200),
+        NetIncomeLoss: y(900),
+        Assets: inst(50_000),
+      });
+    // The tagging heuristic cannot see this bank: it needs the ASC-606 tags absent.
+    const byTagging = buildStatementsFromCompanyFacts(feeTaggingBank(), { ...OPTS, symbol: "RGNL" });
+    expect(byTagging.incomeAnnual.rows[0]!.revenue).toBe(1200);
+    expect(byTagging.incomeAnnual.notes.some((n) => /bank revenue chain/.test(n))).toBe(false);
+    // The caller knows the SIC and says so.
+    const routed = buildStatementsFromCompanyFacts(feeTaggingBank(), { ...OPTS, symbol: "RGNL", bankRevenue: true });
+    expect(routed.incomeAnnual.rows[0]).toMatchObject({ revenue: 5000, netInterestIncome: 3800 });
+    expect(routed.incomeAnnual.notes.some((n) => /bank revenue chain \(the issuer is classified as a bank/.test(n))).toBe(true);
+    // And the option can also switch the chain OFF for a filer the heuristic would route.
+    const industrial = buildStatementsFromCompanyFacts(
+      facts({ InterestIncomeExpenseNet: y(90), NoninterestIncome: y(60), NetIncomeLoss: y(50), Assets: inst(4000) }),
+      { ...OPTS, symbol: "NOTABANK", bankRevenue: false },
+    );
+    expect(industrial.incomeAnnual.rows[0]!.revenue).toBeNull();
+  });
+
+  it("carries the superseded figure of a sign-flipped field on the row's own sign", () => {
+    const f = facts({ NetCashProvidedByUsedInOperatingActivities: y(400), PaymentsForRepurchaseOfCommonStock: y(90), Assets: inst(900) });
+    const buybacks = (f.facts["us-gaap"]!.PaymentsForRepurchaseOfCommonStock as { units: { USD: unknown[] } }).units.USD;
+    buybacks.push({ start: "2025-01-01", end: "2025-12-31", val: 95, form: "10-K/A", fp: "FY", fy: 2025, filed: "2026-04-01", accn: "0000000000-26-000901" } as never);
+    const row = buildStatementsFromCompanyFacts(f, OPTS).cashflowAnnual.rows[0]! as unknown as {
+      commonStockRepurchased: number | null;
+      original?: Record<string, { value: number; form: string; filed: string }>;
+    };
+    expect(row.commonStockRepurchased).toBe(-95);
+    // Before: `original` carried the filed 90 beside a row value of −95, a
+    // −206% "restatement" of a 5.6% one.
+    expect(row.original?.commonStockRepurchased).toMatchObject({ value: -90, form: "10-K", filed: "2026-02-20" });
+  });
+
+  it("labels the newest quarters, filed after the last 10-K, with the 10-Q's own fiscal year", () => {
+    // A September fiscal calendar: the December quarter belongs to FY2026,
+    // and no FY2026 year end has been discovered yet. The calendar year of the
+    // quarter's end date mislabelled it "2025".
+    const k = { form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" } as const;
+    const q = { form: "10-Q", fp: "Q1", fy: 2026, filed: "2026-01-30" } as const;
+    const f = facts({
+      RevenueFromContractWithCustomerExcludingAssessedTax: [
+        { start: "2024-09-29", end: "2025-09-27", val: 400, ...k },
+        { start: "2025-09-28", end: "2025-12-27", val: 120, ...q },
+      ],
+      NetIncomeLoss: [
+        { start: "2024-09-29", end: "2025-09-27", val: 100, ...k },
+        { start: "2025-09-28", end: "2025-12-27", val: 30, ...q },
+      ],
+      Assets: [
+        { end: "2025-09-27", val: 360, ...k },
+        { end: "2025-12-27", val: 340, ...q },
+      ],
+    });
+    const built = buildStatementsFromCompanyFacts(f, OPTS);
+    expect(built.incomeQuarterly.rows.map((r) => [r.date, r.period, r.fiscalYear])).toEqual([["2025-12-27", "Q1", "2026"]]);
+    expect(built.balanceQuarterly.rows.map((r) => [r.date, r.period, r.fiscalYear])).toEqual([
+      ["2025-12-27", "Q1", "2026"],
+      ["2025-09-27", "Q4", "2025"],
+    ]);
+    // A comparative carried in a LATER 10-Q keeps the rule: its fy describes that filing.
+    const restated = facts({
+      RevenueFromContractWithCustomerExcludingAssessedTax: [
+        { start: "2025-09-28", end: "2025-12-27", val: 120, ...q },
+        { start: "2025-09-28", end: "2025-12-27", val: 121, form: "10-Q", fp: "Q1", fy: 2027, filed: "2027-01-29" },
+      ],
+      Assets: [{ end: "2025-12-27", val: 340, ...q }],
+    });
+    expect(buildStatementsFromCompanyFacts(restated, OPTS).incomeQuarterly.rows[0]).toMatchObject({ revenue: 121, fiscalYear: "2026" });
+  });
+
+  it("accepts a 16-week fourth quarter on a 12-12-12-16 calendar as a tagged quarter", () => {
+    const tenQ = (fp: "Q1" | "Q2" | "Q3", filed: string) => ({ form: "10-Q", fp, fy: 2025, filed }) as const;
+    const k = { form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-15" } as const;
+    const f = facts({
+      Revenues: [
+        { start: "2024-09-02", end: "2025-08-31", val: 1000, ...k },
+        { start: "2024-09-02", end: "2024-11-24", val: 220, ...tenQ("Q1", "2024-12-19") },
+        { start: "2024-11-25", end: "2025-02-16", val: 230, ...tenQ("Q2", "2025-03-13") },
+        { start: "2025-02-17", end: "2025-05-11", val: 240, ...tenQ("Q3", "2025-06-05") },
+        { start: "2025-05-12", end: "2025-08-31", val: 310, ...k }, // 111 days end-to-start
+      ],
+      NetIncomeLoss: [{ start: "2024-09-02", end: "2025-08-31", val: 100, ...k }],
+      Assets: [
+        { end: "2025-08-31", val: 900, ...k },
+        { end: "2025-05-11", val: 880, ...tenQ("Q3", "2025-06-05") },
+        { end: "2025-02-16", val: 870, ...tenQ("Q2", "2025-03-13") },
+        { end: "2024-11-24", val: 860, ...tenQ("Q1", "2024-12-19") },
+      ],
+    });
+    const rows = buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "COST" }).incomeQuarterly.rows;
+    expect(rows.map((r) => [r.date, r.period, r.revenue, r.derivation ?? null])).toEqual([
+      ["2025-08-31", "Q4", 310, null],
+      ["2025-05-11", "Q3", 240, null],
+      ["2025-02-16", "Q2", 230, null],
+      ["2024-11-24", "Q1", 220, null],
+    ]);
+  });
+
+  it("reads a Form 40-F filer's facts as annual core-form facts and flags it as a foreign private issuer", () => {
+    const f = facts(
+      {
+        Revenues: [{ start: "2025-01-01", end: "2025-12-31", val: 500, form: "40-F", fp: "FY", fy: 2025, filed: "2026-03-20" }],
+        NetIncomeLoss: [{ start: "2025-01-01", end: "2025-12-31", val: 40, form: "40-F", fp: "FY", fy: 2025, filed: "2026-03-20" }],
+        Assets: [{ end: "2025-12-31", val: 900, form: "40-F", fp: "FY", fy: 2025, filed: "2026-03-20" }],
+      },
+      {},
+      { Revenues: "CAD", NetIncomeLoss: "CAD", Assets: "CAD" },
+    );
+    const built = buildStatementsFromCompanyFacts(f, { ...OPTS, symbol: "CNQ" });
+    expect(built.incomeAnnual.rows[0]).toMatchObject({ date: "2025-12-31", fiscalYear: "2025", period: "FY", revenue: 500, reportedCurrency: "CAD" });
+    expect(built.filesTwentyF).toBe(true);
+  });
+
+  it("resolves common dividends from their own element, else total less preferred, else the total", () => {
+    const own = buildStatementsFromCompanyFacts(
+      facts({
+        NetCashProvidedByUsedInOperatingActivities: y(400),
+        PaymentsOfDividendsCommonStock: y(12),
+        PaymentsOfDividends: y(20),
+        PaymentsOfDividendsPreferredStockAndPreferenceStock: y(8),
+        Assets: inst(900),
+      }),
+      OPTS,
+    );
+    expect(own.cashflowAnnual.rows[0]).toMatchObject({ commonDividendsPaid: -12, netDividendsPaid: -20, preferredDividendsPaid: -8 });
+    expect(own.cashflowAnnual.notes.some((n) => /common dividends/.test(n))).toBe(false);
+
+    const netted = buildStatementsFromCompanyFacts(
+      facts({
+        NetCashProvidedByUsedInOperatingActivities: y(400),
+        PaymentsOfDividends: y(20),
+        PaymentsOfDividendsPreferredStockAndPreferenceStock: y(8),
+        Assets: inst(900),
+      }),
+      OPTS,
+    );
+    // The old alias copied the −20 total into the common column.
+    expect(netted.cashflowAnnual.rows[0]).toMatchObject({ commonDividendsPaid: -12, netDividendsPaid: -20, preferredDividendsPaid: -8 });
+    expect(netted.cashflowAnnual.notes).toContain(
+      "commonDividendsPaid 2025-12-31: common dividends derived as total dividends paid (PaymentsOfDividends) less the preferred dividends paid the filer tagged separately (no PaymentsOfDividendsCommonStock element filed)",
+    );
+
+    const totalOnly = buildStatementsFromCompanyFacts(
+      facts({ NetCashProvidedByUsedInOperatingActivities: y(400), PaymentsOfDividends: y(15), Assets: inst(900) }),
+      OPTS,
+    );
+    expect(totalOnly.cashflowAnnual.rows[0]).toMatchObject({ commonDividendsPaid: -15, netDividendsPaid: -15, preferredDividendsPaid: null });
+    expect(totalOnly.cashflowAnnual.notes.some((n) => /common dividends/.test(n))).toBe(false);
+  });
+});
+
 describe("buildStatementsFromCompanyFacts — income-statement fallbacks", () => {
   const K = { form: "10-K", fp: "FY", fy: 2025, filed: "2026-02-13" } as const;
   const annual = (val: number): Pt[] => [{ start: "2025-01-01", end: "2025-12-31", val, ...K }];

@@ -11,12 +11,23 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+
+import { isEntryPoint } from "./lib/entrypoint.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const README_PATH = path.join(HERE, "..", "README.md");
 export const BEGIN_MARKER = "<!-- BEGIN GENERATED: pricing -->";
 export const END_MARKER = "<!-- END GENERATED: pricing -->";
+
+/**
+ * Effort the fixture shape's output counts were measured at. Effort is the user's
+ * cost knob (settings -> analysis effort) and the runner's default when nothing is
+ * set. The shape below is NOT re-derived per effort: there are no measured token
+ * counts at the other levels, and inventing multipliers would make this table look
+ * precise without making it accurate.
+ */
+export const FIXTURE_RUN_EFFORT = "high";
 
 /** Shape of one fixture-run request, used for the estimate column. */
 export const FIXTURE_RUN_SHAPE = {
@@ -45,6 +56,19 @@ export function estimateRunCostUsd(registryModel, judgeModel, webSearchUsdPerSea
   return total;
 }
 
+/**
+ * Output ceiling one pass may emit at a given effort, from the code that sizes it
+ * (`effectiveMaxTokens`): below `high` the pass constant applies; at `high` and
+ * above max_tokens is raised to the model's registry ceiling. This is the part of
+ * per-effort cost that is derivable rather than guessed, and it is the step that
+ * makes a `max` run on an expensive model cost multiples of the same run at `low`.
+ */
+export function outputCeilingTokens(registryModel, pass, effort, sizing) {
+  const { analystMaxTokens, judgeMaxTokens, isHighOrAboveEffort } = sizing;
+  if (isHighOrAboveEffort(effort)) return registryModel.maxOutputTokens;
+  return pass === "synthesize" ? judgeMaxTokens : analystMaxTokens;
+}
+
 export function renderPricingBlock(registry, sizing) {
   const { maximumRequestCostUsd, passWorstCaseCostUsd, maxRequestsPerPass } = sizing;
   const active = registry.models.filter((m) => m.lifecycle === "active");
@@ -60,25 +84,39 @@ export function renderPricingBlock(registry, sizing) {
   lines.push("window priced as a five-minute cache write, its maximum output, and eight web");
   lines.push("searches at $0.01 (the judge never searches).");
   lines.push("");
-  lines.push("| Analysis model | One analyst request | One synthesize request | Analyst pass worst case | Estimated run |");
-  lines.push("| --- | ---: | ---: | ---: | ---: |");
+  lines.push("| Analysis model | One analyst request | One synthesize request | Analyst pass worst case | Analyst output ceiling | Estimated run |");
+  lines.push("| --- | ---: | ---: | ---: | ---: | ---: |");
   for (const model of active) {
     const judgeEntry = model.family === "haiku" ? judge : model;
+    const ceiling = (effort) =>
+      usd((outputCeilingTokens(model, "bull", effort, sizing) / 1e6) * model.pricing.outputPerMTok);
+    const step = ceiling("low") === ceiling("high") ? ceiling("low") : `${ceiling("low")} → ${ceiling("high")}`;
     lines.push(
       `| ${model.displayName} | ${usd(maximumRequestCostUsd(model.id, "bull"))} | ` +
       `${usd(maximumRequestCostUsd(model.id, "synthesize"))} | ` +
-      `${usd(passWorstCaseCostUsd(model.id, "bull"))} | ` +
+      `${usd(passWorstCaseCostUsd(model.id, "bull"))} | ${step} | ` +
       `${usd(estimateRunCostUsd(model, judgeEntry, searchUsd))} |`,
     );
   }
   lines.push("");
   lines.push(`The worst case is every request one pass could make (${maxRequestsPerPass}: six transport attempts,`);
-  lines.push("each able to pause and resume five times); it is reported, not reserved, so a job");
-  lines.push("cap need only cover the requests in flight. The estimate is a calculation,");
-  lines.push("not a measurement: the fixture run shape at registry rates, with Haiku's");
-  lines.push("synthesize figures those of Sonnet 5 because that pass is raised to it.");
-  lines.push("Measured: Haiku $1.43; Opus 5 on MSFT $5.31 over six requests — each of the three");
-  lines.push("passes was schema-rejected once and repaired, so its winning requests were $2.66.");
+  lines.push("each able to pause and resume five times); in the default request mode it is");
+  lines.push("reported, not reserved, so a job cap need only cover the requests in flight, while");
+  lines.push("`THESIS_RESERVATION_MODE=pass` reserves it whole. Neither reservation column varies");
+  lines.push("with effort — both bound a request at the model's full context and output ceiling.");
+  lines.push("");
+  lines.push("The output ceiling is the one part of per-effort cost that is derivable, and");
+  lines.push("thinking bills as output: below `high` a pass is capped at its own constant");
+  lines.push("(analyst 64K, judge 96K), at `high` and above at the model's registry ceiling — so");
+  lines.push("an abandoned Fable 5.1 request at effort `max` settles at $6.40 of presumed output.");
+  lines.push("");
+  lines.push("The estimated run is a calculation, not a measurement: the fixture shape at effort");
+  lines.push(`\`${FIXTURE_RUN_EFFORT}\` and registry rates, Haiku's synthesize figures those of Sonnet 5`);
+  lines.push("because that pass is raised to it. It does NOT scale with effort — nothing is");
+  lines.push("measured at the other levels — so read it as a floor at `xhigh` and `max`, where the");
+  lines.push("same passes think longer inside the same ceiling. Measured on the maintainer's own");
+  lines.push("runs (not reproducible from the repository): Haiku $1.43; Opus 5 on MSFT $5.31 over");
+  lines.push("six requests, each pass schema-rejected once and repaired, so its winning requests were $2.66.");
   lines.push("");
   lines.push(END_MARKER);
   return lines.join("\n");
@@ -96,10 +134,15 @@ export function replaceBlock(readme, block) {
 async function main(argv) {
   const registry = JSON.parse(readFileSync(path.join(HERE, "..", "config", "models.json"), "utf8"));
   const provider = await import("../src/providers/anthropic.ts");
+  const registryModule = await import("../src/models/registry.ts");
+  const passes = await import("../src/pipeline/stageC/passes.ts");
   const block = renderPricingBlock(registry, {
     maximumRequestCostUsd: provider.maximumRequestCostUsd,
     passWorstCaseCostUsd: provider.passWorstCaseCostUsd,
     maxRequestsPerPass: provider.PASS_MAX_REQUESTS,
+    isHighOrAboveEffort: registryModule.isHighOrAboveEffort,
+    analystMaxTokens: passes.ANALYST_MAX_TOKENS,
+    judgeMaxTokens: passes.JUDGE_MAX_TOKENS,
   });
   if (!argv.includes("--write")) {
     console.log(block);
@@ -111,7 +154,7 @@ async function main(argv) {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntryPoint(import.meta.url)) {
   main(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (error) => {

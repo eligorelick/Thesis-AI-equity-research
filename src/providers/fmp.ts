@@ -1,7 +1,7 @@
 /**
  * Typed FMP (Financial Modeling Prep) client — server-only.
  *
- * Conventions per the provider data contract §1.1 + §2 (load-bearing quirks):
+ * Conventions (load-bearing quirks):
  *  - Base:   https://financialmodelingprep.com/stable/<endpoint>
  *  - Auth:   `apikey` HEADER (keeps the key out of logged URLs)
  *  - Shape:  success = JSON array; error = JSON object with key `"Error Message"`
@@ -20,7 +20,7 @@
  * FetchResult gap "no API key + no fixture". Fixtures are never current data.
  *
  * CACHING: pass `cachedFetch` (from @/cache/apiCache) in the config; every live
- * response flows through it with TTLs per DATA_MAP §3 (see FMP_TTLS). Without
+ * response flows through it with TTLs (see FMP_TTLS). Without
  * it the client fetches directly (uncached) — fixture mode never caches.
  */
 
@@ -59,7 +59,7 @@ export type CachedFetchFn = <T>(
 // ---------------------------------------------------------------------------
 // Row types — minimal fields the pipeline needs; every row keeps all raw
 // fields via the index signature (and FmpPayload.raw keeps the whole body).
-// Numbers can be missing/null; FMP emits 0 for "not disclosed" (DATA_MAP §1.1).
+// Numbers can be missing/null; FMP emits 0 for "not disclosed".
 // ---------------------------------------------------------------------------
 
 export interface FmpRawRow {
@@ -616,7 +616,7 @@ export interface FmpMarketRiskPremiumRow extends FmpRawRow {
   country?: string;
   continent?: string | null;
   countryRiskPremium?: number;
-  /** percent; NO as-of date in the response (DATA_MAP §2.5) */
+  /** percent; NO as-of date in the response */
   totalEquityRiskPremium?: number;
 }
 
@@ -666,11 +666,11 @@ export function isPlanLimited(data: unknown): data is { planLimit: FmpPlanLimit 
 
 export type FmpResult<TRow extends FmpRawRow = FmpRawRow> = Promise<FetchResult<FmpPayload<TRow>>>;
 
-/** Statement-family period selector (DATA_MAP §1.1 fiscal conventions). */
+/** Statement-family period selector (fiscal conventions). */
 export type FmpPeriod = "Q1" | "Q2" | "Q3" | "Q4" | "FY" | "annual" | "quarter";
 
 // ---------------------------------------------------------------------------
-// TTLs per DATA_MAP §3 (ms)
+// TTLs (ms)
 // ---------------------------------------------------------------------------
 
 const MIN = 60_000;
@@ -860,7 +860,7 @@ function validateCriticalRows<TRow extends FmpRawRow>(
 
 /**
  * FMP error detection: any non-array object carrying an "Error Message" key is
- * an error regardless of HTTP status (401-before-routing, DATA_MAP §1.1).
+ * an error regardless of HTTP status (401-before-routing).
  */
 /**
  * Lower FMP tiers reject a `limit` above the plan's cap with a plain-text 402:
@@ -883,6 +883,16 @@ export function parseFmpLimitCap(bodyText: string): number | null {
  * one refused request teaches the cap for every later call in the process.
  */
 const planLimitCaps = new Map<string, number>();
+/**
+ * Largest `limit` the VENDOR has answered in full for a key — a lower bound on
+ * its cap, never proof there is none. Before the 2026-09-06 audit (F223/F227)
+ * a successful probe recorded an "uncapped" sentinel whatever limit it had
+ * asked for, and whether the vendor or the cache had answered, so a within-cap
+ * first request (or a cache hit) disabled the gate and the next wave paid one
+ * refusal per call. Now a request is exempt from probing only up to the limit
+ * already proven; a larger one still probes, serialized, until the cap is known.
+ */
+const planLimitProven = new Map<string, number>();
 
 /**
  * While a key's cap is still unknown, the FIRST limit-bearing request is the
@@ -896,6 +906,7 @@ const planLimitProbes = new Map<string, Promise<void>>();
 
 export function resetFmpPlanLimits(): void {
   planLimitCaps.clear();
+  planLimitProven.clear();
   planLimitProbes.clear();
 }
 
@@ -958,7 +969,7 @@ const MAX_EOD_YEARS = 5;
 
 /**
  * Split [from, to] (inclusive, YYYY-MM-DD) into consecutive chunks of at most
- * `maxYears` years each — FMP EOD serves max ~5 years per request (DATA_MAP §1.1).
+ * `maxYears` years each — FMP EOD serves max ~5 years per request.
  */
 export function chunkDateRange(from: string, to: string, maxYears: number = MAX_EOD_YEARS): DateChunk[] {
   const fromDate = parseIsoDate(from);
@@ -1234,10 +1245,19 @@ export class FmpClient {
       throw new Error("fromLive called without an API key (programming error — fixtureMode should have routed)");
     }
     // Serialize cap discovery: one probe per key, everyone else waits on it.
-    if (typeof spec.params.limit === "number" && !planLimitCaps.has(apiKey)) {
+    // A request whose limit the vendor has already answered in full cannot be
+    // refused for its limit, so it neither probes nor waits.
+    const requestedLimit = typeof spec.params.limit === "number" ? spec.params.limit : null;
+    if (
+      requestedLimit !== null &&
+      !planLimitCaps.has(apiKey) &&
+      requestedLimit > (planLimitProven.get(apiKey) ?? 0)
+    ) {
       const existing = planLimitProbes.get(apiKey);
       if (existing !== undefined) {
         await existing;
+        // The probe may have learned the cap (clamp below) or proven this
+        // limit; either way the request now goes straight through.
       } else {
         let release: () => void = () => {};
         const probe = new Promise<void>((resolve) => {
@@ -1245,13 +1265,22 @@ export class FmpClient {
         });
         planLimitProbes.set(apiKey, probe);
         try {
-          const result = await this.fromLiveUnprobed<TRow>(spec);
-          // A probe that came back with data at its full limit found no cap on
-          // this key (a higher tier): record that so later waves stop waiting
-          // on a probe. A larger limit refused later still learns the real cap
-          // through the retry path, which overwrites this sentinel.
-          if (result.ok && !planLimitCaps.has(apiKey)) {
-            planLimitCaps.set(apiKey, Number.POSITIVE_INFINITY);
+          const observed: VendorObservation = { vendorAnswered: false, appliedLimit: null };
+          const result = await this.fromLiveUnprobed<TRow>(spec, observed);
+          // Only an answer FROM THE VENDOR at the limit actually sent proves
+          // anything: it proves the cap is at least that limit. A cache hit
+          // proves nothing about the key, and a refusal has already recorded
+          // the real cap through the retry path below.
+          if (
+            result.ok &&
+            observed.vendorAnswered &&
+            observed.appliedLimit !== null &&
+            !planLimitCaps.has(apiKey)
+          ) {
+            planLimitProven.set(
+              apiKey,
+              Math.max(planLimitProven.get(apiKey) ?? 0, observed.appliedLimit),
+            );
           }
           return result;
         } finally {
@@ -1263,7 +1292,10 @@ export class FmpClient {
     return this.fromLiveUnprobed<TRow>(spec);
   }
 
-  private async fromLiveUnprobed<TRow extends FmpRawRow>(spec: CallSpec): Promise<FetchResult<FmpPayload<TRow>>> {
+  private async fromLiveUnprobed<TRow extends FmpRawRow>(
+    spec: CallSpec,
+    observed?: VendorObservation,
+  ): Promise<FetchResult<FmpPayload<TRow>>> {
     const apiKey = this.apiKey;
     if (apiKey === undefined) {
       throw new Error("fromLiveUnprobed called without an API key (programming error)");
@@ -1290,6 +1322,12 @@ export class FmpClient {
     let exchange: CachedFetchResult<LiveExchange>;
     try {
       exchange = await this.cachedFetch<LiveExchange>(cacheKey, ttlMs, async () => {
+        // The loader runs only when the cache could not answer: this is the
+        // one place that knows the vendor was asked, and at what limit.
+        if (observed !== undefined) {
+          observed.vendorAnswered = true;
+          observed.appliedLimit = appliedLimit;
+        }
         const policy: FetchPolicy = {
           provider: "fmp",
           timeoutMs: this.timeoutMs,
@@ -1338,6 +1376,18 @@ export class FmpClient {
         if (Array.isArray(body) && body.some((row) => !isRecord(row))) {
           throw new FmpSchemaError(
             `FMP provider schema drift in ${spec.method}: response array contains a non-object row`,
+          );
+        }
+        // An OBJECT body on an array endpoint is the same class of drift: a
+        // non-error envelope ({"message": "temporarily unavailable"}) used to
+        // pass the entity check on every optional-scope endpoint, normalize to
+        // zero rows, and — not being an empty ARRAY — overwrite the last-good
+        // statement row for the full TTL (audit 2026-09-06, F221). Rejected
+        // here so it is never admitted; the retrieval-side check below keeps
+        // reading legacy rows.
+        if (isRecord(body) && spec.allowObjectBody !== true) {
+          throw new FmpSchemaError(
+            `FMP provider schema drift in ${spec.method}: object body where an array was expected`,
           );
         }
         const admitted = normalizeRows<TRow>(body, spec.allowObjectBody === true);
@@ -2166,7 +2216,7 @@ export class FmpClient {
     });
   }
 
-  /** `name` per the 24 documented enum values (DATA_MAP §2.12 / fmp-market.md §6). */
+  /** `name` per the 24 documented enum values. */
   economicIndicators(name: string): FmpResult<FmpEconomicIndicatorRow> {
     return this.call<FmpEconomicIndicatorRow>({
       method: "economicIndicators",
@@ -2212,7 +2262,7 @@ export class FmpClient {
     });
   }
 
-  // -- enums (freeze day-1 per DATA_MAP §2.5) -----------------------------------
+  // -- enums (frozen day-1) -----------------------------------
 
   availableIndustries(): FmpResult<FmpIndustryNameRow> {
     return this.call<FmpIndustryNameRow>({
@@ -2301,6 +2351,12 @@ function gap(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** What a plan-limit probe learned about who answered it (see `planLimitProven`). */
+interface VendorObservation {
+  vendorAnswered: boolean;
+  appliedLimit: number | null;
 }
 
 /** Success bodies are arrays of objects; single-object bodies require explicit opt-in. */

@@ -1212,6 +1212,36 @@ export function readGenerationPassArtifacts(
   return result.artifacts;
 }
 
+/**
+ * Every generation's artifacts for a job, read tolerantly: a corrupt pass in
+ * one generation drops only that pass in that generation.
+ *
+ * For readers that join against the WHOLE ledger. The cost total a report
+ * shows sums every generation the job has billed, so the artifacts that say
+ * which of those rows bought nothing (a rejected attempt whose repair ran in a
+ * later generation) have to span the same lineage; reading only the current
+ * generation left an earlier generation's discarded attempt unmarked in the
+ * breakdown and absent from the manifest.
+ */
+export function readJobPassArtifactLineage(
+  jobId: string,
+  db: ArtifactReadDb = getDb(),
+): CurrentGenerationPassArtifact[] {
+  const generations = [
+    ...new Set(
+      db
+        .select({ runGeneration: jobPassArtifacts.runGeneration })
+        .from(jobPassArtifacts)
+        .where(eq(jobPassArtifacts.jobId, jobId))
+        .all()
+        .map((row) => row.runGeneration),
+    ),
+  ].sort((left, right) => left - right);
+  return generations.flatMap(
+    (runGeneration) => readGenerationResumeArtifacts(db, jobId, runGeneration).artifacts,
+  );
+}
+
 /** Read and strictly validate only artifacts belonging to the job's current generation. */
 export function readCurrentGenerationPassArtifacts(
   jobId: string,

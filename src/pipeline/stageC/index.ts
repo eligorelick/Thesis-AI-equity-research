@@ -327,17 +327,24 @@ function billedAttemptFromRun<T>(run: PassRun<T>): BilledPassAttempt | undefined
 /**
  * Repair-attempt details of one analyst side for BullBearPassFailure: a
  * received-but-rejected output (schema or JSON failure) is retryable and
- * carries the raw text the repair turn echoes back; a successful side or a
- * transport failure contributes nothing.
+ * carries the raw text the repair turn echoes back, plus the failure kind so
+ * the runner's own settlement of the side (when this facade did not settle
+ * it) classifies the artifact exactly as the facade would have; a successful
+ * side contributes nothing.
  */
 function repairDetailsOf<T>(
   run: PassRun<T>,
   side: "bull" | "bear",
-): Partial<Pick<BullBearPassFailureDetails, "bullRetryable" | "bearRetryable" | "bullRawText" | "bearRawText">> {
+): Partial<
+  Pick<
+    BullBearPassFailureDetails,
+    "bullRetryable" | "bearRetryable" | "bullRawText" | "bearRawText" | "bullFailureKind" | "bearFailureKind"
+  >
+> {
   if (run.ok) return {};
   return side === "bull"
-    ? { bullRetryable: run.validationError !== undefined, bullRawText: run.rawText }
-    : { bearRetryable: run.validationError !== undefined, bearRawText: run.rawText };
+    ? { bullRetryable: run.validationError !== undefined, bullRawText: run.rawText, bullFailureKind: run.error.kind }
+    : { bearRetryable: run.validationError !== undefined, bearRawText: run.rawText, bearFailureKind: run.error.kind };
 }
 
 function passRunFailureMessage<T>(run: PassRun<T>, label: string): string {

@@ -6,6 +6,7 @@ import { buildStatementsFromCompanyFacts } from "@/edgar/statements";
 import {
   applyKeylessFallbacks,
   isUsJurisdiction,
+  bankStatementRouting,
   lastCloseOnOrBefore,
   needsFallback,
   sharesOnOrBefore,
@@ -17,6 +18,7 @@ import { classifyInstrumentSupport } from "@/pipeline/stageB/instrumentSupport";
 import { createYahooClient, type YahooClient } from "@/providers/yahoo";
 import { makeLimiter } from "@/providers/http";
 import type { CompanyFacts } from "@/edgar/xbrl";
+import type { PredecessorFacts } from "@/edgar/successor";
 import type { FetchResult } from "@/types/core";
 import type { FmpPayload, FmpRawRow } from "@/providers/fmp";
 
@@ -220,6 +222,20 @@ function inputs(over: Partial<KeylessInputs> = {}): KeylessInputs {
   };
 }
 
+describe("bankStatementRouting", () => {
+  it("routes only the bank industries, by SIC", () => {
+    const reg = inputs().edgar.registrant!;
+    expect(bankStatementRouting({ ...reg, sic: "6021" })).toBe(true);
+    expect(bankStatementRouting({ ...reg, sic: "6022 STATE COMMERCIAL BANKS" })).toBe(true);
+    expect(bankStatementRouting({ ...reg, sic: "6035" })).toBe(true);
+    expect(bankStatementRouting({ ...reg, sic: "6311" })).toBe(false); // insurer: no NII line to protect
+    expect(bankStatementRouting({ ...reg, sic: "6211" })).toBe(false); // broker
+    expect(bankStatementRouting({ ...reg, sic: "3571" })).toBe(false);
+    expect(bankStatementRouting({ ...reg, sic: null })).toBe(false);
+    expect(bankStatementRouting(null)).toBe(false);
+  });
+});
+
 describe("needsFallback", () => {
   it("is true for a gap or an empty ok result and false for rows", () => {
     expect(needsFallback(gap("x"))).toBe(true);
@@ -313,6 +329,47 @@ describe("applyKeylessFallbacks", () => {
     expect(replacements.length).toBeGreaterThan(0);
     expect(replacements.every((g) => g.severity === "info" && g.expected === true)).toBe(true);
     expect(out.gaps.find((g) => g.field === "keyless.profile")?.reason).toMatch(/served by computed .* because FMP no API key \+ no fixture/);
+  });
+
+  it("builds a bank's statements through the bank chain when its SIC says bank and its tagging does not", async () => {
+    // A regional bank that tags its fee revenue under ASC 606: the builder's
+    // own heuristic (ASC-606 tags absent) cannot see it, and used to publish
+    // the 1,200 of fee income as revenue.
+    const stamp = { accn: "0000000000-26-000001", fy: 2025, fp: "FY", form: "10-K", filed: "2026-02-20" };
+    const point = (val: number) => ({ start: "2025-01-01", end: "2025-12-31", val, ...stamp });
+    const instant = (val: number) => ({ end: "2025-12-31", val, ...stamp });
+    const usd = (p: unknown) => ({ label: "x", units: { USD: [p] } });
+    const bank: CompanyFacts = {
+      cik: 1,
+      entityName: "REGIONAL BANK",
+      facts: {
+        "us-gaap": {
+          RevenueFromContractWithCustomerExcludingAssessedTax: usd(point(1200)),
+          InterestIncomeExpenseNet: usd(point(3800)),
+          NoninterestIncome: usd(point(1200)),
+          NetIncomeLoss: usd(point(900)),
+          Assets: usd(instant(50_000)),
+          StockholdersEquity: usd(instant(5_000)),
+        },
+        dei: {},
+      },
+    };
+    const withSic = (sic: string) =>
+      applyKeylessFallbacks(
+        inputs({
+          symbol: "RGNL",
+          edgar: {
+            ...inputs().edgar,
+            registrant: { ...inputs().edgar.registrant!, sic, tickers: ["RGNL"] },
+            companyFacts: { ok: true, value: { data: bank, asOf: "2025-12-31", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+          },
+        }),
+      );
+    const routed = await withSic("6022");
+    expect(routed.members.incomeAnnual.ok && routed.members.incomeAnnual.value.data.rows[0]!.revenue).toBe(5000);
+    expect(routed.notes.some((n) => /^incomeAnnual: revenue resolved through the bank revenue chain \(the issuer is classified as a bank/.test(n))).toBe(true);
+    const unrouted = await withSic("3571");
+    expect(unrouted.members.incomeAnnual.ok && unrouted.members.incomeAnnual.value.data.rows[0]!.revenue).toBe(1200);
   });
 
   it("never overwrites an FMP member that has rows, and marks gaps as unexpected on a keyed plan", async () => {
@@ -442,6 +499,129 @@ describe("applyKeylessFallbacks", () => {
     expect(out.members.balanceAnnual.ok && out.members.balanceAnnual.value.source).toBe("edgar");
     expect(out.replaced).toContain("incomeAnnual");
     expect(out.gaps.some((g) => g.field.startsWith("statements.backfill."))).toBe(false);
+    // The reason is the operator's policy, not an FMP shortfall FMP did not
+    // have; a configured substitution is structural on a keyed plan too.
+    const entry = out.gaps.find((g) => g.field === "keyless.incomeAnnual");
+    expect(entry?.reason).toMatch(/because THESIS_STATEMENT_SOURCE=edgar sets aside FMP's 1 vendor row\(s\)$/);
+    expect(entry?.reason).not.toMatch(/returned no rows/);
+    expect(entry?.expected).toBe(true);
+    // A member FMP never served keeps the shortfall wording.
+    const cashflow = out.gaps.find((g) => g.field === "keyless.cashflowAnnual");
+    expect(cashflow?.reason).toMatch(/because FMP no API key \+ no fixture$/);
+    expect(cashflow?.expected).toBe(false);
+  });
+
+  it("withholds FMP's rows, naming the policy, when EDGAR cannot build a member under THESIS_STATEMENT_SOURCE=edgar", async () => {
+    const fmp = allGaps();
+    fmp.incomeAnnual = okRows([{ date: "2025-09-27", revenue: 1 }, { date: "2024-09-28", revenue: 0.9 }]);
+    const edgar = {
+      ...inputs().edgar,
+      // Nothing filed: EDGAR builds no statement rows at all.
+      companyFacts: {
+        ok: true as const,
+        value: { data: facts({}), asOf: "2025-09-27", source: "edgar" as const, endpoint: "companyfacts", fetchedAt: NOW.toISOString() },
+      },
+    };
+    const out = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false, statementSource: "edgar", edgar }));
+
+    // Not silently FMP's rows under an "EDGAR only" label: a gap that says why.
+    expect(out.members.incomeAnnual.ok).toBe(false);
+    if (out.members.incomeAnnual.ok) return;
+    expect(out.members.incomeAnnual.gap.field).toBe("statements.incomeAnnual");
+    expect(out.members.incomeAnnual.gap.reason).toMatch(/^EDGAR companyfacts produced no incomeAnnual rows: /);
+    expect(out.members.incomeAnnual.gap.reason).toMatch(
+      /; FMP's 2 vendor row\(s\) were withheld because THESIS_STATEMENT_SOURCE=edgar builds statements from filed facts only$/,
+    );
+    expect(out.members.incomeAnnual.gap.attemptedSources).toContain("/stable/x");
+    expect(out.notes).toContain("incomeAnnual: FMP's 2 vendor row(s) withheld under THESIS_STATEMENT_SOURCE=edgar");
+    // The other modes keep the vendor's rows exactly as before.
+    const auto = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false, statementSource: "auto", edgar }));
+    expect(auto.members.incomeAnnual.ok && auto.members.incomeAnnual.value.source).toBe("fmp");
+  });
+
+  it("does not append predecessor history under THESIS_STATEMENT_SOURCE=fmp", async () => {
+    const fmp = allGaps();
+    fmp.incomeAnnual = okRows([{ date: "2025-09-27", revenue: 1 }]);
+    const predecessor: PredecessorFacts = {
+      cik10: "0000034088",
+      name: "EXXON MOBIL CORP",
+      facts: appleFacts(),
+      endpoint: "companyfacts",
+      via: { accession: "0000034088-25-000001", form: "10-Q", filed: "2025-05-02", successorFormAccession: "0002115436-25-000001" },
+      fetchedAt: NOW.toISOString(),
+    };
+    const edgar = {
+      ...inputs().edgar,
+      // The successor's own facts are empty, so only the predecessor could add periods.
+      companyFacts: {
+        ok: true as const,
+        value: { data: facts({}), asOf: "2025-09-27", source: "edgar" as const, endpoint: "companyfacts", fetchedAt: NOW.toISOString() },
+      },
+      predecessor,
+    };
+
+    const auto = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false, statementSource: "auto", edgar }));
+    expect(auto.members.incomeAnnual.ok && auto.members.incomeAnnual.value.data.rows.length).toBeGreaterThan(1);
+    expect(auto.members.incomeAnnual.ok && auto.members.incomeAnnual.value.data.rows.some((row) => row["predecessor"] === true)).toBe(true);
+
+    const vendorOnly = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false, statementSource: "fmp", edgar }));
+    expect(vendorOnly.members.incomeAnnual.ok && vendorOnly.members.incomeAnnual.value.data.rows).toHaveLength(1);
+    expect(vendorOnly.members.incomeAnnual.ok && vendorOnly.members.incomeAnnual.value.endpoint).toBe("/stable/x");
+    expect(vendorOnly.notes).toContain(
+      "predecessor history from CIK 0000034088 not appended: THESIS_STATEMENT_SOURCE=fmp keeps the statements vendor-only",
+    );
+    expect(vendorOnly.gaps.find((g) => g.field === "edgar.predecessor")).toMatchObject({
+      severity: "info",
+      expected: true,
+      reason: expect.stringContaining("THESIS_STATEMENT_SOURCE=fmp keeps the statements vendor-only"),
+    });
+  });
+
+  /**
+   * A plan that caps `limit` clamps the DATE-RANGE market-cap request to its
+   * newest few days; five days of a five-year window used to count as
+   * "served", so the keyless derivation never ran and the buyback analysis
+   * found no market cap inside any fiscal window.
+   */
+  it("extends a plan-clamped market-cap history with derived older days, disclosed like a statement backfill", async () => {
+    const fmp = allGaps();
+    const vendorRows = ["2026-09-01", "2026-08-31", "2026-08-28", "2026-08-27", "2026-08-26"].map((date) => ({
+      symbol: "AAPL",
+      date,
+      marketCap: 3_000_000_000_000,
+    }));
+    fmp.marketCapHistory = {
+      ok: true,
+      value: {
+        data: { rows: vendorRows, raw: null, planLimit: { requested: 5000, applied: 5 } },
+        asOf: "2026-09-01",
+        source: "fmp",
+        endpoint: "/stable/historical-market-capitalization?symbol=AAPL&limit=5",
+        fetchedAt: NOW.toISOString(),
+      },
+    };
+    const out = await applyKeylessFallbacks(inputs({ fmp, fmpKeyless: false }));
+
+    expect(out.members.marketCapHistory.ok).toBe(true);
+    if (!out.members.marketCapHistory.ok) return;
+    const rows = out.members.marketCapHistory.value.data.rows;
+    expect(rows.length).toBeGreaterThan(1000);
+    // The vendor's rows are untouched and first; every appended row is older
+    // than the vendor's oldest day and carries its own provenance.
+    expect(rows.slice(0, 5)).toEqual(vendorRows);
+    for (const row of rows.slice(5)) {
+      expect(row.source).toBe("computed");
+      expect(row.date! < "2026-08-26").toBe(true);
+      expect(row.marketCap).toBeGreaterThan(0);
+    }
+    expect(out.members.marketCapHistory.value.endpoint).toMatch(
+      /^\/stable\/historical-market-capitalization\?symbol=AAPL&limit=5 \+ derived:market-cap\(close×[^)]+\) \(older periods\)$/,
+    );
+    expect(out.replaced).toContain("marketCapHistory");
+    const entry = out.gaps.find((g) => g.field === "marketCapHistory.backfill");
+    expect(entry).toMatchObject({ severity: "info", expected: true });
+    expect(entry?.reason).toMatch(/^FMP served 5 day\(s\) back to 2026-08-26 \(its subscription caps 'limit' at 5, so 5 of 5000 requested days arrived\); \d+ older day\(s\)/);
+    expect(entry?.reason).toMatch(/No date mixes the two sources/);
   });
 
   it("leaves the FMP gap in place and records the keyless failure when Yahoo is unavailable", async () => {

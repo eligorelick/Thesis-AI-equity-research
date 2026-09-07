@@ -3,8 +3,8 @@
  * maintenance-vs-growth capex heuristic, net debt/EBITDA, interest coverage,
  * SBC ratios, diluted share-count trend, buyback price analysis.
  *
- * Pure, deterministic TypeScript: no network, no DB, no LLM (the application contract §4).
- * Input rows use FMP's exact field names (the provider data contract §2.3/§2.4). Sign quirks
+ * Pure, deterministic TypeScript: no network, no DB, no LLM.
+ * Input rows use FMP's exact field names. Sign quirks
  * honored: capitalExpenditure and commonStockRepurchased are NEGATIVE outflows.
  * FMP zero-for-undisclosed: interestExpense === 0 is treated as null.
  *
@@ -16,6 +16,7 @@
 import type { ManifestEntry } from "@/types/core";
 import { deriveFcf } from "@/pipeline/stageB/financialValues";
 import {
+  IRREGULAR_SPACING_TOLERANCE_YEARS,
   hasIrregularAnnualSpacing,
   isFiniteNumber,
   linearRegressionSlope,
@@ -23,14 +24,18 @@ import {
   yearsBetweenDates,
 } from "@/pipeline/stageB/growth";
 import { resolveNetDebt, type NetDebtResolution } from "@/pipeline/stageB/netDebt";
+import { normalizeQuarterRows } from "@/pipeline/stageB/quarterWindows";
 
 // ---------------------------------------------------------------------------
-// Input interfaces — FMP field names (the provider data contract §2.3/§2.4)
+// Input interfaces — FMP field names
 // ---------------------------------------------------------------------------
 
 export interface CapitalIncomeRow {
   /** Fiscal period end, ISO yyyy-mm-dd. */
   date: string;
+  /** Restatement recency: without these a duplicated fiscal period is ambiguous and rejected wholesale. */
+  acceptedDate?: string | null;
+  filingDate?: string | null;
   revenue?: number | null;
   operatingIncome?: number | null;
   ebit?: number | null;
@@ -47,6 +52,8 @@ export interface CapitalIncomeRow {
 export interface CapitalCashFlowRow {
   /** Fiscal period end, ISO yyyy-mm-dd. */
   date: string;
+  acceptedDate?: string | null;
+  filingDate?: string | null;
   netIncome?: number | null;
   depreciationAndAmortization?: number | null;
   stockBasedCompensation?: number | null;
@@ -61,6 +68,8 @@ export interface CapitalCashFlowRow {
 export interface CapitalBalanceRow {
   /** Fiscal period end, ISO yyyy-mm-dd. */
   date: string;
+  acceptedDate?: string | null;
+  filingDate?: string | null;
   totalDebt?: number | null;
   /** FMP: netDebt = totalDebt − cash (short-term investments NOT netted). */
   netDebt?: number | null;
@@ -80,6 +89,23 @@ export interface QuoteInput {
   price: number | null;
   /** Unix seconds (FMP quote.timestamp) — provenance only. */
   timestamp?: number | null;
+}
+
+/**
+ * Instrument context for the buyback price proxy. The proxy divides
+ * reporting-currency repurchase dollars by a quote-currency price per
+ * ORDINARY share and compares the result with the quote, which for an ADR is
+ * per ADS — so, as for the WACC weights and the multiples, a currency mismatch
+ * or an ADR listing suppresses the price analysis rather than publishing a
+ * number that is off by the FX rate or the ADS ratio.
+ */
+export interface CapitalOptions {
+  /** Statements' reported currency (e.g. inc0.reportedCurrency). */
+  reportedCurrency?: string | null;
+  /** Trading currency of the quote and the market-cap history (e.g. profile.currency). */
+  quoteCurrency?: string | null;
+  /** True when the listed instrument is an American depositary share. */
+  isAdr?: boolean | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +319,66 @@ function fmt(n: number): string {
   return String(Number(n.toFixed(4)));
 }
 
+/** Statement joins tolerate this much fiscal-date drift (compute.ts matchByDate uses the same). */
+const STATEMENT_JOIN_TOLERANCE_DAYS = 5;
+
+/**
+ * The row whose fiscal date is the given one, or the nearest within
+ * STATEMENT_JOIN_TOLERANCE_DAYS. An exact string match returned nothing
+ * whenever the cash-flow period end drifted a day from the income one, and
+ * capex intensity, SBC % of revenue, own EBITDA and the buyback price proxy
+ * silently read as unavailable — the only exact-match consumer left after
+ * compute.ts and returns.ts moved to tolerant pairings.
+ */
+function rowForDate<T extends { date: string }>(rows: readonly T[], isoDate: string): T | undefined {
+  const exact = rows.find((r) => r.date === isoDate);
+  if (exact !== undefined) return exact;
+  const target = Date.parse(isoDate);
+  if (!Number.isFinite(target)) return undefined;
+  let best: T | undefined;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  for (const r of rows) {
+    const t = Date.parse(r.date);
+    if (!Number.isFinite(t)) continue;
+    const delta = Math.abs(t - target) / (24 * 3600 * 1000);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = r;
+    }
+  }
+  return bestDelta <= STATEMENT_JOIN_TOLERANCE_DAYS ? best : undefined;
+}
+
+/**
+ * Collapse restated/duplicate fiscal periods before any series is built — the
+ * house rule computeGrowth applies (whole row, provably-latest filing wins,
+ * ambiguous duplicates rejected). Left in place, a fiscal year the vendor
+ * returns twice entered the FCF and capex series twice, its buyback dollars
+ * were summed twice, and the five-year window covered four distinct years.
+ */
+function normalizeAnnual<T extends { date: string }>(
+  rows: readonly T[],
+  statement: "income" | "cashFlow" | "balance",
+  notes: string[],
+  gaps: ManifestEntry[],
+): T[] {
+  const norm = normalizeQuarterRows(rows);
+  for (const { period, reason } of norm.rejected) {
+    gaps.push({
+      field: `capital.${statement}.period`,
+      reason: `annual ${statement} period ${period} dropped: ${reason}`,
+      severity: "warn",
+    });
+  }
+  const collapsed = rows.length - norm.rows.length - norm.rejected.length;
+  if (collapsed > 0) {
+    notes.push(
+      `${collapsed} restated/duplicate annual ${statement} period${collapsed === 1 ? "" : "s"} collapsed to the latest filing`,
+    );
+  }
+  return norm.rows;
+}
+
 /** FMP zero-for-undisclosed: interest expense of exactly 0 is implausible → null. */
 function zeroAsNull(v: number | null | undefined): number | null {
   if (!isFiniteNumber(v)) return null;
@@ -309,13 +395,14 @@ export function computeCapital(
   balance: ReadonlyArray<CapitalBalanceRow>,
   marketCapHistory: ReadonlyArray<MarketCapPoint>,
   quote: QuoteInput,
+  options: CapitalOptions = {},
 ): CapitalResult {
   const notes: string[] = [];
   const gaps: ManifestEntry[] = [];
 
-  const inc = sortNewestFirst(income);
-  const cf = sortNewestFirst(cashflow);
-  const bal = sortNewestFirst(balance);
+  const inc = normalizeAnnual(income, "income", notes, gaps);
+  const cf = normalizeAnnual(cashflow, "cashFlow", notes, gaps);
+  const bal = normalizeAnnual(balance, "balance", notes, gaps);
 
   if (inc.length === 0) {
     gaps.push({
@@ -340,7 +427,18 @@ export function computeCapital(
   }
 
   const asOf = inc[0]?.date ?? cf[0]?.date ?? bal[0]?.date ?? null;
-  const incomeByDate = new Map(inc.map((r) => [r.date, r]));
+  const incomeFor = (date: string): CapitalIncomeRow | undefined => rowForDate(inc, date);
+  // A cash-flow year in the analysed window with no income counterpart is
+  // said once, by name, instead of surfacing as four unrelated blanks.
+  for (const r of cf.slice(0, CAPITAL_SERIES_MAX_YEARS)) {
+    if (inc.length > 0 && incomeFor(r.date) === undefined) {
+      gaps.push({
+        field: "capital.statementJoin",
+        reason: `cash-flow period ${r.date} has no income-statement row within ±${STATEMENT_JOIN_TOLERANCE_DAYS} days — revenue- and share-based ratios for that year are unavailable`,
+        severity: "info",
+      });
+    }
+  }
 
   // --- FCF + conversion ---------------------------------------------------------
   const fcfSeries: FcfYearRow[] = [];
@@ -380,8 +478,8 @@ export function computeCapital(
       }
       const ni = isFiniteNumber(r.netIncome)
         ? r.netIncome
-        : isFiniteNumber(incomeByDate.get(r.date)?.netIncome)
-          ? (incomeByDate.get(r.date)?.netIncome as number)
+        : isFiniteNumber(incomeFor(r.date)?.netIncome)
+          ? (incomeFor(r.date)?.netIncome as number)
           : null;
       let conversion: number | null = null;
       let conversionBeforeSbc: number | null = null;
@@ -417,7 +515,7 @@ export function computeCapital(
     const rows = cf.slice(0, CAPITAL_SERIES_MAX_YEARS).reverse();
     for (const r of rows) {
       const capexAbs = isFiniteNumber(r.capitalExpenditure) ? Math.abs(r.capitalExpenditure) : null;
-      const revenue = incomeByDate.get(r.date)?.revenue;
+      const revenue = incomeFor(r.date)?.revenue;
       const rev = isFiniteNumber(revenue) && revenue > 0 ? revenue : null;
       const da =
         isFiniteNumber(r.depreciationAndAmortization) && r.depreciationAndAmortization > 0
@@ -496,7 +594,7 @@ export function computeCapital(
     ndNotes.push(`${resolution.version}: ${resolution.reason}`);
     // EBITDA: own computation preferred (operatingIncome + cash-flow D&A), vendor fallback noted.
     const latestInc: CapitalIncomeRow | undefined = inc.length > 0 ? inc[0] : undefined;
-    const cfMatch = latestInc !== undefined ? cf.find((r) => r.date === latestInc.date) : undefined;
+    const cfMatch = latestInc !== undefined ? rowForDate(cf, latestInc.date) : undefined;
     let ebitda: number | null = null;
     const ebitLatest = latestInc !== undefined
       ? isFiniteNumber(latestInc.operatingIncome)
@@ -505,16 +603,25 @@ export function computeCapital(
           ? latestInc.ebit
           : null
       : null;
-    if (
-      ebitLatest !== null &&
+    // A cash-flow D&A of 0 (or below) is the same vendor placeholder the capex
+    // split and capex/D&A already refuse; a going concern's EBITDA is not
+    // below its EBIT. The vendor field is consulted instead, and the basis says so.
+    const daLatest =
       cfMatch !== undefined &&
-      isFiniteNumber(cfMatch.depreciationAndAmortization)
-    ) {
-      ebitda = ebitLatest + cfMatch.depreciationAndAmortization;
+      isFiniteNumber(cfMatch.depreciationAndAmortization) &&
+      cfMatch.depreciationAndAmortization > 0
+        ? cfMatch.depreciationAndAmortization
+        : null;
+    if (ebitLatest !== null && daLatest !== null) {
+      ebitda = ebitLatest + daLatest;
       ndNotes.push("EBITDA computed as operatingIncome + cash-flow D&A (latest FY, not TTM)");
     } else if (latestInc !== undefined && isFiniteNumber(latestInc.ebitda)) {
       ebitda = latestInc.ebitda;
-      ndNotes.push("vendor ebitda field used (own operatingIncome + D&A not computable)");
+      ndNotes.push(
+        cfMatch !== undefined && isFiniteNumber(cfMatch.depreciationAndAmortization) && cfMatch.depreciationAndAmortization <= 0
+          ? `vendor ebitda field used (cash-flow D&A ${fmt(cfMatch.depreciationAndAmortization)} treated as undisclosed)`
+          : "vendor ebitda field used (own operatingIncome + D&A not computable)",
+      );
     }
     let value: number | null = null;
     if (netDebt !== null && ebitda !== null) {
@@ -593,7 +700,7 @@ export function computeCapital(
           severity: "info",
         });
       }
-      const revenue = incomeByDate.get(latestCf.date)?.revenue;
+      const revenue = incomeFor(latestCf.date)?.revenue;
       let pctOfRevenue: number | null = null;
       if (sbcVal !== null && isFiniteNumber(revenue) && revenue > 0) {
         pctOfRevenue = (sbcVal / revenue) * 100;
@@ -697,7 +804,7 @@ export function computeCapital(
       const trendNotes: string[] = [
         `flat band = ±${SHARE_TREND_FLAT_BAND_PCT}% total change over the window (house rule)`,
       ];
-      if (Number.isFinite(dateSpan) && Math.abs(dateSpan - years) > 0.6) {
+      if (Number.isFinite(dateSpan) && Math.abs(dateSpan - years) > IRREGULAR_SPACING_TOLERANCE_YEARS) {
         trendNotes.push(
           `irregular fiscal spacing: index-implied ${years}y vs date-implied ${fmt(dateSpan)}y — date-based span used`,
         );
@@ -742,6 +849,13 @@ export function computeCapital(
   let totalRepurchased = 0;
   let weightedDollars = 0;
   let weightedShares = 0;
+  const reported = typeof options.reportedCurrency === "string" ? options.reportedCurrency.toUpperCase() : null;
+  const quoted = typeof options.quoteCurrency === "string" ? options.quoteCurrency.toUpperCase() : null;
+  const currencyMismatch = reported !== null && quoted !== null && reported !== quoted;
+  const priceProxySuppressed = currencyMismatch || options.isAdr === true;
+  const priceProxySuppressedReason = currencyMismatch
+    ? `repurchases are in ${options.reportedCurrency} while the market cap and quote are in ${options.quoteCurrency} — a per-share price proxy would mix the two currencies`
+    : "the instrument is an ADR — the market cap over ordinary shares prices an ordinary share while the quote prices an ADS, and no ADS ratio is applied";
   {
     const mcaps = sortNewestFirst(
       marketCapHistory.filter((p): p is { date: string; marketCap: number } =>
@@ -775,7 +889,7 @@ export function computeCapital(
       // DILUTED (≥ basic) would inflate the denominator and understate the price
       // paid — flattering buyback timing. Fall back to diluted only when basic is
       // absent (no worse than the previous behaviour), and disclose it.
-      const incRow = incomeByDate.get(r.date);
+      const incRow = incomeFor(r.date);
       const sharesBasic = incRow?.weightedAverageShsOut;
       const sharesDiluted = incRow?.weightedAverageShsOutDil;
       const hasBasic = isFiniteNumber(sharesBasic) && sharesBasic > 0;
@@ -784,7 +898,9 @@ export function computeCapital(
       const rowNotes: string[] = [];
       let avgPriceProxy: number | null = null;
       let sharesProxy: number | null = null;
-      if (avgMarketCap === null) {
+      if (priceProxySuppressed) {
+        rowNotes.push(`price proxy suppressed: ${priceProxySuppressedReason}`);
+      } else if (avgMarketCap === null) {
         rowNotes.push("no market-cap history inside the fiscal window");
       } else if (!isFiniteNumber(shares) || shares <= 0) {
         rowNotes.push("basic/diluted weighted-avg shares missing — price proxy unavailable");
@@ -810,7 +926,15 @@ export function computeCapital(
   }
   const avgPricePaidProxy = weightedShares > 0 ? weightedDollars / weightedShares : null;
   const currentPrice = isFiniteNumber(quote.price) && quote.price > 0 ? quote.price : null;
-  if (currentPrice === null && totalRepurchased > 0) {
+  if (priceProxySuppressed && totalRepurchased > 0) {
+    notes.push(`buyback price proxy suppressed: ${priceProxySuppressedReason} (the WACC weights and the multiples apply the same guard)`);
+    gaps.push({
+      field: "capital.buybackPriceAnalysis",
+      reason: `buyback price proxy and premium/discount withheld — ${priceProxySuppressedReason}`,
+      severity: "info",
+    });
+  }
+  if (currentPrice === null && totalRepurchased > 0 && !priceProxySuppressed) {
     gaps.push({
       field: "capital.buybackPriceAnalysis",
       reason: "current quote price missing — buyback premium/discount unavailable",

@@ -487,6 +487,31 @@ describe("GET /api/report/[jobId]/stream — revisioned snapshot protocol", () =
   });
 });
 
+describe("stream keepalive", () => {
+  /**
+   * The heartbeat comment is the only thing that keeps an idle connection (a
+   * long fetch step with no revision change) alive through an intermediary's
+   * idle timeout; on loopback nothing breaks when it stops, so it is pinned.
+   */
+  it("sends a heartbeat comment every 15 s, re-arming until the client goes away", async () => {
+    vi.useFakeTimers();
+    const { jobId } = createJob("AAPL");
+    const abort = new AbortController();
+    const response = await streamGET(...requestArgs(jobId, abort.signal));
+    const body = readBody(response);
+
+    await vi.advanceTimersByTimeAsync(15_001);
+    await vi.advanceTimersByTimeAsync(15_001);
+    // Not yet a third: the timer re-arms only after each successful enqueue.
+    await vi.advanceTimersByTimeAsync(1_000);
+    abort.abort();
+    const text = await body;
+
+    expect(text.match(/^: heartbeat$/gm)).toHaveLength(2);
+    expect(subscriberCount(jobId)).toBe(0);
+  });
+});
+
 describe("stream resource cleanup", () => {
   it("request abort invokes unsubscribe and clears each timer once", async () => {
     vi.useFakeTimers();

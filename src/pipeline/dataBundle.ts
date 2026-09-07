@@ -1,6 +1,6 @@
 /**
  * Stage A composition root: buildDataBundle(symbol) — turns a ticker into the
- * DataBundle everything downstream consumes (the application contract §3).
+ * DataBundle everything downstream consumes .
  *
  * Wiring (integration caveats from Phase 1):
  *  - FMP: createFmpClient({ cachedFetch }) takes an injected CachedFetchFn;
@@ -28,6 +28,7 @@ import {
   createFmpClient,
   isPlanLimited,
   FMP_EMPTY_ARRAY_REASON,
+  type FmpPlanLimit,
   type CachedFetchFn,
   type CachedFetchResult,
   type FmpClient,
@@ -60,7 +61,7 @@ import {
   SUCCESSOR_FORM,
   predecessorCandidates,
   predecessorFromFilers,
-  usGaapConceptCount,
+  hasOwnAnnualHistory,
   type PredecessorFacts,
 } from "@/edgar/successor";
 import {
@@ -117,11 +118,11 @@ import { applyKeylessFallbacks, type KeylessOutcome } from "@/pipeline/keyless";
 
 /** Benchmark index proxy for relative strength. */
 export const BENCHMARK_SYMBOL = "SPY";
-/** Annual statement history requested (SPEC §4: up to 10y CAGRs). */
+/** Annual statement history requested (up to 10y CAGRs). */
 export const ANNUAL_PERIODS = 10;
 /** Quarterly statement/EV history requested (20 rolling TTM windows + one headroom window). */
 export const QUARTERLY_PERIODS = 24;
-/** Daily price history window, years (SPEC §4 technicals). */
+/** Daily price history window, years (technicals). */
 export const EOD_YEARS = 5;
 
 const DAY_MS = 86_400_000;
@@ -621,7 +622,7 @@ function sortRowsNumeric<TRow extends FmpRawRow>(
 
 /**
  * Derive the next expected earnings date: the earliest future-dated row of
- * /stable/earnings (future rows carry epsActual=null — DATA_MAP §2.1).
+ * /stable/earnings (future rows carry epsActual=null).
  */
 function isValidIsoDate(date: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
@@ -938,6 +939,12 @@ export function selectAnnualFiling(
   if (tenK.ok) return tenK;
   const twentyF = filingFromSubmissions(sub, "20-F", field, "critical");
   if (twentyF.ok) return twentyF;
+  // A Canadian filer under the multijurisdictional disclosure system files
+  // Form 40-F: its annual report is an exhibit rather than itemised, so the
+  // section jobs below record gaps against it, but the filing is real and the
+  // manifest should name it rather than report "no annual report on file".
+  const fortyF = filingFromSubmissions(sub, "40-F", field, "critical");
+  if (fortyF.ok) return fortyF;
   // Neither on file: name both forms (reporting only the 20-F miss made a
   // domestic filer look foreign), and the one situation that leaves a listed
   // large cap with no annual report at all — a successor registrant (Form
@@ -946,7 +953,7 @@ export function selectAnnualFiling(
   const successor = sub.data.recentFilings.find((f) => f.form.trim() === "8-K12B");
   return gapResult(
     field,
-    `no "10-K" or "20-F" among ${sub.data.recentFilings.length} recent filings (exact form match; older overflow pages not searched)` +
+    `no "10-K", "20-F" or "40-F" among ${sub.data.recentFilings.length} recent filings (exact form match; older overflow pages not searched)` +
       (successor === undefined
         ? ""
         : `; the registrant is a successor issuer (Form 8-K12B filed ${successor.filingDate}) — its predecessor's annual reports live under another CIK that EDGAR does not link`),
@@ -1323,10 +1330,12 @@ async function resolvePredecessor(
 ): Promise<PredecessorFacts | null> {
   const eightK = recentFilings.find((filing) => filing.form.trim() === SUCCESSOR_FORM);
   if (eightK === undefined) return null;
-  // A successor that HAS its own history needs no second hop: the reorganized
-  // entity may have carried the XBRL forward, in which case reaching for the
-  // predecessor would double-count periods.
-  if (usGaapConceptCount(facts) > 0) return null;
+  // A successor that HAS its own annual history needs no second hop: the
+  // reorganized entity may have carried the XBRL forward, in which case
+  // reaching for the predecessor would double-count periods. One quarter of
+  // its own is not that: the first 10-Q after a reorganization fills the
+  // concept list without reaching back a single year.
+  if (hasOwnAnnualHistory(facts)) return null;
 
   progress(`EDGAR: ${symbol} is a successor issuer (${SUCCESSOR_FORM}) — resolving the predecessor CIK`);
   for (const candidate of predecessorCandidates(recentFilings, MAX_PREDECESSOR_HEADER_READS)) {
@@ -1343,10 +1352,10 @@ async function resolvePredecessor(
       edgar.companyFacts(registrant.cik10),
     );
     if (!predecessorFacts.ok) return null;
-    // A co-registrant with no us-gaap history of its own is not the
+    // A co-registrant with no ANNUAL us-gaap history of its own is not the
     // predecessor this exists to find — a financing subsidiary, say. Keep
     // looking rather than adopting an empty payload as the company's past.
-    if (usGaapConceptCount(predecessorFacts.value.data) === 0) continue;
+    if (!hasOwnAnnualHistory(predecessorFacts.value.data)) continue;
     return {
       ...registrant,
       facts: predecessorFacts.value.data,
@@ -1429,6 +1438,36 @@ export interface BuildDataBundleOptions {
    * DEFAULT_EDGAR_SECTION_BUDGET_MS. Overridable for tests/tuning.
    */
   edgarSectionBudgetMs?: number;
+}
+
+/**
+ * The manifest entry for a feed FMP's subscription capped.
+ *
+ * A subscription that caps `limit` served fewer periods than the pipeline
+ * asked for. The rows that arrived are real; what is missing is depth, and
+ * every consumer that needs more history discloses its own shortfall. This
+ * entry records WHY the history is short so a reader does not blame the
+ * provider's data or the pipeline's math — and, once the keyless backfill has
+ * appended the older periods from SEC EDGAR (the endpoint then carries
+ * "(older periods)"), it says so instead of still calling the history
+ * truncated beside the backfill entry that says it was filled.
+ */
+export function planLimitManifestEntry(
+  name: string,
+  value: { endpoint: string; data: { planLimit: FmpPlanLimit; rows?: readonly unknown[] } },
+): ManifestEntry {
+  const { applied, requested } = value.data.planLimit;
+  const backfilled = value.endpoint.includes("(older periods)");
+  const held = value.data.rows?.length;
+  return {
+    field: `fmp.planLimit(${name})`,
+    reason: backfilled
+      ? `FMP subscription caps 'limit' at ${applied}; ${applied} of ${requested} requested periods arrived from FMP and the older periods were backfilled from SEC EDGAR companyfacts${held === undefined ? "" : ` (${held} period(s) held now)`} — see the matching backfill entry`
+      : `FMP subscription caps 'limit' at ${applied}; served ${applied} of ${requested} requested periods, so history depth is truncated`,
+    severity: "info",
+    attemptedSources: [value.endpoint],
+    expected: true,
+  };
 }
 
 export async function buildDataBundle(
@@ -1951,22 +1990,9 @@ export async function buildDataBundle(
   const gaps = mergeManifest(
     [
       ...allResults.filter((r): r is { ok: false; gap: ManifestEntry } => !r.ok).map((r) => r.gap),
-      // A subscription that caps `limit` served fewer periods than the pipeline
-      // asked for. The rows that arrived are real; what is missing is depth, and
-      // every consumer that needs more history discloses its own shortfall. This
-      // entry records WHY the history is short so a reader does not blame the
-      // provider's data or the pipeline's math.
       ...Object.entries(resultRegistry).flatMap(([name, result]): ManifestEntry[] =>
         result.ok && isPlanLimited(result.value.data)
-          ? [
-              {
-                field: `fmp.planLimit(${name})`,
-                reason: `FMP subscription caps 'limit' at ${result.value.data.planLimit.applied}; served ${result.value.data.planLimit.applied} of ${result.value.data.planLimit.requested} requested periods, so history depth is truncated`,
-                severity: "info",
-                attemptedSources: [result.value.endpoint],
-                expected: true,
-              },
-            ]
+          ? [planLimitManifestEntry(name, { endpoint: result.value.endpoint, data: result.value.data })]
           : [],
       ),
       ...allResults.flatMap((result): ManifestEntry[] =>

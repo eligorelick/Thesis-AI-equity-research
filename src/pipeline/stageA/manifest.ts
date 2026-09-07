@@ -1,5 +1,5 @@
 /**
- * Missing-data manifest utilities (the application contract §3): every gap is disclosed, never
+ * Missing-data manifest utilities : every gap is disclosed, never
  * papered over. This module merges gap lists from many sources (provider
  * FetchResults, validation, structural seeds) into one deduped,
  * severity-ordered manifest for the report appendix.

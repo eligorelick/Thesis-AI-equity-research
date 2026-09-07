@@ -13,12 +13,16 @@
  * - mortgage-backed securities or loans held for investment WITHOUT investment
  *   property                                          → mortgage REIT
  *
- * The mortgage-REIT rule is the one rule that fires on a single tag group, so
- * its elements must be specific to that business model (they are: every tag
- * below names mortgage-backed securities or mortgage loans) AND the routing
- * layer requires corroboration — repo funding, or an already-financial SIC or
- * sector — before the tags alone may set a base route. Uncorroborated, the
- * disagreement is disclosed as a routing-evidence conflict instead.
+ * Two rules fire on a single tag group: the equity-REIT rule (investment
+ * property) and the mortgage-REIT rule (mortgage assets without investment
+ * property). The mortgage rule's elements must be specific to that business
+ * model (they are: every tag below names mortgage-backed securities or
+ * mortgage loans) AND the routing layer requires corroboration — repo funding,
+ * or an already-financial SIC or sector — before the tags alone may set a base
+ * route. The equity-REIT rule needs no corroboration only because the routing
+ * layer lets evidence SET a route solely on an undecided (no industry string)
+ * or financial-classified profile; against a declared non-financial industry
+ * and SIC either rule is disclosed as a routing-evidence conflict instead.
  *
  * A tag counts as present only when it carries a non-zero core-form fact whose
  * period end is within `recencyMonths` of the newest evidence fact on file, so

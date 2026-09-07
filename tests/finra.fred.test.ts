@@ -545,7 +545,10 @@ describe("fred series catalogs", () => {
     ["T10Y2Y", "lin", { unit: "pp", scale: 1, qualifier: null }],
     ["VIXCLS", "lin", { unit: "index", scale: 1, qualifier: null }],
     ["PAYEMS", "chg", { unit: "count", scale: 1e3, qualifier: "persons (FRED serves thousands; shown ×1,000)" }],
-    ["TOTALSA", "lin", { unit: "count", scale: 1e6, qualifier: "units (FRED serves millions; shown ×1,000,000)" }],
+    // Housing starts and vehicle sales are seasonally adjusted ANNUAL rates;
+    // the qualifier names the basis (audit 2026-09-06, F224).
+    ["HOUST", "lin", { unit: "count", scale: 1e3, qualifier: "units at a seasonally adjusted annual rate (FRED serves thousands; shown ×1,000)" }],
+    ["TOTALSA", "lin", { unit: "count", scale: 1e6, qualifier: "units at a seasonally adjusted annual rate (FRED serves millions; shown ×1,000,000)" }],
     ["DCOILWTICO", "lin", { unit: "USD", scale: 1, qualifier: "USD per barrel" }],
     ["PCE", "lin", { unit: "USD", scale: 1e9, qualifier: "USD (FRED serves billions; shown ×1,000,000,000)" }],
     ["NOSUCHSERIES", "lin", { unit: "", scale: 1, qualifier: null }],

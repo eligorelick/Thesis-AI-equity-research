@@ -7,7 +7,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { MODEL_REGISTRY } from "@/models/registry";
+import { MODEL_REGISTRY, isHighOrAboveEffort } from "@/models/registry";
+import { ANALYST_MAX_TOKENS, JUDGE_MAX_TOKENS } from "@/pipeline/stageC/passes";
 import {
   PASS_MAX_REQUESTS,
   maximumRequestCostUsd,
@@ -20,6 +21,8 @@ interface PricingModule {
   BEGIN_MARKER: string;
   END_MARKER: string;
   FIXTURE_RUN_SHAPE: { passes: Array<{ pass: string }> };
+  FIXTURE_RUN_EFFORT: string;
+  outputCeilingTokens(model: unknown, pass: string, effort: string, sizing: unknown): number;
   estimateRunCostUsd(model: unknown, judge: unknown, searchUsd: number): number;
   renderPricingBlock(registry: unknown, sizing: unknown): string;
   replaceBlock(readme: string, block: string): string;
@@ -33,6 +36,9 @@ const sizing = {
   maximumRequestCostUsd,
   passWorstCaseCostUsd,
   maxRequestsPerPass: PASS_MAX_REQUESTS,
+  isHighOrAboveEffort,
+  analystMaxTokens: ANALYST_MAX_TOKENS,
+  judgeMaxTokens: JUDGE_MAX_TOKENS,
 };
 
 describe("generated pricing block", () => {
@@ -53,6 +59,33 @@ describe("generated pricing block", () => {
     expect(block).toContain(`(${PASS_MAX_REQUESTS}: six transport`);
     expect(block).toContain("reported, not");
     expect(block).toContain("not a measurement");
+  });
+
+  /**
+   * Effort is the app's cost knob, and the block used to publish one figure for
+   * every level. The ceiling a pass bills against doubles at `high`
+   * (`effectiveMaxTokens`), so a `max` run on Fable 5.1 can emit $6.40 of output
+   * per analyst request where `low` cannot pass $3.20 — the step that turned one
+   * abandoned request into a $6.86 pass on 2026-09-03.
+   */
+  it("publishes the analyst output ceiling on both sides of the effort step", async () => {
+    const { renderPricingBlock, outputCeilingTokens } = await load();
+    const fable = MODEL_REGISTRY.models.find((m) => m.id === "claude-fable-5-1")!;
+    const haiku = MODEL_REGISTRY.models.find((m) => m.id === "claude-haiku-4-5")!;
+
+    // Below `high` the pass constant applies; at `high` and above, the ceiling.
+    expect(outputCeilingTokens(fable, "bull", "medium", sizing)).toBe(ANALYST_MAX_TOKENS);
+    expect(outputCeilingTokens(fable, "bull", "high", sizing)).toBe(fable.maxOutputTokens);
+    expect(outputCeilingTokens(fable, "synthesize", "low", sizing)).toBe(JUDGE_MAX_TOKENS);
+    // Haiku's own ceiling IS the analyst constant, so it has no step to show.
+    expect(outputCeilingTokens(haiku, "bull", "max", sizing)).toBe(ANALYST_MAX_TOKENS);
+
+    const block = renderPricingBlock(MODEL_REGISTRY, sizing);
+    // 64K then 128K output at $50/MTok.
+    expect(block).toContain("| Claude Fable 5.1 | $18.98 | $18.90 | $683.28 | $3.20 → $6.40 |");
+    // 64K at $10/MTok, and no arrow: the step does not exist on this model.
+    expect(block).toContain("| Claude Haiku 4.5 | $0.65 | $3.78 | $23.40 | $0.32 |");
+    expect(block).toContain("does NOT scale with effort");
   });
 
   it("prices the fixture run shape from the registry, cache reads included", async () => {

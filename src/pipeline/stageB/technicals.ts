@@ -2,7 +2,7 @@
  * Stage B — Technicals. Pure, deterministic computation from EOD OHLCV rows
  * (FMP `historical-price-eod/full` field names: date/open/high/low/close/volume).
  * FMP indicator endpoints are NOT used — everything is computed locally
- * (the application contract §4, the provider data contract §2.7).
+ * .
  *
  * Design rules honored here:
  * - No network / db / LLM. Plain typed inputs in, typed results out.
@@ -1264,7 +1264,7 @@ export function computeTechnicals(
   if (px.length < 200) {
     gaps.push({
       field: "technicals.sma200",
-      reason: `only ${px.length} trading rows available (<200) — SMA200/cross state unavailable (recent-IPO overlay case)`,
+      reason: `only ${px.length} trading rows available (<200) — SMA200/cross state unavailable (insufficient price history; a short series is not evidence of a recent listing)`,
       severity: "info",
     });
   }
@@ -1323,8 +1323,12 @@ export function computeTechnicals(
       `Price ${fmt1(pctVs200)}% ${pctVs200 >= 0 ? "above" : "below"} SMA200${crossSuffix}.`,
     );
   } else {
+    // Row count alone never asserts a listing event: a failed older EOD chunk
+    // truncates a decades-old issuer's history to a handful of rows, and the
+    // routing layer's rule (sparse history is "insufficient coverage", never
+    // a recent IPO) applies to prices as it does to statements.
     flags.push(
-      `Only ${px.length} sessions of price history — SMA200 and long-window technicals unavailable (recent-IPO overlay).`,
+      `Only ${px.length} sessions of price history — SMA200 and long-window technicals unavailable (insufficient price history).`,
     );
   }
   if (rsi.value !== null && rsi.value >= RSI_OVERBOUGHT) {
@@ -1371,8 +1375,13 @@ export function computeTechnicals(
   }
   const dd1y = drawdowns.find((d) => d.windowYears === 1);
   if (dd1y && dd1y.depthPct !== null && dd1y.depthPct >= DEEP_DRAWDOWN_FLAG_PCT) {
+    // A peak-to-trough measured over three months is not a one-year statistic
+    // (the same rule range52w applies): the window label says what it spans.
+    const windowLabel = dd1y.insufficientHistory
+      ? `Max drawdown over the available ${px.length}-session history (does not span 1y)`
+      : "Max 1y drawdown";
     flags.push(
-      `Max 1y drawdown ${fmt1(dd1y.depthPct)}% (peak ${dd1y.peakDate ?? "n/a"} → trough ${dd1y.troughDate ?? "n/a"}), ${dd1y.recovered ? "since recovered" : "not yet recovered"}.`,
+      `${windowLabel} ${fmt1(dd1y.depthPct)}% (peak ${dd1y.peakDate ?? "n/a"} → trough ${dd1y.troughDate ?? "n/a"}), ${dd1y.recovered ? "since recovered" : "not yet recovered"}.`,
     );
   }
 

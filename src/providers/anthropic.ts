@@ -5,7 +5,7 @@
  * SERVER-ONLY. Never import this module from a client component: it reads
  * ANTHROPIC_API_KEY from the environment.
  *
- * Design notes (the application contract §5, the cost model, the Anthropic API contract):
+ * Design notes :
  * - No key → every call returns a FetchResult gap ("no Anthropic key") so the
  *   pipeline can dry-run end-to-end without throwing.
  * - All requests go through the beta messages surface (`client.beta.messages`)
@@ -19,7 +19,7 @@
  *   (config/models.json via src/models/registry.ts), never hard-coded here.
  *
  * Bull-first-then-bear cache-write sequencing (load-bearing for cost —
- * the cost model §2): a prompt-cache entry becomes readable only once the first
+ * the cost model): a prompt-cache entry becomes readable only once the first
  * response *begins streaming*. Fire the bull pass with `runPassStreaming`,
  * await its `firstToken` promise, then fire the bear pass — it reads the
  * cache bull just wrote instead of paying a second 1.25x write:
@@ -33,6 +33,7 @@
 import "server-only";
 
 import Anthropic, {
+  AnthropicError,
   APIConnectionError,
   APIConnectionTimeoutError,
   APIError,
@@ -53,6 +54,7 @@ import type {
 import { getConfig } from "@/config/env";
 import {
   ANTHROPIC_REQUEST_TIMEOUT_MS as REQUEST_TIMEOUT_MS,
+  MODEL_STAGE_DEADLINE_MS,
 } from "@/pipeline/leaseTiming";
 import { modelSupportsEffort } from "@/report/execution";
 import {
@@ -65,6 +67,7 @@ import {
   isHighOrAboveEffort,
   judgeFloorModelId,
   resolveRegistryModel,
+  type RegistryEffortLevel,
   type RegistryModel,
 } from "@/models/registry";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
@@ -75,10 +78,10 @@ import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
  * ------------------------------------------------------------------------ */
 
 /**
- * "auto" model resolution preference order (the application contract §5).
+ * "auto" model resolution preference order.
  *
  * Opus FIRST — the tier recommended for accurate professional analysis in the
- * Anthropic API contract §9. Opus 5 leads and Opus 4.8 is the immediate
+ * Anthropic API contract. Opus 5 leads and Opus 4.8 is the immediate
  * fallback: they are the same price ($5/$25) and the same context (1M), so
  * preferring the newer model costs nothing, and resolution already probes
  * models.list() and falls through when a key cannot reach Opus 5.
@@ -111,7 +114,7 @@ function defaultAutoModel(): string {
  * is refused by {@link webSearchTool} rather than sent.
  *
  * `web_search_20260318` = dynamic filtering + `response_inclusion` (the
- * Anthropic API contract §2). `web_search_20250305` is the basic variant for
+ * Anthropic API contract). `web_search_20250305` is the basic variant for
  * models without dynamic-filtering support: Haiku 4.5 rejects the modern one
  * with 400 "does not support programmatic tool calling" (verified live
  * 2026-07-08).
@@ -133,6 +136,61 @@ export const WEB_SEARCH_TOOL_TYPE_BASIC = "web_search_20250305" as const;
  */
 export function streamIdleTimeoutMs(): number {
   return getConfig().streamIdleTimeoutMs;
+}
+
+/**
+ * Effort multipliers on the idle limit.
+ *
+ * The guard is blind to two things at once. It cannot see that the request is
+ * alive — Anthropic keeps a long stream warm with SSE `ping` events, and the
+ * SDK drops them before any listener runs (`core/streaming.js`:
+ * `if (sse.event === 'ping') continue;`) — and it cannot see that the model is
+ * working, because Thesis never asks for thinking summaries: the Fable family
+ * gets no `thinking` param at all (always-on) and Opus gets
+ * `{type: "adaptive"}` with no `display`, so `display` is the API default
+ * "omitted" on every model and reasoning produces no stream traffic.
+ *
+ * So the guard measures "no application events", which on a thinking model is
+ * normal. Effort is the only knob that sets how deep that reasoning goes, and
+ * Anthropic's guidance is that a single Fable request at high effort runs many
+ * minutes — a flat limit survivable at `low` is a guaranteed false abort at
+ * `max`. That is what happened on 2026-09-03: AMZN on claude-fable-5-1 at
+ * effort `max`, five reported output tokens, abandoned at 120s and settled at
+ * a presumed 127,995-token remainder ($6.40 of a $6.86 pass) for a run that
+ * produced no report.
+ *
+ * The tiers are policy, not measurement: a straight-line widening with thinking
+ * depth on top of a base that already sits at undici's body-timeout window, so
+ * a dead connection is caught by the layer that CAN see pings and this guard is
+ * left as the backstop for a socket kept warm by pings that never produces
+ * anything. The ceiling is the model stage's own deadline, past which the guard
+ * could never fire. THESIS_STREAM_IDLE_SECONDS scales all of them; zero still
+ * disables the guard entirely.
+ */
+export const STREAM_IDLE_EFFORT_MULTIPLIER: Readonly<Record<RegistryEffortLevel, number>> = {
+  low: 1,
+  medium: 1,
+  high: 2,
+  xhigh: 3,
+  max: 4,
+};
+
+/**
+ * Idle limit for one request at a given effort: the configured base scaled by
+ * {@link STREAM_IDLE_EFFORT_MULTIPLIER}, clamped to the model stage's deadline.
+ *
+ * The clamp is the STAGE deadline, not ANTHROPIC_REQUEST_TIMEOUT_MS: that
+ * timeout is armed around the fetch itself, which for a streaming request
+ * resolves as soon as the response headers arrive, so it bounds how long the
+ * provider may take to ANSWER and not how long the stream may run. Undefined
+ * effort (a model that does not support it, or a caller that sends none) keeps
+ * the unscaled base.
+ */
+export function streamIdleTimeoutMsFor(effort: RegistryEffortLevel | undefined): number {
+  const base = streamIdleTimeoutMs();
+  if (base <= 0) return 0;
+  const multiplier = effort === undefined ? 1 : STREAM_IDLE_EFFORT_MULTIPLIER[effort];
+  return Math.min(base * multiplier, MODEL_STAGE_DEADLINE_MS);
 }
 
 /** A stream that accepted the request and then produced nothing for too long. */
@@ -424,9 +482,84 @@ export const PASS_TRANSPORT_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 
 export const PASS_MID_STREAM_RETRY_DELAYS_MS: readonly number[] = [15_000, 30_000];
 
 /**
+ * Error codes Node and undici (which Node 24 bundles) put on a connection
+ * that died. undici's body timeout, the layer that CAN see the provider's SSE
+ * pings, surfaces as `TypeError: terminated` with a `BodyTimeoutError` cause.
+ */
+const CONNECTION_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_ABORTED",
+  "UND_ERR_RES_CONTENT_LENGTH_MISMATCH",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ECONNABORTED",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+]);
+
+/** The error and every `cause` beneath it (bounded; a cycle cannot spin). */
+function causeChain(err: unknown): unknown[] {
+  const chain: unknown[] = [];
+  let current: unknown = err;
+  for (let depth = 0; depth < 8 && current !== undefined && current !== null; depth += 1) {
+    if (chain.includes(current)) break;
+    chain.push(current);
+    current = (current as { cause?: unknown }).cause;
+  }
+  return chain;
+}
+
+/** The connection-failure code carried anywhere on the cause chain, if any. */
+export function connectionFailureCode(err: unknown): string | null {
+  for (const entry of causeChain(err)) {
+    const code = (entry as { code?: unknown } | null)?.code;
+    if (typeof code === "string" && CONNECTION_FAILURE_CODES.has(code)) return code;
+  }
+  return null;
+}
+
+/**
+ * A stream that died between the response headers and `message_stop`.
+ *
+ * The SDK produces `APIConnectionError` only for a fetch that fails BEFORE the
+ * headers arrive. A body that dies mid-stream — undici's ~300s idle body
+ * timeout, a socket reset, a clean close before `message_stop` — reaches the
+ * stream's error handler as an ordinary Error and is re-wrapped as a BARE
+ * `AnthropicError` (not an APIError) carrying the network error on `cause`
+ * (`lib/BetaMessageStream.js` #handleError), or thrown by `finalMessage()`
+ * with one of the SDK's own "stream ended without producing …" messages.
+ * Until this was recognised, every such death was classified as a programming
+ * error: the pass promise REJECTED, nothing was retried, and the usage the
+ * stream had already billed was dropped — exactly the class of loss the
+ * transport retries exist for. The SDK's programming-error messages ("Cannot
+ * iterate over a consumed stream", "no body") are not matched.
+ */
+export function isStreamConnectionFailure(err: unknown): boolean {
+  if (!(err instanceof AnthropicError) || err instanceof APIError) return false;
+  if (connectionFailureCode(err) !== null) return true;
+  // undici reports a dead body as `TypeError: terminated` / `fetch failed`.
+  if (causeChain(err).some((entry) => entry instanceof TypeError)) return true;
+  const message = err.message.toLowerCase();
+  return (
+    message.includes("stream ended without producing") ||
+    message.includes("terminated") ||
+    message.includes("fetch failed") ||
+    message.includes("premature")
+  );
+}
+
+/**
  * Whether a failed pass attempt is worth re-issuing from scratch.
- * - Connection failures (network drop, undici's ~300s idle body timeout on a
- *   hung stream) → yes.
+ * - Connection failures before the headers (APIConnectionError) and a stream
+ *   that died after them (undici's ~300s idle body timeout on a hung stream, a
+ *   socket reset, a premature close — {@link isStreamConnectionFailure}) → yes.
  * - HTTP 408/409/429/5xx (the SDK's own retryable set, seen here only after
  *   CLIENT_MAX_RETRIES exhausted) → yes: by then minutes have passed, and the
  *   pass-level backoff operates on a longer timescale than the SDK's.
@@ -437,6 +570,7 @@ export const PASS_MID_STREAM_RETRY_DELAYS_MS: readonly number[] = [15_000, 30_00
 export function isRetryableTransportError(err: unknown): boolean {
   if (err instanceof APIUserAbortError) return false;
   if (err instanceof APIConnectionError) return true;
+  if (isStreamConnectionFailure(err)) return true;
   if (err instanceof APIError) {
     if (typeof err.status === "number") {
       return err.status === 408 || err.status === 409 || err.status === 429 || err.status >= 500;
@@ -872,7 +1006,68 @@ export function collectFetchedUrls(message: BetaMessage): string[] {
   return [...urls].sort();
 }
 
+/** One hop of a multi-model response, as `usage.iterations` reports it. */
+interface PricedIteration {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+}
+
+function pricedIteration(entry: unknown): PricedIteration | null {
+  if (typeof entry !== "object" || entry === null) return null;
+  const e = entry as Record<string, unknown>;
+  if (typeof e.model !== "string" || !findPricing(e.model)) return null;
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const input = num(e.input_tokens);
+  const output = num(e.output_tokens);
+  if (input === null || output === null) return null;
+  return {
+    model: e.model,
+    input_tokens: input,
+    output_tokens: output,
+    cache_creation_input_tokens: num(e.cache_creation_input_tokens) ?? 0,
+    cache_read_input_tokens: num(e.cache_read_input_tokens) ?? 0,
+  };
+}
+
+/**
+ * Price a response hop by hop when the provider billed it under more than one
+ * model. A server-side refusal fallback bills the declining hop's streamed
+ * tokens at the declining model's rate and the rescue at the fallback model's
+ * (a Fable → Opus fallback is 2× on the first hop); `usage.iterations` carries
+ * each hop's model and tokens. Used only when every hop names a priced model
+ * AND the hops account for exactly the message's token totals — otherwise the
+ * single-model price stands, which is what one hop is anyway.
+ */
+function costPerIteration(message: BetaMessage): number | null {
+  const entries = message.usage.iterations ?? [];
+  if (entries.length < 2) return null;
+  const hops: PricedIteration[] = [];
+  for (const entry of entries) {
+    const hop = pricedIteration(entry);
+    if (hop === null) return null;
+    hops.push(hop);
+  }
+  const sum = (pick: (hop: PricedIteration) => number): number =>
+    hops.reduce((total, hop) => total + pick(hop), 0);
+  const u = message.usage;
+  const matches =
+    sum((h) => h.input_tokens) === u.input_tokens &&
+    sum((h) => h.output_tokens) === u.output_tokens &&
+    sum((h) => h.cache_creation_input_tokens) === (u.cache_creation_input_tokens ?? 0) &&
+    sum((h) => h.cache_read_input_tokens) === (u.cache_read_input_tokens ?? 0);
+  if (!matches) return null;
+  return (
+    hops.reduce((total, hop) => total + computeCostUsd(hop, hop.model), 0) +
+    webSearchCount(message) * WEB_SEARCH_USD_PER_SEARCH
+  );
+}
+
 function costForMessage(message: BetaMessage, opts: RunPassOptions): number {
+  const perHop = costPerIteration(message);
+  if (perHop !== null) return perHop;
   // A fallback-served response reports the serving model's canonical id;
   // fall back to the requested model if the served id has no pricing entry.
   const pricingModel = findPricing(message.model) ? message.model : opts.model;
@@ -1106,7 +1301,11 @@ export interface PassError {
   message: string;
   /** kind "refusal": policy category from stop_details (may be null). */
   refusalCategory?: "cyber" | "bio" | "frontier_llm" | "reasoning_extraction" | null;
-  /** kind "max_tokens"/"context_window": the limit configured for the request. */
+  /**
+   * kind "max_tokens"/"context_window": the `max_tokens` the request actually
+   * SENT ({@link effectiveMaxTokens}) — at effort `high` and above that is the
+   * model's registry ceiling, not the pass constant.
+   */
   maxTokens?: number;
   /** Usage/cost of the failed attempt(s) (mid-stream failures bill partial output). */
   usage?: BetaUsage;
@@ -1116,6 +1315,13 @@ export interface PassError {
   model?: string;
   /** Web searches billed across failed attempt(s) ($0.01 each, kind "transport"). */
   webSearches?: number;
+  /**
+   * kind "transport": the CALLER aborted the request (its signal fired); the
+   * provider did not fail it. An orchestrator that stops a pass on purpose
+   * uses this to tell its own abort from a provider fault that landed at the
+   * same moment.
+   */
+  aborted?: true;
 }
 
 export interface PassOutcome {
@@ -1196,17 +1402,28 @@ function interpretPassMessages(
     };
   }
 
+  // Both truncation gaps name the limit that was actually SENT: at effort
+  // `high` and above buildPassParams raises max_tokens to the model's registry
+  // ceiling, and a gap that quoted the pass constant told the reader to "retry
+  // with a higher limit" when no higher limit existed for that model.
+  const sentMaxTokens = effectiveMaxTokens(opts);
   if (message.stop_reason === "max_tokens") {
+    const atCeiling = sentMaxTokens >= modelMaxOutputTokens(opts.model);
     return {
       ok: false,
       gap: gapEntry(
         opts,
-        `Pass truncated at max_tokens=${opts.maxTokens} — output incomplete; retry with a higher limit`,
+        `Pass truncated at max_tokens=${sentMaxTokens} — output incomplete; ` +
+          (atCeiling
+            ? "that is the model's registry ceiling, so a retry needs a shorter prompt or a different model"
+            : "retry at a higher effort, which raises max_tokens to the model's registry ceiling"),
       ),
       error: {
         kind: "max_tokens",
-        message: `Response hit max_tokens=${effectiveMaxTokens(opts)} before completing. Retry at a higher effort, which raises max_tokens to the model's registry ceiling.`,
-        maxTokens: opts.maxTokens,
+        message: atCeiling
+          ? `Response hit max_tokens=${sentMaxTokens}, the model's registry ceiling, before completing.`
+          : `Response hit max_tokens=${sentMaxTokens} before completing. Retry at a higher effort, which raises max_tokens to the model's registry ceiling.`,
+        maxTokens: sentMaxTokens,
         usage,
         costUsd,
         fallbackUsed,
@@ -1219,12 +1436,12 @@ function interpretPassMessages(
       ok: false,
       gap: gapEntry(
         opts,
-        `Pass stopped at model context window (stop_reason "model_context_window_exceeded") with max_tokens=${opts.maxTokens} - reduce input payload or maxTokens`,
+        `Pass stopped at model context window (stop_reason "model_context_window_exceeded") with max_tokens=${sentMaxTokens} - reduce input payload or maxTokens`,
       ),
       error: {
         kind: "context_window",
-        message: `Response stopped because input plus max_tokens exceeded the model context window. Reduce the prompt size or maxTokens=${opts.maxTokens}; partial output discarded.`,
-        maxTokens: opts.maxTokens,
+        message: `Response stopped because input plus max_tokens exceeded the model context window. Reduce the prompt size or maxTokens=${sentMaxTokens}; partial output discarded.`,
+        maxTokens: sentMaxTokens,
         usage,
         costUsd,
         fallbackUsed,
@@ -1294,14 +1511,17 @@ interface ResumedMessage {
 }
 
 /**
- * A pause-resumption `create()` call failed AFTER earlier messages of the same
- * pass attempt were fully received (and billed). Carries those messages so the
- * caller's transport accounting doesn't lose their real spend.
+ * A pause-resumption request failed AFTER earlier messages of the same pass
+ * attempt were fully received (and billed). Carries those messages so the
+ * caller's transport accounting doesn't lose their real spend, plus the
+ * streamed-usage snapshot of the resumption itself, whose permit the
+ * resumption already settled.
  */
 class ResumptionFailedError extends Error {
   constructor(
     readonly cause: unknown,
     readonly billableMessages: BetaMessage[],
+    readonly snapshot: StreamedUsageSnapshot = { model: null, usage: null },
   ) {
     super(errorMessageOf(cause));
     this.name = "ResumptionFailedError";
@@ -1313,26 +1533,12 @@ function errorMessageOf(err: unknown): string {
 }
 
 /**
- * Resume a `stop_reason: "pause_turn"` message by re-sending the assistant's
- * paused content UNCHANGED as an appended assistant turn (explicitly NOT a new
- * "continue" user message), bounded by {@link MAX_PAUSE_RESUMPTIONS} so a turn
- * that keeps re-pausing can't loop
- * forever. Resumption calls are plain (non-streaming) `create()` regardless of
- * whether the original request streamed — a paused turn's content is already
- * fully materialized (it's a complete message, not a partial stream), so there
- * is no first-token/cache-warming reason to stream the resumption itself.
- * Returns the message unchanged if it never paused; returns the last (still
- * "pause_turn") message if the budget is exhausted — interpretPassMessage
- * files that as a typed "paused" error rather than misreading it as success.
- * Throws {@link ResumptionFailedError} (wrapping the cause + the messages
- * billed so far) if a resumption call itself fails.
- */
-/**
  * Settle one admitted request with what it actually billed. A request the
  * provider never answered settles at $0 unless it was sent and then timed out
- * — that case is presumed at the request maximum until something reconciles
- * it, because Anthropic may have generated (and billed) the whole response
- * with nobody listening (DECISIONS D-10).
+ * or lost its connection while answering — that case is presumed at the
+ * request maximum until something reconciles it, because Anthropic may have
+ * generated (and billed) the whole response with nobody listening
+ * (DECISIONS D-10).
  */
 async function settleRequest(
   admission: RequestAdmission | undefined,
@@ -1365,14 +1571,96 @@ async function settleRequest(
   });
 }
 
-/** Did this request reach the provider and then stop answering? */
+/**
+ * Did this request reach the provider and then stop answering, or lose its
+ * connection while the provider was answering? Either way generation may have
+ * happened (and billed) with nobody listening, so an unanswered request of
+ * this kind is presumed rather than released.
+ */
 function timedOutAfterSend(err: unknown): boolean {
   if (err instanceof StreamIdleTimeoutError) return true;
   if (err instanceof APIConnectionTimeoutError) return true;
+  if (isStreamConnectionFailure(err)) return true;
   const message = errorMessageOf(err).toLowerCase();
   return message.includes("timeout") || message.includes("timed out");
 }
 
+/**
+ * Open one streaming request and wait for its final message under the idle
+ * guard. `snapshot` is filled in as events arrive so the caller can settle
+ * whatever the stream billed if it dies. On idle timeout the stream is aborted
+ * (so it cannot keep generating, and billing, after nobody is reading) and a
+ * {@link StreamIdleTimeoutError} is thrown; any other failure is rethrown as
+ * the SDK raised it.
+ */
+async function streamFinalMessage(
+  client: Anthropic,
+  params: MessageCreateParamsNonStreaming,
+  signal: AbortSignal | undefined,
+  idleMs: number,
+  snapshot: StreamedUsageSnapshot,
+  onFirstEvent?: () => void,
+): Promise<BetaMessage> {
+  const stream = client.beta.messages.stream(params, { signal, timeout: REQUEST_TIMEOUT_MS });
+  trackStreamedUsage(stream, snapshot);
+  if (onFirstEvent !== undefined) stream.once("streamEvent", onFirstEvent);
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearIdle = (): void => {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    idleTimer = undefined;
+  };
+  // Idle guard: every stream event restarts the clock, and silence past the
+  // limit abandons the attempt rather than holding the durable lease until the
+  // transport timeout.
+  let tripIdle: (() => void) | undefined;
+  const idleGuard = new Promise<never>((_resolve, reject) => {
+    tripIdle = (): void => reject(new StreamIdleTimeoutError(idleMs));
+  });
+  idleGuard.catch(() => {}); // raced below; never an unhandled rejection
+  const resetIdle = (): void => {
+    if (idleMs <= 0) return;
+    clearIdle();
+    idleTimer = setTimeout(() => tripIdle?.(), idleMs);
+    idleTimer.unref?.();
+  };
+  stream.on("streamEvent", resetIdle);
+  resetIdle();
+  try {
+    return await Promise.race([stream.finalMessage(), idleGuard]);
+  } catch (err) {
+    if (err instanceof StreamIdleTimeoutError) {
+      (stream as { abort?: () => void } | undefined)?.abort?.();
+    }
+    throw err;
+  } finally {
+    clearIdle();
+  }
+}
+
+/**
+ * Resume a `stop_reason: "pause_turn"` message by re-sending the assistant's
+ * paused content UNCHANGED as an appended assistant turn (explicitly NOT a new
+ * "continue" user message), bounded by {@link MAX_PAUSE_RESUMPTIONS} so a turn
+ * that keeps re-pausing can't loop forever.
+ *
+ * The resumption STREAMS, under the same idle guard as the first request
+ * (DECISIONS D-09). It used to be a plain non-streaming `create()` with the
+ * 600 s client timeout: the paused content is fully materialized, so there was
+ * no cache-warming reason to stream — but the resumed turn is itself a full
+ * generation, up to the registry output ceiling at high effort, and a
+ * non-streaming request that outlives the client timeout is cut off client
+ * side while the server keeps generating and billing, then presumed at the
+ * request maximum and retried from scratch, which cannot succeed either.
+ * Streaming gives the resumption the idle guard, the usage snapshot and the
+ * same settlement rules as the request it continues.
+ *
+ * Returns the message unchanged if it never paused; returns the last (still
+ * "pause_turn") message if the budget is exhausted — interpretPassMessage
+ * files that as a typed "paused" error rather than misreading it as success.
+ * Throws {@link ResumptionFailedError} (wrapping the cause, the messages
+ * billed so far and the resumption's own usage snapshot) if a resumption
+ * fails; the resumption settles its own permit before throwing.
+ */
 async function resumeIfPausedWithUsage(
   client: Anthropic,
   params: MessageCreateParamsNonStreaming,
@@ -1380,6 +1668,9 @@ async function resumeIfPausedWithUsage(
   signal?: AbortSignal,
   opts?: RunPassOptions,
   attempt = 1,
+  idleMs: number = opts === undefined
+    ? streamIdleTimeoutMs()
+    : streamIdleTimeoutMsFor(supportsEffort(opts.model) ? opts.effort : undefined),
 ): Promise<ResumedMessage> {
   let current = params;
   let msg = message;
@@ -1401,16 +1692,29 @@ async function resumeIfPausedWithUsage(
         maximumUsd: requestReservationUsd(opts),
       });
     }
+    const snapshot: StreamedUsageSnapshot = { model: null, usage: null };
     try {
-      msg = await client.beta.messages.create(current, {
-        signal,
-        timeout: REQUEST_TIMEOUT_MS,
-      });
+      msg = await streamFinalMessage(client, current, signal, idleMs, snapshot);
     } catch (err) {
       if (opts !== undefined) {
-        await settleRequest(admission, permit, opts, null, timedOutAfterSend(err));
+        if (
+          err instanceof StreamIdleTimeoutError ||
+          (err instanceof APIUserAbortError && snapshot.usage !== null)
+        ) {
+          // Generation had started and nobody knows how far it got: what was
+          // reported plus the presumed remainder, like the first request.
+          await settlePresumedRemainder(opts, permit, snapshot);
+        } else {
+          await settleRequest(
+            admission,
+            permit,
+            opts,
+            billedMessageFromSnapshot(snapshot, opts),
+            timedOutAfterSend(err),
+          );
+        }
       }
-      throw new ResumptionFailedError(err, billableMessages);
+      throw new ResumptionFailedError(err, billableMessages, snapshot);
     }
     if (opts !== undefined) await settleRequest(admission, permit, opts, msg, false);
     billableMessages.push(msg);
@@ -1469,10 +1773,12 @@ interface StreamedUsageSnapshot {
   usage: BetaUsage | null;
 }
 
-function trackStreamedUsage(stream: {
-  on: (event: "streamEvent", listener: (event: BetaRawMessageStreamEvent) => void) => unknown;
-}): StreamedUsageSnapshot {
-  const snapshot: StreamedUsageSnapshot = { model: null, usage: null };
+function trackStreamedUsage(
+  stream: {
+    on: (event: "streamEvent", listener: (event: BetaRawMessageStreamEvent) => void) => unknown;
+  },
+  snapshot: StreamedUsageSnapshot = { model: null, usage: null },
+): StreamedUsageSnapshot {
   stream.on("streamEvent", (event: BetaRawMessageStreamEvent) => {
     if (event.type === "message_start") {
       snapshot.model = event.message.model;
@@ -1533,23 +1839,30 @@ function billedMessageFromSnapshot(
 }
 
 /**
- * Settle a stream that went silent (DECISIONS D-09): what the provider
- * reported before it stalled, PLUS the worst case for the rest of the
- * response, priced at the model's output rate for the tokens the request
- * could still emit.
+ * The result for a stream abandoned after generation started (DECISIONS
+ * D-09): what the provider reported before it stopped being read, PLUS the
+ * worst case for the rest of the response, priced at the model's output rate
+ * for the tokens the request could still emit.
  *
- * Anthropic bills for generation, and a stalled stream gives no way to know
- * how much of it happened. Recording only the last reported usage would
- * understate the charge exactly when nothing else can correct it, so the
- * remainder is presumed spent and named as presumed. The whole figure stays
- * inside the pass reservation, which already bounds the full output ceiling.
+ * Anthropic bills for generation, and neither a stalled stream nor one the
+ * caller aborted gives any way to know how much of it happened: the API
+ * reports cumulative output tokens only in the final `message_delta`, so a
+ * stream cut mid-generation has reported input tokens and ~1 output token.
+ * Recording only the last reported usage would understate the charge exactly
+ * when nothing else can correct it, so the remainder is presumed spent and
+ * named as presumed. The whole figure stays inside the pass reservation,
+ * which already bounds the full output ceiling. `headline` is what the pass
+ * gap and error say happened; `aborted` marks a caller abort so an
+ * orchestrator that stopped the request on purpose can tell it from a
+ * provider fault.
  */
-function deadStreamResult(
+function presumedRemainderResult(
   opts: RunPassOptions,
   snapshot: StreamedUsageSnapshot,
-  idleMs: number,
   priorBilled: readonly BetaMessage[],
   attempts: number,
+  headline: string,
+  aborted: boolean,
 ): RunPassResult {
   const reported = billedMessageFromSnapshot(snapshot, opts);
   const billedMessages = reported ? [...priorBilled, reported] : [...priorBilled];
@@ -1559,15 +1872,17 @@ function deadStreamResult(
   const remainderUsd = (remainingOutputTokens / 1_000_000) * pricing.outputPerMTok;
   const reportedUsd = billedMessages.reduce((sum, m) => sum + costForMessage(m, opts), 0);
   const usage = billedMessages.length > 0 ? aggregateUsage(billedMessages) : undefined;
+  const attemptNoun = `${attempts} attempt${attempts === 1 ? "" : "s"}`;
   const detail =
-    `${new StreamIdleTimeoutError(idleMs).message}; settled ${billedMessages.length > 0 ? "reported usage" : "no reported usage"} ` +
+    `${headline}; settled ${billedMessages.length > 0 ? "reported usage" : "no reported usage"} ` +
     `plus a presumed ${remainingOutputTokens.toLocaleString("en-US")} remaining output tokens at $${pricing.outputPerMTok}/MTok`;
   return {
     ok: false,
-    gap: gapEntry(opts, `LLM pass abandoned after ${attempts} attempt${attempts === 1 ? "" : "s"}: ${detail}`),
+    gap: gapEntry(opts, `LLM pass abandoned after ${attemptNoun}: ${detail}`),
     error: {
       kind: "transport",
-      message: `stream idle timeout after ${attempts} attempt${attempts === 1 ? "" : "s"}: ${detail}`,
+      ...(aborted ? { aborted: true as const } : {}),
+      message: `${aborted ? "request aborted by the caller" : "stream idle timeout"} after ${attemptNoun}: ${detail}`,
       usage,
       costUsd: reportedUsd + remainderUsd,
       fallbackUsed: billedMessages.some(detectFallbackUsed),
@@ -1577,15 +1892,34 @@ function deadStreamResult(
   };
 }
 
+/** The idle-guard result: {@link presumedRemainderResult} under its own headline. */
+function deadStreamResult(
+  opts: RunPassOptions,
+  snapshot: StreamedUsageSnapshot,
+  idleMs: number,
+  priorBilled: readonly BetaMessage[],
+  attempts: number,
+): RunPassResult {
+  return presumedRemainderResult(
+    opts,
+    snapshot,
+    priorBilled,
+    attempts,
+    new StreamIdleTimeoutError(idleMs).message,
+    false,
+  );
+}
+
 /**
- * Settle a request abandoned by the idle guard: what it reported, plus the
- * presumed remainder, as one admitted request.
+ * Settle a request abandoned after generation started — by the idle guard or
+ * by the caller's abort — as one admitted request: what it reported, plus the
+ * presumed remainder, flagged presumed so `npm run costs:reconcile` can lower
+ * it against the provider's reported totals.
  */
-async function settleIdleRequest(
+async function settlePresumedRemainder(
   opts: RunPassOptions,
   permit: RequestPermit | null,
   snapshot: StreamedUsageSnapshot,
-  idleMs: number,
 ): Promise<void> {
   if (opts.admission === undefined || permit === null) return;
   const reported = billedMessageFromSnapshot(snapshot, opts);
@@ -1603,7 +1937,6 @@ async function settleIdleRequest(
     fallbackUsed: reported === null ? false : detectFallbackUsed(reported),
     presumed: true,
   });
-  void idleMs;
 }
 
 /**
@@ -1659,6 +1992,11 @@ function transportFailureResult(
     gap: gapEntry(opts, `LLM pass transport failure after ${attemptNoun} (incl. automatic retries): ${raw}`),
     error: {
       kind: "transport",
+      // The caller aborted this request, rather than the provider failing it.
+      // Callers that stop a pass on purpose (a doomed run abandoning its
+      // sibling) need to tell their own abort apart from a real provider
+      // failure that happened to land at the same moment.
+      ...(err instanceof APIUserAbortError ? { aborted: true as const } : {}),
       message: `transport failure after ${attemptNoun}: ${raw}`,
       usage,
       costUsd,
@@ -1704,19 +2042,15 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
 
   const result = (async (): Promise<RunPassResult> => {
     const billedFailedAttempts: BetaMessage[] = [];
-    const idleMs = streamIdleTimeoutMs();
+    // Scaled by effort: a deep-thinking request is legitimately silent for
+    // longer than a shallow one, and the guard must not mistake that for a
+    // dead provider (see STREAM_IDLE_EFFORT_MULTIPLIER).
+    const idleMs = streamIdleTimeoutMsFor(supportsEffort(opts.model) ? opts.effort : undefined);
     for (let attempt = 1; attempt <= PASS_TRANSPORT_MAX_ATTEMPTS; attempt++) {
       // Opening the stream is inside the guarded block: a client that fails
       // at construction is a transport failure like any other, not a
       // rejection the runner would have to treat as a crash.
-      type MessageStreamHandle = ReturnType<Anthropic["beta"]["messages"]["stream"]>;
-      let stream: MessageStreamHandle | undefined;
-      let snapshot: StreamedUsageSnapshot = { model: null, usage: null };
-      let idleTimer: ReturnType<typeof setTimeout> | undefined;
-      const clearIdle = (): void => {
-        if (idleTimer !== undefined) clearTimeout(idleTimer);
-        idleTimer = undefined;
-      };
+      const snapshot: StreamedUsageSnapshot = { model: null, usage: null };
       // Admit this exact request before it is sent. A refusal here is a spend
       // cap doing its job: the pass stops at a request boundary rather than
       // half-way through one.
@@ -1733,30 +2067,16 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
           return admissionRefusedResult(opts, error, billedFailedAttempts, attempt);
         }
       }
+      // Set the instant the request goes out. A permit still held past that
+      // point stands for a request the provider may have billed, and the
+      // reservation policy (DECISIONS D-07) says such a request is presumed,
+      // never released.
+      let dispatched = false;
       try {
-        stream = client.beta.messages.stream(params, {
-          signal: opts.signal,
-          timeout: REQUEST_TIMEOUT_MS,
-        });
-        snapshot = trackStreamedUsage(stream);
-        stream.once("streamEvent", () => signalFirst("streamEvent"));
-        // Idle guard: every stream event restarts the clock, and silence past
-        // the limit abandons the attempt rather than holding the durable lease
-        // until the transport timeout.
-        let tripIdle: (() => void) | undefined;
-        const idleGuard = new Promise<never>((_resolve, reject) => {
-          tripIdle = (): void => reject(new StreamIdleTimeoutError(idleMs));
-        });
-        idleGuard.catch(() => {}); // raced below; never an unhandled rejection
-        const resetIdle = (): void => {
-          if (idleMs <= 0) return;
-          clearIdle();
-          idleTimer = setTimeout(() => tripIdle?.(), idleMs);
-          idleTimer.unref?.();
-        };
-        stream.on("streamEvent", resetIdle);
-        resetIdle();
-        const message = await Promise.race([stream.finalMessage(), idleGuard]);
+        dispatched = true;
+        const message = await streamFinalMessage(client, params, opts.signal, idleMs, snapshot, () =>
+          signalFirst("streamEvent"),
+        );
         await settleRequest(opts.admission, permit, opts, message, false);
         permit = null;
         const { final, billableMessages } = await resumeIfPausedWithUsage(
@@ -1766,31 +2086,52 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
           opts.signal,
           opts,
           attempt,
+          idleMs,
         );
         signalFirst("end"); // only reachable pre-signal if the stream emitted no events
         return interpretPassMessages(final, opts, [...billedFailedAttempts, ...billableMessages]);
       } catch (err) {
-        if (err instanceof StreamIdleTimeoutError) {
-          // Stop the request so it cannot keep generating (and billing) after
-          // we have given up on reading it.
-          (stream as { abort?: () => void } | undefined)?.abort?.();
-          await settleIdleRequest(opts, permit, snapshot, idleMs);
-          permit = null;
+        // A failed resumption has already settled its own permit and carries
+        // the attempt's completed messages (incl. the streamed first message,
+        // whose permit settled when it arrived) plus its own usage snapshot;
+        // anything else is this stream's failure, still holding its permit.
+        const resumption = err instanceof ResumptionFailedError ? err : null;
+        const cause = resumption === null ? err : resumption.cause;
+        const failedSnapshot = resumption === null ? snapshot : resumption.snapshot;
+        if (resumption !== null) billedFailedAttempts.push(...resumption.billableMessages);
+        if (cause instanceof StreamIdleTimeoutError) {
+          if (resumption === null) {
+            await settlePresumedRemainder(opts, permit, snapshot);
+            permit = null;
+          }
           console.error(
-            `[anthropic] ${opts.field ?? "llm.pass"}: ${err.message}; abandoning the attempt and settling reported usage plus the presumed remainder`,
+            `[anthropic] ${opts.field ?? "llm.pass"}: ${cause.message}; abandoning the attempt and settling reported usage plus the presumed remainder`,
           );
           signalFirst("error");
-          return deadStreamResult(opts, snapshot, idleMs, billedFailedAttempts, attempt);
+          return deadStreamResult(opts, failedSnapshot, cause.idleMs, billedFailedAttempts, attempt);
         }
-        // A failed resumption still billed the attempt's completed messages
-        // (incl. the streamed first message); otherwise fall back to the
-        // last streamed usage snapshot.
-        const cause = err instanceof ResumptionFailedError ? err.cause : err;
-        if (err instanceof ResumptionFailedError) {
-          // The resumption path already settled its own permits; this
-          // attempt's stream permit settled when its message arrived.
-          billedFailedAttempts.push(...err.billableMessages);
-        } else {
+        if (cause instanceof APIUserAbortError && failedSnapshot.usage !== null) {
+          // Aborted after generation started — a cancel, a stage deadline, or
+          // a doomed run abandoning its sibling. The provider bills whatever it
+          // generated up to the disconnect and reports none of it (cumulative
+          // output tokens arrive only in the final message_delta), so the
+          // request settles exactly like a dead stream: reported usage plus
+          // the presumed remainder, flagged presumed (DECISIONS D-09).
+          if (resumption === null) {
+            await settlePresumedRemainder(opts, permit, snapshot);
+            permit = null;
+          }
+          signalFirst("abort");
+          return presumedRemainderResult(
+            opts,
+            failedSnapshot,
+            billedFailedAttempts,
+            attempt,
+            "request aborted by the caller after generation started",
+            true,
+          );
+        }
+        if (resumption === null) {
           const billed = billedMessageFromSnapshot(snapshot, opts);
           await settleRequest(opts.admission, permit, opts, billed, timedOutAfterSend(cause));
           permit = null;
@@ -1800,7 +2141,7 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
           // A failure after generation started means Anthropic shed load while
           // already serving the request; re-entering immediately mostly dies
           // again, and the retry re-bills the input either way.
-          const midStream = snapshot.usage !== null;
+          const midStream = failedSnapshot.usage !== null || resumption !== null;
           const delays = midStream
             ? PASS_MID_STREAM_RETRY_DELAYS_MS
             : PASS_TRANSPORT_RETRY_DELAYS_MS;
@@ -1811,7 +2152,19 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
           console.warn(
             `[anthropic] ${opts.field ?? "llm.pass"}: transport failure on attempt ${attempt}/${PASS_TRANSPORT_MAX_ATTEMPTS}, retrying in ${Math.round(delay / 1000)}s: ${errorMessageOf(cause)}`,
           );
-          await transportRetrySleepWithSignal(delay, opts.signal);
+          try {
+            await transportRetrySleepWithSignal(delay, opts.signal);
+          } catch {
+            // The caller gave up during the backoff. Nothing is in flight, so
+            // there is nothing to settle — but the contract still holds:
+            // `firstToken` settles and `result` resolves a typed failure. A
+            // rejection here left `await bullHandle.firstToken` waiting forever
+            // on a cancel before the first token, and on a later attempt filed
+            // the side as an anonymous transport failure with no `aborted`
+            // flag and none of the usage its earlier attempts billed.
+            signalFirst("abort");
+            return transportFailureResult(opts, new APIUserAbortError(), billedFailedAttempts, attempt);
+          }
           continue;
         }
         // A programming error is not a provider failure: keep it loud rather
@@ -1832,11 +2185,22 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
         signalFirst(cause instanceof APIUserAbortError ? "abort" : "error");
         return transportFailureResult(opts, cause, billedFailedAttempts, attempt);
       } finally {
-        clearIdle();
-        // Any exit that did not settle this request never reached the
-        // provider; release it so the reservation is not held.
         if (permit !== null && opts.admission !== undefined) {
-          await opts.admission.release(permit);
+          if (dispatched) {
+            // The request went out and its settlement write itself failed
+            // (both the in-line settle and the catch's retry threw — a
+            // writer-lock timeout, say). Releasing here would return money
+            // the provider may already have billed; leaving the reservation
+            // lets it expire into presumed spend that a later measurement or
+            // the reported totals can lower (D-07).
+            console.error(
+              `[anthropic] ${opts.field ?? "llm.pass"}: request settlement could not be recorded; ` +
+                "leaving the reservation to be presumed at expiry rather than releasing it",
+            );
+          } else {
+            // Never reached the provider: release so the reservation is not held.
+            await opts.admission.release(permit);
+          }
           permit = null;
         }
       }

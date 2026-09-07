@@ -1,5 +1,193 @@
 # Changelog
 
+## Unreleased — full codebase audit of 2026-09-06
+
+Every source file, test and document was read against the others; 232
+findings from independent reviewers were verified one by one, and the slices
+no reviewer reached were audited directly. The record is
+[`docs/superpowers/audits/2026-09-06-full-codebase-audit.md`](docs/superpowers/audits/2026-09-06-full-codebase-audit.md);
+the conventions it changed are D-24 to D-27 in
+[`docs/audit/DECISIONS.md`](docs/audit/DECISIONS.md). What follows is what a
+reader of the previous release notices.
+
+### You may need to act
+
+- **`npm run costs:reconcile` now works.** It targeted a Cost API path that
+  does not exist and read amounts in cents as dollars, so it had never lowered
+  a presumed row. If you carry presumed spend from an earlier crash, run it
+  again with `ANTHROPIC_ADMIN_KEY` set.
+- **`.env.example` gained `NEXT_TELEMETRY_DISABLED=1`.** The Next.js CLI that
+  `npm run dev` and `npm run build` invoke sends anonymous usage telemetry
+  unless opted out; the app itself still sends nothing. Copy the line into an
+  existing `.env`, or run `npx next telemetry disable` once for the machine.
+- **`npm run audit:deltas -- --write` now needs `--group` for a leaf that
+  moved again**, not only for a new one: a value that changed since it was
+  blessed is a new change and the old reason does not describe it.
+- **`AGENTS.md` and `CLAUDE.md` are gitignored.** `next dev` regenerates them
+  and the release allowlist forbids tracking them.
+- **Every run's report changes shape slightly.** New disclosures print on the
+  page (the stored disclaimer beside the grades; the ROIC lease basis; the
+  WACC's debt and coverage basis; the grid's held excess; the news-section
+  truncation note; N beside every own-history rank as "rank X/100 of N
+  quarters"), one score band moved (a partially evidenced Piotroski signal
+  now enters the quality aspect at the weight its evidence supports), and the
+  audited-fixture comparison carries dated groups for every leaf that moved.
+
+### Fixed — money and the provider
+
+- A mid-stream connection failure surfaced as a bare SDK error that the retry
+  classifier rejected, so the pass rejected instead of retrying; a signal
+  abort during a retry backoff could hang the analyst orchestration forever;
+  a `pause_turn` resumption ran without the idle guard on a hard 600 s client
+  timeout; a fallback-served message was priced at the serving model's rate
+  for every token; the reported `max_tokens` was the pass constant rather
+  than the limit sent. All repaired, each with a test.
+- A deliberately aborted stream settled at the `message_start` snapshot as an
+  `actual` row; it now settles what was reported plus the presumed remainder,
+  flagged presumed, like a dead stream.
+- The scheduler: presumed rows are stamped with the lease's own acquisition
+  time (an overnight sweep zeroed real spend against the wrong day); a late
+  settlement on an expired, unswept lease is accepted; `settleRequestCost`
+  versions the snapshot so the SSE stream delivers the change; an
+  over-reservation records the measured cost before raising; the reconciler
+  counts already-reconciled presumptions as accounted; bucket bounds are
+  normalised.
+- The runner: the presumed-spend disclosure and discarded-attempt marking
+  read every generation; a Stage B exception is filed as a critical
+  `pipeline.compute` gap instead of vanishing; the admission lease is dropped
+  only after the durable write commits; the verify checkpoint's admission is
+  registered.
+
+### Fixed — the analysis
+
+- Stage B: the three fundamentals-dependent bases now agree — invested
+  capital, the WACC's debt leg and the enterprise-value bridge remove the
+  same operating-lease slice; interest expense and EBIT come from one
+  statement basis; one Blume constant serves the WACC and the keyless beta.
+  Every DCF re-run (bull, base, bear, the projection fan) bridges on the
+  bridge the base case used, and the sensitivity grid holds the terminal
+  excess rather than the terminal level. The EBIT-margin ceiling never binds
+  below a margin the issuer has earned. Graded signals carry an evidence
+  fraction. Restatement double-rows collapse in the returns and capital
+  series. The REIT cap rate uses the house enterprise value; the own-history
+  P/FFO band is withheld when the current FFO is a different construction.
+- Stage C: the judge is no longer told it may search the web; the
+  named-individual rule admits the payload's own executive and insider rows
+  and states both sides of the rule; the per-claim case cap is measured on
+  the serialised text and tightened from the originals; a truncation never
+  overruns its budget and the news section discloses clipped rows; the
+  data-only report prints FRED units and scales, net segment shares, an exact
+  coverage figure and "placeholder" wherever a letter is not a grade; the
+  consistency checks read the id's final segment, admit bare magnitude
+  words, and skip capitalised direction words inside proper nouns; a job
+  cancel no longer relabels both analyst sides as sibling-abandoned.
+- EDGAR: `Revenues` precedes the ASC-606 elements in every chain; Form 40-F
+  is a core form; a split re-tag is measured from the previous one; the
+  successor's own-history test is an annual core-form fact.
+- Providers and cache: an object body on an array endpoint is refused before
+  admission; the plan-limit gate records only a limit the vendor answered in
+  full; the keyless quote's previous close comes from the chart's own
+  penultimate bar; HOUST and TOTALSA name their annual-rate basis; response
+  bodies are capped at 64 MiB and never re-downloaded on retry; concurrent
+  cache misses share one fetch.
+- Found by the one paid run made after the audit (AAPL on Haiku at low
+  effort, $0.60): the WACC row printed the Blume weights as raw floats, and
+  the named-individual manifest sentence described the rule before the audit
+  widened it. Both fixed.
+
+### Fixed — the app
+
+The in-app report prints the stored disclaimer; share-count bars start at
+zero; the projection fan's bridge row shows only the historical value; the
+page refreshes when a job completes; the own-history label matches the
+exports; the sidebar's remove control is no longer nested in the link; the
+report tabs have tab semantics and arrow-key switching; the returns panel
+shows the module's spread or "n/a" rather than a fabricated one; the
+home and settings banners say what a keyless run actually serves.
+
+### Tooling and tests
+
+Every script's "am I the entry point?" test resolves symlinks, so a release
+gate cannot silently no-op on a linked checkout. The live-smoke opt-in
+narrows the offline guard to `sec.gov` only. Six risk-bearing modules joined
+the per-file coverage contract and a walk of src/ fails the build when a
+module is in neither contract. The runner's analyst admission is asserted on
+the real pass runner. The audited-fixture helper's label and hash are
+corrected.
+
+### Documentation
+
+README, METHODOLOGY, RESEARCH, PRIVACY, DECISIONS (Revised notes on D-09,
+D-20, D-22), the remediation report and the pricing generator were corrected
+where they had drifted; 130+ code comments and twenty user-visible strings
+that cited section numbers of retired design documents now cite a living
+heading or none. Retired audit records and notes were removed; the 2026-09-06
+audit document is the record that supersedes them.
+
+## Unreleased — per-request admission restored, effort-aware idle guard
+
+Found by a live run on 2026-09-03: AMZN on `claude-fable-5-1` at effort `max`.
+The bull pass reported five output tokens, went quiet while the model reasoned,
+was abandoned by the 120-second idle guard, and settled at $6.86 — of which
+$6.40 was a presumed remainder of 127,995 output tokens the run has no evidence
+were ever generated. The job produced no report. Three defects, one chain:
+
+- **Per-request cost admission was silently off for both analyst passes.**
+  `runBullThenBear` built each request's arguments BEFORE the `beforePass` hook
+  the runner registers that pass's admission in, so the arguments captured
+  `undefined`. Every provider request in the streaming path — the production
+  path — therefore ran outside the per-request reserve/settle machinery
+  introduced with `THESIS_RESERVATION_MODE=request`. The mocked pipeline tests
+  called the hook in the right order, so nothing caught it. The judge pass was
+  never affected. Arguments are now built after the hook, as the non-streaming
+  fallback always did.
+- **A presumed cost was recorded as an actual one.** With no per-request
+  admission, `settleIdleRequest` returned early and the pass settlement wrote
+  the figure with `settlementKind: "actual"`, which `npm run costs:reconcile`
+  will not lower. Restoring admission restores the `presumed` marking the
+  reconciler needs.
+- **The stream idle guard was blind to the signal that proves a request is
+  alive.** Anthropic keeps a long stream warm with SSE `ping` events, and the
+  Anthropic SDK discards them before any listener runs
+  (`core/streaming.js`: `if (sse.event === 'ping') continue;`) — while undici's
+  ~300-second idle body timeout counts them as socket traffic and does not. The
+  guard also cannot see that the model is working: Thesis never asks for
+  thinking summaries, so reasoning produces no stream events on any model. At a
+  flat 120 seconds it therefore pre-empted a working detector with a blind one
+  and killed healthy paid passes mid-reasoning.
+
+  `THESIS_STREAM_IDLE_SECONDS` now defaults to **300** — at undici's window, so
+  a dead connection is caught by the layer that can see pings and retried,
+  leaving this guard as the backstop for a socket kept warm by pings that never
+  produces anything. Effort scales the base (×1 low/medium, ×2 high, ×3 xhigh,
+  ×4 max), bounded by the model stage deadline rather than by
+  `ANTHROPIC_REQUEST_TIMEOUT_MS`: that timeout is armed around the fetch, which
+  for a streaming request resolves when the response headers arrive, so it
+  bounds how long the provider may take to answer and not how long the stream
+  may run. Zero still disables the guard. At the settings that produced the
+  loss — Fable 5.1 at effort `max` — the limit is now 20 minutes of application
+  silence rather than two.
+
+- **A doomed run kept paying for its second analyst pass.** Once one side fails
+  unrepairably the runner's `recoverable` test is false and the job degrades to
+  a data-only report whatever the sibling does — but `runBullThenBear` awaited
+  both sides regardless. On 2026-09-03 bull was abandoned at 19:05:00 and bear
+  billed on until the user cancelled it by hand at 19:13:12: eight minutes of
+  paid output for a report that could no longer be written. A side that ends the
+  run now stops its sibling at once — the sibling is not launched at all if it
+  had not started, and is aborted mid-stream if it had, settling only what it
+  actually billed. A schema-invalid output is still repairable, so it never
+  stops the sibling. The provider now flags a caller abort (`error.aborted`) so
+  a pass we stopped on purpose is reported as abandoned rather than as a
+  provider fault, and a side that failed on its own in the same instant keeps
+  its own message.
+
+The README cost table also published one estimate for all five effort levels
+while the ceiling a pass bills against doubles at `high`. It now carries an
+**analyst output ceiling** column showing that step per model (Fable 5.1:
+$3.20 → $6.40), and says plainly that the estimated run is measured at effort
+`high` and does not scale above it.
+
 ## Unreleased — 2026-09-02 audit remediation
 
 The 2026-09-02 README audit found stale documentation, unusable spend caps, gaps

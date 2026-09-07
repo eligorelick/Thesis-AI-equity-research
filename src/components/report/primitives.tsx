@@ -1,17 +1,17 @@
 /**
- * Report-specific presentational primitives (the application contract §7/§8) — the provenance
+ * Report-specific presentational primitives — the provenance
  * layer of the full report UI. Every LLM claim and every figure renders WITH
- * its label / source / as-of, per the non-negotiable analysis rules (the application contract
- * §1): rule #2 (every claim labeled FACT|ESTIMATE|JUDGMENT) and rule #5 (every
- * figure carries its as-of date) are structural in the schema and surfaced
+ * its label / source / as-of, per the non-negotiable analysis rules: rule #2 (every claim labeled
+ * FACT|ESTIMATE|JUDGMENT) and rule #5 (every figure carries its as-of date) are structural in the schema and surfaced
  * here.
  *
  * Server Component: everything below is static presentational markup (the
- * grade reasoning disclosure uses native <details>, no JS required). The one
- * genuinely interactive bit — the click-to-reveal claim source line — lives in
- * the small client island ./ClaimText.tsx, imported and rendered here as a
- * normal Server-Component-renders-Client-Component leaf. Theme tokens come
- * from globals.css.
+ * grade reasoning disclosure uses native <details>, no JS required). The
+ * click-to-reveal claim source line (./ClaimText.tsx) is ALSO a Server
+ * Component — a native <details>/<summary> that ships zero client JS; it used
+ * to be a useState island, and a report renders 100+ claims. The only client
+ * leaves in the report UI are the chart panels and ExportButtons. Theme
+ * tokens come from globals.css.
  *
  * Formatting helpers live here too (formatNumber/formatCurrency/formatPct/
  * formatLargeNumber). They intentionally mirror the company-page formatters in
@@ -519,7 +519,7 @@ const AXIS_ORDER: LowMedHigh[] = ["high", "medium", "low"];
 /**
  * A 3×3 severity (rows) × probability (cols) grid. Cells in the high/high
  * corner are tinted red, low/low green; each cell lists the risks that land in
- * it. A compact, scannable risk map (the application contract §7.10).
+ * it. A compact, scannable risk map (section 10).
  */
 export function SeverityProbMatrix({ items }: { items: readonly MatrixItem[] }) {
   const cellItems = (sev: LowMedHigh, prob: LowMedHigh): MatrixItem[] =>

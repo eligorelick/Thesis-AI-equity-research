@@ -28,9 +28,16 @@
  *
  *  3. ONE FILING LINEAGE PER DERIVATION. A derived quarter (YTD difference,
  *     FY − YTD, FY − Q1 − Q2 − Q3) subtracts the newest copy of each operand
- *     that was filed NO LATER than the minuend's own filing, so a restated FY
- *     is never netted against an unrestated YTD or vice versa. When no such
- *     copy exists the quarter is left null and the notes say why.
+ *     that was filed NO LATER than the minuend's own filing, so a restated
+ *     minuend is never netted against a subtrahend restated AFTER it. The
+ *     minuend is always the dedup winner (the last-filed copy); a subtrahend
+ *     restated in a later filing than that is ignored in favour of the copy
+ *     the minuend's own filing saw — a later restatement of the subtrahend
+ *     alone cannot be netted against an older minuend without mixing
+ *     lineages, so the quarter is then derived from the older pair (see
+ *     `lineagePoints`). When no copy of the subtrahend was filed on or before
+ *     the minuend's filing at all, the quarter is left null and the notes say
+ *     why.
  *
  * Tag lists come from src/edgar/tagSynonyms.ts (stamped with the taxonomy
  * year they were reviewed against). The module is pure: no network, no clock,
@@ -55,6 +62,7 @@ import {
 } from "@/edgar/tagSynonyms";
 import {
   CORE_FACT_FORMS,
+  QUARTER_DURATION_DAYS,
   conceptFactsSchema,
   dedupByPeriod,
   filterToCoreForms,
@@ -71,6 +79,16 @@ export { BALANCE_SHEET_SHARES_TAG } from "@/edgar/tagSynonyms";
 // ---------------------------------------------------------------------------
 
 export interface StatementBuildOptions {
+  /**
+   * Route revenue and operating income through the bank chains regardless of
+   * how the facts are tagged. The builder's own detection
+   * (`looksLikeBankTagging`) needs the ASC-606 revenue tags to be ABSENT, so a
+   * bank that also tags its fee revenue under them is invisible to it and
+   * would publish fee income as revenue; the caller knows the issuer's
+   * industry (SIC) and passes it here. `undefined` leaves the decision to the
+   * tagging heuristic.
+   */
+  bankRevenue?: boolean;
   symbol: string;
   /** 10-digit or raw CIK; copied verbatim onto every row. */
   cik: string | null;
@@ -229,7 +247,10 @@ export interface BuiltStatements {
     publicFloat: { value: number; asOf: string } | null;
   };
   reportedCurrency: string | null;
-  /** True when at least one 20-F point was used (foreign private issuer). */
+  /**
+   * True when at least one foreign-private-issuer annual-report point (Form
+   * 20-F or 40-F) was used; the keyless profile reads it as the ADR flag.
+   */
   filesTwentyF: boolean;
   /**
    * The stock splits applied to per-share and share-count facts filed before
@@ -248,11 +269,19 @@ const DAY_MS = 86_400_000;
 const TOLERANCE_DAYS = 3;
 const ANNUAL_MIN_DAYS = 300;
 const ANNUAL_MAX_DAYS = 400;
-const QUARTER_MIN_DAYS = 70;
-const QUARTER_MAX_DAYS = 110;
+/**
+ * A quarter is 13 weeks give or take a 53rd week — except on a 12-12-12-16
+ * calendar, where the fourth quarter runs 16 or 17 weeks (Costco). The upper
+ * bound admits that quarter; nothing standardized is four months long, so it
+ * admits nothing else. Shared with xbrl.ts.
+ */
+const QUARTER_MIN_DAYS = QUARTER_DURATION_DAYS[0];
+const QUARTER_MAX_DAYS = QUARTER_DURATION_DAYS[1];
 
 /** Derived from CORE_FACT_FORMS so a change there cannot silently desync. */
-const ANNUAL_FORMS = new Set([...CORE_FACT_FORMS].filter((f) => f.startsWith("10-K") || f.startsWith("20-F")));
+const FOREIGN_ANNUAL_FORM_PREFIXES = ["20-F", "40-F"] as const;
+const isForeignAnnualForm = (form: string): boolean => FOREIGN_ANNUAL_FORM_PREFIXES.some((p) => form.startsWith(p));
+const ANNUAL_FORMS = new Set([...CORE_FACT_FORMS].filter((f) => f.startsWith("10-K") || isForeignAnnualForm(f)));
 const QUARTERLY_FORMS = new Set([...CORE_FACT_FORMS].filter((f) => f.startsWith("10-Q")));
 
 function dateMs(d: string): number {
@@ -397,10 +426,45 @@ const REVENUE_SPEC: ChainSpec = { kind: "first", tags: [...REVENUE_TAGS], unit: 
 const INTEREST_EXPENSE_SPEC: ChainSpec = lineItemChain("interestExpense", "money");
 
 /**
+ * FMP's `commonDividendsPaid` is the common dividend alone, and its
+ * `netDividendsPaid` the total including preferred. Copying the total into the
+ * common field (the old alias) overstated common dividends at every
+ * preferred-issuing filer — banks, utilities, REITs — by the preferred coupon.
+ * The common element is tried first; then the total net of the preferred
+ * element; and only when no preferred element is filed at all does the total
+ * stand in, disclosed, because a filer with no preferred stock tags none.
+ */
+const COMMON_DIVIDENDS_SPEC: ChainSpec = {
+  kind: "chain",
+  unit: "money",
+  steps: [
+    { kind: "first", tags: tagsFor("commonDividendsPaid"), unit: "money", sign: -1 },
+    {
+      kind: "diff",
+      plus: tagsFor("preferredDividendsPaid")[0] as string,
+      minus: tagsFor("netDividendsPaid")[0] as string,
+      unit: "money",
+      disclose:
+        "common dividends derived as total dividends paid (PaymentsOfDividends) less the preferred dividends paid the filer tagged separately (no PaymentsOfDividendsCommonStock element filed)",
+    },
+    // A filer with no preferred stock tags no preferred element, and for it
+    // the total IS the common dividend — the vendor publishes the same figure
+    // in both columns. Undisclosed on purpose: a note on every ordinary filer
+    // would bury the one that matters (a preferred issuer that tags only the
+    // total), which this chain cannot tell apart from the ordinary case.
+    { kind: "first", tags: tagsFor("netDividendsPaid"), unit: "money", sign: -1 },
+  ],
+};
+
+/**
  * Banks tag total net revenue under Revenues / RevenuesNetOfInterestExpense, or
- * not at all (then NII + noninterest income is the verified identity). RFC tags
- * stay as a trailing fallback but must never win at a bank: at BAC/WFC/C they
- * carry FEE-ONLY revenue and would drop the whole net-interest-income line.
+ * not at all (then NII + noninterest income is the verified identity). The
+ * ASC-606 tags stay as a trailing fallback but must never win at a bank: a
+ * bank that tags its fee revenue under RevenueFromContractWithCustomer* would
+ * otherwise resolve to that FEE-ONLY figure and drop the whole net-interest-
+ * income line (docs/RESEARCH.md §2.6). Which is why the chain is selected by
+ * the issuer's INDUSTRY as well as by its tagging: `looksLikeBankTagging`
+ * requires the ASC-606 tags to be absent, so it cannot see that bank.
  */
 const BANK_REVENUE_SPEC: ChainSpec = {
   kind: "chain",
@@ -728,6 +792,7 @@ const CASHFLOW_CHAINS: Record<string, ChainSpec> = {
   commonStockRepurchased: { kind: "first", tags: tagsFor("commonStockRepurchased"), unit: "money", sign: -1 },
   netDividendsPaid: { kind: "first", tags: tagsFor("netDividendsPaid"), unit: "money", sign: -1 },
   preferredDividendsPaid: { kind: "first", tags: tagsFor("preferredDividendsPaid"), unit: "money", sign: -1 },
+  commonDividendsPaid: COMMON_DIVIDENDS_SPEC,
   incomeTaxesPaid: lineItemChain("incomeTaxesPaid", "money"),
   interestPaid: lineItemChain("interestPaid", "money"),
   /**
@@ -744,7 +809,6 @@ const CASHFLOW_CHAINS: Record<string, ChainSpec> = {
 const CASHFLOW_ALIASES: Record<string, string> = {
   netCashProvidedByOperatingActivities: "operatingCashFlow",
   investmentsInPropertyPlantAndEquipment: "capitalExpenditure",
-  commonDividendsPaid: "netDividendsPaid",
   /** Short forms kept for existing consumers; legal via the FmpRawRow index signature. */
   investingCashFlow: "netCashProvidedByInvestingActivities",
   financingCashFlow: "netCashProvidedByFinancingActivities",
@@ -1173,7 +1237,14 @@ function resolveSpec(spec: ChainSpec, resolve: TagResolver, notes: NoteSink, lab
         if (r === null) continue;
         if (spec.sign === undefined) return disclosed(r);
         const decimals = spec.unit === "perShare" ? PER_SHARE_DECIMALS : MONEY_DECIMALS;
-        return disclosed({ ...r, value: tidy(r.value * spec.sign, decimals) });
+        const signed: Resolved = { ...r, value: tidy(r.value * spec.sign, decimals) };
+        // The superseded figure travels on the same sign convention as the
+        // row's value: left as filed, a restated buyback compared −70 against
+        // 75 and raised a −193% restatement flag for a 7% change.
+        if (r.original !== undefined) {
+          signed.original = { ...r.original, value: tidy(r.original.value * spec.sign, decimals) };
+        }
+        return disclosed(signed);
       }
       return null;
     }
@@ -1881,16 +1952,24 @@ const MAX_OWN_PERIOD_FILING_LAG_DAYS = 270;
 
 /**
  * `fy`/`fp` describe the FILING, not the fact's period (xbrl.ts:37), so they may only be
- * trusted when this filing is plausibly the period's OWN report: an annual `fp`/form, filed
- * within the window above. A comparative carried in a later filing fails one test or both,
- * and the fiscal-year end's own year is used instead.
+ * trusted when this filing is plausibly the period's OWN report: an annual `fp`/form for an
+ * annual row, or a 10-Q for a quarterly row, filed within the window above. A comparative
+ * carried in a later filing fails one test or both, and the fiscal-year end's own year is
+ * used instead — which for a quarter is the discovered year end after it, and only when no
+ * year end has been discovered yet (the quarters after the latest 10-K) the quarter's own
+ * calendar year. A 10-Q's own `fy` is exactly the label those newest quarters need: on a
+ * September fiscal calendar the December quarter belongs to the NEXT fiscal year, and its
+ * calendar year mislabels it until the 10-K arrives.
  */
 function fiscalYearLabel(anchor: FactPoint, slot: PeriodSlot): string {
   const form = anchor.form.trim();
-  const fromAnnualFiling = anchor.fp === "FY" || form.startsWith("10-K") || form.startsWith("20-F");
+  const fromAnnualFiling = anchor.fp === "FY" || form.startsWith("10-K") || isForeignAnnualForm(form);
+  const fromOwnQuarterlyFiling = slot.quarter !== null && form.startsWith("10-Q");
   const lag = daysBetween(anchor.end, anchor.filed);
   const reportsOwnPeriod = lag >= 0 && lag <= MAX_OWN_PERIOD_FILING_LAG_DAYS;
-  if (fromAnnualFiling && reportsOwnPeriod && typeof anchor.fy === "number") return String(anchor.fy);
+  if ((fromAnnualFiling || fromOwnQuarterlyFiling) && reportsOwnPeriod && typeof anchor.fy === "number") {
+    return String(anchor.fy);
+  }
   return (slot.quarter?.fyEnd ?? slot.date).slice(0, 4);
 }
 
@@ -1974,7 +2053,7 @@ function buildStatementRows<TRow>(
     });
     for (const field of def.unsourced) values[field] ??= null;
 
-    if (anchor.point.form.trim().startsWith("20-F") || anchor.reporter.form.trim().startsWith("20-F")) {
+    if (isForeignAnnualForm(anchor.point.form.trim()) || isForeignAnnualForm(anchor.reporter.form.trim())) {
       state.filesTwentyF = true;
     }
 
@@ -2313,10 +2392,12 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
   const balanceQuarterSlots = (): PeriodSlot[] =>
     quarterSlotContexts.map((ctx) => ({ date: ctx.end, resolve: instantResolver(index, ctx.end), quarter: ctx }));
 
-  const bankRevenue = looksLikeBankTagging(facts);
+  const bankTagging = looksLikeBankTagging(facts);
+  const bankRevenue = opts.bankRevenue ?? bankTagging;
   const incomeDef = INCOME_DEF(bankRevenue);
-  const bankNote =
-    "revenue resolved through the bank revenue chain (RevenueFromContractWithCustomer* absent, bank revenue/NII tags present)";
+  const bankNote = bankTagging
+    ? "revenue resolved through the bank revenue chain (RevenueFromContractWithCustomer* absent, bank revenue/NII tags present)"
+    : "revenue resolved through the bank revenue chain (the issuer is classified as a bank; its ASC-606 revenue tags carry fee revenue only and are tried last)";
 
   const incomeAnnualNotes = createNoteSink();
   const incomeQuarterlyNotes = createNoteSink();

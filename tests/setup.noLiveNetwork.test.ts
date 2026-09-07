@@ -67,12 +67,24 @@ describe("no-live-network guard", () => {
     expect(isLoopbackUrl("http://localhost.evil.example/x")).toBe(false);
   });
 
-  it("stands aside when the EDGAR live smoke opt-in is set", async () => {
+  it("stands aside for sec.gov only when the EDGAR live smoke opt-in is set (audit 2026-09-06, F203)", async () => {
     process.env.EDGAR_LIVE_SMOKE = "1";
     const { fn, calls } = stubFetch();
     const guarded = createNoLiveNetworkFetch(fn);
     await guarded("https://www.sec.gov/cgi-bin/browse-edgar");
-    expect(calls).toEqual(["https://www.sec.gov/cgi-bin/browse-edgar"]);
+    await guarded("https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json");
+    // Every other host keeps the guard: the opt-in is for two SEC requests,
+    // not a licence for the rest of the suite to open sockets.
+    await expect(guarded("https://query1.finance.yahoo.com/v8/finance/chart/AAPL")).rejects.toThrow(
+      "live network is disabled in the test suite",
+    );
+    await expect(guarded("https://sec.gov.evil.example/x")).rejects.toThrow(
+      "live network is disabled in the test suite",
+    );
+    expect(calls).toEqual([
+      "https://www.sec.gov/cgi-bin/browse-edgar",
+      "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+    ]);
   });
 
   it("is installed on globalThis and installs at most once", async () => {

@@ -64,6 +64,7 @@ import {
   JUDGE_RETRY_PREVIOUS_OUTPUT_CAP,
   JUDGE_MAX_TOKENS,
   type PassDeps,
+  type RunPassOutcome,
 } from "@/pipeline/stageC/passes";
 import type { CostBreakdownEntry as _CBE } from "@/report/schema";
 
@@ -525,14 +526,37 @@ describe("payload determinism + provenance", () => {
       // no reader before), states the risk-free SOURCE split between the current
       // WACC and its per-year history, and anchors the SBC disclosure on the
       // free-cash-flow row's own fiscal year end.
-      fingerprint: "1.3.0:d3e596cc",
-      promptBytes: 90_194,
+      // Changed 2026-09-06 by the full-codebase audit (+16 prompt bytes): the
+      // Piotroski figure now carries the forensic layer's own label — the
+      // variant, the denominator and the withheld signals by name — instead
+      // of "Piotroski F (/N)", so a reduced score is never read against the
+      // 9-point scale (its registry id moves with the label); the quality
+      // score's Altman driver is named altmanZOriginalScale, the value it
+      // actually carries; the Beneish notes state the D&A basis of DEPI; and
+      // an undisclosed equity issuance no longer scores a Piotroski point.
+      // Changed 2026-09-06 (audit, valuation and routing): the projections
+      // assumption line names the growth anchor's actual methods instead of
+      // claiming an analyst anchor, the WACC notes print the debt basis and
+      // the 2/3–1/3 Blume formula, the ROIC notes state the lease and cash
+      // basis, and the sensitivity grid states the terminal excess it holds.
+      // Changed 2026-09-06 (audit §6, −46 prompt bytes): the payload copy
+      // cited section numbers of a specification that no longer exists
+      // ("SPEC §1 rule #1", "SPEC §1 rule #4"); the rules are cited by number
+      // alone, and one route note the finance block carries lost the same
+      // dead reference, so financeHash moves with it.
+      // Changed 2026-09-07 (post-audit live run, −26 prompt bytes): the WACC
+      // notes print the Blume weights to three decimals ("0.667·raw + 0.333")
+      // instead of the raw 2/3 and 1/3 floats the label had interpolated since
+      // the constants moved to betaEstimate.ts; financeHash moves with the
+      // WACC method label.
+      fingerprint: "1.3.0:86a86660",
+      promptBytes: 90_736,
       provenanceCount: 308,
-      provenanceHash: "52326402",
-      provenanceIdsHash: "5c7fb3b4",
+      provenanceHash: "098ebead",
+      provenanceIdsHash: "fb88be40",
       citationCount: 11,
       citationHash: "7ebe5276",
-      computedFigureLabelHash: "e8a6711a",
+      computedFigureLabelHash: "26cc3d2a",
       projectionPathPeriodHash: "45ce96a4",
       // Changed 2026-08-31: the projections fcf series now states that its
       // HISTORICAL points are the reported levered figure while the PROJECTED
@@ -540,7 +564,7 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "cf6d97ae",
+      financeHash: "f9ea3f0e",
     });
   });
 
@@ -971,6 +995,44 @@ describe("payload budget helpers", () => {
     const { text, truncated } = truncateWithDisclosure(short, 1000);
     expect(truncated).toBe(false);
     expect(text).toBe("hello");
+  });
+
+  it("never returns more than the budget, even when the budget cannot hold the counted marker (audit 2026-09-06, F165)", () => {
+    const long = "y".repeat(500);
+    for (const budget of [5, 12, 30, 60, 80]) {
+      const { text, truncated } = truncateWithDisclosure(long, budget);
+      expect(truncated).toBe(true);
+      expect(text.length).toBeLessThanOrEqual(budget);
+      expect(text.startsWith("y") || text.startsWith(TRUNCATION_MARKER.slice(0, budget))).toBe(true);
+    }
+    const bare = truncateWithDisclosure(long, 30).text;
+    expect(bare.endsWith(`${TRUNCATION_MARKER}]`)).toBe(true);
+    expect(bare.length).toBe(30);
+  });
+
+  it("discloses news snippets clipped or dropped for the budget (audit 2026-09-06, F171)", () => {
+    const { bundle, computed } = buildInputs();
+    if (!bundle.news.ok) throw new Error("fixture requires news");
+    const rows = Array.from({ length: 12 }, (_, i) => ({
+      publishedDate: `2026-07-${String(20 - i).padStart(2, "0")}`,
+      publisher: "Wire",
+      title: `Story ${i}`,
+      text: "n".repeat(1_000),
+    }));
+    const overflow = { ...bundle, news: { ...bundle.news, value: { ...bundle.news.value, data: { rows, raw: {} } } } } as typeof bundle;
+    const NOW = new Date("2026-07-06T00:00:00Z");
+    const validation = validateBundle(overflow, { now: NOW });
+    const payload = assembleContextPayload(overflow, computed, validation);
+    const note = payload.news.notes.at(-1) ?? "";
+    expect(note.startsWith(TRUNCATION_MARKER)).toBe(true);
+    expect(note).toContain("clipped mid-line");
+    expect(note).toContain("omitted");
+    expect(note).toContain(`${PAYLOAD_BUDGETS.newsChars}-char news budget`);
+    // The disclosure carries no source tag, so it registers no citation.
+    expect((payload.citationRegistry ?? []).filter((entry) => entry.id === "fmp:news").length).toBeLessThan(12);
+    // Within budget, no note is added.
+    const within = assembleContextPayload(bundle, computed, validateBundle(bundle, { now: NOW }));
+    expect(within.news.notes.some((n) => n.startsWith(TRUNCATION_MARKER))).toBe(false);
   });
 
   it("truncates the oversized transcript with disclosure", () => {
@@ -2266,6 +2328,34 @@ describe("mock-driven bull/bear/judge passes", () => {
     }
   });
 
+  /**
+   * `entity` is the one disagreement kind the prompt FORCES the judge to emit
+   * (every deterministic entity conflict); it was missing from the casing
+   * normalizer, so `kind: "Entity"` failed validation and burned a paid judge
+   * retry while `Fact` and `Interpretation` were silently fixed.
+   */
+  it("normalizes the casing of the entity disagreement kind like the other two", async () => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    const output = judgeOutput();
+    output.disagreements = [
+      {
+        topic: "programme identity",
+        bullView: "TRIUMPH evaluated one candidate",
+        bearView: "TRIUMPH evaluated another",
+        kind: "Entity" as never,
+        judgeResolution: "the filing names the programme",
+      },
+    ];
+    mock.onJson("llm.judge", output);
+
+    const run = await runJudgePass(makeDeps(mock), payload, analystCase("bull"), analystCase("bear"));
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.output.disagreements[0]?.kind).toBe("entity");
+  });
+
   it("normalizes common judge enum casing drift before schema validation", async () => {
     const { payload } = buildInputs();
     const mock = new MockRunPass();
@@ -2506,15 +2596,29 @@ describe("mock-driven bull/bear/judge passes", () => {
         webSearches: 6,
       },
     });
+    // Bull's death is only reported once bear has been launched: a bull known
+    // to be dead BEFORE bear launches now keeps bear from launching at all
+    // (see "abandons the sibling …"), and this test is about the billed usage
+    // of two sides that both reached the provider.
+    let reportBullDeath!: (outcome: RunPassOutcome) => void;
+    const bullResult = new Promise<RunPassOutcome>((resolve) => {
+      reportBullDeath = resolve;
+    });
     const deps: PassDeps = {
       model: "claude-opus-4-8",
       runPass: async () => {
         throw new Error("unexpected non-streaming call");
       },
-      runPassStreaming: (args) => ({
-        firstToken: Promise.resolve("streamEvent" as never),
-        result: Promise.resolve(transportFailure(args.field ?? "") as never),
-      }),
+      runPassStreaming: (args) => {
+        if (args.field === "llm.bull") {
+          return { firstToken: Promise.resolve("streamEvent"), result: bullResult };
+        }
+        queueMicrotask(() => reportBullDeath(transportFailure("llm.bull") as never));
+        return {
+          firstToken: Promise.resolve("streamEvent"),
+          result: Promise.resolve(transportFailure(args.field ?? "") as never),
+        };
+      },
     };
 
     const { bull, bear } = await runBullThenBear(deps, payload);
@@ -2570,6 +2674,42 @@ describe("mock-driven bull/bear/judge passes", () => {
     expect(report.appendix.costBreakdown.map((c) => c.step)).toEqual(["bull", "bear", "synthesize"]);
     // Total cost = bull + bear + judge.
     expect(report.meta.costUsd).toBeCloseTo(0.9 + 0.47 + 0.4, 10);
+  });
+
+  /**
+   * The standalone loop issues one judge request per attempt and never runs
+   * the mirrored pass. Under `THESIS_JUDGE_ORDER=both` it used to frame that
+   * one request as "judged TWICE", stamp `setting=both` into the protocol and
+   * record no reconciliation — a report that overstated the protocol run.
+   */
+  it("narrows a `both` setting to the seeded single order on the standalone judge path and says so", async () => {
+    const { bundle, computed, payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", judgeOutput(), { costUsd: 0.4 });
+    const deps = makeDeps(mock, { judgeOrder: "both" });
+
+    const result = await runJudgeVerifyAssemble(
+      deps,
+      payload,
+      analystCase("bull"),
+      analystCase("bear"),
+      { symbol: "AAPL", bundle, computed, priorCostEntries: [] },
+      GENERATED_AT,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const judgeCalls = mock.calls.filter((c) => c.field === "llm.judge");
+    expect(judgeCalls).toHaveLength(1);
+    const framing = JSON.stringify(judgeCalls[0].messages);
+    expect(framing).not.toMatch(/judged TWICE/i);
+    const report = result.report as Report;
+    expect(report.meta.judgeProtocol?.setting).not.toBe("both");
+    expect(report.meta.judgeProtocol?.reconciliation?.performed).toBe(false);
+    const disclosure = report.appendix.missingData.find(
+      (entry) => entry.field === "llm.judge.order-reconciliation",
+    );
+    expect(disclosure?.reason).toMatch(/single .* pass/);
   });
 
   it("retries the judge on a zod-invalid output, feeding the error back, then succeeds", async () => {
@@ -2824,6 +2964,345 @@ describe("runBullThenBear per-pass lifecycle hooks", () => {
       );
     },
   );
+
+  /**
+   * The runner registers a side's per-request admission inside `beforePass`
+   * (`passAdmissions.set(side, checkpoint.admission)`), and the request args
+   * snapshot `deps.admissionFor(side)` when they are built. Building the args
+   * first therefore captures `undefined`, silently dropping per-request
+   * admission for the whole pass: no request reserves or settles on its own,
+   * and a stalled stream's presumed remainder is recorded as an `actual`
+   * settlement the reconciler can never lower (2026-09-03, AMZN on
+   * claude-fable-5-1 at effort max — $6.86 booked as actual for a pass that
+   * reported five output tokens).
+   */
+  /**
+   * Once one analyst side fails unrepairably the run cannot produce a report:
+   * `recoverable` in the runner needs every side to have either succeeded or
+   * be schema-repairable, and a transport failure is neither — the job
+   * degrades to data-only. The sibling was left generating anyway. On
+   * 2026-09-03 bull was abandoned by the idle guard at 19:05:00 and bear kept
+   * billing until the user cancelled it by hand at 19:13:12: eight minutes of
+   * paid output for a report that could no longer be written.
+   */
+  it("abandons the sibling once a side fails in a way the run cannot recover from", async () => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    // Bull dies on transport (not repairable); bear is still streaming.
+    mock.on("llm.bull", { kind: "error", error: { kind: "transport", message: "stream idle timeout" } });
+    let bearReachedProvider = false;
+    const deps = makeDeps(mock, {
+      runPassStreaming: (args) => {
+        if (args.field === "llm.bear") {
+          bearReachedProvider = true;
+          // A bear that is never stopped never resolves — the 2026-09-03
+          // behaviour, where only the user's cancel ended it.
+          const stopped = new Promise<RunPassOutcome>((resolve) => {
+            const abandonNow = (): void =>
+              resolve({
+                ok: false,
+                gap: { field: "llm.bear", reason: "aborted", severity: "critical" },
+                // What the provider returns for a caller abort.
+                error: { kind: "transport", message: "Request was aborted.", aborted: true },
+              });
+            if (args.signal?.aborted === true) abandonNow();
+            else args.signal?.addEventListener("abort", abandonNow);
+          });
+          return { firstToken: Promise.resolve("streamEvent"), result: stopped };
+        }
+        return mock.runPassStreaming(args);
+      },
+    });
+
+    // The contract is that this RESOLVES: before the fix it ran until cancelled.
+    const { bull, bear } = await runBullThenBear(deps, payload);
+
+    expect(bull.ok).toBe(false);
+    expect(bear.ok, "bear must not produce a paid case for a run that is already lost").toBe(false);
+    if (!bear.ok) {
+      // Either never launched, or launched and cut short — both name the cause.
+      expect(bear.gap.reason).toMatch(/bull pass failed unrecoverably/);
+      expect(bear.gap.reason).toMatch(/not launched|abandoned/);
+      if (!bearReachedProvider) expect(bear.error.notLaunched).toBe(true);
+    }
+  });
+
+  /**
+   * A schema-invalid output IS repairable — the runner pays for one repair
+   * attempt per side and then synthesizes — so the sibling must be left alone.
+   */
+  it("leaves the sibling running when the failure is schema-repairable", async () => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onText("llm.bull", "{\"thesis\": \"not an array\"}");
+    mock.onJson("llm.bear", analystCase("bear"));
+
+    const { bull, bear } = await runBullThenBear(makeDeps(mock), payload);
+
+    expect(bull.ok).toBe(false);
+    if (!bull.ok) expect(bull.validationError).toBeDefined();
+    expect(bear.ok).toBe(true);
+  });
+
+  /**
+   * The second `abandon.bear.signal.aborted` check sits AFTER bear's
+   * `beforePass` (where the runner acquires bear's durable lease) and before
+   * `onPassStart` / `beforeProviderLaunch`: a bull that ends the run while
+   * bear is waiting at its permit gate must leave bear un-launched, with the
+   * launch hooks unfired, so the runner releases that lease as a prelaunch.
+   */
+  it("backs bear out after its permit gate when bull ends the run while bear waits there", async () => {
+    const { payload } = buildInputs();
+    let reportBullDeath!: (outcome: RunPassOutcome) => void;
+    const bullResult = new Promise<RunPassOutcome>((resolve) => {
+      reportBullDeath = resolve;
+    });
+    let releaseBearGate!: () => void;
+    const bearGate = new Promise<void>((resolve) => {
+      releaseBearGate = resolve;
+    });
+    const providerCalls: string[] = [];
+    const hookLog: string[] = [];
+    const deps: PassDeps = {
+      model: "claude-opus-4-8",
+      runPass: async () => {
+        throw new Error("unexpected non-streaming call");
+      },
+      runPassStreaming: (args) => {
+        providerCalls.push(args.field ?? "");
+        return { firstToken: Promise.resolve("streamEvent"), result: bullResult };
+      },
+    };
+
+    const run = runBullThenBear(deps, payload, {
+      beforePass: async (side) => {
+        hookLog.push(`beforePass:${side}`);
+        if (side === "bear") {
+          // Bull dies while bear is held at its permit gate.
+          reportBullDeath({
+            ok: false,
+            gap: { field: "llm.bull", reason: "stream idle timeout", severity: "critical" },
+            error: { kind: "transport", message: "stream idle timeout" },
+          });
+          await bearGate;
+        }
+      },
+      onPassStart: (side) => {
+        hookLog.push(`onPassStart:${side}`);
+      },
+      beforeProviderLaunch: (side) => {
+        hookLog.push(`beforeProviderLaunch:${side}`);
+      },
+    });
+    // Let bull's failure propagate (and abort bear's controller) before the
+    // gate opens; then bear re-checks the signal and backs out.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseBearGate();
+    const { bull, bear } = await run;
+
+    expect(bull.ok).toBe(false);
+    expect(bear.ok).toBe(false);
+    if (bear.ok) return;
+    expect(bear.error.notLaunched).toBe(true);
+    expect(bear.gap.reason).toMatch(/not launched because the bull pass failed unrecoverably/);
+    expect(providerCalls).toEqual(["llm.bull"]);
+    expect(hookLog).toEqual([
+      "beforePass:bull",
+      "onPassStart:bull",
+      "beforeProviderLaunch:bull",
+      "beforePass:bear",
+    ]);
+  });
+
+  it("never opens a bear request on the sequential path once bull has ended the run", async () => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.on("llm.bull", { kind: "error", error: { kind: "transport", message: "Overloaded" } });
+    mock.onJson("llm.bear", analystCase("bear"));
+    const deps = makeDeps(mock);
+    delete (deps as { runPassStreaming?: unknown }).runPassStreaming;
+
+    const { bull, bear } = await runBullThenBear(deps, payload);
+
+    expect(bull.ok).toBe(false);
+    expect(bear.ok).toBe(false);
+    if (bear.ok) return;
+    expect(bear.error.notLaunched).toBe(true);
+    expect(mock.calls.map((call) => call.field)).toEqual(["llm.bull"]);
+  });
+
+  it("keeps each side's own failure message when both fail on their own in the same instant", async () => {
+    const { payload } = buildInputs();
+    const failure = (field: string): RunPassOutcome => ({
+      ok: false,
+      gap: { field, reason: `${field} overloaded`, severity: "critical" },
+      // No `aborted`: the provider failed it, nobody aborted it.
+      error: { kind: "transport", message: `transport failure after 6 attempts: Overloaded (${field})` },
+    });
+    const deps: PassDeps = {
+      model: "claude-opus-4-8",
+      runPass: async () => {
+        throw new Error("unexpected non-streaming call");
+      },
+      runPassStreaming: (args) => ({
+        firstToken: Promise.resolve("streamEvent"),
+        result: new Promise<RunPassOutcome>((resolve) =>
+          setTimeout(() => resolve(failure(args.field ?? "")), 5),
+        ),
+      }),
+    };
+
+    const { bull, bear } = await runBullThenBear(deps, payload);
+    expect(bull.ok || bear.ok).toBe(false);
+    if (bull.ok || bear.ok) return;
+    expect(bull.error.message).toContain("Overloaded (llm.bull)");
+    expect(bear.error.message).toContain("Overloaded (llm.bear)");
+    expect(bull.error.message).not.toMatch(/abandoned/);
+    expect(bear.error.message).not.toMatch(/abandoned/);
+  });
+
+  /**
+   * A job-level abort (cancel, stage deadline) aborts BOTH sides at once, both
+   * then satisfy endsTheRun and each side's controller fires for the other.
+   * Neither sibling failed, so neither side may be labelled "abandoned
+   * because the sibling failed unrecoverably".
+   */
+  it("does not relabel either side when the job signal, not a sibling, ended the run", async () => {
+    const { payload } = buildInputs();
+    const job = new AbortController();
+    const abortedResult = (field: string): RunPassOutcome => ({
+      ok: false,
+      gap: { field, reason: "request aborted by the caller", severity: "critical" },
+      error: { kind: "transport", message: "request aborted by the caller after generation started", aborted: true },
+    });
+    const deps: PassDeps = {
+      model: "claude-opus-4-8",
+      signal: job.signal,
+      runPass: async () => {
+        throw new Error("unexpected non-streaming call");
+      },
+      runPassStreaming: (args) => ({
+        firstToken: Promise.resolve("streamEvent"),
+        result: new Promise<RunPassOutcome>((resolve) => {
+          const stop = (): void => resolve(abortedResult(args.field ?? ""));
+          if (args.signal?.aborted === true) stop();
+          else args.signal?.addEventListener("abort", stop);
+        }),
+      }),
+    };
+
+    const run = runBullThenBear(deps, payload);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    job.abort(new Error("user cancelled"));
+    const { bull, bear } = await run;
+
+    expect(bull.ok || bear.ok).toBe(false);
+    if (bull.ok || bear.ok) return;
+    expect(bull.error.message).toBe("request aborted by the caller after generation started");
+    expect(bear.error.message).toBe("request aborted by the caller after generation started");
+  });
+
+  /**
+   * The abandonment label must reach the settlement hook: the durable pass
+   * artifact and the step detail are what a resume, the pipeline page and a
+   * post-mortem read, and they used to record the provider's raw abort text
+   * while the manifest said the run abandoned the side on purpose.
+   */
+  it("settles an abandoned side under the abandonment label, not the provider's abort text", async () => {
+    const { payload } = buildInputs();
+    const settledFailures: Record<string, string> = {};
+    const deps: PassDeps = {
+      model: "claude-opus-4-8",
+      runPass: async () => {
+        throw new Error("unexpected non-streaming call");
+      },
+      runPassStreaming: (args) => {
+        if (args.field === "llm.bull") {
+          return {
+            firstToken: Promise.resolve("streamEvent"),
+            result: new Promise<RunPassOutcome>((resolve) =>
+              setTimeout(
+                () =>
+                  resolve({
+                    ok: false,
+                    gap: { field: "llm.bull", reason: "stream idle timeout", severity: "critical" },
+                    error: { kind: "transport", message: "stream idle timeout after 1 attempt" },
+                  }),
+                5,
+              ),
+            ),
+          };
+        }
+        return {
+          firstToken: Promise.resolve("streamEvent"),
+          result: new Promise<RunPassOutcome>((resolve) => {
+            const stop = (): void =>
+              resolve({
+                ok: false,
+                gap: { field: "llm.bear", reason: "request aborted by the caller", severity: "critical" },
+                error: {
+                  kind: "transport",
+                  message: "request aborted by the caller after generation started",
+                  aborted: true,
+                  costUsd: 0.31,
+                },
+              });
+            if (args.signal?.aborted === true) stop();
+            else args.signal?.addEventListener("abort", stop);
+          }),
+        };
+      },
+    };
+
+    const { bull, bear } = await runBullThenBear(
+      deps,
+      payload,
+      {},
+      {
+        bull: (settlement) => {
+          if (settlement.outcome === "failure") settledFailures.bull = settlement.failure.message;
+        },
+        bear: (settlement) => {
+          if (settlement.outcome === "failure") settledFailures.bear = settlement.failure.message;
+        },
+      },
+    );
+
+    expect(bull.ok || bear.ok).toBe(false);
+    if (bull.ok || bear.ok) return;
+    expect(bear.error.message).toMatch(/bear pass abandoned because the bull pass failed unrecoverably/);
+    expect(settledFailures.bear).toMatch(/bear pass abandoned because the bull pass failed unrecoverably/);
+    expect(settledFailures.bull).toBe("stream idle timeout after 1 attempt");
+    // The billed figure the provider settled is kept exactly as it was.
+    expect(bear.costUsd).toBeCloseTo(0.31, 10);
+  });
+
+  it("registers each analyst side's admission before building its request", async () => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.bull", analystCase("bull"));
+    mock.onJson("llm.bear", analystCase("bear"));
+    // Mirrors the runner exactly: a side has no admission until beforePass ran.
+    const registered = new Map<string, unknown>();
+    const admissions: Record<string, unknown> = {
+      bull: { pass: "bull" },
+      bear: { pass: "bear" },
+    };
+    const deps = makeDeps(mock, {
+      admissionFor: (side) => registered.get(side),
+    });
+
+    await runBullThenBear(deps, payload, {
+      beforePass: (side) => {
+        registered.set(side, admissions[side]);
+      },
+    });
+
+    expect(mock.calls.find((call) => call.field === "llm.bull")?.admission)
+      .toBe(admissions.bull);
+    expect(mock.calls.find((call) => call.field === "llm.bear")?.admission)
+      .toBe(admissions.bear);
+  });
 
   it.each(["bull", "bear"] as const)(
     "propagates the single-side %s launch fence before runPass",

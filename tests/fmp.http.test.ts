@@ -2,7 +2,7 @@
  * Shared HTTP layer tests — token bucket, backoff math, retry policy,
  * bandwidth accounting. No network: fetch is injected.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   computeBackoffMs,
   fetchWithPolicy,
@@ -10,6 +10,7 @@ import {
   getBandwidthTotals,
   getProviderLimiter,
   HttpRequestAbortedError,
+  HttpBodyTooLargeError,
   HttpTransportError,
   makeLimiter,
   parseRetryAfterMs,
@@ -78,14 +79,60 @@ describe("makeLimiter (token bucket)", () => {
     expect(fmp.burst).toBeGreaterThanOrEqual(40);
   });
 
-  it("fred default burst admits one sector-overlay volley at the documented ≤2 req/s", () => {
-    // First ticker in a GICS sector adds ≤6 sector FRED series on top of the
-    // (usually cached) core set. Burst 2 serialized that tail ~0.5 s per series
-    // on top of fredgraph latency; burst 8 admits the overlay in one shot while
-    // sustained draw stays at the documented ≤2 req/s (~120/min reported cap).
-    const fred = getProviderLimiter("fred");
-    expect(fred.ratePerSec).toBe(2);
-    expect(fred.burst).toBeGreaterThanOrEqual(8);
+  it("declares limiters only for the clients that go through fetchWithPolicy (audit 2026-09-06, F222/F230)", () => {
+    // fred.ts, finra.ts and finnhub.ts call fetchWithRedirectPolicy directly
+    // and pace themselves; a registry row for them (and the burst-8
+    // sector-overlay rationale this test used to pin) described pacing no
+    // request ever received. They now get the generic fallback, which governs
+    // nothing they do.
+    for (const provider of ["fred", "finra", "finnhub"]) {
+      const limiter = getProviderLimiter(provider);
+      expect(limiter.ratePerSec).toBe(2);
+      expect(limiter.burst).toBe(2);
+    }
+    expect(getProviderLimiter("edgar").ratePerSec).toBe(5);
+    expect(getProviderLimiter("yahoo")).toMatchObject({ ratePerSec: 2, burst: 2 });
+  });
+});
+
+describe("fetchWithPolicy body size cap (audit 2026-09-06, F229)", () => {
+  const policy = (fetchImpl: typeof fetch, maxBodyBytes: number) => ({
+    provider: "test",
+    fetchImpl,
+    limiter: makeLimiter(1000, 1000),
+    maxRetries: 2,
+    maxBodyBytes,
+    sleepImpl: async () => undefined,
+  });
+
+  it("refuses a declared Content-Length above the cap without reading the body, and does not retry", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response("x".repeat(64), {
+        status: 200,
+        headers: { "content-length": String(10 * 1024 * 1024) },
+      }),
+    ) as unknown as typeof fetch;
+    await expect(fetchWithPolicy("https://example.invalid/big", {}, policy(fetchImpl, 1024))).rejects.toBeInstanceOf(
+      HttpBodyTooLargeError,
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("abandons an undeclared body the moment it passes the cap", async () => {
+    const fetchImpl = vi.fn(async () => new Response("y".repeat(4096), { status: 200 })) as unknown as typeof fetch;
+    const failure = await fetchWithPolicy("https://example.invalid/stream", {}, policy(fetchImpl, 1024)).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(HttpBodyTooLargeError);
+    expect((failure as HttpBodyTooLargeError).limitBytes).toBe(1024);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads a body within the cap exactly as before", async () => {
+    const fetchImpl = vi.fn(async () => new Response("small body", { status: 200 })) as unknown as typeof fetch;
+    const result = await fetchWithPolicy("https://example.invalid/ok", {}, policy(fetchImpl, 1024));
+    expect(result.bodyText).toBe("small body");
+    expect(result.bytes).toBe(10);
   });
 });
 

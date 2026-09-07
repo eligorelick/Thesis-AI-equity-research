@@ -1,5 +1,5 @@
 /**
- * Finnhub client — deliberately thin (the provider contract §1.7).
+ * Finnhub client — deliberately thin .
  *
  * Server-only. Free tier justifies exactly ONE adapter:
  * - insiderSentiment (MSPR) — always on; unique derived signal FMP lacks.

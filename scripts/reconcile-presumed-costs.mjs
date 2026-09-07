@@ -8,52 +8,91 @@
  * reserved maximum (DECISIONS D-07). A late settlement replaces that
  * automatically; this script is the other route, for a process that never
  * came back. It needs ANTHROPIC_ADMIN_KEY (an Admin API key, distinct from
- * ANTHROPIC_API_KEY) and makes exactly one paid-account read: the Usage &
- * Cost API for the window covering the oldest unreconciled presumption.
+ * ANTHROPIC_API_KEY) and reads one thing from the paid account: the Cost
+ * report (`GET /v1/organizations/cost_report`) for the window from the oldest
+ * unreconciled presumption to tomorrow, in daily buckets, following the
+ * report's own paging until the window is covered.
  *
  * The Cost API reports totals per time bucket, not per request, so the only
  * sound inference is an upper bound: within a bucket, presumed spend cannot
- * exceed the reported total less the settlements already recorded there. A row
- * is only ever lowered.
+ * exceed the reported total less the settlements already recorded there. A
+ * row is only ever lowered.
+ *
+ * Amounts arrive in the currency's LOWEST unit as decimal strings — cents for
+ * USD, so `"123.45"` is $1.2345 — and are converted here; the reconciler
+ * works in dollars (audit 2026-09-06, §5: the script read them as dollars and
+ * targeted `cost_reports`, a path the API does not serve, so it had never
+ * lowered a row).
  *
  * Nothing in the app calls this: reconciliation is an operator action, so no
  * report path ever makes an Admin API request.
  */
 
-import { pathToFileURL } from "node:url";
+import { isEntryPoint } from "./lib/entrypoint.mjs";
 
-export const COST_API_URL = "https://api.anthropic.com/v1/organizations/cost_reports";
+export const COST_API_URL = "https://api.anthropic.com/v1/organizations/cost_report";
 export const ANTHROPIC_VERSION = "2023-06-01";
+/** Buckets per page: the API's maximum. */
+export const COST_API_PAGE_LIMIT = 31;
+/** Pages followed before giving up: 24 × 31 daily buckets, two years. */
+export const COST_API_MAX_PAGES = 24;
+/** Cost-report amounts are in the lowest currency unit (cents for USD). */
+export const LOWEST_UNITS_PER_USD = 100;
 
-/** Map one Cost API page to the bucket shape the reconciler consumes. */
+/** Read one result's amount (lowest currency unit) as a finite number, else 0. */
+function lowestUnitAmount(result) {
+  const raw = result?.amount ?? result?.cost?.amount ?? 0;
+  const amount = Number(raw);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+/** Map one Cost API page to the bucket shape the reconciler consumes (USD). */
 export function bucketsFromCostReport(page) {
   const buckets = [];
   for (const entry of page?.data ?? []) {
     const startTime = typeof entry.starting_at === "string" ? entry.starting_at : null;
     const endTime = typeof entry.ending_at === "string" ? entry.ending_at : null;
     if (startTime === null || endTime === null) continue;
-    let reportedUsd = 0;
+    let reportedLowestUnits = 0;
     for (const result of entry.results ?? []) {
-      const amount = Number(result?.amount ?? result?.cost?.amount ?? 0);
-      if (Number.isFinite(amount)) reportedUsd += amount;
+      reportedLowestUnits += lowestUnitAmount(result);
     }
-    buckets.push({ startTime, endTime, reportedUsd });
+    buckets.push({ startTime, endTime, reportedUsd: reportedLowestUnits / LOWEST_UNITS_PER_USD });
   }
   return buckets;
 }
 
-async function fetchCostReport(adminKey, startTime, endTime) {
-  const url = new URL(COST_API_URL);
-  url.searchParams.set("starting_at", startTime);
-  url.searchParams.set("ending_at", endTime);
-  url.searchParams.set("bucket_width", "1d");
-  const response = await fetch(url, {
-    headers: { "x-api-key": adminKey, "anthropic-version": ANTHROPIC_VERSION },
-  });
-  if (!response.ok) {
-    throw new Error(`${COST_API_URL} responded ${response.status}`);
+/**
+ * Fetch every daily bucket in [startTime, endTime), following `next_page`
+ * until `has_more` is false or the page cap is reached. Returns the buckets
+ * oldest first, as the API serves them.
+ */
+export async function fetchCostReport(adminKey, startTime, endTime, fetchImpl = fetch) {
+  const buckets = [];
+  let page;
+  for (let pages = 0; pages < COST_API_MAX_PAGES; pages++) {
+    const url = new URL(COST_API_URL);
+    url.searchParams.set("starting_at", startTime);
+    url.searchParams.set("ending_at", endTime);
+    url.searchParams.set("bucket_width", "1d");
+    url.searchParams.set("limit", String(COST_API_PAGE_LIMIT));
+    if (page !== undefined) url.searchParams.set("page", page);
+    const response = await fetchImpl(url, {
+      headers: { "x-api-key": adminKey, "anthropic-version": ANTHROPIC_VERSION },
+    });
+    if (!response.ok) {
+      throw new Error(`${COST_API_URL} responded ${response.status}`);
+    }
+    const body = await response.json();
+    buckets.push(...bucketsFromCostReport(body));
+    if (body?.has_more !== true || typeof body?.next_page !== "string" || body.next_page.length === 0) {
+      return buckets;
+    }
+    page = body.next_page;
   }
-  return bucketsFromCostReport(await response.json());
+  throw new Error(
+    `${COST_API_URL} still had more pages after ${COST_API_MAX_PAGES}; narrow the window`,
+  );
 }
 
 async function main(argv) {
@@ -98,7 +137,7 @@ async function main(argv) {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntryPoint(import.meta.url)) {
   main(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (error) => {

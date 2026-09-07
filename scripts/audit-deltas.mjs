@@ -6,11 +6,15 @@
  *
  * The list lives in `tests/fixtures/audit-intended-deltas.json` and is the
  * written record of every leaf where this tree's Stage B projection differs
- * from the audited commit's. Regenerating refreshes the pinned values of paths
- * already classified and drops paths that no longer differ; a path nobody has
- * classified must be assigned to a named group with `--group`, whose reason a
- * human then has to write. The script cannot invent one, which is the point:
- * nothing gets blessed without somebody saying why.
+ * from the audited commit's. Regenerating drops paths that no longer differ
+ * and keeps every path whose pinned values are unchanged in its group. Two
+ * kinds of path must be assigned to a named group with `--group`, whose reason
+ * a human then has to write: a path nobody has classified, and a path already
+ * classified whose `before`/`after` no longer match what was blessed — a value
+ * that moved again is a new change, and the old reason does not describe it
+ * (audit 2026-09-06, F199: the regenerator used to re-pin such a value under
+ * the old reason without a word). The script cannot invent a reason, which is
+ * the point: nothing gets blessed without somebody saying why.
  *
  * No network, no provider call: the projection is rebuilt from the checked-in
  * fixtures exactly as the test rebuilds it.
@@ -19,7 +23,9 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+
+import { isEntryPoint } from "./lib/entrypoint.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(HERE, "..");
@@ -45,23 +51,7 @@ export function regenerate({ baseline, current, existing, targetGroup, generated
     for (const delta of group.deltas) groupOfPath.set(delta.path, group.name);
   }
 
-  const unclassified = differing.filter((p) => !groupOfPath.has(p));
-  if (unclassified.length > 0) {
-    if (targetGroup === undefined) {
-      throw new Error(
-        `${unclassified.length} newly differing path(s) belong to no group; rerun with --group <name>.\n` +
-          `First few: ${unclassified.slice(0, 8).join(", ")}`,
-      );
-    }
-    for (const p of unclassified) groupOfPath.set(p, targetGroup);
-  }
-
-  const buckets = new Map();
-  for (const group of existing.groups) buckets.set(group.name, []);
-  if (targetGroup !== undefined && !buckets.has(targetGroup)) buckets.set(targetGroup, []);
-
-  for (const p of differing) {
-    const name = groupOfPath.get(p);
+  const deltaFor = (p) => {
     const before = readJsonPath(baseline, p);
     const after = readJsonPath(current, p);
     const delta = { path: p };
@@ -69,7 +59,49 @@ export function regenerate({ baseline, current, existing, targetGroup, generated
     else delta.beforeMissing = true;
     if (after.exists) delta.after = after.value;
     else delta.afterMissing = true;
-    buckets.get(name).push(delta);
+    return delta;
+  };
+  const pinned = (delta) =>
+    canonicalJson({
+      before: delta.before,
+      beforeMissing: delta.beforeMissing === true,
+      after: delta.after,
+      afterMissing: delta.afterMissing === true,
+    });
+  const existingDelta = new Map();
+  for (const group of existing.groups) {
+    for (const delta of group.deltas) existingDelta.set(delta.path, delta);
+  }
+
+  const unclassified = differing.filter((p) => !groupOfPath.has(p));
+  const reclassified = differing.filter((p) => {
+    const prior = existingDelta.get(p);
+    return prior !== undefined && pinned(prior) !== pinned(deltaFor(p));
+  });
+  if (unclassified.length > 0 || reclassified.length > 0) {
+    if (targetGroup === undefined) {
+      const parts = [];
+      if (unclassified.length > 0) parts.push(`${unclassified.length} newly differing path(s) belong to no group`);
+      if (reclassified.length > 0) {
+        parts.push(
+          `${reclassified.length} already-classified path(s) moved since they were blessed, so their group's reason no longer describes them`,
+        );
+      }
+      throw new Error(
+        `${parts.join("; ")}; rerun with --group <name>.\n` +
+          `First few: ${[...unclassified, ...reclassified].slice(0, 8).join(", ")}`,
+      );
+    }
+    for (const p of unclassified) groupOfPath.set(p, targetGroup);
+    for (const p of reclassified) groupOfPath.set(p, targetGroup);
+  }
+
+  const buckets = new Map();
+  for (const group of existing.groups) buckets.set(group.name, []);
+  if (targetGroup !== undefined && !buckets.has(targetGroup)) buckets.set(targetGroup, []);
+
+  for (const p of differing) {
+    buckets.get(groupOfPath.get(p)).push(deltaFor(p));
   }
 
   const knownGroups = new Map(existing.groups.map((group) => [group.name, group]));
@@ -102,7 +134,7 @@ export function regenerate({ baseline, current, existing, targetGroup, generated
     manifestIdentity: computeManifestIdentity(baseline, current, existing.keyedArrays),
     groups,
   };
-  return { file, added: unclassified, dropped };
+  return { file, added: unclassified, reclassified, dropped };
 }
 
 function parseArgs(argv) {
@@ -128,7 +160,7 @@ async function main(argv) {
     reportFixture: path.join(ROOT, "fixtures", "report", "DEMO-sample.json"),
   });
 
-  const { file, added, dropped } = regenerate({
+  const { file, added, reclassified, dropped } = regenerate({
     baseline,
     current: projection,
     existing,
@@ -143,6 +175,7 @@ async function main(argv) {
     console.log(`  ${group.deltas.length.toString().padStart(4)}  ${group.name}`);
   }
   if (added.length > 0) console.log(`  newly classified into ${targetGroup}: ${added.length}`);
+  if (reclassified.length > 0) console.log(`  moved since blessed, reclassified into ${targetGroup}: ${reclassified.length}`);
   if (dropped.length > 0) console.log(`  no longer differing, dropped: ${dropped.length}`);
   for (const group of file.groups) {
     if (group.reason.trim().length === 0) {
@@ -159,7 +192,7 @@ async function main(argv) {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntryPoint(import.meta.url)) {
   main(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (error) => {

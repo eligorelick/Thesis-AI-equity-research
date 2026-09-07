@@ -1,4 +1,4 @@
-import { resolveRegistryModel } from "@/models/registry";
+import { judgeFloorModelId, resolveRegistryModel } from "@/models/registry";
 
 export type ExecutionEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type ExecutionAdjustment =
@@ -66,12 +66,22 @@ export function buildExecutionMetadataEntry(input: {
   const notes: string[] = [];
   const requestedFamily = resolveRegistryModel(input.requestedModel)?.entry.family;
   const effectiveFamily = resolveRegistryModel(input.effectiveModel)?.entry.family;
+  // The floor is applied by the provider to the synthesize pass only, and to
+  // the registry's `judgeFloorModelId` — the disclosure follows the same rule
+  // rather than a hard-coded haiku→sonnet family pair, so moving the floor in
+  // config/models.json cannot leave it undisclosed and an analyst pass can
+  // never be labelled with the judge's adjustment.
+  const floored =
+    input.step === "synthesize" &&
+    input.effectiveModel === judgeFloorModelId() &&
+    input.requestedModel !== input.effectiveModel &&
+    requestedFamily !== effectiveFamily;
   if (input.fallbackUsed) {
     adjustments.push("fallback");
     notes.push(
       `${input.step}: served by the server-side fallback model ${input.effectiveModel} after ${input.requestedModel} declined the request.`,
     );
-  } else if (requestedFamily === "haiku" && effectiveFamily === "sonnet") {
+  } else if (floored) {
     adjustments.push("model-floor");
     const requestedAcceptsEffort = modelSupportsEffort(input.requestedModel);
     notes.push(

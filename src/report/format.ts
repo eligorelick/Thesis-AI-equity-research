@@ -49,14 +49,26 @@ export function formatPct(value: number | null | undefined, digits = 1, signed =
   return `${signed && value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
 }
 
+const LARGE_NUMBER_SCALES: readonly [scale: number, suffix: string, digits: number][] = [
+  [1e12, "T", 2],
+  [1e9, "B", 2],
+  [1e6, "M", 2],
+  [1e3, "K", 1],
+];
+
+/**
+ * Compact magnitude ("$60.96B"). The scale is chosen on the ROUNDED mantissa,
+ * largest first, so it never reaches 1000: 999,996,000,000 prints "1.00T",
+ * not "1000.00B", and 999,999.999 prints "1.00M", not "1000.0K".
+ */
 export function formatLargeNumber(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "n/a";
   const abs = Math.abs(value);
   const sign = value < 0 ? "-" : "";
-  if (abs >= 1e12) return `${sign}${(abs / 1e12).toFixed(2)}T`;
-  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`;
+  for (const [scale, suffix, digits] of LARGE_NUMBER_SCALES) {
+    const mantissa = (abs / scale).toFixed(digits);
+    if (Number(mantissa) >= 1) return `${sign}${mantissa}${suffix}`;
+  }
   return `${sign}${abs.toFixed(2)}`;
 }
 
@@ -86,6 +98,54 @@ function formatMoney(value: number, currency: string | null | undefined, large: 
   return `${magnitude} ${code}`;
 }
 
+/**
+ * A plain money amount at a chosen precision, in its ACTUAL currency — the
+ * same rule as {@link formatMoney}, for figures rendered outside a
+ * TracedNumber (the DCF sensitivity grid, whose cells are bare numbers in the
+ * currency of `valuation.dcf.perShare`).
+ */
+export function formatMoneyAmount(
+  value: number,
+  currency: string | null | undefined,
+  digits = 2,
+): string {
+  const magnitude = formatNumber(value, digits);
+  const code = (currency ?? "").trim().toUpperCase();
+  if (code === "" || code === "USD") return `$${magnitude}`;
+  return `${magnitude} ${code}`;
+}
+
+/**
+ * Units the pipeline's own payload and score drivers emit that are not
+ * canonical financial units: share counts, percentage-point deltas, RSI,
+ * ranks, days, quarters and fractions. Rendered on their own terms rather
+ * than through the generic "two decimals + unit word" fallback, which printed
+ * a share count as "15,204,000,000.00 shares" and an RSI as "55.00 rsi".
+ */
+function formatPipelineUnit(value: number, unit: string): string | null {
+  switch (unit.trim().toLowerCase()) {
+    case "shares":
+      return `${formatLargeNumber(value)} shares`;
+    case "pp":
+    case "pp/yr":
+      return `${formatNumber(value, 1)} ${unit.trim().toLowerCase()}`;
+    case "fraction":
+    case "frac":
+      return formatPct(value * 100);
+    case "z":
+      return `${formatNumber(value, 2)} z`;
+    case "days":
+    case "quarters":
+    case "rank":
+    case "score":
+    case "rsi":
+    case "pctile":
+      return `${formatNumber(value, Number.isInteger(value) ? 0 : 1)} ${unit.trim().toLowerCase()}`;
+    default:
+      return null;
+  }
+}
+
 export function formatFinancialValue(
   value: number,
   unit: string,
@@ -101,7 +161,7 @@ export function formatFinancialValue(
     case "basis-points": return `${formatNumber(value, 0)} bps`;
     case "years": return `${formatNumber(value, 1)}y`;
     case "number": return formatNumber(value, Number.isInteger(value) ? 0 : 2);
-    default: return `${formatNumber(value)} ${unit}`;
+    default: return formatPipelineUnit(value, unit) ?? `${formatNumber(value)} ${unit}`;
   }
 }
 

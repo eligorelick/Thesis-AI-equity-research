@@ -84,6 +84,23 @@ export function money(v: number | null | undefined, digits = 2): string {
   return `${sign}$${price(Math.abs(v), digits)}`;
 }
 
+/**
+ * Money in its ACTUAL currency: "$" only for USD or an unknown (legacy)
+ * currency, otherwise the ISO code follows the magnitude — the same rule as
+ * src/report/format.ts formatMoney, so a TWD-per-share grid never wears a "$".
+ */
+export function moneyIn(
+  v: number | null | undefined,
+  currency: string | null | undefined,
+  digits = 2,
+): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return EM_DASH;
+  const code = (currency ?? "").trim().toUpperCase();
+  if (code === "" || code === "USD") return money(v, digits);
+  const sign = v < 0 ? "-" : "";
+  return `${sign}${price(Math.abs(v), digits)} ${code}`;
+}
+
 /** Multiple: "12.3×"; "n/m" when null (matches page convention). */
 export function multiple(v: number | null | undefined, digits = 1): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "n/m";

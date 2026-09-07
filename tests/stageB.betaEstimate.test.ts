@@ -1,8 +1,19 @@
 // tests/stageB.betaEstimate.test.ts
 import { describe, expect, it } from "vitest";
-import { BETA_MIN_MONTHS, blumeAdjust, estimateBeta, monthEndCloses } from "@/pipeline/stageB/betaEstimate";
+import {
+  BETA_MIN_MONTHS,
+  blumeAdjust,
+  estimateBeta,
+  isMonthComplete,
+  monthEndCloses,
+} from "@/pipeline/stageB/betaEstimate";
 
-/** Daily closes for `months` months where the symbol's monthly log return is beta × benchmark's. */
+/**
+ * Daily closes for `months` COMPLETE calendar months (every weekday through
+ * the month's last weekday) where the symbol's monthly log return is beta ×
+ * benchmark's. Complete months matter: the estimator drops a month whose
+ * last observation is not in the month's closing days (audit 2026-09-06).
+ */
 function series(months: number, beta: number, start = "2021-01-04") {
   const symbol: { date: string; close: number }[] = [];
   const bench: { date: string; close: number }[] = [];
@@ -11,19 +22,31 @@ function series(months: number, beta: number, start = "2021-01-04") {
   const d = new Date(`${start}T00:00:00Z`);
   for (let m = 0; m < months; m++) {
     const benchReturn = ((m % 5) - 2) * 0.02; // −4%, −2%, 0, +2%, +4% pattern
-    for (let day = 0; day < 20; day++) {
+    const month = d.getUTCMonth();
+    while (d.getUTCMonth() === month) {
+      if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6) {
+        const iso = d.toISOString().slice(0, 10);
+        symbol.push({ date: iso, close: s });
+        bench.push({ date: iso, close: b });
+      }
       d.setUTCDate(d.getUTCDate() + 1);
-      if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue;
-      const iso = d.toISOString().slice(0, 10);
-      symbol.push({ date: iso, close: s });
-      bench.push({ date: iso, close: b });
     }
     b *= Math.exp(benchReturn);
     s *= Math.exp(beta * benchReturn);
-    // advance to the next month
-    d.setUTCMonth(d.getUTCMonth() + 1, 1);
   }
   return { symbol, bench };
+}
+
+/** The first two weekdays of the month after `lastIso`. */
+function nextMonthStub(lastIso: string): [string, string] {
+  const d = new Date(`${lastIso}T00:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + 1, 1);
+  const days: string[] = [];
+  while (days.length < 2) {
+    if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6) days.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return [days[0]!, days[1]!];
 }
 
 describe("estimateBeta", () => {
@@ -77,6 +100,33 @@ describe("estimateBeta", () => {
     expect(ends[0]!.date > ends[1]!.date).toBe(true);
     for (const end of ends) expect(symbol.some((r) => r.date === end.date)).toBe(true);
   });
+
+  // Audit 2026-09-06: a history that ends on the fetch date closes with a stub
+  // of a few sessions, and one earnings day regressed at the weight of a full
+  // month moved the slope by a tenth. The month in progress is not a monthly
+  // observation.
+  it("excludes the month in progress: a two-session stub is not a monthly return", () => {
+    const { symbol, bench } = series(40, 1.3);
+    const last = symbol[symbol.length - 1]!.date;
+    const [d1, d2] = nextMonthStub(last);
+    const s0 = symbol[symbol.length - 1]!.close;
+    const b0 = bench[bench.length - 1]!.close;
+    // An idiosyncratic −20% move over two sessions, benchmark flat.
+    const sym = [...symbol, { date: d1, close: s0 * 0.85 }, { date: d2, close: s0 * 0.8 }];
+    const ben = [...bench, { date: d1, close: b0 }, { date: d2, close: b0 }];
+    const result = estimateBeta(sym, ben);
+    expect(result.months).toBe(39);
+    expect(result.beta!).toBeCloseTo(1.3, 6);
+    expect(result.windowEnd).toBe(last);
+    expect(result.note).toMatch(new RegExp(`partial month ${d1.slice(0, 7)} in progress is excluded`));
+  });
+
+  it("keeps a month whose last observation falls in its closing days", () => {
+    expect(isMonthComplete("2024-11-29")).toBe(true); // Thanksgiving Friday close
+    expect(isMonthComplete("2021-05-28")).toBe(true); // Memorial Day on the 31st
+    expect(isMonthComplete("2024-05-02")).toBe(false);
+    expect(isMonthComplete("2024-05-20")).toBe(false);
+  });
 });
 
 /**
@@ -100,19 +150,20 @@ describe("estimateBeta — D-15 basis, uncertainty and the Blume adjustment", ()
     const d = new Date("2021-01-04T00:00:00Z");
     for (let m = 0; m < months; m++) {
       const benchReturn = ((m % 5) - 2) * 0.02;
-      for (let day = 0; day < 20; day++) {
+      const month = d.getUTCMonth();
+      while (d.getUTCMonth() === month) {
+        if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6) {
+          const iso = d.toISOString().slice(0, 10);
+          symbol.push({ date: iso, close: sClose, adjClose: sAdj });
+          // The benchmark's two bases move together, so only the symbol's choice
+          // of basis changes the measured slope.
+          bench.push({ date: iso, close: b, adjClose: b });
+        }
         d.setUTCDate(d.getUTCDate() + 1);
-        if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue;
-        const iso = d.toISOString().slice(0, 10);
-        symbol.push({ date: iso, close: sClose, adjClose: sAdj });
-        // The benchmark's two bases move together, so only the symbol's choice
-        // of basis changes the measured slope.
-        bench.push({ date: iso, close: b, adjClose: b });
       }
       b *= Math.exp(benchReturn);
       sAdj *= Math.exp(adjBeta * benchReturn);
       sClose *= Math.exp(closeBeta * benchReturn);
-      d.setUTCMonth(d.getUTCMonth() + 1, 1);
     }
     return { symbol, bench };
   }

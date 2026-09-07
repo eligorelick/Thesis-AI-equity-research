@@ -1,12 +1,12 @@
 /**
  * reportToMarkdown — a clean, complete, DETERMINISTIC Markdown rendering of a
- * full {@link Report} (the application contract §7 sections 1–13 + appendix). This is the
+ * full {@link Report} (report sections 1–13 + appendix). This is the
  * shareable artifact behind the "Export MD" button.
  *
  * Design goals (mirror the on-screen ReportView, plain-text edition):
- *   - Every section header from SPEC §7 is present, numbered as on screen.
+ *   - Every section header is present, numbered as on screen.
  *   - Every figure carries its as-of date and its FACT/ESTIMATE/JUDGMENT label
- *     (SPEC §1 rules #2 and #5 are structural in the schema — we surface them).
+ *     (rules #2 and #5 are structural in the schema — we surface them).
  *   - Tables render as GitHub-flavored Markdown tables.
  *   - The mandatory disclaimer and the FRED attribution appear verbatim.
  *   - DETERMINISTIC: same input → byte-identical output. No `Date.now()`, no
@@ -50,7 +50,14 @@ import {
   deriveReportCompletenessPresentation,
   type ReportCompletenessPresentation,
 } from "@/report/completeness";
-import { formatCostUsd, formatFinancialValue, peerColumnKeys, roundedDisplayedCostTotal } from "@/report/format";
+import {
+  formatCostUsd,
+  formatFinancialValue,
+  formatMoneyAmount,
+  peerColumnKeys,
+  roundedDisplayedCostTotal,
+} from "@/report/format";
+import { reportSection, type ReportSectionKey } from "@/report/sectionManifest";
 import {
   markdownBlockquote,
   markdownHeading,
@@ -89,6 +96,17 @@ import { DISCLAIMER_TEXT, FRED_ATTRIBUTION_TEXT, citationOutcomeLabel } from "@/
  * ======================================================================== */
 
 const DASH = "—";
+
+/**
+ * A section heading numbered from the shared section manifest — the same
+ * index and title the print export and the live view use, so "section 13"
+ * names the same section in every artifact. Hard-coded numbers here had
+ * drifted (Macro 12 / Appendix 13 against the manifest's 13 / 14).
+ */
+function sectionHeading(key: ReportSectionKey): string {
+  const section = reportSection(key);
+  return `## ${section.index}. ${section.printTitle}`;
+}
 
 function coverageCell(supported: number, total: number, rate: number | null): string {
   return `${supported}/${total} (${
@@ -293,7 +311,7 @@ function segmentTable(rows: readonly SegmentRow[]): string {
 }
 
 /* ======================================================================== *
- * Section renderers (SPEC §7.1 – §7.13)
+ * Section renderers (sections 1–13)
  * ======================================================================== */
 
 function renderVerdict(report: Report): string {
@@ -306,7 +324,7 @@ function renderVerdict(report: Report): string {
       block.oneLineWhy,
     ]),
   );
-  const lines: string[] = ["## 1. Verdict", "", markdownProse(v.synthesis), ""];
+  const lines: string[] = [sectionHeading("verdict"), "", markdownProse(v.synthesis), ""];
   if (v.executiveSummary && v.executiveSummary.length > 0) {
     lines.push("### Executive summary", "", claimList(v.executiveSummary), "");
   }
@@ -320,7 +338,9 @@ function renderScores(scores: Scoring): string {
   const compositeFields = COMPOSITE_SCORE_FIELDS.filter((field) => field.key !== "weights");
   const aspectFields = ASPECT_SCORE_FIELDS.filter((field) => field.key !== "drivers");
   return [
-    "## 1b. Scorecard (deterministic)",
+    // A sub-heading of the verdict, as on the print surface: the manifest has
+    // no separate scorecard section, so it takes no number of its own.
+    "### Scorecard (deterministic)",
     "",
     `**Composite: ${c.score === null ? DASH : Math.round(c.score)} / 100 (${c.band ?? DASH})**`,
     "",
@@ -398,7 +418,7 @@ function renderScores(scores: Scoring): string {
 function renderProjections(p: Projections): string {
   const series = orderedProjectionSeries(p.series);
   const lines: string[] = [
-    "## 11b. Weighted Projections",
+    sectionHeading("projections"),
     "",
     `Horizon ${p.horizonYears}y · unbacktested display prior weights ${p.scenarioWeights.bull}/${p.scenarioWeights.base}/${p.scenarioWeights.bear} (bull/base/bear). Forward figures are ESTIMATEs, not facts or empirically calibrated odds.`,
     "",
@@ -503,7 +523,7 @@ function renderProjections(p: Projections): string {
 }
 
 function renderBusiness(b: Business): string {
-  const lines: string[] = ["## 2. Business & Segments", ""];
+  const lines: string[] = [sectionHeading("business"), ""];
   lines.push("### What they sell", "", claimList(b.whatTheySell), "");
   lines.push("### Product segments", "", segmentTable(b.segments.product), "");
   lines.push(
@@ -517,7 +537,7 @@ function renderBusiness(b: Business): string {
 }
 
 function renderFundamentals(f: Fundamentals): string {
-  const lines: string[] = ["## 3. Fundamentals", ""];
+  const lines: string[] = [sectionHeading("fundamentals"), ""];
   lines.push(gradeBlock("Fundamentals", f.graded), "");
   lines.push("### Growth", "", metricRowsTable(f.growthTable), "");
   lines.push("### Margin trend", "", metricRowsTable(f.marginTrend), "");
@@ -530,7 +550,7 @@ function renderFundamentals(f: Fundamentals): string {
 }
 
 function renderBalanceSheet(bs: BalanceSheet): string {
-  const lines: string[] = ["## 4. Balance Sheet & Capital", ""];
+  const lines: string[] = [sectionHeading("balanceSheet"), ""];
   if (bs.graded) {
     lines.push(gradeBlock("Balance Sheet & Capital", bs.graded), "");
   }
@@ -570,10 +590,13 @@ function renderBalanceSheet(bs: BalanceSheet): string {
  * stand-in, which is always published under its own name.
  */
 function renderRouteMetrics(rm: RouteMetrics): string {
+  // Raw cells: `table` serialises each one exactly once at the table boundary
+  // (markdownEscape is deliberately not idempotent). Pre-escaping here doubled
+  // every backslash and turned the stand-in marker into literal underscores.
   const rows = rm.metrics.map((m) => [
-    markdownProse(m.label) + (m.proxy ? " _(stand-in)_" : ""),
-    m.value === null ? "withheld" : markdownProse(formatFinancialValue(m.value, m.unit)),
-    markdownProse(m.withheldReason ?? m.basis),
+    m.label + (m.proxy ? " (stand-in)" : ""),
+    m.value === null ? "withheld" : formatFinancialValue(m.value, m.unit),
+    m.withheldReason ?? m.basis,
   ]);
   return [
     `### Route metrics (${markdownHeading(rm.route)} route)${asOfSuffix(rm.asOf)}`,
@@ -591,7 +614,7 @@ function renderValuation(
   fairValue?: FairValue,
   routeMetrics?: RouteMetrics,
 ): string {
-  const lines: string[] = ["## 5. Valuation", ""];
+  const lines: string[] = [sectionHeading("valuation"), ""];
   lines.push(gradeBlock("Valuation", v.graded), "");
 
   // DCF — perShare is null when the deterministic fair value was suppressed
@@ -639,7 +662,9 @@ function renderValuation(
       `${w.toFixed(1)}%`,
       ...gterms.map((g) => {
         const ps = lookup.get(`${w}|${g}`);
-        return ps === undefined || ps === null ? DASH : `$${ps.toFixed(0)}`;
+        // The grid is in the currency of the per-share value beside it: a
+        // TWD/share DCF over a "$" grid was a 30× disagreement to the reader.
+        return ps === undefined || ps === null ? DASH : formatMoneyAmount(ps, dcfPs?.currency ?? null, 0);
       }),
     ]);
     lines.push(
@@ -753,7 +778,7 @@ function renderScenario(sc: Scenario): string {
 }
 
 function renderQuality(q: Quality): string {
-  const lines: string[] = ["## 6. Quality & Red Flags", ""];
+  const lines: string[] = [sectionHeading("quality"), ""];
   lines.push(gradeBlock("Quality", q.graded), "");
   const fs = q.forensicScores;
   lines.push(
@@ -794,7 +819,7 @@ function renderQuality(q: Quality): string {
 }
 
 function renderTechnicals(t: Technicals): string {
-  const lines: string[] = ["## 7. Technicals", ""];
+  const lines: string[] = [sectionHeading("technicals"), ""];
   lines.push(gradeBlock("Technicals", t.graded), "");
   lines.push(
     "### Structured read",
@@ -835,7 +860,7 @@ function renderTechnicals(t: Technicals): string {
 }
 
 function renderLeadership(l: Leadership): string {
-  const lines: string[] = ["## 8. Leadership & Governance", ""];
+  const lines: string[] = [sectionHeading("leadership"), ""];
   lines.push(gradeBlock("Leadership", l.graded), "");
   lines.push("### Executives", "");
   for (const e of l.executives) {
@@ -861,7 +886,7 @@ function renderLeadership(l: Leadership): string {
 }
 
 function renderCompetitive(c: Competitive): string {
-  const lines: string[] = ["## 9. Competitive Landscape", ""];
+  const lines: string[] = [sectionHeading("competitive"), ""];
   lines.push(gradeBlock("Moat", c.moatGraded), "");
   lines.push("### Peer table", "");
   if (c.peerTable.length > 0) {
@@ -910,7 +935,7 @@ function renderCompetitive(c: Competitive): string {
 }
 
 function renderCatalystsRisks(cr: CatalystsRisks): string {
-  const lines: string[] = ["## 10. Catalysts & Risks", ""];
+  const lines: string[] = [sectionHeading("catalystsRisks"), ""];
   lines.push(
     "### Catalysts",
     "",
@@ -945,7 +970,7 @@ function renderCatalystsRisks(cr: CatalystsRisks): string {
 
 function renderOutlook(report: Report): string {
   const o = report.outlook;
-  const lines: string[] = ["## 11. Future Outlook", ""];
+  const lines: string[] = [sectionHeading("outlook"), ""];
   lines.push("### Segment trajectories", "", claimList(o.segmentTrajectories), "");
   if (o.tam && o.tam.length > 0) {
     lines.push("### TAM", "", claimList(o.tam), "");
@@ -965,7 +990,7 @@ function renderOutlook(report: Report): string {
 }
 
 function renderMacro(m: Macro): string {
-  const lines: string[] = ["## 12. Macro Context", ""];
+  const lines: string[] = [sectionHeading("macro"), ""];
   lines.push(
     table(
       ["Series", "Name", "Latest", "As of", "Relevance"],
@@ -1005,7 +1030,7 @@ function renderAppendix(
   a: Appendix,
   completeness: ReportCompletenessPresentation,
 ): string {
-  const lines: string[] = ["## 13. Appendix", ""];
+  const lines: string[] = [sectionHeading("appendix"), ""];
   lines.push(
     "### Sources",
     "",
@@ -1110,6 +1135,13 @@ function renderHeader(
   completeness: ReportCompletenessPresentation,
 ): string {
   const m = report.meta;
+  // The same figure the appendix totals and the print/live headers show: the
+  // sum of the displayed rows. `meta.costUsd` is stored at four decimals while
+  // the rows are settled at micro-USD, so the header and its own appendix
+  // Total disagreed in the sixth decimal.
+  const displayedCost = roundedDisplayedCostTotal(
+    report.appendix.costBreakdown.map((entry) => entry.costUsd),
+  );
   const lines: string[] = [];
   lines.push(
     `# ${markdownHeading(m.companyName)} (${markdownHeading(m.symbol)}) — Research Report`,
@@ -1127,11 +1159,22 @@ function renderHeader(
         ...(m.judgeProtocol !== undefined
           ? [["Judgement protocol", m.judgeProtocol.note]]
           : []),
+        // Requested versus effective model/effort per pass, with the
+        // adjustments (judge floor, effort stripped, fallback, model
+        // rejected) — the same row the print export carries. A shared
+        // Markdown that said only "Model: claude-haiku-4-5" hid that the judge
+        // ran on Sonnet.
+        ...(m.execution
+          ? [[
+              "Pass execution",
+              m.execution.map((entry) => `${entry.step}: requested ${entry.requestedModel}/${entry.requestedEffort ?? "n/a"}; effective ${entry.effectiveModel}/${entry.effectiveEffort ?? "n/a"}${entry.adjustments.length > 0 ? ` (${entry.adjustments.join(", ")})` : ""}`).join(" | "),
+            ]]
+          : []),
         // Legacy reports carry a verifyModel label (removed setting) — keep it.
         ...(m.verifyModel !== undefined ? [["Verify model", m.verifyModel]] : []),
         ["Spec version", m.specVersion],
         ["Pipeline version", m.pipelineVersion],
-        ["Cost (USD)", formatCostUsd(m.costUsd)],
+        ["Cost (USD)", formatCostUsd(displayedCost)],
         ["Data completeness", completeness.statusText],
         [
           "Citation coverage",
@@ -1180,7 +1223,7 @@ function capitalize(s: string): string {
 
 /**
  * Render a full {@link Report} to a complete, deterministic Markdown document.
- * Every SPEC §7 section, the appendix, the disclaimer, and the FRED attribution
+ * Every report section, the appendix, the disclaimer, and the FRED attribution
  * are present; every figure carries its as-of and verification state.
  */
 export function reportToMarkdown(report: Report): string {

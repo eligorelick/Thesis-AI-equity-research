@@ -90,7 +90,7 @@ export function computeFairValue(inputs: FairValueInputs): FairValue {
   if (method === null || !isNum(perShareValue)) {
     const reason =
       valuation.kind === "reit"
-        ? "equity REITs are valued on P/FFO and P/AFFO multiples — no DCF-style per-share intrinsic value is modelled (SPEC §6)"
+        ? "equity REITs are valued on P/FFO and P/AFFO multiples — no DCF-style per-share intrinsic value is modelled (docs/METHODOLOGY.md, Financial-company routes)"
         : valuation.kind === "pre-revenue"
           ? "pre-revenue company — no meaningful intrinsic per-share model in v1"
           : valuation.kind === "dcf-suppressed"
@@ -105,8 +105,24 @@ export function computeFairValue(inputs: FairValueInputs): FairValue {
     );
   }
 
+  // Limited liability: common equity cannot be worth less than nothing. A DCF
+  // whose enterprise value sits below net debt and the senior claims values
+  // the equity at or below zero; the published figure is 0 with the reason,
+  // and the upside bottoms at −100% — the same floor the scenario targets
+  // apply to their extremes, so the two blocks can no longer contradict each
+  // other (one refused a negative number the other published as available).
+  const floored = perShareValue < 0;
+  const reasons: ManifestEntry[] = floored
+    ? [
+        {
+          field: "valuation.dcf.perShare.floor",
+          reason: `the ${method} per-share is ${round2(perShareValue)} — enterprise value at or below net debt and the senior claims; published as 0 (common equity cannot be worth less than nothing) with the upside capped at −100%`,
+          severity: "warn",
+        },
+      ]
+    : [];
   const perShare: TracedNumber = {
-    value: round2(perShareValue),
+    value: floored ? 0 : round2(perShareValue),
     unit: perShareUnit(currency),
     // computed.* ⇒ the verify pass classifies this computed-derived (provenance,
     // not correctness). verified:true == "traced to computed inputs", the same
@@ -129,8 +145,13 @@ export function computeFairValue(inputs: FairValueInputs): FairValue {
     basis: [
       `Intrinsic value per share = the deterministic ${methodLabel}.`,
       "Computed-derived (source computed.valuation.*), not a source-verified analyst target — the LLM interprets it but does not author the number.",
+      ...(floored
+        ? [
+            `The model's per-share is ${round2(perShareValue)}: enterprise value sits at or below net debt and the senior claims, so the intrinsic value is published as 0 under limited liability and the upside is capped at −100%.`,
+          ]
+        : []),
     ],
-    reasons: [],
+    reasons,
   };
 }
 

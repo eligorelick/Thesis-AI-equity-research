@@ -7,7 +7,7 @@
  *
  * Pure + deterministic: no network, no DB, no LLM, no clock reads beyond the
  * bundle's own builtAt. Missing inputs degrade to gaps — never throw
- * (the application contract §3, non-negotiable rule #4).
+ * (non-negotiable rule #4).
  */
 
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
@@ -394,6 +394,8 @@ function toReturnsIncome(
   const prefRow = preferredByDate ? matchByDate(preferredByDate, String(r.date ?? "")) : null;
   return {
     date: String(r.date ?? ""),
+    acceptedDate: str(r.acceptedDate),
+    filingDate: str(r.filingDate),
     preferredDividendsPaid: prefRow ? num(prefRow.preferredDividendsPaid) : null,
     revenue: num(r.revenue),
     operatingIncome: num(r.operatingIncome),
@@ -407,7 +409,12 @@ function toReturnsIncome(
 function toReturnsBalance(r: FmpBalanceSheetRow): ReturnsBalanceRow {
   return {
     date: String(r.date ?? ""),
+    acceptedDate: str(r.acceptedDate),
+    filingDate: str(r.filingDate),
     totalDebt: num(r.totalDebt),
+    // The operating-lease slice of totalDebt (EDGAR route only) — invested
+    // capital removes it on the EV bridge's lease rule.
+    operatingLeaseLiability: num(r.operatingLeaseLiability),
     totalStockholdersEquity: num(r.totalStockholdersEquity),
     cashAndCashEquivalents: num(r.cashAndCashEquivalents),
     // Invested capital nets the same cash the house net-debt resolver does.
@@ -424,6 +431,8 @@ function toReturnsBalance(r: FmpBalanceSheetRow): ReturnsBalanceRow {
 function toCapitalIncome(r: FmpIncomeStatementRow): CapitalIncomeRow {
   return {
     date: String(r.date ?? ""),
+    acceptedDate: str(r.acceptedDate),
+    filingDate: str(r.filingDate),
     revenue: num(r.revenue),
     operatingIncome: num(r.operatingIncome),
     ebit: num(r.ebit),
@@ -438,6 +447,8 @@ function toCapitalIncome(r: FmpIncomeStatementRow): CapitalIncomeRow {
 function toCapitalCashFlow(r: FmpCashFlowRow): CapitalCashFlowRow {
   return {
     date: String(r.date ?? ""),
+    acceptedDate: str(r.acceptedDate),
+    filingDate: str(r.filingDate),
     netIncome: num(r.netIncome),
     depreciationAndAmortization: num(r.depreciationAndAmortization),
     stockBasedCompensation: num(r.stockBasedCompensation),
@@ -883,7 +894,38 @@ function riskFreeObservations(bundle: DataBundle): { date: string; value: number
 }
 
 /**
- * Latest-two totalDebt observations for WACC.
+ * Book debt on the house lease basis: the provider's totalDebt less the
+ * operating-lease liability where the balance sheet discloses it (the EDGAR
+ * route; FMP publishes no split), unless THESIS_EV_INCLUDE_LEASES keeps
+ * leases in. The same rule the EV bridge and invested capital apply, so the
+ * WACC's debt leg, ROIC and EV share one basis. Interest expense excludes
+ * operating-lease interest under ASC 842, so dividing it by a lease-inclusive
+ * balance understated the effective rate and could push it below the
+ * acceptance band.
+ */
+function bookDebtOnLeaseBasis(
+  row: FmpBalanceSheetRow | undefined,
+  includeOperatingLeases: boolean,
+): { value: number | null; leaseRemoved: boolean } {
+  const total = row ? num(row.totalDebt) : null;
+  if (total === null) return { value: null, leaseRemoved: false };
+  const operatingLease = row ? num(row.operatingLeaseLiability) : null;
+  if (!includeOperatingLeases && operatingLease !== null && operatingLease > 0 && operatingLease <= total) {
+    return { value: total - operatingLease, leaseRemoved: true };
+  }
+  return { value: total, leaseRemoved: false };
+}
+
+/**
+ * Average debt for the WACC's debt weight and effective cost of debt.
+ *
+ * Which balances: when the interest figure is TRAILING-TWELVE-MONTH, the
+ * quarter-end balances at the window's two ends (the latest quarter and the
+ * one four quarters earlier), so numerator and denominator cover the same
+ * twelve months — the fiscal-year-end pair was up to three quarters stale
+ * against a TTM numerator, and a debt issue after the year end doubled the
+ * measured rate. When the interest figure is the annual statement's, the
+ * latest two fiscal-year ends. The basis string says which pair was used.
  *
  * A negative balance is invalid for FMP's totalDebt field. Preserve that fact
  * separately so opposite-signed observations can never average to zero and
@@ -899,7 +941,9 @@ function riskFreeObservations(bundle: DataBundle): { date: string; value: number
 export function priorYearCostOfDebt(
   incomeAnnual: readonly FmpIncomeStatementRow[],
   balanceAnnual: readonly FmpBalanceSheetRow[],
+  options: { includeOperatingLeases?: boolean } = {},
 ): PriorYearCostOfDebt | null {
+  const includeOperatingLeases = options.includeOperatingLeases === true;
   for (let index = 1; index < incomeAnnual.length && index <= PRIOR_YEAR_COST_OF_DEBT_MAX_YEARS_BACK; index += 1) {
     const income = incomeAnnual[index];
     const fiscalYearEnd = isoDay(income?.date);
@@ -907,8 +951,9 @@ export function priorYearCostOfDebt(
     if (fiscalYearEnd === null || interestExpense === null || interestExpense <= 0) continue;
     const balanceIndex = balanceAnnual.findIndex((row) => isoDay(row.date) === fiscalYearEnd);
     if (balanceIndex < 0) continue;
-    const debtThisYear = num(balanceAnnual[balanceIndex]?.totalDebt);
-    const debtPriorYear = num(balanceAnnual[balanceIndex + 1]?.totalDebt);
+    // Same lease basis as the current-year debt leg (bookDebtOnLeaseBasis).
+    const debtThisYear = bookDebtOnLeaseBasis(balanceAnnual[balanceIndex], includeOperatingLeases).value;
+    const debtPriorYear = bookDebtOnLeaseBasis(balanceAnnual[balanceIndex + 1], includeOperatingLeases).value;
     if (debtThisYear === null || debtThisYear <= 0) continue;
     if (debtPriorYear !== null && debtPriorYear < 0) continue;
     const totalDebtAvg =
@@ -925,17 +970,59 @@ export function priorYearCostOfDebt(
   return null;
 }
 
-function totalDebtSnapshot(balances: FmpBalanceSheetRow[]): {
+function totalDebtSnapshot(
+  balancesAnnual: FmpBalanceSheetRow[],
+  balancesQuarterly: FmpBalanceSheetRow[],
+  interestBasis: "ttm" | "annual",
+  includeOperatingLeases: boolean,
+): {
   average: number | null;
   negativeObservation: number | null;
+  basis: string;
 } {
-  const a = balances[0] ? num(balances[0].totalDebt) : null;
-  const b = balances[1] ? num(balances[1].totalDebt) : null;
-  const negativeObservation = [a, b].find((value) => value !== null && value < 0) ?? null;
-  if (negativeObservation !== null) return { average: null, negativeObservation };
-  if (a === null && b === null) return { average: null, negativeObservation: null };
-  if (a !== null && b !== null) return { average: (a + b) / 2, negativeObservation: null };
-  return { average: a ?? b, negativeObservation: null };
+  const quarterEnd = balancesQuarterly[0];
+  const quarterEndMs = quarterEnd ? Date.parse(String(quarterEnd.date ?? "")) : Number.NaN;
+  const yearEarlier = Number.isFinite(quarterEndMs)
+    ? balancesQuarterly.find((row) => {
+        const t = Date.parse(String(row.date ?? ""));
+        return Number.isFinite(t) && Math.abs(quarterEndMs - t - 365.25 * SPREAD_DAYS) <= 45 * SPREAD_DAYS;
+      })
+    : undefined;
+  let pair: [FmpBalanceSheetRow | undefined, FmpBalanceSheetRow | undefined];
+  let which: string;
+  if (
+    interestBasis === "ttm" &&
+    quarterEnd !== undefined &&
+    yearEarlier !== undefined &&
+    num(quarterEnd.totalDebt) !== null &&
+    num(yearEarlier.totalDebt) !== null
+  ) {
+    pair = [quarterEnd, yearEarlier];
+    which = `the quarter-end balances at the TTM window's ends (${isoDay(quarterEnd.date)} and ${isoDay(yearEarlier.date)})`;
+  } else {
+    pair = [balancesAnnual[0], balancesAnnual[1]];
+    which =
+      "the latest two fiscal-year-end balances" +
+      (interestBasis === "ttm"
+        ? " (no quarter-end balance four quarters back, so TTM interest is measured against fiscal-year-end debt)"
+        : "");
+  }
+  const a = bookDebtOnLeaseBasis(pair[0], includeOperatingLeases);
+  const b = bookDebtOnLeaseBasis(pair[1], includeOperatingLeases);
+  const leaseText =
+    a.leaseRemoved || b.leaseRemoved
+      ? "book totalDebt less the operating-lease liability (the EV bridge's lease rule)"
+      : includeOperatingLeases
+        ? "book totalDebt with the operating-lease liability kept in (THESIS_EV_INCLUDE_LEASES=1)"
+        : "book totalDebt (no operating-lease liability disclosed separately, so lease liabilities remain inside it)";
+  const basis = `${leaseText}, average of ${which}`;
+  const negativeObservation = [a.value, b.value].find((value) => value !== null && value < 0) ?? null;
+  if (negativeObservation !== null) return { average: null, negativeObservation, basis };
+  if (a.value === null && b.value === null) return { average: null, negativeObservation: null, basis };
+  if (a.value !== null && b.value !== null) {
+    return { average: (a.value + b.value) / 2, negativeObservation: null, basis };
+  }
+  return { average: a.value ?? b.value, negativeObservation: null, basis };
 }
 
 export function runStageB(bundle: DataBundle): ComputedMetrics {
@@ -1053,7 +1140,21 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   );
 
   // --- Returns (WACC / ROIC / DuPont) ---------------------------------------
-  const returns = computeReturns(bundle, incomeAnnual, balanceAnnual, ttmInc, route);
+  // WS6 (D-19): THESIS_EV_INCLUDE_LEASES is read ONCE per Stage B run and
+  // handed to both consumers — the returns block (WACC debt leg, invested
+  // capital) and the valuation block (both EV bridges) — so the lease basis
+  // cannot drift between them and the run makes a single settings read
+  // (tests/jobRunner.test.ts pins the count).
+  const evIncludeLeases = getConfig().evIncludeLeases;
+  const returns = computeReturns(
+    bundle,
+    incomeAnnual,
+    balanceAnnual,
+    balanceQuarterly,
+    ttmInc,
+    route,
+    evIncludeLeases,
+  );
 
   // --- Capital ---------------------------------------------------------------
   const capital = computeCapital(
@@ -1065,6 +1166,14 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
       marketCap: num(r.marketCap),
     })),
     quoteInput(quote),
+    {
+      // The buyback price proxy divides reporting-currency repurchases by a
+      // quote-currency, per-ordinary-share price; the ADR/currency guard the
+      // WACC weights and the multiples already apply is applied here too.
+      reportedCurrency: str(incomeAnnual[0]?.reportedCurrency),
+      quoteCurrency: str(profile?.currency),
+      isAdr: typeof profile?.isAdr === "boolean" ? profile.isAdr : null,
+    },
   );
 
   // --- SEC 8-K forensic events -------------------------------------------
@@ -1118,7 +1227,13 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     balance: balanceAnnual.map(toForensicsBalance),
     cashFlow: cashflowAnnual.map(toForensicsCashFlow),
     marketCap: num(profile?.marketCap ?? quote?.marketCap),
-    marketCapAsOf: isoDay(inc0?.date),
+    // The as-of of a datum is its OBSERVATION date — the envelope of whichever
+    // source supplied the figure — not the fiscal-year end of the statement it
+    // sits beside, which stamped today's market cap with a date months old in
+    // the stored Altman provenance.
+    marketCapAsOf: num(profile?.marketCap) !== null
+      ? (sourcedOf(bundle.profile)?.asOf ?? null)
+      : (sourcedOf(bundle.quote)?.asOf ?? null),
     reportedCurrency: str(inc0?.reportedCurrency),
     quoteCurrency: str(profile?.currency),
     classification: {
@@ -1152,6 +1267,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     ttmInc,
     ttmCf,
     growth,
+    evIncludeLeases,
     // WS6 wiring.
     capital,
     wacc: returns.wacc,
@@ -1250,14 +1366,11 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   const inc0Proj = incomeAnnual[0];
   const projRowDate = (r: { date?: unknown } | null | undefined): string =>
     typeof r?.date === "string" ? r.date : "";
-  const balQProj = balanceQuarterly[0] ?? null;
-  const balPointProj = pickBalanceAnchor(balQProj, balanceAnnual[0] ?? null).row;
   const posSharesProj = (v: number | null): number | null => (v !== null && v > 0 ? v : null);
   const sharesQProj = posSharesProj(num(incomeQuarterly[0]?.weightedAverageShsOutDil));
   const sharesAProj = posSharesProj(num(inc0Proj?.weightedAverageShsOutDil));
   const dilutedSharesProj =
     projRowDate(incomeQuarterly[0]) >= projRowDate(inc0Proj) ? (sharesQProj ?? sharesAProj) : (sharesAProj ?? sharesQProj);
-  const netDebtProj = netDebtFromBalance(balPointProj).value;
   // Collapse restated/duplicate fiscal years BEFORE the dispersion sees them.
   // Removing the irregular-spacing veto left scenarioDispersion with no
   // protection against a duplicated period, which contributes a zero-length
@@ -1295,7 +1408,6 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     route,
     valuation,
     waccPct: returns.wacc.waccPct,
-    netDebt: netDebtProj,
     dilutedShares: dilutedSharesProj,
     incomeHistory: projectionIncomeHistory,
     fcfHistory: capital.fcf.series.map((r) => ({ date: r.date, fcf: r.fcf })),
@@ -1310,14 +1422,13 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   // value. Suppressed (never fabricated) off the general DCF route / on missing
   // WACC or bridge inputs. assembleReport overwrites the judge's scenario
   // priceTargets from this — the LLM no longer authors the headline numbers.
+  // The per-share bridge for the perturbed re-runs is the base DCF's own
+  // (valuation.dcf.bridge, lease-adjusted by valueCompany), never the raw
+  // figure held here.
   const scenarioTargets = computeScenarioTargets({
     route,
     valuation,
     waccPct: returns.wacc.waccPct,
-    netDebt: netDebtProj,
-    dilutedShares: dilutedSharesProj,
-    minorityInterest: balPointProj ? num(balPointProj.minorityInterest) : null,
-    preferred: balPointProj ? num(balPointProj.preferredStock) : null,
     incomeHistory: projectionIncomeHistory,
     currentPrice,
     currency: projectionCurrency,
@@ -1508,8 +1619,11 @@ function computeReturns(
   bundle: DataBundle,
   incomeAnnual: FmpIncomeStatementRow[],
   balanceAnnual: FmpBalanceSheetRow[],
+  balanceQuarterly: FmpBalanceSheetRow[],
   ttmInc: TtmIncome | null,
   route: CompanyRouteResult,
+  /** One lease basis for the EV bridge, invested capital and the WACC's debt leg (read once in runStageB). */
+  includeOperatingLeases: boolean,
 ): ReturnsBlock {
   const notes: string[] = [];
   const gaps: ManifestEntry[] = [];
@@ -1536,7 +1650,6 @@ function computeReturns(
     });
   }
   const bal0 = balanceAnnual[0];
-  const debtSnapshot = totalDebtSnapshot(balanceAnnual);
 
   const isFinancial = route.base === "bank" || route.base === "insurer" || route.base === "reit-mortgage";
 
@@ -1544,22 +1657,66 @@ function computeReturns(
   // ttmInc existence — when the completeness gate nulls a TTM field the annual
   // figure must still be consulted. Missing interest with debt now suppresses
   // WACC, but using a complete annual observation preserves more valid output.
-  // Each annual fallback is disclosed with its basis in notes.
+  //
+  // Audit 2026-09-06: ONE statement basis for both legs of the coverage
+  // ratio. The two fallbacks used to be independent, so a TTM EBIT could be
+  // scored against a fiscal-year interest expense (a notch of rating from the
+  // mix) under a note that said "on TTM". When the TTM pair is incomplete
+  // and the annual pair is complete, the annual figures are used for BOTH
+  // legs; a genuinely mixed pair is the last resort and is labelled as such.
+  // The basis also decides which balance-sheet pair averages the debt.
   const annualDate = isoDay(incomeAnnual[0]?.date) ?? "?";
   const interestExpenseAnnual = num(incomeAnnual[0]?.interestExpense);
-  const interestExpenseForWacc = ttmInc?.interestExpense ?? interestExpenseAnnual;
-  if (ttmInc && ttmInc.interestExpense === null && interestExpenseAnnual !== null) {
-    notes.push(
-      `WACC interest expense: TTM field unavailable (suppressed or unreported) — latest annual FY (${annualDate}) figure used instead`,
-    );
+  const ebitAnnual = num(incomeAnnual[0]?.operatingIncome) ?? num(incomeAnnual[0]?.ebit);
+  const interestExpenseTtm = ttmInc?.interestExpense ?? null;
+  const ebitTtm = ttmInc?.ebit ?? ttmInc?.operatingIncome ?? null;
+  let interestExpenseForWacc: number | null;
+  let ebitForWacc: number | null;
+  let coverageBasis: string;
+  let interestBasis: "ttm" | "annual";
+  if (ttmInc && interestExpenseTtm !== null && ebitTtm !== null) {
+    interestExpenseForWacc = interestExpenseTtm;
+    ebitForWacc = ebitTtm;
+    coverageBasis = "TTM";
+    interestBasis = "ttm";
+  } else if (interestExpenseAnnual !== null && ebitAnnual !== null) {
+    interestExpenseForWacc = interestExpenseAnnual;
+    ebitForWacc = ebitAnnual;
+    coverageBasis = `FY ${annualDate} annual statement`;
+    interestBasis = "annual";
+    if (ttmInc) {
+      notes.push(
+        `WACC interest expense and EBIT: the TTM pair is incomplete (${
+          interestExpenseTtm === null ? "interest expense" : "EBIT"
+        } suppressed or unreported) — the latest annual FY (${annualDate}) figures are used for BOTH legs so the coverage ratio stays on one basis`,
+      );
+    }
+  } else {
+    interestExpenseForWacc = interestExpenseTtm ?? interestExpenseAnnual;
+    ebitForWacc = ebitTtm ?? ebitAnnual;
+    const interestLabel =
+      interestExpenseTtm !== null ? "TTM" : interestExpenseAnnual !== null ? `FY ${annualDate}` : "unavailable";
+    const ebitLabel = ebitTtm !== null ? "TTM" : ebitAnnual !== null ? `FY ${annualDate}` : "unavailable";
+    interestBasis = interestExpenseTtm !== null ? "ttm" : "annual";
+    coverageBasis =
+      interestLabel === ebitLabel
+        ? interestLabel
+        : `mixed basis — interest expense ${interestLabel}, EBIT ${ebitLabel}`;
+    if (interestExpenseForWacc !== null && ebitForWacc !== null && interestLabel !== ebitLabel) {
+      notes.push(
+        `WACC coverage ratio pairs ${interestLabel} interest expense with ${ebitLabel} EBIT — a mixed basis, named in the synthetic-rating note, because no single-basis pair was available`,
+      );
+    } else if (ttmInc && interestExpenseTtm === null && interestExpenseAnnual !== null) {
+      notes.push(
+        `WACC interest expense: TTM field unavailable (suppressed or unreported) — latest annual FY (${annualDate}) figure used instead`,
+      );
+    } else if (ttmInc && ebitTtm === null && ebitAnnual !== null) {
+      notes.push(
+        `WACC EBIT (interest-coverage input): TTM fields unavailable (suppressed or unreported) — latest annual FY (${annualDate}) operating income used instead`,
+      );
+    }
   }
-  const ebitAnnual = num(incomeAnnual[0]?.operatingIncome);
-  const ebitForWacc = ttmInc?.ebit ?? ttmInc?.operatingIncome ?? ebitAnnual;
-  if (ttmInc && ttmInc.ebit === null && ttmInc.operatingIncome === null && ebitAnnual !== null) {
-    notes.push(
-      `WACC EBIT (interest-coverage input): TTM fields unavailable (suppressed or unreported) — latest annual FY (${annualDate}) operating income used instead`,
-    );
-  }
+  const debtSnapshot = totalDebtSnapshot(balanceAnnual, balanceQuarterly, interestBasis, includeOperatingLeases);
 
   const wacc = computeWacc({
     beta: num(profile?.beta),
@@ -1581,9 +1738,11 @@ function computeReturns(
     // equity carried" outcome.
     priorYearCostOfDebt:
       !isFinancial && (interestExpenseForWacc === null || interestExpenseForWacc <= 0)
-        ? priorYearCostOfDebt(incomeAnnual, balanceAnnual)
+        ? priorYearCostOfDebt(incomeAnnual, balanceAnnual, { includeOperatingLeases })
         : null,
     totalDebtAvg: debtSnapshot.average,
+    totalDebtBasis: debtSnapshot.basis,
+    currentCoverageBasis: coverageBasis,
     negativeTotalDebtObservation: debtSnapshot.negativeObservation,
     marketCap: num(quote?.marketCap ?? profile?.marketCap),
     // FMP's ratios-ttm endpoint suffixes every metric name with "TTM"
@@ -1627,7 +1786,7 @@ function computeReturns(
   const returnsIncome = incomeAnnual.map((r) => toReturnsIncome(r, preferredByDate));
   const returnsBalance = balanceAnnual.map(toReturnsBalance);
 
-  const roic = computeRoic(returnsIncome, returnsBalance);
+  const roic = computeRoic(returnsIncome, returnsBalance, { includeOperatingLeases });
   // Return on tangible common equity — the capital-return measure for
   // deposit-funded balance sheets, where invested capital is undefined.
   const rote = computeRote(returnsIncome, returnsBalance);
@@ -1699,6 +1858,8 @@ interface ValuationCtx {
   dupont: DupontResult;
   /** WS5: return on tangible common equity — the return P/TBV is read against. */
   rote: RoteResult;
+  /** THESIS_EV_INCLUDE_LEASES, read once in runStageB and shared with the returns block. */
+  evIncludeLeases: boolean;
   profile: FmpRawRow | null;
   quote: FmpRawRow | null;
 }
@@ -1709,7 +1870,7 @@ function cagrPctFor(growth: GrowthResult, window: number): number | null {
 }
 
 function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResult {
-  const { route, incomeAnnual, balanceAnnual, balanceQuarterly, incomeQuarterly, ttmInc, ttmCf, growth, wacc, roic, profile, quote } = ctx;
+  const { route, incomeAnnual, balanceAnnual, balanceQuarterly, incomeQuarterly, ttmInc, ttmCf, growth, wacc, roic, profile, quote, evIncludeLeases } = ctx;
   // WS6 (D-18/D-19): the growth-anchor regression method and the WACC
   // disclosure travel into the DCF assumption block with the rest.
   const waccByYear = new Map(ctx.waccHistory.points.map((point) => [point.date, point]));
@@ -1751,8 +1912,6 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
 
   const netDebtInfo = netDebtFromBalance(balPoint);
   const netDebtDerived = netDebtInfo.value;
-  // WS6 (D-19): THESIS_EV_INCLUDE_LEASES, read once for both bridges.
-  const evIncludeLeases = getConfig().evIncludeLeases;
 
   // --- DCF inputs (general route) -------------------------------------------
   const analystEstimates: AnalystEstimateRow[] | null = bundle.analystEstimates.ok
@@ -1963,6 +2122,9 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
     enterpriseValuesHistory,
     ffoApprox: route.base === "reit" ? ffoApprox : null,
     affoApprox: route.base === "reit" ? affoApprox : null,
+    // The own-history P/FFO band can only be rebuilt as net income + D&A per
+    // quarter; say whether the current FFO is that construction.
+    ffoHistoryComparable: route.base === "reit" ? nareitFfo.netIncomePlusTotalDa : undefined,
     // WS6 (D-19): off by default; see docs/METHODOLOGY.md, "EV bridge".
     includeLeasesInEv: evIncludeLeases,
   };
@@ -2036,6 +2198,12 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
           affoApproximate: nareitFfo.affoApproximate,
           submap: route.reitSubmap ?? null,
           submapReason: reitSubmapReason,
+          // The HOUSE enterprise value for the implied cap rate: the same
+          // senior claims and lease rule the multiples and the DCF bridge use.
+          preferredStock: balPoint ? num(balPoint.preferredStock) : null,
+          minorityInterest: balPoint ? num(balPoint.minorityInterest) : null,
+          operatingLeaseLiability: balPoint ? num(balPoint.operatingLeaseLiability) : null,
+          includeLeasesInEv: evIncludeLeases,
         }
       : null;
 

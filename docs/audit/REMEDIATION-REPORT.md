@@ -6,11 +6,14 @@ reason is stated rather than the criterion quietly dropped.
 
 Read alongside:
 
-- [`README-RECONCILIATION.md`](README-RECONCILIATION.md) — the 60 README claims
-  the work started from, each with file-and-line evidence and a verdict.
 - [`DECISIONS.md`](DECISIONS.md) — D-01 to D-23, the options considered and why
-  each was chosen.
-- [`PROGRESS.md`](PROGRESS.md) — the state of the work as it ran.
+  each was chosen (D-24 to D-26 were added by the audit that followed).
+- [`2026-09-06-full-codebase-audit.md`](../superpowers/audits/2026-09-06-full-codebase-audit.md)
+  — the full audit that followed this remediation. The Phase 0 reconciliation
+  (sixty README claims with file-and-line evidence and a verdict) and the
+  running progress board this report used to link were retired by that audit,
+  whose record supersedes them; the reconciliation row numbers (R-nn, V-nn)
+  cited below refer to that retired table.
 
 ## How the work was done
 
@@ -257,11 +260,13 @@ access control when it is a browser-CSRF boundary.
 
 ### WS9 — the documentation
 
-**Met.** The README is 250 lines and three of its sections are generated: the
+**Met.** The README was 250 lines when this was written (the cap has since
+moved to 270, on the record in `tests/docs.lint.test.ts`) and three of its
+sections are generated: the
 configuration table from `.env.example`, the commands table from `package.json`,
 the cost table from the model registry and the reservation code.
 `tests/docs.lint.test.ts` fails if the checked-in file drifts from any of them,
-if a link points at a missing file, if it grows past 250 lines, or if a retired
+if a link points at a missing file, if it grows past the cap, or if a retired
 rule reappears in the prose. `docs/METHODOLOGY.md` is one document rather than
 two. `CHANGELOG.md` leads with what a reader may have to act on. `engines.node`
 is 22.18.0.

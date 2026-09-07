@@ -230,8 +230,11 @@ function splitSentences(text: string): string[] {
     // the period already excludes decimals ("3.5"). The lookbehind excludes a
     // SINGLE-letter token — "U.S." — without blocking a name that merely ends
     // in a capital ("LLY.") or a trial code ending in a digit ("ATTAIN-1."),
-    // both of which are real sentence ends.
-    .split(/(?<!\b[A-Z])[.!?]+[ \t]+(?=[A-Z0-9"'“‘])|[\r\n]+/)
+    // both of which are real sentence ends. "vs.", "e.g.", "i.e." and the
+    // corporate suffixes are abbreviations, not ends: "orforglipron vs.
+    // Wegovy" split before a capitalised drug name and the fragment raised a
+    // relationship conflict the sentence never made (audit 2026-09-06, F193).
+    .split(/(?<!\b[A-Z])(?<!\b[Vv]s)(?<!\b[Ee]\.g)(?<!\b[Ii]\.e)(?<!\bInc)(?<!\bCorp)(?<!\bLtd)(?<!\bCo)[.!?]+[ \t]+(?=[A-Z0-9"'“‘])|[\r\n]+/)
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
 }
@@ -357,9 +360,22 @@ export function validateJudgeEntityResolution(
     .filter((item) => item.kind === "entity")
     .map((item) => `${item.topic} ${item.bullView} ${item.bearView} ${item.judgeResolution}`.toLowerCase());
   return conflicts.filter((conflict) => {
+    // A relationship conflict's canonical name is "TRIAL / DRUG"; every part
+    // must be named. Each part may itself carry alternates in parentheses —
+    // "Foundayo (orforglipron)" — and naming EITHER alternate is naming the
+    // entity (audit 2026-09-06, F195: the judge had to write the parenthetical
+    // form verbatim or be retried and then failed).
     const recordTerms = conflict.canonicalName
       .split(/\s*\/\s*/)
-      .map((term) => term.toLowerCase());
-    return !resolutions.some((text) => recordTerms.every((term) => text.includes(term)));
+      .map((term) =>
+        term
+          .toLowerCase()
+          .split(/\s*[()]\s*/)
+          .map((alternate) => alternate.trim())
+          .filter((alternate) => alternate.length > 0),
+      );
+    return !resolutions.some((text) =>
+      recordTerms.every((alternates) => alternates.some((alternate) => text.includes(alternate))),
+    );
   });
 }

@@ -41,6 +41,7 @@ import {
   isCredibilityPath,
   isDeltaRecord,
   isFilingOrTranscriptSource,
+  isPayloadPersonRowSource,
   namesIndividual,
   runConsistencyChecks,
   type ConsistencyClaimRef,
@@ -84,6 +85,7 @@ function run(
     citationRegistry?: CitationProvenanceRecord[];
     fetchedUrls?: string[];
     personNames?: string[];
+    organizationNames?: string[];
   } = {},
 ) {
   return runConsistencyChecks({
@@ -92,6 +94,7 @@ function run(
     citationRegistry: over.citationRegistry ?? [],
     fetchedUrls: new Set(over.fetchedUrls ?? []),
     personNames: over.personNames ?? [],
+    organizationNames: over.organizationNames ?? [],
   });
 }
 
@@ -125,6 +128,54 @@ describe("direction check", () => {
     );
     expect(result.checks.direction).toEqual({ checked: 1, passed: 1, failed: 0, rate: 1 });
     expect(result.findings).toEqual([]);
+  });
+
+  it("reads a comma between the word and the number as an apposition, not a delta (audit 2026-09-06, F191)", () => {
+    // "growth came in lower, 6.4%": 6.4 is the LEVEL of growth and "lower" is
+    // second-order. Before the audit the comma did not break the reading and a
+    // correct sentence about a +6.4 record failed as a direction mismatch.
+    const growth = numeric({ id: "computed.growth-margins.latest-revenue-yoy", value: 6.4 });
+    const apposition = run(refs(claim("Revenue growth came in lower, 6.4%.", growth.id)), [growth]);
+    expect(apposition.checks.direction.checked).toBe(0);
+    expect(apposition.findings).toEqual([]);
+    // Without the punctuation the word still owns the number.
+    const glued = run(refs(claim("Revenue growth was up 6.4%.", growth.id)), [growth]);
+    expect(glued.checks.direction).toEqual({ checked: 1, passed: 1, failed: 0, rate: 1 });
+  });
+
+  it("does not read a capitalised word inside a company name as a direction word (audit 2026-09-06, F192)", () => {
+    // "Advanced Micro Devices" carried a +1 "advanced" that failed every
+    // correct decline sentence naming the peer.
+    const named = run(refs(claim("Advanced Micro Devices revenue fell 3.2% in the quarter.", decline.id)), [decline]);
+    expect(named.checks.direction).toEqual({ checked: 1, passed: 1, failed: 0, rate: 1 });
+    // The same word as a verb keeps its sign.
+    const verb = run(refs(claim("Revenue advanced 3.2% in the quarter.", decline.id)), [decline]);
+    expect(verb.checks.direction).toEqual({ checked: 1, passed: 0, failed: 1, rate: 0 });
+  });
+
+  it("classifies delta vs level by the figure's OWN name, using the real registry id shapes (audit 2026-09-06, F186/F197)", () => {
+    // payload.ts registers every growth-section figure as
+    // computed.growth-margins.<label slug> with origin computed.growth.*; the
+    // old identity test read "growth" from the section and origin, so a margin
+    // LEVEL was a delta and "gross margin climbed 46.2%" was checked as if 46.2
+    // could be a decline.
+    const level = numeric({
+      id: "computed.growth-margins.gross-margin-latest",
+      origin: "computed.growth.margins.gross",
+      value: 46.2,
+    });
+    expect(isDeltaRecord(level)).toBe(false);
+    const result = run(refs(claim("Gross margin climbed 46.2% in FY2025.", level.id)), [level]);
+    expect(result.checks.direction.checked).toBe(0);
+    expect(result.findings).toEqual([]);
+    for (const id of [
+      "computed.growth-margins.revenue-cagr-3y",
+      "computed.growth-margins.latest-revenue-yoy",
+      "computed.growth-margins.diluted-eps-cagr-5y.2",
+    ]) {
+      expect(isDeltaRecord(numeric({ id, origin: "computed.growth.revenueCagrs" }))).toBe(true);
+    }
+    expect(isDeltaRecord(numeric({ id: "computed.returns.roic-latest", origin: "computed.returns.roic" }))).toBe(false);
   });
 
   it("reads basis points as hundredths of a point when locating the cited change", () => {
@@ -243,6 +294,19 @@ describe("period check", () => {
     expect(result.checks.period.failed).toBe(0);
   });
 
+  it("does not check a sentence in which the cited figure was never located (audit 2026-09-06, F189)", () => {
+    // The module rule is locate-first. The period check used to run before the
+    // guard, so "in FY2024" around a figure the sentence never wrote was judged
+    // against the cited record's period.
+    const dated = numeric({ value: 6.4, period: "2025-09-27" });
+    const result = run(refs(claim("Revenue growth was strong in FY2024.", dated.id)), [dated]);
+    expect(result.checks.period.checked).toBe(0);
+    expect(result.findings).toEqual([]);
+    // With the figure present the same phrase is checked and fails.
+    const located = run(refs(claim("Revenue grew 6.4% in FY2024.", dated.id)), [dated]);
+    expect(located.checks.period).toEqual({ checked: 1, passed: 0, failed: 1, rate: 0 });
+  });
+
   it("does not check a bare quarter — no fiscal calendar, no verdict", () => {
     // Apple's Q3 FY2025 ends in June. Guessing which ISO period end "Q3" means
     // would fail correct sentences, so it is reported as not checked.
@@ -327,6 +391,20 @@ describe("unit check", () => {
     ]) {
       expect(run(refs(claim(sentence, money.id)), [money]).checks.unit.failed).toBe(0);
     }
+  });
+
+  it("accepts a bare scale word on a share count — a magnitude names no unit (audit 2026-09-06, F185)", () => {
+    const shares = numeric({
+      id: "computed.capital.diluted-shares-latest",
+      origin: "computed.capital.shares",
+      value: 15_200_000_000,
+      unit: "shares",
+    });
+    const bare = run(refs(claim("The diluted share count stood at 15.2 billion.", shares.id)), [shares]);
+    expect(bare.checks.unit).toEqual({ checked: 1, passed: 1, failed: 0, rate: 1 });
+    // A currency prefix still claims money, which a share count is not.
+    const dollars = run(refs(claim("The diluted share count stood at $15.2 billion.", shares.id)), [shares]);
+    expect(dollars.checks.unit).toEqual({ checked: 1, passed: 0, failed: 1, rate: 0 });
   });
 
   it("judges only the CITED figure's unit, not every unit in the sentence", () => {
@@ -473,6 +551,53 @@ describe("claims that name a person", () => {
     expect(namesIndividual("Free cash flow covered the dividend.", [])).toBeNull();
   });
 
+  it("does not read an honorific inside a company name as a person (audit 2026-09-06, F187)", () => {
+    const orgs = ["Keurig Dr Pepper Inc.", "Dr. Reddy's Laboratories Limited"];
+    expect(namesIndividual("Keurig Dr Pepper grew volumes 3% in the quarter.", [], orgs)).toBeNull();
+    expect(namesIndividual("Dr. Reddy's generics pricing weighed on margins.", [], orgs)).toBeNull();
+    // A person keeps being a person beside the same organisation list.
+    expect(namesIndividual("Dr. Rivera joined the board.", [], orgs)).toContain("Rivera");
+    // Through the check itself: a company claim citing news is not a
+    // named-individual claim at all.
+    const result = run(
+      refs(claim("Keurig Dr Pepper grew volumes 3% in the quarter.", news.id)),
+      [],
+      { citationRegistry: [news], organizationNames: orgs },
+    );
+    expect(result.checks.namedIndividual.checked).toBe(0);
+    expect(result.findings).toEqual([]);
+  });
+
+  it("accepts a named-person claim that cites the payload's own executive or insider row (audit 2026-09-06, F188)", () => {
+    // The rows the names are harvested from are payload facts, registered as
+    // citations under these tags; rejecting a claim that cites one contradicted
+    // the prompt's "or a payload figure".
+    const executives: CitationProvenanceRecord = {
+      id: "fmp:key-executives",
+      kind: "payload-text",
+      asOf: null,
+      origin: "fmp:key-executives",
+    };
+    const insiders: CitationProvenanceRecord = {
+      id: "fmp:insider-trades",
+      kind: "payload-text",
+      asOf: "2026-06-01",
+      origin: "fmp:insider-trades",
+    };
+    expect(isPayloadPersonRowSource(executives.id)).toBe(true);
+    expect(isPayloadPersonRowSource(insiders.id)).toBe(true);
+    expect(isPayloadPersonRowSource(news.id)).toBe(false);
+    for (const source of [executives, insiders]) {
+      const result = run(
+        refs(claim("Tim Cook has led the company since 2011.", source.id)),
+        [],
+        { citationRegistry: [executives, insiders, news], personNames: ["Tim Cook"] },
+      );
+      expect(result.checks.namedIndividual).toEqual({ checked: 1, passed: 1, failed: 0, rate: 1 });
+      expect(result.findings).toEqual([]);
+    }
+  });
+
   it("rejects a named-person claim sourced to a web-search result", async () => {
     const url = "https://example.com/interview";
     const payload = {
@@ -532,7 +657,7 @@ describe("claims that name a person", () => {
     expect(result.checks.namedIndividual).toEqual({ checked: 1, passed: 0, failed: 1, rate: 0 });
     expect(result.findings[0].reason).toBe("named-individual-unsourced");
     expect(result.findings[0].note).toContain("Tim Cook");
-    expect(result.findings[0].note).toContain("neither a registry figure nor a filing or transcript");
+    expect(result.findings[0].note).toContain("neither a registry figure, a filing or transcript, nor a payload executive or insider row");
     expect(result.rejectedClaimPaths.has("fundamentals.commentary[0]")).toBe(true);
   });
 

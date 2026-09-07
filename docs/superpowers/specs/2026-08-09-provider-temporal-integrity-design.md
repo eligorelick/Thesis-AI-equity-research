@@ -7,12 +7,14 @@
 **Workstream:** 1 of 4
 
 > **Status: all eight Scope defects fixed on `main` (2026-08-31)**, though by a
-> different implementation than the Architecture section prescribes. See the
-> status note in
-> [`../plans/2026-08-09-provider-temporal-integrity.md`](../plans/2026-08-09-provider-temporal-integrity.md)
-> for what shipped, and the "Second pass" table in
-> [`../audits/2026-08-30-code-and-docs-audit.md`](../audits/2026-08-30-code-and-docs-audit.md)
-> for the per-defect regression tests.
+> different implementation than the Architecture section prescribes: the
+> observation date of every provider payload is derived from the payload's own
+> newest eligible period end (`asOf`), never from the fetch time, and each
+> defect carries a regression test in the provider suites (tests/fmp.*.test.ts,
+> tests/edgar.*.test.ts, tests/dataBundle.*.test.ts). The plan and the audit
+> record that tracked the per-defect tests were retired by the audit of
+> 2026-09-06
+> ([`../audits/2026-09-06-full-codebase-audit.md`](../audits/2026-09-06-full-codebase-audit.md)).
 
 ## Goal
 
@@ -200,7 +202,7 @@ For EDGAR company facts:
 - derive `asOf` from the maximum eligible fact `end` date in the parsed facts;
 - eligibility requires a valid ISO date no later than `fetchedAt` and one of
   the existing `CORE_FACT_FORMS`: `10-K`, `10-Q`, `10-K/A`, `10-Q/A`, `20-F`,
-  or `20-F/A`;
+  `20-F/A`, `40-F` or `40-F/A`;
 - do not use future frames, malformed dates, or a fetch timestamp as the fact
   observation date;
 - if no eligible fact end exists, return a typed data-quality gap rather than a

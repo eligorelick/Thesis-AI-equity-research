@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
 import {
+  AnthropicError,
   APIConnectionError,
   APIError,
   APIUserAbortError,
@@ -15,6 +16,7 @@ import {
 } from "@anthropic-ai/sdk";
 import type { BetaMessage, BetaUsage } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import { resetConfigCache } from "@/config/env";
+import { MODEL_STAGE_DEADLINE_MS } from "@/pipeline/leaseTiming";
 import {
   CLIENT_MAX_RETRIES,
   MAX_PROVIDER_WEB_SEARCHES,
@@ -33,10 +35,13 @@ import {
   buildPassParams,
   collectFetchedUrls,
   computeCostUsd,
+  connectionFailureCode,
   detectFallbackUsed,
+  effectiveMaxTokens,
   findPricing,
   interpretPassMessage,
   isRetryableTransportError,
+  isStreamConnectionFailure,
   modelContextTokenLimit,
   pickPreferredModel,
   pricedModelAlias,
@@ -46,6 +51,7 @@ import {
   runPass,
   runPassStreaming,
   streamIdleTimeoutMs,
+  streamIdleTimeoutMsFor,
   requestInputTokenUpperBound,
   supportsEffort,
   thinkingConfigFor,
@@ -256,7 +262,7 @@ describe("computeCostUsd", () => {
     expect(computeCostUsd(usage, "claude-haiku-4-5")).toBeCloseTo(0.5, 10);
   });
 
-  it("reproduces the the cost model bull-pass mid-case (~$0.90 on opus-4-8)", () => {
+  it("reproduces the cost-model bull-pass mid-case (~$0.90 on opus-4-8)", () => {
     // 75K cache write + 3x85K cache reads + 15K fresh in + 6K out + 7 searches
     const usage = {
       input_tokens: 15_000,
@@ -689,8 +695,72 @@ describe("interpretPassMessage", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.data.fallbackUsed).toBe(true);
-    // priced at the SERVING model's rate ($5/MTok), not fable's $10
+    // Without per-hop usage the only price available is the SERVING model's
+    // rate ($5/MTok), not fable's $10.
     expect(result.value.data.costUsd).toBeCloseTo(5, 10);
+  });
+
+  /**
+   * A server-side fallback bills the declining hop at the declining model's
+   * rate (Fable $10/$50) and the rescue at the fallback model's (Opus 4.8
+   * $5/$25). `usage.iterations` carries each hop's model and tokens, so a
+   * response served by two models is priced hop by hop — only when the hops
+   * account for exactly the message's totals.
+   */
+  it("prices a two-model response hop by hop from usage.iterations", () => {
+    const message = syntheticMessage({
+      model: "claude-opus-4-8",
+      content: [
+        { type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" } },
+        { type: "text", text: "case", citations: null },
+      ],
+      usage: syntheticUsage({
+        input_tokens: 1_000_000,
+        output_tokens: 100_000,
+        iterations: [
+          {
+            type: "message",
+            model: "claude-fable-5",
+            input_tokens: 600_000,
+            output_tokens: 20_000,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_creation: null,
+          },
+          {
+            type: "fallback_message",
+            model: "claude-opus-4-8",
+            input_tokens: 400_000,
+            output_tokens: 80_000,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_creation: null,
+          },
+        ] as never,
+      }),
+    });
+    const result = interpretPassMessage(message, { ...baseOpts, model: "claude-fable-5" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Fable hop: 0.6M × $10 + 0.02M × $50 = $7; Opus hop: 0.4M × $5 + 0.08M × $25 = $4.
+    expect(result.value.data.costUsd).toBeCloseTo(11, 10);
+
+    // Hops that do not add up to the message total fall back to one rate.
+    const inconsistent = syntheticMessage({
+      model: "claude-opus-4-8",
+      usage: syntheticUsage({
+        input_tokens: 1_000_000,
+        output_tokens: 0,
+        iterations: [
+          { type: "message", model: "claude-fable-5", input_tokens: 100, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+          { type: "fallback_message", model: "claude-opus-4-8", input_tokens: 100, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        ] as never,
+      }),
+    });
+    const fallback = interpretPassMessage(inconsistent, { ...baseOpts, model: "claude-fable-5" });
+    expect(fallback.ok).toBe(true);
+    if (!fallback.ok) return;
+    expect(fallback.value.data.costUsd).toBeCloseTo(5, 10);
   });
 
   it('returns a typed "refusal" error with category and files a gap', () => {
@@ -724,6 +794,27 @@ describe("interpretPassMessage", () => {
     expect(result.error.costUsd).toBeGreaterThan(0);
   });
 
+  /**
+   * At effort `high` and above the request is sent at the model's registry
+   * ceiling, not the pass constant. The gap used to quote the constant and
+   * tell the reader to "retry with a higher limit" when none existed.
+   */
+  it('reports the max_tokens actually SENT at effort high, and says the ceiling was reached', () => {
+    const message = syntheticMessage({
+      stop_reason: "max_tokens",
+      usage: syntheticUsage({ input_tokens: 1000, output_tokens: 128_000 }),
+    });
+    const opts = { ...baseOpts, effort: "high" as const };
+    const result = interpretPassMessage(message, opts);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(effectiveMaxTokens(opts)).toBe(registryEntryFor(baseOpts.model).maxOutputTokens);
+    expect(result.error.maxTokens).toBe(effectiveMaxTokens(opts));
+    expect(result.gap.reason).toContain(`max_tokens=${effectiveMaxTokens(opts)}`);
+    expect(result.gap.reason).toMatch(/registry ceiling/);
+    expect(result.error.message).not.toMatch(/higher effort/i);
+  });
+
   it('returns a typed "context_window" error when Sonnet 5 stops for the model context window', () => {
     const message = syntheticMessage({
       stop_reason: "model_context_window_exceeded",
@@ -750,18 +841,20 @@ describe("interpretPassMessage", () => {
 });
 
 /* ------------------------------------------------------------------------ *
- * pause_turn resumption (the Anthropic API contract §2: long search turns can
+ * pause_turn resumption (long search turns can
  * pause mid-turn — resend the assistant's content UNCHANGED to resume).
  * ------------------------------------------------------------------------ */
 
 /**
  * A client whose initial request STREAMS (every paid pass streams now) and
- * whose pause resumption uses create(). `streamFinal` is what finalMessage()
- * resolves with; `createResponses` answers each resumption in order.
+ * whose pause resumptions stream too: `streamFinal` is what the first
+ * stream's finalMessage() resolves with; `resumeResponses` answers each
+ * resumption stream in order. A non-streaming create() is a contract
+ * violation and throws.
  */
 function fakeStreamingResumeClient(
   streamFinal: BetaMessage,
-  createResponses: BetaMessage[],
+  resumeResponses: BetaMessage[],
 ): { client: Anthropic; calls: Record<string, unknown>[] } {
   const calls: Record<string, unknown>[] = [];
   let i = 0;
@@ -770,13 +863,12 @@ function fakeStreamingResumeClient(
       messages: {
         stream: (params: Record<string, unknown>) => {
           calls.push(params);
-          return makeFakeStream({ events: [{ type: "message_start", message: streamFinal }], final: streamFinal });
-        },
-        create: async (params: Record<string, unknown>) => {
-          calls.push(params);
-          const msg = createResponses[Math.min(i, createResponses.length - 1)];
+          const msg = i === 0 ? streamFinal : resumeResponses[Math.min(i - 1, resumeResponses.length - 1)];
           i++;
-          return msg;
+          return makeFakeStream({ events: [{ type: "message_start", message: msg }], final: msg });
+        },
+        create: async () => {
+          throw new Error("unexpected non-streaming create() call");
         },
       },
     },
@@ -784,17 +876,21 @@ function fakeStreamingResumeClient(
   return { client, calls };
 }
 
+/** Every request streams; each stream() call resolves with the next response. */
 function fakeCreateClient(responses: BetaMessage[]): { client: Anthropic; calls: Record<string, unknown>[] } {
   const calls: Record<string, unknown>[] = [];
   let i = 0;
   const client = {
     beta: {
       messages: {
-        create: async (params: Record<string, unknown>) => {
+        stream: (params: Record<string, unknown>) => {
           calls.push(params);
           const msg = responses[Math.min(i, responses.length - 1)];
           i++;
-          return msg;
+          return makeFakeStream({ events: [{ type: "message_start", message: msg }], final: msg });
+        },
+        create: async () => {
+          throw new Error("unexpected non-streaming create() call");
         },
       },
     },
@@ -846,13 +942,76 @@ describe("runPass resumes a paused turn end-to-end", () => {
       content: [{ type: "text", text: '{"ok":true}', citations: null }],
     });
     const pausedMsg = syntheticMessage({ stop_reason: "pause_turn" });
-    // The initial request streams and pauses; resumeIfPaused then calls
-    // create() once and returns the final message.
-    const { client } = fakeStreamingResumeClient(pausedMsg, [finalMsg]);
+    // The initial request streams and pauses; the resumption STREAMS too
+    // (DECISIONS D-09) and returns the final message.
+    const { client, calls } = fakeStreamingResumeClient(pausedMsg, [finalMsg]);
     _resetAnthropicForTests(client);
     const result = await runPass(baseOpts);
     expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(2);
   });
+
+  /**
+   * The resumed turn is itself a full generation, up to the registry output
+   * ceiling at high effort. As a non-streaming create() with the 600 s client
+   * timeout it was cut off client-side past ten minutes while the server kept
+   * generating and billing, then presumed at the request maximum and retried
+   * from scratch. Streaming puts it under the same idle guard as the first
+   * request, and a resumption that goes silent is abandoned with a presumed
+   * remainder rather than retried.
+   */
+  it("abandons a resumption that goes silent under the idle guard instead of retrying it", async () => {
+    process.env.THESIS_STREAM_IDLE_SECONDS = "1";
+    resetConfigCache();
+    try {
+      const pausedMsg = syntheticMessage({
+        stop_reason: "pause_turn",
+        usage: syntheticUsage({ input_tokens: 1_000, output_tokens: 100 }),
+      });
+      const aborts: number[] = [];
+      let streamCalls = 0;
+      const client = {
+        beta: {
+          messages: {
+            stream: () => {
+              streamCalls += 1;
+              if (streamCalls === 1) {
+                return makeFakeStream({ events: [{ type: "message_start", message: pausedMsg }], final: pausedMsg });
+              }
+              // The resumption accepts the request and goes quiet.
+              const stalled = makeFakeStream({
+                events: [messageStartEvent({ input_tokens: 2_000, output_tokens: 1 })],
+              }) as Record<string, unknown>;
+              stalled.abort = (): void => {
+                aborts.push(1);
+              };
+              return stalled;
+            },
+            create: async () => {
+              throw new Error("unexpected non-streaming create() call");
+            },
+          },
+        },
+      } as unknown as Anthropic;
+      _resetAnthropicForTests(client);
+
+      const result = await runPass({ ...baseOpts, effort: "low" });
+
+      expect(streamCalls).toBe(2);
+      expect(aborts).toHaveLength(1);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.kind).toBe("transport");
+      expect(result.error.message).toMatch(/stream idle timeout/);
+      expect(result.error.message).toMatch(/presumed .* remaining output tokens/);
+      // The paused first message (1K in, 100 out) and the resumption's own
+      // message_start (2K in) are both in the usage; the remainder is presumed.
+      expect(result.error.usage).toMatchObject({ input_tokens: 3_000 });
+    } finally {
+      delete process.env.THESIS_STREAM_IDLE_SECONDS;
+      resetConfigCache();
+    }
+  }, 15_000);
 
   it("accounts for billed usage and web-search cost from both the paused attempt and the resumption", async () => {
     const pausedUsage = syntheticUsage({
@@ -1092,6 +1251,41 @@ describe("isRetryableTransportError", () => {
     ).toBe(false);
     expect(isRetryableTransportError(new Error("boom"))).toBe(false);
   });
+
+  /**
+   * The SDK produces APIConnectionError only for a fetch that fails BEFORE
+   * the headers. A body that dies mid-stream reaches BetaMessageStream's
+   * error handler as an ordinary Error and is re-wrapped as a BARE
+   * AnthropicError with the network error on `cause` — undici's ~300 s idle
+   * body timeout is `TypeError: terminated` → `BodyTimeoutError`. Classified
+   * as a programming error, that death rejected the pass promise, retried
+   * nothing and dropped the usage the stream had billed.
+   */
+  it("classifies a stream that died after the headers as a retryable connection failure", () => {
+    const bodyTimeout = Object.assign(new Error("Body Timeout Error"), { code: "UND_ERR_BODY_TIMEOUT" });
+    const terminated = new TypeError("terminated", { cause: bodyTimeout });
+    const wrapped = Object.assign(new AnthropicError("terminated"), { cause: terminated });
+    expect(connectionFailureCode(wrapped)).toBe("UND_ERR_BODY_TIMEOUT");
+    expect(isStreamConnectionFailure(wrapped)).toBe(true);
+    expect(isRetryableTransportError(wrapped)).toBe(true);
+
+    const reset = Object.assign(new AnthropicError("read ECONNRESET"), {
+      cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    });
+    expect(isRetryableTransportError(reset)).toBe(true);
+
+    // A clean close before message_stop: the SDK's own finalMessage() error.
+    const premature = new AnthropicError("stream ended without producing a Message with role=assistant");
+    expect(isStreamConnectionFailure(premature)).toBe(true);
+    expect(isRetryableTransportError(premature)).toBe(true);
+
+    // The SDK's programming-error messages are NOT connection failures.
+    expect(isStreamConnectionFailure(new AnthropicError("Cannot iterate over a consumed stream, use `.tee()` to split the stream."))).toBe(false);
+    expect(isStreamConnectionFailure(new AnthropicError("Attempted to iterate over a response with no body"))).toBe(false);
+    // An APIError is classified by its own rules, never as a bare stream death.
+    expect(isStreamConnectionFailure(midStreamOverloadedError())).toBe(false);
+    expect(isStreamConnectionFailure(new APIUserAbortError())).toBe(false);
+  });
 });
 
 describe("runPassStreaming transport retry", () => {
@@ -1137,6 +1331,172 @@ describe("runPassStreaming transport retry", () => {
         computeCostUsd(finalUsage, "claude-opus-4-8", 3),
       10,
     );
+  });
+
+  it("retries a stream that died after generation started and folds its billed usage into the result", async () => {
+    const delays = instantSleep();
+    const finalUsage = syntheticUsage({ input_tokens: 5_000, output_tokens: 20_000 });
+    const finalMsg = syntheticMessage({
+      content: [{ type: "text", text: '{"ok":true}', citations: null }],
+      usage: finalUsage,
+    });
+    // What the SDK hands finalMessage() when undici's body timeout kills the socket.
+    const died = Object.assign(new AnthropicError("terminated"), {
+      cause: new TypeError("terminated", {
+        cause: Object.assign(new Error("Body Timeout Error"), { code: "UND_ERR_BODY_TIMEOUT" }),
+      }),
+    });
+    const settled: Array<Record<string, unknown>> = [];
+    let released = 0;
+    const admission = {
+      reserve: async () => ({ id: `p${settled.length + 1}`, maximumUsd: 10 }),
+      settle: async (_permit: unknown, settlement: Record<string, unknown>) => {
+        settled.push(settlement);
+      },
+      release: async () => {
+        released += 1;
+      },
+    };
+    const { client, streamCalls } = fakeStreamingClient([
+      { events: [messageStartEvent(attemptStartUsage), messageDeltaEvent(attemptDeltaUsage)], failWith: died },
+      { events: [messageStartEvent(attemptStartUsage)], final: finalMsg },
+    ]);
+    _resetAnthropicForTests(client);
+
+    const handle = runPassStreaming({ ...streamingOpts, admission: admission as never });
+    await expect(handle.firstToken).resolves.toBe("streamEvent");
+    const result = await handle.result;
+
+    // Retried on the mid-stream ladder, never rejected, never released.
+    expect(streamCalls.length).toBe(2);
+    expect(delays).toEqual([PASS_MID_STREAM_RETRY_DELAYS_MS[0]]);
+    expect(released).toBe(0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.data.usage.input_tokens).toBe(10_000);
+    expect(result.value.data.usage.output_tokens).toBe(28_000);
+    // The dead attempt settled what it had reported (it reached generation).
+    expect(settled).toHaveLength(2);
+    expect(settled[0]).toMatchObject({ usage: { input_tokens: 5_000, output_tokens: 8_000 } });
+  });
+
+  it("presumes a request whose body died before message_start rather than releasing it", async () => {
+    instantSleep();
+    const died = Object.assign(new AnthropicError("terminated"), {
+      cause: new TypeError("terminated", {
+        cause: Object.assign(new Error("Body Timeout Error"), { code: "UND_ERR_BODY_TIMEOUT" }),
+      }),
+    });
+    const settled: Array<Record<string, unknown>> = [];
+    let released = 0;
+    const admission = {
+      reserve: async () => ({ id: "p1", maximumUsd: 12.5 }),
+      settle: async (_permit: unknown, settlement: Record<string, unknown>) => {
+        settled.push(settlement);
+      },
+      release: async () => {
+        released += 1;
+      },
+    };
+    const { client } = fakeStreamingClient([{ events: [], failWith: died }]);
+    _resetAnthropicForTests(client);
+
+    const result = await runPass({ ...streamingOpts, admission: admission as never });
+    expect(result.ok).toBe(false);
+    // Headers arrived, so the provider may have generated and billed the
+    // whole response with nobody listening: presumed at the maximum, never
+    // released as "never reached the provider".
+    expect(released).toBe(0);
+    expect(settled.every((s) => s.presumed === true && s.costUsd === 12.5)).toBe(true);
+    expect(settled.length).toBe(PASS_TRANSPORT_MAX_ATTEMPTS);
+  });
+
+  /**
+   * An abort landing during the backoff between attempts used to escape the
+   * catch block as a raw rejection: `firstToken` never settled (so a cancel
+   * before the first token hung runBullThenBear) and a later abort filed the
+   * side as an anonymous transport failure with no `aborted` flag and none of
+   * the usage its earlier attempts billed.
+   */
+  it("resolves an aborted result and settles firstToken when the signal aborts during the retry backoff", async () => {
+    const controller = new AbortController();
+    const { client, streamCalls } = fakeStreamingClient([
+      { events: [], failWith: new APIConnectionError({ message: "socket hang up" }) },
+    ]);
+    _resetAnthropicForTests(client);
+
+    const handle = runPassStreaming({ ...streamingOpts, signal: controller.signal });
+    // The first attempt fails pre-token and the pass sleeps 1 s; cancel now.
+    setTimeout(() => controller.abort(new Error("job canceled upstream")), 25);
+
+    await expect(handle.firstToken).resolves.toBe("abort");
+    const result = await handle.result;
+    expect(streamCalls.length).toBe(1);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe("transport");
+    expect(result.error.aborted).toBe(true);
+  });
+
+  it("carries the billed usage of earlier attempts on an abort during a mid-stream backoff", async () => {
+    const controller = new AbortController();
+    const { client } = fakeStreamingClient([failingAttemptScript]);
+    _resetAnthropicForTests(client);
+
+    const handle = runPassStreaming({ ...streamingOpts, signal: controller.signal });
+    await expect(handle.firstToken).resolves.toBe("streamEvent");
+    setTimeout(() => controller.abort(new Error("sibling ended the run")), 25);
+    const result = await handle.result;
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.aborted).toBe(true);
+    // Attempt 1 streamed 5K input + 8K output before it died: still billed.
+    expect(result.error.usage).toMatchObject({ input_tokens: 5_000, output_tokens: 8_000 });
+    expect(result.error.costUsd).toBeCloseTo(computeCostUsd(attemptBilledUsage, "claude-opus-4-8", 2), 10);
+  });
+
+  /**
+   * An abort after generation started (a cancel, a deadline, or a doomed run
+   * abandoning its sibling) is billed by the provider up to the disconnect
+   * and reported as ~1 output token, because cumulative output tokens arrive
+   * only in the final message_delta. It settles like a dead stream: reported
+   * usage plus the presumed remainder, flagged presumed so the reconciler can
+   * lower it — not as an `actual` row at message_start usage.
+   */
+  it("settles an abort after message_start as reported usage plus a presumed remainder", async () => {
+    const settled: Array<Record<string, unknown>> = [];
+    const admission = {
+      reserve: async () => ({ id: "p1", maximumUsd: 100 }),
+      settle: async (_permit: unknown, settlement: Record<string, unknown>) => {
+        settled.push(settlement);
+      },
+      release: async () => {
+        throw new Error("must not release a request that reached generation");
+      },
+    };
+    const { client } = fakeStreamingClient([
+      {
+        events: [messageStartEvent({ input_tokens: 40_000, output_tokens: 1 })],
+        failWith: new APIUserAbortError(),
+      },
+    ]);
+    _resetAnthropicForTests(client);
+
+    const result = await runPass({ ...streamingOpts, effort: "low", admission: admission as never });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe("transport");
+    expect(result.error.aborted).toBe(true);
+    expect(result.error.message).toMatch(/aborted by the caller after generation started/);
+    // 40K input at $5/MTok = $0.20 reported, plus (16,001 − 1) output tokens
+    // at $25/MTok = $0.40 presumed.
+    const expected = 0.2 + 0.000025 + (16_000 / 1_000_000) * 25;
+    expect(result.error.costUsd).toBeCloseTo(expected, 6);
+    expect(settled).toHaveLength(1);
+    expect(settled[0]).toMatchObject({ presumed: true });
+    expect(settled[0].costUsd).toBeCloseTo(expected, 6);
   });
 
   it("resolves a typed transport failure carrying summed billed usage after exhausting attempts", async () => {
@@ -1355,7 +1715,7 @@ describe("stream idle timeout", () => {
 
   it("reads the idle limit from the validated THESIS_STREAM_IDLE_SECONDS config", () => {
     setIdleSeconds(undefined);
-    expect(streamIdleTimeoutMs()).toBe(120_000);
+    expect(streamIdleTimeoutMs()).toBe(300_000);
     setIdleSeconds("30");
     expect(streamIdleTimeoutMs()).toBe(30_000);
     // Zero still disables the guard.
@@ -1368,6 +1728,88 @@ describe("stream idle timeout", () => {
     setIdleSeconds("3601");
     expect(() => streamIdleTimeoutMs()).toThrow(/THESIS_STREAM_IDLE_SECONDS/);
   });
+
+  /**
+   * The guard cannot see thinking: Thesis never asks for thinking summaries, so
+   * reasoning is silent on the wire on every model. Effort is what sets how
+   * long that silence lasts, so the limit has to widen with it — a flat limit
+   * survivable at `low` is a guaranteed false abort at `max` (2026-09-03: AMZN
+   * on claude-fable-5-1 at effort max, abandoned at 120s and settled at the
+   * presumed 127,995-token remainder).
+   */
+  it("widens the idle limit with effort and clamps it to the model stage deadline", () => {
+    setIdleSeconds(undefined);
+    // The default base sits at undici's ~300s body-timeout window, so a dead
+    // connection is caught by the layer that can see the provider's pings.
+    expect(streamIdleTimeoutMsFor("low")).toBe(300_000);
+    expect(streamIdleTimeoutMsFor("medium")).toBe(300_000);
+    expect(streamIdleTimeoutMsFor("high")).toBe(600_000);
+    expect(streamIdleTimeoutMsFor("xhigh")).toBe(900_000);
+    expect(streamIdleTimeoutMsFor("max")).toBe(1_200_000);
+    // A model without effort support keeps the unscaled base.
+    expect(streamIdleTimeoutMsFor(undefined)).toBe(300_000);
+    // Never past the stage that owns the request, where it could not fire.
+    setIdleSeconds("3600");
+    expect(streamIdleTimeoutMsFor("max")).toBe(MODEL_STAGE_DEADLINE_MS);
+    // Zero still disables the guard at every effort.
+    setIdleSeconds("0");
+    expect(streamIdleTimeoutMsFor("max")).toBe(0);
+  });
+
+  /**
+   * The regression that produced the 2026-09-03 loss, stated as a rule: the
+   * guard must never fire before undici's own idle body timeout, because the
+   * Anthropic SDK drops the `ping` events that prove the request is alive
+   * (`core/streaming.js`: `if (sse.event === 'ping') continue;`) and undici,
+   * which counts bytes on the socket, does not. Firing first means pre-empting
+   * a working detector with a blind one.
+   */
+  it("never fires before the transport's own ping-aware timeout", () => {
+    setIdleSeconds(undefined);
+    const UNDICI_BODY_TIMEOUT_MS = 300_000;
+    for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
+      expect(streamIdleTimeoutMsFor(effort)).toBeGreaterThanOrEqual(UNDICI_BODY_TIMEOUT_MS);
+    }
+  });
+
+  it("does not abandon a deep-thinking stream inside its scaled limit", async () => {
+    // Base 1s: effort low would abort at 1s, effort max must not.
+    setIdleSeconds("1");
+    const silentFor = 2_000;
+    let resolveFinal!: (message: BetaMessage) => void;
+    const finalPromise = new Promise<BetaMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
+    const final = syntheticMessage({
+      model: "claude-fable-5-1",
+      usage: syntheticUsage({ input_tokens: 1_000, output_tokens: 10 }),
+    });
+    const listeners: Array<(event: unknown) => void> = [];
+    const stalled = {
+      on: (name: string, fn: (event: unknown) => void) => {
+        if (name === "streamEvent") listeners.push(fn);
+      },
+      once: (name: string, fn: (event: unknown) => void) => {
+        if (name === "streamEvent") listeners.push(fn);
+      },
+      finalMessage: () => finalPromise,
+      abort: () => {},
+    };
+    _resetAnthropicForTests({
+      beta: { messages: { stream: () => stalled, create: async () => { throw new Error("must stream"); } } },
+    } as unknown as Anthropic);
+
+    // One event, then silence for longer than the unscaled limit.
+    queueMicrotask(() => {
+      for (const fn of listeners) fn(messageStartEvent({ input_tokens: 1_000 }, "claude-fable-5-1"));
+    });
+    const run = runPass({ ...idleOpts, model: "claude-fable-5-1", effort: "max" });
+    await new Promise((resolve) => setTimeout(resolve, silentFor));
+    resolveFinal(final);
+
+    const result = await run;
+    expect(result.ok).toBe(true);
+  }, 15_000);
 
   it("abandons a silent stream and settles reported usage plus the presumed remainder", async () => {
     setIdleSeconds("1");

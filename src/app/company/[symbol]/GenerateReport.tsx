@@ -4,9 +4,11 @@
  * GenerateReport — the "generate report" client interaction for /company/[symbol].
  *
  * Flow:
- *   1. POST /api/report {symbol} → 202 { jobId } (or 409 if one is already
- *      running — we adopt that path via the returned message and just open the
- *      stream by re-POSTing is avoided; a 409 surfaces as a notice).
+ *   1. POST /api/report {symbol} → 202 { jobId } for a new job, or
+ *      202 { jobId, existing: true } when a reusable job for the symbol is
+ *      already queued/running — the client simply attaches to that job's
+ *      stream. 400 on a malformed body, 403 on a cross-site request; the route
+ *      never answers 409 (only the retry route does).
  *   2. Open GET /api/report/[jobId]/stream (SSE). Render the 7 PIPELINE_STEPS as
  *      a live stepper: per-step status, timing, and running cost.
  *   3. On an accepted terminal snapshot, GET /api/report/view/[reportId] and render
@@ -17,8 +19,9 @@
  * The parent page stays a server component and passes `symbol` in.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { Panel } from "@/components/ui";
 import { ExportButtons } from "@/components/report/ExportButtons";
@@ -633,6 +636,7 @@ function asGrade(g: string): Grade | null {
  * ------------------------------------------------------------------------ */
 
 export function GenerateReport({ symbol }: { symbol: string }) {
+  const router = useRouter();
   const [phase, setPhase] = useState<Phase>("idle");
   const [steps, setSteps] = useState<StepProgress[]>(() =>
     PIPELINE_STEPS.map((step) => ({ step, status: "pending" as const })),
@@ -689,6 +693,12 @@ export function GenerateReport({ symbol }: { symbol: string }) {
           } else if (terminal === "done") {
             setPhase("done");
             setError(null);
+            // The server tree around this panel (the "full report" tab, its
+            // "#id · date" label, the sidebar grades) was rendered from the
+            // PREVIOUS report; re-run it so the page shows the one just
+            // persisted (audit 2026-09-06, F213). The company-load coordinator
+            // caches the pipeline, so the refresh is cheap.
+            startTransition(() => router.refresh());
             if (snap.reportId !== null) {
               const token = streamFenceRef.current.token(es, jobId);
               if (token !== null) {
@@ -720,7 +730,7 @@ export function GenerateReport({ symbol }: { symbol: string }) {
         // the next validated snapshot catches up by canonical revision.
       });
     },
-    [closeCurrentStream, symbol],
+    [closeCurrentStream, router, symbol],
   );
 
   const start = useCallback(async () => {

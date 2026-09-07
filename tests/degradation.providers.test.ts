@@ -1,5 +1,5 @@
 /**
- * Provider-outage degradation tests (Phase 4 gate, the application contract §10):
+ * Provider-outage degradation tests (Phase 4 gate):
  *
  *   "simulated FMP/Finnhub outage produces a gracefully degraded report with
  *    disclosed gaps — never fabricated data."
@@ -7,7 +7,7 @@
  * These drive the REAL buildDataBundle with FAILING / PARTIAL provider clients
  * injected (FMP live-mode with a controlled fetchImpl, a fake EdgarTransport,
  * and FRED/Finnhub/FINRA configs with a controlled fetchImpl) and assert:
- *   - the bundle still BUILDS (no throw — SPEC §3 rule #4),
+ *   - the bundle still BUILDS (no throw — house rule),
  *   - every gap is DISCLOSED in bundle.gaps (mergeManifest) at the right severity,
  *   - providers that are still up populate what they can,
  *   - downstream compute (runStageB) + validation (validateBundle) +

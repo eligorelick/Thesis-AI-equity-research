@@ -97,7 +97,11 @@ export function runCorrectedExport({
         }[])
       : [];
     const requestedModel = report.meta.model || row.model;
-    const execution = costs.map((cost) =>
+    // A reconstruction from the ledger knows neither the requested effort nor
+    // the adjustments the run disclosed; it fills a LEGACY report's gap and
+    // must never replace persisted disclosures (effort-stripped,
+    // model-rejected, the judge floor) with a lossier copy.
+    const reconstructed = costs.map((cost) =>
       buildExecutionMetadataEntry({
         step: cost.step,
         requestedModel,
@@ -107,6 +111,8 @@ export function runCorrectedExport({
         fallbackUsed: cost.fallbackUsed === 1,
       }),
     );
+    const persistedExecution = report.meta.execution ?? [];
+    const execution = persistedExecution.length > 0 ? [...persistedExecution] : reconstructed;
     if (!execution.some((entry) => entry.step === "verify")) {
       execution.push(
         buildExecutionMetadataEntry({
@@ -125,8 +131,17 @@ export function runCorrectedExport({
     if (row.runCompletedAt) report.meta.completedAt = row.runCompletedAt;
     if (costs.length > 0) {
       report.meta.costUsd = costs.reduce((sum, cost) => sum + cost.costUsd, 0);
+      const persistedBreakdown = report.appendix.costBreakdown;
       report.appendix.costBreakdown = costs.map((cost, index) => {
-        const entry = execution[index]!;
+        const entry = execution.find((candidate) => candidate.step === cost.step) ?? reconstructed[index]!;
+        // The runner derives the discarded marking from pass artifacts this
+        // CLI does not read; the stored row (same ledger order) is the only
+        // place it survives.
+        const stored = persistedBreakdown[index];
+        const discarded =
+          stored !== undefined && stored.step === cost.step && stored.discarded === true
+            ? { discarded: true as const, ...(stored.discardedReason === undefined ? {} : { discardedReason: stored.discardedReason }) }
+            : {};
         return {
           step: cost.step,
           model: cost.model,
@@ -136,6 +151,7 @@ export function runCorrectedExport({
           effectiveEffort: entry.effectiveEffort,
           fallbackUsed: entry.fallbackUsed,
           adjustments: entry.adjustments,
+          ...discarded,
         };
       });
     }

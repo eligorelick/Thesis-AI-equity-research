@@ -3,19 +3,19 @@
  * report-degradation plan.
  *
  * PURE, deterministic TypeScript: no network, no db, no LLM. Inputs are plain
- * typed rows whose field names mirror FMP exactly (the provider data contract §2.2/§2.3):
+ * typed rows whose field names mirror FMP exactly:
  * profile {sector, industry, isAdr, isEtf, isFund, ipoDate, country, currency},
  * statement rows {date, revenue, netIncome, operatingCashFlow,
  * capitalExpenditure, cashAndCashEquivalents, shortTermInvestments,
  * cashAndShortTermInvestments, weightedAverageShsOutDil}.
  *
- * Routing evidence and rules: the sector-routing methodology §1 (industry-prefix
+ * Routing evidence and rules: docs/METHODOLOGY.md "Routing" (industry-prefix
  * matching FIRST, case-insensitive, trimmed; SIC fallback; XBRL tag evidence
  * from EDGAR companyfacts confirms, contradicts or — when neither industry nor
  * SIC decides — supplies the base route, and alone decides the equity-vs-
- * mortgage REIT sub-map (WS5, D-16); overlays compose),
- * the application contract §6 (route table incl. hard suppressions) and §13.7 (unprofitable /
- * pre-revenue house rules).
+ * mortgage REIT sub-map (WS5, D-16); overlays compose), the route table with
+ * its hard suppressions ("Financial-company routes" there) and the
+ * unprofitable / pre-revenue house rules below.
  *
  * Contract rules honored here:
  * - Missing inputs NEVER throw — partial results + ManifestEntry gaps.
@@ -51,13 +51,13 @@ const FINANCIAL_FORENSIC_SIGNALS = ["altmanZ", "beneishM", "accrualsRatio"] as c
 // House-rule constants (every one of these is annotated in returned notes)
 // ---------------------------------------------------------------------------
 
-/** Pre-revenue overlay floor: TTM revenue below this → pre-revenue (SPEC §13.7). */
+/** Pre-revenue overlay floor: TTM revenue below this → pre-revenue (house rule). */
 export const PRE_REVENUE_TTM_REVENUE_FLOOR_USD = 10_000_000;
 
-/** Recent-IPO overlay: ipoDate within this many months of `today` (SPEC §6). */
+/** Recent-IPO overlay: ipoDate within this many months of `today` (house rule). */
 export const RECENT_IPO_WINDOW_MONTHS = 24;
 
-/** Recent-IPO overlay: fewer than this many quarterly statements (SPEC §6). */
+/** Recent-IPO overlay: fewer than this many quarterly statements (house rule). */
 export const RECENT_IPO_MIN_QUARTERS = 8;
 
 /** Burn rate is averaged over at most this many most-recent quarters. */
@@ -250,7 +250,7 @@ export function routeCompany(
   if (profile.isEtf === true || profile.isFund === true) {
     notes.push(
       "profile.isEtf/isFund is true — funds/ETFs are out of scope for company routing " +
-        "(the sector-routing methodology §1.3); no company report should be generated.",
+        "(docs/METHODOLOGY.md, Routing); no company report should be generated.",
     );
     gaps.push({
       field: "route.base",
@@ -266,13 +266,13 @@ export function routeCompany(
       // Insurance brokers (Marsh, Aon, AJG) are fee-based, NOT balance-sheet
       // businesses, so EBITDA margins / EV-EBITDA / organic growth are valid and
       // the insurer map's EV/EBITDA suppression would wrongly hide them. Route to
-      // GENERAL per the sector-routing methodology §3 ("Brokers → route to GENERAL map").
+      // GENERAL (docs/METHODOLOGY.md, Routing: brokers are fee-based).
       base = "general";
       baseMatched = true;
       notes.push(
         "industry 'Insurance - Brokers' routed to the GENERAL map (not insurer): brokers are " +
           "fee-based, not balance-sheet businesses, so EBITDA-margin / EV-EBITDA / organic-growth " +
-          "metrics are valid (the sector-routing methodology §3).",
+          "metrics are valid (docs/METHODOLOGY.md, Routing).",
       );
     } else {
       base = "insurer";
@@ -284,20 +284,49 @@ export function routeCompany(
     if (base === "reit-mortgage") {
       notes.push(
         "mortgage REIT routed to the book-value submap (P/B, dividend yield, spread, leverage) — " +
-          "FFO/NOI largely irrelevant (the sector-routing methodology §4).",
+          "FFO/NOI largely irrelevant (docs/METHODOLOGY.md, The REIT sub-map).",
+      );
+    }
+  } else if (industryLc !== null) {
+    // A KNOWN industry string that matched no bank/insurer/REIT prefix is a
+    // DECIDED classification — credit services, mortgage finance, capital
+    // markets, asset management, exchanges, conglomerates, and every
+    // non-financial industry — so the SIC is not consulted, mirroring the
+    // validator's bank-revenue rule. The SIC band used to fire past a
+    // 'Credit Services' or 'Mortgage Finance' string and put a consumer
+    // lender or a mortgage originator on the bank map.
+    if (sectorLc === "financial services" || sectorLc === "financial") {
+      base = "general";
+      baseMatched = true;
+      notes.push(
+        `industry '${industryRaw}' under sector 'Financial Services' matched no bank/insurance/REIT prefix — ` +
+          "routed to the general map (FIN-OTHER treatment: book-value-tilted, NOT the bank map; docs/METHODOLOGY.md, Routing).",
       );
     }
   } else {
-    // SIC fallback — only when the industry string gave no match.
+    // SIC fallback — only when there is NO industry string at all.
     const sic = parseSic(sicRaw);
-    if (sic !== null && sic >= 6020 && sic <= 6199) {
+    if (sic !== null && sic >= 6020 && sic <= 6036) {
+      // SEC major group 60, depository institutions only: 6021/6022/6029
+      // commercial banks, 6035/6036 savings institutions. Major group 61
+      // (6111–6199, non-depository credit) has no deposits, so none of the bank
+      // map's metrics fit it; it is FIN-OTHER and stays on the general map.
       base = "bank";
       baseMatched = true;
-      notes.push(`base route 'bank' from SIC ${sicRaw} (6020–6199) — industry string gave no match.`);
-    } else if (sic !== null && sic >= 6300 && sic <= 6499) {
+      notes.push(`base route 'bank' from SIC ${sicRaw} (6020–6036, depository institutions) — industry string missing.`);
+    } else if (sic !== null && sic >= 6300 && sic <= 6399) {
       base = "insurer";
       baseMatched = true;
-      notes.push(`base route 'insurer' from SIC ${sicRaw} (6300–6499) — industry string gave no match.`);
+      notes.push(`base route 'insurer' from SIC ${sicRaw} (6300–6399, insurance carriers) — industry string missing.`);
+    } else if (sic !== null && sic >= 6400 && sic <= 6499) {
+      // Major group 64: insurance agents, brokers and service — fee-based, the
+      // same class the 'Insurance - Brokers' industry sends to the general map.
+      base = "general";
+      baseMatched = true;
+      notes.push(
+        `SIC ${sicRaw} is in 6400–6499 (insurance agents, brokers and service) — fee-based, routed to the general map ` +
+          "like the 'Insurance - Brokers' industry, not the insurer map.",
+      );
     } else if (sic === 6798) {
       base = "reit";
       baseMatched = true;
@@ -310,7 +339,7 @@ export function routeCompany(
       baseMatched = true;
       notes.push(
         "sector 'Financial Services' without a bank/insurance/REIT industry — routed to the general " +
-          "map (FIN-OTHER treatment: book-value-tilted, NOT the bank map; the sector-routing methodology §1.3).",
+          "map (FIN-OTHER treatment: book-value-tilted, NOT the bank map; docs/METHODOLOGY.md, Routing).",
       );
     }
   }
@@ -318,7 +347,11 @@ export function routeCompany(
   // ---- XBRL routing evidence (WS5, D-16): confirms, contradicts, or decides.
   const evidence = opts.evidence ?? null;
   const sicNum = parseSic(sicRaw);
-  const sicIsFinancial = sicNum !== null && sicNum >= 6000 && sicNum <= 6799;
+  // 6000–6499 and 6700–6799: major groups 65 (real-estate operators and
+  // developers) and 66 are not financial companies — the band the forensics
+  // classifier uses — so a developer's SIC cannot corroborate REIT evidence.
+  const sicIsFinancial =
+    sicNum !== null && ((sicNum >= 6000 && sicNum <= 6499) || (sicNum >= 6700 && sicNum <= 6799));
   const sectorIsFinancial = sectorLc === "financial services" || sectorLc === "financial";
   const evidenceSuggests = evidence?.suggests ?? null;
   const evidenceSignalsFor = (cls: NonNullable<typeof evidenceSuggests>): string =>
@@ -340,22 +373,42 @@ export function routeCompany(
   const financialCandidate =
     (baseMatched && base !== "general") || sicIsFinancial || sectorIsFinancial || evidenceSuggests !== null;
 
-  // The mortgage-REIT rule is the ONLY evidence rule that fires on a single tag
-  // group (bank needs deposits AND loans/NII; insurer needs premiums AND
-  // reserves), so on its own it is the weakest evidence the module produces.
-  // Before it may SET a base route — which suppresses the DCF, the reverse DCF,
-  // EV/EBITDA and ROIC−WACC, drops Piotroski to three signals and leads the
-  // report with book value per share — something has to corroborate it: the
-  // repo funding a levered mortgage book cannot run without, or a classification
-  // (SIC/sector) that already says "financial". Uncorroborated, the tags are
-  // DISCLOSED as a conflict and the route is left where it was.
+  // TWO evidence rules fire on a single tag group: the equity-REIT rule
+  // (investment property) and the mortgage-REIT rule (mortgage assets without
+  // investment property); bank needs deposits AND loans/NII, insurer needs
+  // premiums AND reserves. The mortgage rule is the weakest evidence the
+  // module produces, so before it may SET a base route — which suppresses the
+  // DCF, the reverse DCF, EV/EBITDA and ROIC−WACC, drops Piotroski to three
+  // signals and leads the report with book value per share — something has to
+  // corroborate it: the repo funding a levered mortgage book cannot run
+  // without, or a classification (SIC/sector) that already says "financial".
+  // Uncorroborated, the tags are DISCLOSED as a conflict and the route is left
+  // where it was.
   const mortgageEvidenceCorroborated =
     evidence !== null &&
     (evidence.mortgageFunding.length > 0 || sicIsFinancial || sectorIsFinancial);
   const uncorroboratedMortgageEvidence =
     evidenceSuggests === "reit-mortgage" && !mortgageEvidenceCorroborated;
 
-  if (!baseMatched && evidenceSuggests !== null && evidence !== null && !uncorroboratedMortgageEvidence) {
+  // Evidence may SET a base route only on a profile that is UNDECIDED (no
+  // industry string) or already classified as financial by its SIC or sector.
+  // A vendor industry plus a SIC that are both non-financial is a
+  // classification — "general", decided — and carries at least as much
+  // information as the FIN-OTHER sector string the code already honours.
+  // Acting on the tags there put a taxable real-estate operator that tags
+  // investment property on the FFO map with no conflict recorded, against the
+  // methodology's own rule that evidence confirms or contradicts and does not
+  // silently override.
+  const classificationDecidedNonFinancial =
+    !baseMatched && industryLc !== null && !sicIsFinancial && !sectorIsFinancial;
+
+  if (
+    !baseMatched &&
+    evidenceSuggests !== null &&
+    evidence !== null &&
+    !uncorroboratedMortgageEvidence &&
+    !classificationDecidedNonFinancial
+  ) {
     base = evidenceSuggests;
     baseMatched = true;
     notes.push(
@@ -363,13 +416,34 @@ export function routeCompany(
         `${evidence.basis ?? evidenceSignalsFor(evidenceSuggests)} — industry string ` +
         `${industryRaw === null ? "missing" : `'${industryRaw}'`} and SIC ${sicRaw ?? "missing"} gave no match.`,
     );
+  } else if (
+    classificationDecidedNonFinancial &&
+    evidenceSuggests !== null &&
+    evidence !== null &&
+    !uncorroboratedMortgageEvidence
+  ) {
+    notes.push(
+      `routing evidence (${evidence.source}${evidenceAsOf}) suggests '${evidenceSuggests}' ` +
+        `(${evidence.basis ?? evidenceSignalsFor(evidenceSuggests)}) but the vendor industry '${industryRaw}' and ` +
+        `SIC ${sicRaw ?? "(missing)"} are NOT financial — a declared non-financial classification stands and the ` +
+        "disagreement is disclosed rather than acted on (a taxable real-estate operator tags investment property " +
+        "without being a REIT; an industrial with vendor financing tags loans).",
+    );
+    gaps.push({
+      field: "route.evidence.conflict",
+      reason:
+        `XBRL tags suggest '${evidenceSuggests}' (${evidenceSignalsFor(evidenceSuggests)}) while the vendor industry ` +
+        `'${industryRaw}' and SIC ${sicRaw ?? "(missing)"} are non-financial — route kept on 'general'; review the classification`,
+      severity: "warn",
+      attemptedSources: [evidence.source, "fmp:/stable/profile", "edgar:submissions.sic"],
+    });
   } else if (!baseMatched && uncorroboratedMortgageEvidence && evidence !== null) {
     notes.push(
       `routing evidence (${evidence.source}${evidenceAsOf}) suggests 'reit-mortgage' ` +
         `(${evidence.basis ?? evidenceSignalsFor("reit-mortgage")}) but NOTHING corroborates it: no repurchase-agreement ` +
         `funding (${MORTGAGE_REIT_FUNDING_TAGS[0]}) is tagged and neither the SIC ${sicRaw ?? "(missing)"} nor the ` +
-        `sector ${sectorRaw === null ? "(missing)" : `'${sectorRaw}'`} is financial. Mortgage assets are the one ` +
-        "evidence rule that fires on a single tag group, so on their own they are disclosed as a conflict rather " +
+        `sector ${sectorRaw === null ? "(missing)" : `'${sectorRaw}'`} is financial. Mortgage assets fire on a ` +
+        "single tag group, so on their own they are disclosed as a conflict rather " +
         `than used to re-route — the '${base}' route stands.`,
     );
     gaps.push({
@@ -439,7 +513,7 @@ export function routeCompany(
   } else if (baseMatched && base === "general" && evidenceSuggests !== null && evidence !== null) {
     // Industry or sector deliberately routed a FIN-OTHER issuer to the general
     // map; the tags say otherwise. The classification is kept (the sector-routing
-    // methodology §1.3 sends fee-based financials there on purpose) and the
+    // methodology sends fee-based financials there on purpose) and the
     // disagreement is disclosed rather than silently overridden.
     notes.push(
       `routing evidence (${evidence.source}${evidenceAsOf}) suggests '${evidenceSuggests}' ` +
@@ -504,7 +578,7 @@ export function routeCompany(
       );
       notes.push(
         "mortgage REIT routed to the book-value submap (P/B, dividend yield, spread, leverage) — " +
-          "FFO/NOI largely irrelevant (the sector-routing methodology §4).",
+          "FFO/NOI largely irrelevant (docs/METHODOLOGY.md, The REIT sub-map).",
       );
     } else if (evidenceSubmap === "equity") {
       base = "reit";
@@ -617,7 +691,7 @@ export function routeCompany(
     notes.push(
       `unprofitable overlay applied: netIncome=${ni === null ? "n/a" : ni} (${niBasis ?? "n/a"}), ` +
         `operatingCashFlow=${ocf === null ? "n/a" : ocf} (${ocfBasis ?? "n/a"}). ` +
-        "Trigger (house rule, SPEC §13.7): TTM netIncome < 0 OR TTM operatingCashFlow < 0" +
+        "Trigger (house rule): TTM netIncome < 0 OR TTM operatingCashFlow < 0" +
         (ocfIsProfitSignal ? "." : ` (net income only on the '${base}' route).`),
     );
   } else if (!ocfIsProfitSignal && ocf !== null && ocf < 0) {
@@ -666,12 +740,12 @@ export function routeCompany(
     overlays.push("pre-revenue");
     notes.push(
       `house rule: pre-revenue overlay — ${revBasis} revenue ${rev} < $${PRE_REVENUE_TTM_REVENUE_FLOOR_USD.toLocaleString("en-US")} ` +
-        "floor (SPEC §13.7; annotated house rule, revisit with data).",
+        "floor (annotated house rule, revisit with data).",
     );
   }
 
   // recent-ipo overlay: applied ONLY when a VERIFIED ipoDate falls within the
-  // recency window (SPEC §6). Sparse quarterly history is NOT evidence of a
+  // recency window (house rule). Sparse quarterly history is NOT evidence of a
   // recent IPO — a mature issuer with incomplete data coverage is "insufficient
   // historical coverage", disclosed as a gap, and NEVER routed as a recent IPO
   // (audit 2026-07-11 finding #4). Treating missing history as a listing event
@@ -699,7 +773,7 @@ export function routeCompany(
     overlays.push("recent-ipo");
     notes.push(
       `recent-ipo overlay applied: verified ipoDate ${ipoRaw} within ${RECENT_IPO_WINDOW_MONTHS} months of ` +
-        `${opts.today} (house rule, SPEC §6).` +
+        `${opts.today} (house rule).` +
         (thinHistory
           ? ` ${q} quarterly statements available (< ${RECENT_IPO_MIN_QUARTERS}) — consistent with a recent listing.`
           : ""),
@@ -739,7 +813,7 @@ export function routeCompany(
     overlays.push("adr");
     notes.push(
       "adr overlay applied (profile.isAdr). ADR ratio comes from the static ADR_RATIOS map " +
-        "(no FMP field exists — the provider data contract §4.10); unknown ADRs are disclosed as gaps.",
+        "(no FMP field exists); unknown ADRs are disclosed as gaps.",
     );
   } else {
     const country = normStr(profile.country)?.toUpperCase() ?? null;
@@ -769,7 +843,7 @@ export function routeCompany(
 }
 
 // ---------------------------------------------------------------------------
-// ADR_RATIOS — static, research-verified map (the sector-routing methodology §7)
+// ADR_RATIOS — static, research-verified map (house table)
 // ---------------------------------------------------------------------------
 
 export interface AdrRatioEntry {
@@ -831,7 +905,7 @@ export interface SectorEtfEntry {
   benchmark: typeof SPY_BENCHMARK;
 }
 
-/** Keys are the 11 FMP sector strings (the provider data contract §2.5 enum; frozen day-1). */
+/** Keys are the 11 FMP sector strings (FMP's enum; frozen day-1). */
 export const SECTOR_ETF_MAP: Readonly<Record<string, SectorEtfEntry>> = {
   "Basic Materials": { etf: "XLB", benchmark: SPY_BENCHMARK },
   "Communication Services": { etf: "XLC", benchmark: SPY_BENCHMARK },
@@ -874,7 +948,7 @@ export function lookupSectorEtf(sector: string | null | undefined): SectorEtfLoo
 }
 
 // ---------------------------------------------------------------------------
-// metricPolicy — suppress/lead lists per SPEC §6 table (hard product rules)
+// metricPolicy — suppress/lead lists per docs/METHODOLOGY.md Financial-company routes (hard product rules)
 // ---------------------------------------------------------------------------
 
 export interface MetricPolicy {
@@ -913,7 +987,7 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
     suppress: [],
     lead: ["revenueCagr", "grossMargin", "operatingMargin", "roicVsWacc", "fcfYield", "evEbitda", "pe"],
   },
-  // SPEC §6: banks never show EV/EBITDA, current ratio, FCF DCF, Altman/Beneish
+  // Financial-company routes: banks never show EV/EBITDA, current ratio, FCF DCF, Altman/Beneish
   // (FMP emits garbage/zeros for these on banks — verified in FMP's own docs example).
   bank: {
     suppress: [
@@ -983,7 +1057,7 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
       "dividendYield",
     ],
   },
-  // Mortgage REITs: bank-flavored book-value submap (the sector-routing methodology §4).
+  // Mortgage REITs: bank-flavored book-value submap (docs/METHODOLOGY.md, The REIT sub-map).
   // grossMargin is meaningless on a net-interest-spread income statement (same as
   // the bank/insurer routes) — suppress so it cannot drive the moat score.
   "reit-mortgage": {
@@ -993,7 +1067,7 @@ const BASE_POLICIES: Readonly<Record<SectorRoute, { suppress: readonly string[];
 };
 
 const OVERLAY_POLICIES: Readonly<Record<SectorOverlay, { suppress: readonly string[]; lead: readonly string[] }>> = {
-  // the sector-routing methodology §5 overlay behavior.
+  // overlay behavior.
   unprofitable: {
     suppress: ["pe", "peg", "fcfDcf", "dividendSafety", "piotroskiF", "beneishM"],
     lead: ["cashRunway", "quarterlyBurn", "dilutionRate", "cashVsMarketCap", "evToSales", "goingConcern"],
@@ -1002,7 +1076,7 @@ const OVERLAY_POLICIES: Readonly<Record<SectorOverlay, { suppress: readonly stri
     suppress: ["pe", "peg", "evEbitda", "evToSales", "psRatio", "fcfDcf", "grossMargin", "piotroskiF", "beneishM"],
     lead: ["cashRunway", "quarterlyBurn", "dilutionRate", "cashVsMarketCap", "milestones", "goingConcern"],
   },
-  // the sector-routing methodology §6 degradations.
+  // route degradations.
   "recent-ipo": {
     suppress: ["cagr5y", "cagr10y", "sma200", "fiftyTwoWeekRange", "beta", "seasonality", "beneishM", "piotroskiF"],
     lead: ["sinceIpoGrowth", "lockupCountdown", "analystCoverageCount"],
@@ -1138,7 +1212,7 @@ export function degradationPlan(
       ? `${availableQuarters} quarters`
       : "an unknown number of quarters";
 
-  // ---- route-driven degradations (SPEC §6 table)
+  // ---- route-driven degradations (docs/METHODOLOGY.md, Financial-company routes)
   if (route === "bank") {
     items.push(
       {
@@ -1285,21 +1359,22 @@ export function degradationPlan(
           disclosure:
             `No 5y/10y CAGRs: only ${qStr} of history available (recent-ipo overlay: IPO within ` +
             `${RECENT_IPO_WINDOW_MONTHS} months or < ${RECENT_IPO_MIN_QUARTERS} quarterly statements). ` +
-            "Showing since-IPO growth with an explicit period-count badge instead.",
+            "Only the growth windows the history supports are computed, each annotated with its actual span.",
         },
         {
           target: "outlook.analystEstimates",
           action: "annotate",
           disclosure:
-            "Analyst estimate coverage is typically thin for ~25–40 days post-IPO (quiet period): shown as " +
-            '"thin coverage (N analysts)", never as consensus-as-truth.',
+            "Analyst estimate coverage is typically thin for ~25–40 days post-IPO (quiet period): any consensus " +
+            "figure from this window is to be read as thin coverage, never as consensus-as-truth (no analyst count is computed).",
         },
         {
           target: "technicals.sma200",
           action: "suppress",
           disclosure:
-            "200-day moving average requires 200 trading days — suppressed; since-IPO high/low shown instead " +
-            "of the 52-week range.",
+            "200-day moving average requires 200 trading days — suppressed. The 52-week range and the 1y drawdown " +
+            "are reported only over a full year of prices; a shorter history is disclosed as insufficient, never " +
+            "presented as a year (no since-IPO high/low is computed).",
         },
         {
           // Retargeted: the pipeline computes no `technicals.beta` at all, so
@@ -1324,8 +1399,8 @@ export function degradationPlan(
           target: "catalysts.lockup",
           action: "annotate",
           disclosure:
-            "Lockup expiration estimated as ipoDate + 180 days unless the prospectus clause was extracted — " +
-            'labeled "estimated (standard 180-day term) — verify in prospectus".',
+            "No lockup-expiration date is computed or extracted. The standard 180-day term after the IPO date " +
+            "applies to most listings and is a reader's check against the prospectus, not a figure in this report.",
         },
       );
       if (!(typeof availableQuarters === "number" && Number.isFinite(availableQuarters))) {
@@ -1342,8 +1417,9 @@ export function degradationPlan(
           action: "replace",
           replacement: "runway-framing",
           disclosure:
-            "Valuation section replaced by runway framing: cash runway, quarterly burn trend, dilution path, " +
-            "cash vs market cap, milestones and going-concern status. Trigger (house rule): TTM revenue < " +
+            "Valuation section replaced by runway framing: cash runway, quarterly burn trend and the dilution path " +
+            "(computed). Cash against market cap, milestones and going-concern status are NOT computed and are left " +
+            "to the narrative, labelled as such. Trigger (house rule): TTM revenue < " +
             `$${PRE_REVENUE_TTM_REVENUE_FLOOR_USD.toLocaleString("en-US")}.`,
         },
         {
@@ -1368,8 +1444,9 @@ export function degradationPlan(
           action: "replace",
           replacement: "runway-burn-dilution",
           disclosure:
-            "Headline metric box replaced with: cash runway, burn trend, dilution rate, cash vs market cap, " +
-            "EV/S (if revenue), going-concern status.",
+            "Headline metric box replaced with: cash runway, burn trend and dilution rate (computed), and EV/S " +
+            "where revenue exists. Cash against market cap and going-concern status are NOT computed and are left " +
+            "to the narrative.",
         },
         {
           target: "forensics.piotroskiBeneish",
@@ -1415,7 +1492,7 @@ export function degradationPlan(
 // computeRunway — cash + STI over average quarterly burn (+ dilution context)
 // ---------------------------------------------------------------------------
 
-/** Latest balance-sheet row (FMP field names, the provider data contract §2.3). */
+/** Latest balance-sheet row (FMP field names). */
 export interface RunwayBalanceInput {
   /** Fiscal period end (as-of date of the liquidity figure). */
   date: string;
@@ -1484,7 +1561,7 @@ export function computeRunway(
 
   notes.push(
     "burn = -(operatingCashFlow + capitalExpenditure) per quarter; FMP capitalExpenditure is negative, " +
-      `so the sum is FCF (the sector-routing methodology §5). Averaged over the last <= ${BURN_WINDOW_MAX_QUARTERS} ` +
+      `so the sum is FCF (house rule). Averaged over the last <= ${BURN_WINDOW_MAX_QUARTERS} ` +
       `usable quarters (house rule); quarter length = ${DAYS_PER_QUARTER} days (365.25/4).`,
   );
   notes.push(

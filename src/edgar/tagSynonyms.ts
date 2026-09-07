@@ -41,9 +41,17 @@ export interface TagSynonymEntry {
 const entry = (tags: readonly string[], standIns?: readonly TagStandIn[]): TagSynonymEntry =>
   standIns === undefined ? { tags } : { tags, standIns };
 
+/**
+ * `Revenues` first: it is the taxonomy's total-revenue element, and the
+ * ASC-606 elements are the performance-obligation subset of it. A filer that
+ * tags both for one period reports the total on the face of its income
+ * statement, and that is what the vendor's `revenue` carries. Resolution is
+ * period-scoped, so a filer whose `Revenues` stops in an old year still
+ * resolves the ASC-606 tag for every later period (see xbrl.ts).
+ */
 export const REVENUE_TAGS: readonly string[] = [
-  "RevenueFromContractWithCustomerExcludingAssessedTax",
   "Revenues",
+  "RevenueFromContractWithCustomerExcludingAssessedTax",
   "SalesRevenueNet",
   "RevenueFromContractWithCustomerIncludingAssessedTax",
   "RevenuesNetOfInterestExpense",
@@ -289,6 +297,13 @@ export const LINE_ITEM_TAGS = {
   commonStockIssuance: entry(["ProceedsFromIssuanceOfCommonStock"]),
   commonStockRepurchased: entry(["PaymentsForRepurchaseOfCommonStock"]),
   netDividendsPaid: entry(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]),
+  /**
+   * Common dividends have their own element; when only the total is tagged
+   * the statements builder nets the preferred element out of it, and only
+   * when no preferred element is filed either does the total stand in
+   * (disclosed) — see COMMON_DIVIDENDS_SPEC in statements.ts.
+   */
+  commonDividendsPaid: entry(["PaymentsOfDividendsCommonStock"]),
   preferredDividendsPaid: entry(["PaymentsOfDividendsPreferredStockAndPreferenceStock"]),
   incomeTaxesPaid: entry(["IncomeTaxesPaidNet", "IncomeTaxesPaid"]),
   interestPaid: entry(["InterestPaidNet", "InterestPaid"]),

@@ -239,6 +239,8 @@ export function discoverStockSplits(facts: CompanyFacts): StockSplits {
 
   const events: SplitEvent[] = [];
   const notes: SplitNote[] = [];
+  /** The most recent context date each tagged ratio appeared with. */
+  const lastTaggedAt = new Map<string | number, string>();
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i] as Candidate;
     const date = candidate.date;
@@ -262,13 +264,33 @@ export function discoverStockSplits(facts: CompanyFacts): StockSplits {
     }
 
     const evidence = restatementFactor(shares, date, previous, next);
-    const repeatOf = events.find((e) => e.tagged === tagged && daysBetween(e.date, date) <= REPEAT_TAG_WINDOW_DAYS);
+    // A repeat is measured from the LAST time this ratio was tagged, applied
+    // or not: a filer that keeps re-tagging its split in every later filing
+    // would otherwise walk out of the window and have the same split applied
+    // a second time, compounding every earlier share count.
+    const lastTagged = lastTaggedAt.get(tagged);
+    const priorEvent = events.find((e) => e.tagged === tagged);
+    const repeatOf =
+      priorEvent !== undefined && lastTagged !== undefined && daysBetween(lastTagged, date) <= REPEAT_TAG_WINDOW_DAYS
+        ? priorEvent
+        : undefined;
+    lastTaggedAt.set(tagged, date);
     const repeatNote = (of: SplitEvent): string =>
       `stock split ratio ${formatRatio(tagged)} tagged again for ${where} is the ${describeSplitRatio(of.ratio)} split of ${of.date} restated, not a further split; not applied again`;
 
     if (evidence === null) {
       if (repeatOf !== undefined) {
         info(repeatNote(repeatOf));
+        continue;
+      }
+      if (priorEvent !== undefined) {
+        // The same ratio again, long after the last tag, with no restated
+        // share count on either side of it: a further split and a stale
+        // re-tag of the earlier one look identical here, and applying the
+        // wrong one rescales every earlier per-share figure.
+        warn(
+          `stock split ratio ${formatRatio(tagged)} tagged for ${where} NOT applied: the same ratio was already applied for ${priorEvent.date} and no share count was restated across ${date} to show whether this is a further split or a re-tag of that one; ${LEFT_AS_FILED}`,
+        );
         continue;
       }
       events.push({ date, ratio: tagged, tagged, evidence: null });

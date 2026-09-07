@@ -25,8 +25,11 @@ import {
 import {
   buildDcfAssumptions,
   runDcf,
+  valueCompany,
+  type DcfAssumptionInputs,
   type DcfAssumptions,
   type DcfResult,
+  type MultiplesFrameworkInputs,
   type ValuationResult,
 } from "@/pipeline/stageB/valuation";
 import type { CompanyRouteResult } from "@/pipeline/stageB/sectorRouting";
@@ -94,10 +97,6 @@ function makeInputs(over: Partial<ScenarioTargetsInputs> = {}): ScenarioTargetsI
     route: route(),
     valuation: dcfValuation(),
     waccPct: 9,
-    netDebt: -100,
-    dilutedShares: 100,
-    minorityInterest: null,
-    preferred: null,
     incomeHistory: INCOME_HISTORY,
     currentPrice: 120,
     currency: "USD",
@@ -208,7 +207,7 @@ describe("scenarioTargets — suppressed (never fabricate)", () => {
 
   it("suppresses when the base DCF per-share is unavailable (e.g. net debt / shares missing)", () => {
     const noBridge = dcfValuation({ dcf: { ...buildDcf().dcf, perShare: null, equityValue: null } });
-    const r = computeScenarioTargets(makeInputs({ valuation: noBridge, netDebt: null }));
+    const r = computeScenarioTargets(makeInputs({ valuation: noBridge }));
     expect(r.status).toBe("suppressed");
     expect(r.targets).toEqual([]);
   });
@@ -218,9 +217,9 @@ describe("scenarioTargets — suppressed (never fabricate)", () => {
  * Regression: ordering / floor / degeneracy invariants (2026-07-20 audit).
  * ------------------------------------------------------------------------ */
 
-// A DCF whose base per-share is the SAME netDebt as the scenario re-runs, so the
-// base target is consistent with the perturbed extremes (production always passes
-// one net-debt figure to both). Used to force a heavily-levered bear bridge.
+// A DCF built on a chosen net debt. The scenario re-runs read the bridge from
+// the result itself (DcfResult.bridge), so base and the perturbed extremes are
+// always on one bridge. Used to force a heavily-levered bear bridge.
 function buildDcfWithNetDebt(netDebt: number): { assumptions: DcfAssumptions; dcf: DcfResult } {
   const built = buildDcfAssumptions({
     revenueCagr3yPct: 12,
@@ -300,7 +299,7 @@ describe("scenarioTargets — ordering / floor / degeneracy invariants", () => {
       multiples: { multiples: [], enterpriseValue: { value: null, excludingLeases: null, includingLeases: null, leaseLiability: null, includeLeases: false, basis: "test" }, sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
       notes: [], gaps: [],
     };
-    const r = computeScenarioTargets(makeInputs({ valuation, netDebt: 4200 }));
+    const r = computeScenarioTargets(makeInputs({ valuation }));
     expect(r.status).toBe("available");
 
     const bear = targetFor(r, "bear");
@@ -329,7 +328,7 @@ describe("scenarioTargets — ordering / floor / degeneracy invariants", () => {
       multiples: { multiples: [], enterpriseValue: { value: null, excludingLeases: null, includingLeases: null, leaseLiability: null, includeLeases: false, basis: "test" }, sectorAppropriate: [], asOf: { quote: null, statements: null }, notes: [], gaps: [] },
       notes: [], gaps: [],
     };
-    const r = computeScenarioTargets(makeInputs({ valuation, netDebt: 4600 }));
+    const r = computeScenarioTargets(makeInputs({ valuation }));
     expect(r.status).toBe("suppressed");
     expect(r.targets).toEqual([]);
     expect(
@@ -354,3 +353,78 @@ describe("scenarioTargets — ordering / floor / degeneracy invariants", () => {
 });
 
 const round2 = (v: number): number => Math.round(v * 100) / 100;
+
+/* ------------------------------------------------------------------------ *
+ * Audit 2026-09-06: one bridge for base, bull and bear. valueCompany removes
+ * the operating-lease liability from net debt before bridging the base
+ * per-share; the scenario re-runs used to bridge on the RAW figure compute.ts
+ * holds, and published a bull target below base for every lease-heavy issuer.
+ * ------------------------------------------------------------------------ */
+
+describe("scenarioTargets — the perturbed runs use the base DCF's own bridge", () => {
+  const dcfInputs: DcfAssumptionInputs = {
+    revenueCagr3yPct: 12,
+    revenueCagr5yPct: 12,
+    analystEstimates: null,
+    waccPct: 9,
+    riskFreePct: 4,
+    incomeTtm: { date: "2025-12-31", revenue: 1000, operatingIncome: 300, incomeBeforeTax: 280, incomeTaxExpense: 60 },
+    incomeHistory: INCOME_HISTORY.map((r) => ({
+      date: r.date,
+      revenue: r.revenue,
+      operatingIncome: r.ebit,
+      incomeBeforeTax: (r.ebit ?? 0) - 20,
+      incomeTaxExpense: ((r.ebit ?? 0) - 20) * 0.21,
+    })),
+    balance: { date: "2025-12-31", basis: "annual", totalDebt: 200, totalStockholdersEquity: 800, cashAndShortTermInvestments: 300 },
+    marketCap: 5000,
+  };
+  const multiples: MultiplesFrameworkInputs = {
+    quote: { price: 100, marketCap: 10_000, currency: "USD" },
+    reportedCurrency: "USD",
+    incomeTtm: { date: "2025-12-31", revenue: 1000, operatingIncome: 300, depreciationAndAmortization: 50, netIncome: 214, epsDiluted: 2.1 },
+    cashFlowTtm: { date: "2025-12-31", operatingCashFlow: 260, capitalExpenditure: -40, depreciationAndAmortization: 50 },
+    balance: {
+      date: "2025-12-31",
+      totalDebt: 700,
+      cashAndShortTermInvestments: 250,
+      totalStockholdersEquity: 800,
+      goodwill: 0,
+      intangibleAssets: 0,
+      minorityInterest: 0,
+      preferredStock: 0,
+      capitalLeaseObligations: 250,
+      operatingLeaseLiability: 250,
+    },
+  };
+
+  it("re-runs bull and bear on the lease-adjusted bridge the base per-share used, so bull is never below base", () => {
+    const valuation = valueCompany(route(), {
+      currentPrice: 100,
+      waccPct: 9,
+      netDebt: 450,
+      dilutedShares: 100,
+      operatingLeaseLiability: 250,
+      includeLeasesInEv: false,
+      dcfInputs,
+      multiples,
+      excessReturn: null,
+      reit: null,
+    });
+    expect(valuation.kind).toBe("dcf");
+    const dcf = (valuation as Extract<ValuationResult, { kind: "dcf" }>).dcf!;
+    // The base bridge removed the operating-lease liability: 450 − 250.
+    expect(dcf.bridge.netDebt).toBe(200);
+    expect(dcf.bridge.dilutedShares).toBe(100);
+
+    const r = computeScenarioTargets(makeInputs({ valuation }));
+    expect(r.status).toBe("available");
+    const bull = targetFor(r, "bull").perShare!.value;
+    const base = targetFor(r, "base").perShare!.value;
+    const bear = targetFor(r, "bear").perShare!.value;
+    expect(base).toBeCloseTo(round2(dcf.perShare!), 6);
+    expect(bull).toBeGreaterThanOrEqual(base);
+    expect(base).toBeGreaterThanOrEqual(bear);
+    expect(r.missingReasons.some((g) => g.field === "valuation.scenarioTargets.ordering")).toBe(false);
+  });
+});

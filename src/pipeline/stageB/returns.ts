@@ -2,8 +2,8 @@
  * Stage B — Returns: WACC build, ROIC series, DuPont decomposition,
  * ROIC-vs-WACC spread.
  *
- * Pure, deterministic TypeScript: no network, no DB, no LLM (the application contract §4).
- * WACC methodology per the valuation methodology §1 (Damodaran-standard):
+ * Pure, deterministic TypeScript: no network, no DB, no LLM.
+ * WACC methodology per docs/METHODOLOGY.md "WACC inputs" (Damodaran-standard):
  * - Re = rf (FRED DGS10) + Blume beta (0.67·raw + 0.33, clamped [0.6, 2.0]) × ERP
  *   (FMP market-risk-premium, dated Damodaran US implied-ERP fallback);
  *   Re clamped [rf + 2.5, 25].
@@ -23,13 +23,15 @@
  */
 
 import type { ManifestEntry } from "@/types/core";
-import { isFiniteNumber, sortNewestFirst } from "@/pipeline/stageB/growth";
+import { BLUME_MARKET_WEIGHT, BLUME_RAW_WEIGHT } from "@/pipeline/stageB/betaEstimate";
+import { isFiniteNumber } from "@/pipeline/stageB/growth";
 import { resolveNetDebt } from "@/pipeline/stageB/netDebt";
+import { normalizeQuarterRows } from "@/pipeline/stageB/quarterWindows";
 
 // ---------------------------------------------------------------------------
 // SPREADS_2026_01 — Damodaran synthetic-rating spread table (verbatim)
 // Source: pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/ratings.html
-// "Date of Analysis: January 2026" — fetched 2026-07-05 (the valuation methodology §1.4).
+// "Date of Analysis: January 2026" — fetched 2026-07-05 (docs/METHODOLOGY.md "WACC inputs").
 // ---------------------------------------------------------------------------
 
 export interface RatingSpreadBand {
@@ -109,7 +111,7 @@ export function lookupSyntheticSpread(
 }
 
 // ---------------------------------------------------------------------------
-// WACC constants (house rules per the valuation methodology §1)
+// WACC constants (house rules per docs/METHODOLOGY.md "WACC inputs")
 // ---------------------------------------------------------------------------
 
 /** Latest reviewed Damodaran US implied ERP fallback. Update value and date together. */
@@ -123,9 +125,14 @@ export const ERP_FALLBACK_PCT = ERP_FALLBACK.pct;
 export const ERP_FALLBACK_MAX_AGE_DAYS = 210;
 /** ERP plausibility band (percent) outside which the fallback is used. */
 export const ERP_PLAUSIBLE_PCT: readonly [number, number] = [3, 25];
-/** Blume adjustment toward 1: beta_adj = 0.67·raw + 0.33. */
-export const BLUME_RAW_WEIGHT = 0.67;
-export const BLUME_MEAN_WEIGHT = 0.33;
+/**
+ * Blume adjustment toward 1: beta_adj = 2/3·raw + 1/3 — ONE set of constants
+ * for the whole codebase, owned by betaEstimate.ts (RESEARCH §7.1). The WACC
+ * used to carry its own rounded 0.67/0.33 pair, so a keyless report printed
+ * two unequal "Blume-adjusted" betas for one raw slope.
+ */
+export { BLUME_RAW_WEIGHT };
+export const BLUME_MEAN_WEIGHT = BLUME_MARKET_WEIGHT;
 export const BETA_CLAMP: readonly [number, number] = [0.6, 2.0];
 /** Raw beta outside (0, 4] is treated as unusable; WACC fails closed. */
 export const BETA_RAW_MAX = 4;
@@ -173,6 +180,19 @@ export interface WaccInputs {
   priorYearCostOfDebt?: PriorYearCostOfDebt | null;
   /** Average of the latest two totalDebt balances (currency units). */
   totalDebtAvg: number | null;
+  /**
+   * What `totalDebtAvg` is an average OF — which balance sheets, and whether
+   * the operating-lease liability was removed — for the notes and the
+   * disclosure block. Null keeps the default label.
+   */
+  totalDebtBasis?: string | null;
+  /**
+   * Statement basis of the CURRENT `interestExpenseTtm` / `ebitTtm` pair as the
+   * caller supplied it ("TTM", or "FY 2025-12-31 annual statement" when the
+   * trailing figures were unavailable and the annual ones stand in). Printed
+   * in the synthetic-rating note instead of assuming "TTM".
+   */
+  currentCoverageBasis?: string | null;
   /** Raw invalid observation, kept separate so it cannot be hidden by averaging. */
   negativeTotalDebtObservation?: number | null;
   /** Current market cap (currency units) — market-value equity weight. */
@@ -282,6 +302,8 @@ export interface WaccResult {
   erpAsOf: string | null;
   /** Where the tax rate came from (input passthrough). */
   taxRateBasis: string | null;
+  /** What the debt weight and the effective cost of debt divided by (input passthrough). */
+  debtBasis: string | null;
 }
 
 function fmt(n: number): string {
@@ -320,7 +342,9 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
     });
   } else {
     betaAdjusted = BLUME_RAW_WEIGHT * betaRaw + BLUME_MEAN_WEIGHT;
-    notes.push(`Blume adjustment: beta_adj = ${BLUME_RAW_WEIGHT}·raw + ${BLUME_MEAN_WEIGHT}`);
+    notes.push(
+      `Blume adjustment: beta_adj = ${BLUME_RAW_WEIGHT.toFixed(3)}·raw + ${BLUME_MEAN_WEIGHT.toFixed(3)} (the Bloomberg 2/3–1/3 weighting, research §7.1)`,
+    );
     betaFinal = betaAdjusted;
     if (betaFinal < BETA_CLAMP[0]) {
       clampsApplied.push(`beta clamped ${fmt(betaFinal)} → ${BETA_CLAMP[0]} (floor)`);
@@ -419,6 +443,7 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
     erpSource,
     erpAsOf,
     taxRateBasis: taxRateUsed === null ? null : (inputs.effectiveTaxRateBasis ?? null),
+    debtBasis: inputs.totalDebtBasis ?? null,
   };
 
   // --- Risk-free rate is load-bearing ------------------------------------------
@@ -547,13 +572,28 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
     notes.push("no debt (totalDebtAvg = 0) — WACC = cost of equity");
   }
 
+  // Every financial route — bank, insurer and mortgage REIT — is valued on the
+  // cost of equity alone (the excess-return and price-to-book models), and none
+  // of them consumes the WACC's debt leg. A WACC-only shortfall there (tax
+  // shield, E/D weights, the ADR currency guard, the cost of debt) is disclosed
+  // at WARN rather than CRITICAL, because buildDataCompleteness reports state
+  // "blocked" on any critical gap and would block a bank's report over a figure
+  // nothing downstream reads. Non-financials keep CRITICAL: their DCF discount
+  // rate depends on each of these.
+  const financialRoute = inputs.isFinancial === true;
+  const financialSuffix =
+    "; the financial route does not consume a WACC (its valuation is costed on equity alone), so this is disclosed rather than blocking";
+  const waccGapSeverity = financialRoute ? "warn" : "critical";
+
   if (taxRateUsed === null) {
     if (hasDebt) {
       notes.push("effective tax rate unavailable — debt tax shield and WACC are unavailable");
       gaps.push({
         field: "returns.wacc.effectiveTaxRate",
-        reason: "effective tax rate missing with debt outstanding — after-tax debt cost cannot be computed without inventing a tax shield",
-        severity: "critical",
+        reason:
+          "effective tax rate missing with debt outstanding — after-tax debt cost cannot be computed without inventing a tax shield" +
+          (financialRoute ? financialSuffix : ""),
+        severity: waccGapSeverity,
       });
     } else if (debtAvg !== null) {
       notes.push("effective tax rate unavailable but immaterial to debt-free WACC");
@@ -602,20 +642,10 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
             ? "interest expense = 0 treated as undisclosed (FMP zero-for-undisclosed policy) — cost of debt and WACC unavailable"
             : "interest expense missing with debt outstanding — cost of debt and WACC unavailable",
       );
-      // Every financial route — bank, insurer and mortgage REIT — is valued on
-      // the cost of equity alone (the excess-return and price-to-book models),
-      // and none of them consumes a WACC cost of debt, so a missing one costs
-      // them no output. Filing this as CRITICAL there would make
-      // buildDataCompleteness (report/completeness.ts) report state "blocked"
-      // over a figure nothing downstream consumes.
-      //
-      // This downgrade applies on KEYED plans too, not only keyless ones: a
-      // vendor failure to supply interest expense for a bank now yields a warn
-      // rather than blocking the report. That is deliberate — the severity
-      // tracks what the route consumes, not which provider served it.
-      // Non-financials keep the critical severity: their DCF discount rate does
-      // depend on it.
-      const financialRoute = inputs.isFinancial === true;
+      // The severity switch above applies on KEYED plans too, not only keyless
+      // ones: a vendor failure to supply interest expense for a bank yields a
+      // warn rather than blocking the report. That is deliberate — the
+      // severity tracks what the route consumes, not which provider served it.
       const interestGapReason = intExpNegative
         ? `interest expense negative (${fmt(intExpRaw)}) with debt outstanding — implausible sign; cost of debt cannot be inferred`
         : intExpRaw === 0
@@ -626,7 +656,7 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
         reason: financialRoute
           ? `${interestGapReason}; the financial route does not consume a cost of debt (its valuation is costed on equity alone), so this is disclosed rather than blocking`
           : interestGapReason,
-        severity: financialRoute ? "warn" : "critical",
+        severity: waccGapSeverity,
       });
     }
 
@@ -635,11 +665,16 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
       isFiniteNumber(inputs.totalAssets) &&
       inputs.totalAssets > 0 &&
       debtAvg < DE_MINIMIS_DEBT_TO_ASSETS * inputs.totalAssets;
-    if (deMinimis) {
-      notes.push(
-        `debt < ${DE_MINIMIS_DEBT_TO_ASSETS * 100}% of total assets — effective Rd treated as noise, synthetic rating used`,
-      );
-    }
+    // The de-minimis note is written AFTER the synthetic path has run, so it
+    // states the method that actually ran: "synthetic rating used" was pushed
+    // unconditionally and reached the report beside "cost of debt unavailable".
+    const deMinimisNote = (outcome: string): void => {
+      if (deMinimis) {
+        notes.push(
+          `debt < ${DE_MINIMIS_DEBT_TO_ASSETS * 100}% of total assets — effective Rd treated as noise; ${outcome}`,
+        );
+      }
+    };
 
     const rdEffective =
       intExp !== null && intExp > 0
@@ -668,14 +703,20 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
       // is internally consistent — and today's rf carries the current-rate
       // information the historical coupon lacks (Damodaran: the cost of debt
       // is the marginal rate, which a synthetic rating prices off today's rf).
+      // The current pair's label is whatever the caller says it is: compute.ts
+      // substitutes the latest annual statement when the trailing figures are
+      // unavailable, and a note that said "on TTM" for an annual pair asserted
+      // a basis that was not used.
+      const currentBasis = inputs.currentCoverageBasis ?? "TTM";
       const coverageBasis =
         intExp !== null && intExp > 0
-          ? { interest: intExp, ebit: inputs.ebitTtm, label: "TTM" }
+          ? { interest: intExp, ebit: inputs.ebitTtm, label: currentBasis }
           : priorUsable && isFiniteNumber(prior.ebit) && prior.interestExpense > 0
             ? { interest: prior.interestExpense, ebit: prior.ebit, label: `FY ${prior.fiscalYearEnd} (latest fiscal year with disclosed interest expense)` }
             : null;
       if (coverageBasis === null) {
         costOfDebtMethod = "unavailable";
+        deMinimisNote("no synthetic rating computable (no positive interest expense to score coverage on)");
       } else if (isFiniteNumber(coverageBasis.ebit)) {
         interestCoverageRatio = coverageBasis.ebit / coverageBasis.interest;
         const band = lookupSyntheticSpread(interestCoverageRatio, variant);
@@ -683,6 +724,7 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
         costOfDebtMethod = "synthetic";
         syntheticRating = band.rating;
         syntheticSpreadPct = band.spreadPct;
+        deMinimisNote("synthetic rating used");
         notes.push(
           `synthetic rating ${band.rating} from ICR ${fmt(interestCoverageRatio)} on ${coverageBasis.label} (${variant} table, SPREADS_2026_01 ${SPREADS_2026_01.dateOfAnalysis}) — Rd = rf + ${fmt(band.spreadPct)}%`,
         );
@@ -696,10 +738,13 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
         // basis for either accepting or synthetically replacing the rate.
         gaps.push({
           field: "returns.wacc.costOfDebt",
-          reason: "effective cost of debt outside the acceptance band and ebitTtm missing — synthetic rating unavailable",
-          severity: "critical",
+          reason:
+            "effective cost of debt outside the acceptance band and ebitTtm missing — synthetic rating unavailable" +
+            (financialRoute ? financialSuffix : ""),
+          severity: waccGapSeverity,
         });
         costOfDebtMethod = "unavailable";
+        deMinimisNote("no synthetic rating computable (EBIT unavailable for the coverage ratio)");
       }
     }
   }
@@ -717,8 +762,10 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
   } else if (mcap === null) {
     gaps.push({
       field: "returns.wacc.weights",
-      reason: "market cap missing with debt outstanding — E/D weights not computable",
-      severity: "critical",
+      reason:
+        "market cap missing with debt outstanding — E/D weights not computable" +
+        (financialRoute ? financialSuffix : ""),
+      severity: waccGapSeverity,
     });
     return {
       ...base,
@@ -752,8 +799,9 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
       field: "returns.wacc.weights.currency",
       reason:
         `reportedCurrency ${inputs.reportedCurrency} != quote currency ${inputs.quoteCurrency} (ADR case) — ` +
-        "market-value equity weight needs FX conversion (pending); WACC suppressed rather than mixing currencies",
-      severity: "critical",
+        "market-value equity weight needs FX conversion (pending); WACC suppressed rather than mixing currencies" +
+        (financialRoute ? financialSuffix : ""),
+      severity: waccGapSeverity,
     });
     return {
       ...base,
@@ -771,7 +819,9 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
   } else {
     weightEquity = mcap / (mcap + debtAvg);
     weightDebt = debtAvg / (mcap + debtAvg);
-    notes.push("debt weight uses book totalDebt (avg of latest two periods) as market-value proxy");
+    notes.push(
+      `debt weight uses ${inputs.totalDebtBasis ?? "book totalDebt (avg of latest two periods)"} as market-value proxy`,
+    );
   }
 
   if (weightDebt > 0 && (costOfDebtPct === null || taxRateUsed === null)) {
@@ -861,7 +911,7 @@ export interface WaccDisclosure {
   summary: string;
 }
 
-const BETA_METHOD_LABEL = `Blume-adjusted (${BLUME_RAW_WEIGHT}·raw + ${BLUME_MEAN_WEIGHT}), clamped [${BETA_CLAMP[0]}, ${BETA_CLAMP[1]}]`;
+const BETA_METHOD_LABEL = `Blume-adjusted (${BLUME_RAW_WEIGHT.toFixed(3)}·raw + ${BLUME_MEAN_WEIGHT.toFixed(3)}), clamped [${BETA_CLAMP[0]}, ${BETA_CLAMP[1]}]`;
 const WEIGHTS_BASIS_LABEL =
   "market-value weights: equity = current market capitalization, debt = book totalDebt (average of the latest two balance sheets) as the market-value proxy";
 
@@ -890,12 +940,16 @@ export function waccDisclosure(result: WaccResult): WaccDisclosure {
       : result.costOfDebtPct === null
         ? `cost of debt unavailable (${result.costOfDebtMethod})`
         : `pre-tax cost of debt ${fmt(result.costOfDebtPct)}% (${result.costOfDebtMethod}${result.syntheticRating ? `, synthetic rating ${result.syntheticRating}` : ""})`;
+  const weightsBasis =
+    result.debtBasis === null
+      ? WEIGHTS_BASIS_LABEL
+      : `market-value weights: equity = current market capitalization, debt = ${result.debtBasis} as the market-value proxy`;
   const summary =
     `WACC ${pctOrNa(result.waccPct)}: risk-free ${pctOrNa(result.riskFreePct)} (${result.riskFreeSeriesId ?? "series not stated"}` +
     `${rfAsOf ? `, observation ${rfAsOf}` : ""}); ERP ${pctOrNa(result.erpPct)} (${erpSourceLabel ?? "unavailable"}` +
     `${result.erpAsOf ? `, as of ${result.erpAsOf}` : ""}); beta ${result.betaFinal === null ? "n/a" : fmt(result.betaFinal)}` +
     ` (${BETA_METHOD_LABEL}${result.betaRaw !== null ? `, raw ${fmt(result.betaRaw)}` : ""}); cost of equity ${pctOrNa(result.costOfEquityPct)}; ` +
-    `${rdText}; ${taxText}; ${weightsText} (${WEIGHTS_BASIS_LABEL})`;
+    `${rdText}; ${taxText}; ${weightsText} (${weightsBasis})`;
   return {
     waccPct: result.waccPct,
     riskFree: { pct: result.riskFreePct, seriesId: result.riskFreeSeriesId, asOf: rfAsOf },
@@ -904,7 +958,7 @@ export function waccDisclosure(result: WaccResult): WaccDisclosure {
     costOfEquityPct: result.costOfEquityPct,
     costOfDebt: { pct: result.costOfDebtPct, method: result.costOfDebtMethod, syntheticRating: result.syntheticRating },
     taxRate: { fraction: result.taxRateUsed, basis: result.taxRateBasis },
-    weights: { equity: result.weightEquity, debt: result.weightDebt, basis: WEIGHTS_BASIS_LABEL },
+    weights: { equity: result.weightEquity, debt: result.weightDebt, basis: weightsBasis },
     summary,
   };
 }
@@ -1062,12 +1116,26 @@ export interface ReturnsIncomeRow {
   incomeBeforeTax?: number | null;
   incomeTaxExpense?: number | null;
   netIncome?: number | null;
+  /** Restatement recency: without these a duplicated fiscal period is ambiguous and rejected wholesale. */
+  acceptedDate?: string | null;
+  filingDate?: string | null;
 }
 
 export interface ReturnsBalanceRow {
   /** Fiscal period end, ISO yyyy-mm-dd. */
   date: string;
+  /** Restatement recency (see ReturnsIncomeRow). */
+  acceptedDate?: string | null;
+  filingDate?: string | null;
   totalDebt?: number | null;
+  /**
+   * The operating-lease slice of `totalDebt`, where the balance sheet discloses
+   * it (the EDGAR route resolves it; FMP publishes no split). Invested capital
+   * removes it by default — NOPAT is after operating-lease cost under ASC 842,
+   * so the liability is capital the numerator earns nothing on — matching the
+   * EV bridge (METHODOLOGY "EV bridge").
+   */
+  operatingLeaseLiability?: number | null;
   totalStockholdersEquity?: number | null;
   cashAndCashEquivalents?: number | null;
   /** Tangible common equity components (bank profitability; see computeRote). */
@@ -1160,7 +1228,11 @@ function yearTaxRate(row: ReturnsIncomeRow, notes: string[]): number | null {
  * sales-to-capital and the valuation equity bridge netted cash + short-term
  * investments. One company, two invested-capital definitions.
  */
-function investedCapital(b: ReturnsBalanceRow, notes: string[]): number | null {
+function investedCapital(
+  b: ReturnsBalanceRow,
+  notes: string[],
+  includeOperatingLeases: boolean,
+): number | null {
   if (!isFiniteNumber(b.totalStockholdersEquity)) {
     notes.push(`totalStockholdersEquity missing on ${b.date} — invested capital uncomputable`);
     return null;
@@ -1174,9 +1246,34 @@ function investedCapital(b: ReturnsBalanceRow, notes: string[]): number | null {
     return null;
   }
 
+  // Lease basis. Under ASC 842 operating-lease cost stays in operating
+  // expenses, so NOPAT is already after it; the operating-lease liability the
+  // provider folds into totalDebt is capital the numerator earns nothing on,
+  // and keeping it understated ROIC for every lease-heavy issuer (a discount
+  // retailer: 6% on a lease-inclusive base, 11% on the consistent one). The EV
+  // bridge removes the same slice by default and the finance-lease liability
+  // stays, as it does there.
+  let debt = b.totalDebt;
+  const operatingLease =
+    isFiniteNumber(b.operatingLeaseLiability) && b.operatingLeaseLiability > 0
+      ? b.operatingLeaseLiability
+      : null;
+  if (operatingLease !== null && !includeOperatingLeases) {
+    if (operatingLease <= b.totalDebt) {
+      debt = b.totalDebt - operatingLease;
+      notes.push(
+        `${b.date}: operating-lease liability ${fmt(operatingLease)} excluded from invested capital (NOPAT is after operating-lease cost under ASC 842; the EV bridge applies the same rule)`,
+      );
+    } else {
+      notes.push(
+        `${b.date}: operating-lease liability ${fmt(operatingLease)} exceeds totalDebt ${fmt(b.totalDebt)} — inconsistent lease data; totalDebt used unadjusted`,
+      );
+    }
+  }
+
   const resolution = resolveNetDebt({
     date: b.date,
-    totalDebt: b.totalDebt,
+    totalDebt: debt,
     cashAndCashEquivalents: b.cashAndCashEquivalents ?? null,
     shortTermInvestments: b.shortTermInvestments ?? null,
     cashAndShortTermInvestments: b.cashAndShortTermInvestments ?? null,
@@ -1210,7 +1307,49 @@ function investedCapital(b: ReturnsBalanceRow, notes: string[]): number | null {
     `short-term investments unreported on ${b.date} — invested capital nets cash only ` +
       "(narrower than the house cash + short-term-investments basis)",
   );
-  return b.totalDebt + b.totalStockholdersEquity - b.cashAndCashEquivalents;
+  return debt + b.totalStockholdersEquity - b.cashAndCashEquivalents;
+}
+
+/**
+ * Collapse restated/duplicate fiscal periods before any series is built — the
+ * house rule computeGrowth applies (whole row, provably-latest filing wins,
+ * ambiguous duplicates rejected outright). Left in place, a fiscal year the
+ * vendor returns twice (an original and its restatement) entered the ROIC,
+ * ROTE and DuPont series twice — the duplicate on a single-period base — and
+ * the balance lookup could land on the superseded copy. Returns newest first.
+ */
+function normalizeAnnualRows<T extends { date: string }>(
+  rows: readonly T[],
+  statement: "income" | "balance",
+  metric: string,
+  notes: string[],
+  gaps: ManifestEntry[],
+): T[] {
+  const norm = normalizeQuarterRows(rows);
+  for (const { period, reason } of norm.rejected) {
+    gaps.push({
+      field: `returns.${metric}.${statement}.period`,
+      reason: `annual ${statement} period ${period} dropped: ${reason}`,
+      severity: "warn",
+    });
+  }
+  const collapsed = rows.length - norm.rows.length - norm.rejected.length;
+  if (collapsed > 0) {
+    notes.push(
+      `${collapsed} restated/duplicate annual ${statement} period${collapsed === 1 ? "" : "s"} collapsed to the latest filing`,
+    );
+  }
+  return norm.rows;
+}
+
+export interface RoicOptions {
+  /**
+   * Keep the operating-lease liability inside invested capital
+   * (THESIS_EV_INCLUDE_LEASES=1), so ROIC and the EV bridge share one lease
+   * basis whichever way the option is set. Default false: the slice is
+   * removed where the balance sheet discloses it.
+   */
+  includeOperatingLeases?: boolean;
 }
 
 /** One fiscal year of return on tangible common equity. */
@@ -1270,8 +1409,8 @@ export function computeRote(
 ): RoteResult {
   const notes: string[] = [];
   const gaps: ManifestEntry[] = [];
-  const inc = sortNewestFirst(income);
-  const bal = sortNewestFirst(balance);
+  const inc = normalizeAnnualRows(income, "income", "rote", notes, gaps);
+  const bal = normalizeAnnualRows(balance, "balance", "rote", notes, gaps);
   const series: RoteYear[] = [];
 
   // Driven off the INCOME rows with the same ±tolerance period match ROIC and
@@ -1296,10 +1435,16 @@ export function computeRote(
     // preferred is present but its dividend is unavailable, rather than
     // silently returning the unadjusted ratio.
     const niTotal = isFiniteNumber(row.netIncome) ? row.netIncome : null;
-    const prefDiv = isFiniteNumber(row.preferredDividendsPaid)
+    const prefDivRaw = isFiniteNumber(row.preferredDividendsPaid)
       ? Math.abs(row.preferredDividendsPaid)
       : null;
     const hasPreferred = isFiniteNumber(cur.preferredStock) && cur.preferredStock > 0;
+    // A vendor 0 beside OUTSTANDING preferred is the zero-for-undisclosed
+    // placeholder (the convention interestExpense already gets), not a coupon
+    // of nothing: preferred that is outstanding pays. Treating it as disclosed
+    // credited the whole preferred coupon to common on exactly the issuers
+    // (banks) this metric exists for.
+    const prefDiv = prefDivRaw === 0 && hasPreferred ? null : prefDivRaw;
     let ni: number | null;
     if (niTotal === null) {
       ni = null;
@@ -1308,7 +1453,9 @@ export function computeRote(
     } else if (hasPreferred) {
       ni = null;
       notes.push(
-        `${row.date}: preferred stock is outstanding but preferred dividends are unavailable — ROTE withheld rather than crediting preferred earnings to common`,
+        `${row.date}: preferred stock is outstanding but preferred dividends are ${
+          prefDivRaw === 0 ? "reported as 0 (treated as undisclosed — vendor zero-for-undisclosed)" : "unavailable"
+        } — ROTE withheld rather than crediting preferred earnings to common`,
       );
     } else {
       ni = niTotal;
@@ -1363,11 +1510,13 @@ export function computeRote(
 export function computeRoic(
   income: ReadonlyArray<ReturnsIncomeRow>,
   balance: ReadonlyArray<ReturnsBalanceRow>,
+  options: RoicOptions = {},
 ): RoicResult {
   const notes: string[] = [];
   const gaps: ManifestEntry[] = [];
-  const inc = sortNewestFirst(income);
-  const bal = sortNewestFirst(balance);
+  const includeOperatingLeases = options.includeOperatingLeases === true;
+  const inc = normalizeAnnualRows(income, "income", "roic", notes, gaps);
+  const bal = normalizeAnnualRows(balance, "balance", "roic", notes, gaps);
 
   if (inc.length === 0 || bal.length === 0) {
     gaps.push({
@@ -1378,8 +1527,18 @@ export function computeRoic(
     return { series: [], latestRoicPct: null, asOf: inc[0]?.date ?? null, notes, gaps };
   }
   notes.push(
-    "invested capital = totalDebt + totalStockholdersEquity − cashAndCashEquivalents (house definition per the valuation methodology §2.2)",
+    "invested capital = totalDebt (less the operating-lease liability where the balance sheet discloses it) + totalStockholdersEquity − (cash + short-term investments): the house net-debt basis (NET_DEBT_V1; cash-only where short-term investments are unreported, disclosed per year) and the EV bridge's lease rule (METHODOLOGY \"EV bridge\")",
   );
+  const leaseDisclosed = bal.some((b) => isFiniteNumber(b.operatingLeaseLiability) && b.operatingLeaseLiability > 0);
+  if (includeOperatingLeases) {
+    notes.push(
+      "operating-lease liability kept inside invested capital (THESIS_EV_INCLUDE_LEASES=1), matching the enterprise-value bridge",
+    );
+  } else if (!leaseDisclosed) {
+    notes.push(
+      "no balance sheet discloses an operating-lease liability separately (the provider publishes no split) — invested capital carries totalDebt, lease liabilities included, unadjusted; for a lease-heavy issuer ROIC is understated against the lease-consistent basis",
+    );
+  }
 
   const series: RoicYear[] = [];
   const take = Math.min(ROIC_SERIES_MAX_YEARS, inc.length);
@@ -1426,7 +1585,7 @@ export function computeRoic(
       yearNotes.push(`no balance sheet within ${BALANCE_MATCH_TOLERANCE_DAYS}d of ${row.date}`);
       continue;
     }
-    const icNow = investedCapital(balNow, yearNotes);
+    const icNow = investedCapital(balNow, yearNotes, includeOperatingLeases);
     if (icNow === null) continue;
 
     // Previous-period balance for averaging: the next-older income date, else nearest older balance.
@@ -1434,7 +1593,7 @@ export function computeRoic(
     const balPrev = prevIncomeDate !== null ? findBalanceForDate(bal, prevIncomeDate) : null;
     let icAvg: number;
     if (balPrev !== null && balPrev !== balNow) {
-      const icPrev = investedCapital(balPrev, yearNotes);
+      const icPrev = investedCapital(balPrev, yearNotes, includeOperatingLeases);
       if (icPrev !== null) {
         icAvg = (icNow + icPrev) / 2;
       } else {
@@ -1501,8 +1660,8 @@ export function computeDupont(
 ): DupontResult {
   const notes: string[] = [];
   const gaps: ManifestEntry[] = [];
-  const inc = sortNewestFirst(income);
-  const bal = sortNewestFirst(balance);
+  const inc = normalizeAnnualRows(income, "income", "dupont", notes, gaps);
+  const bal = normalizeAnnualRows(balance, "balance", "dupont", notes, gaps);
 
   if (inc.length === 0 || bal.length === 0) {
     gaps.push({

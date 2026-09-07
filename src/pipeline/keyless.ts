@@ -36,6 +36,7 @@ import {
   RESTATEMENT_THRESHOLD_PCT,
   type BuiltStatements,
   type SharesBasis,
+  type StatementBuildOptions,
   type StatementRowsResult,
 } from "@/edgar/statements";
 import { conceptFactsSchema, dedupFactPoints, parseFactPoints, type CompanyFacts, type FactPoint } from "@/edgar/xbrl";
@@ -45,7 +46,7 @@ import {
   SUCCESSOR_FORM,
   predecessorManifestEntry,
   predecessorUnresolvedEntry,
-  usGaapConceptCount,
+  hasOwnAnnualHistory,
   type PredecessorFacts,
 } from "@/edgar/successor";
 import { estimateBeta, type ClosePoint } from "@/pipeline/stageB/betaEstimate";
@@ -520,14 +521,30 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     );
   }
 
+  /** Did `THESIS_STATEMENT_SOURCE=edgar` set aside vendor rows FMP actually served for this member? */
+  const vendorRowsOverridden = (member: keyof KeylessMembers): number => {
+    if (!statementsFromEdgarOnly || !(STATEMENT_MEMBERS as readonly string[]).includes(member)) return 0;
+    const original = inputs.fmp[member] as AnyMemberResult;
+    return original.ok ? original.value.data.rows.length : 0;
+  };
+
   /** A member was served from a keyless source: disclose what replaced what. */
   const record = (member: keyof KeylessMembers, source: DataSource, endpoint: string): void => {
     replaced.push(member);
+    const overridden = vendorRowsOverridden(member);
     gaps.push({
       field: `keyless.${member}`,
-      reason: `served by ${source} (${endpoint}) because FMP ${fmpReason(inputs.fmp[member] as AnyMemberResult)}`,
+      // The true reason is named: under `edgar` the operator's policy set
+      // FMP's rows aside — "because FMP returned no rows" was false whenever
+      // rows had arrived, and filed the configured substitution as an
+      // unexpected incident on a keyed plan.
+      reason: overridden > 0
+        ? `served by ${source} (${endpoint}) because THESIS_STATEMENT_SOURCE=edgar sets aside FMP's ${overridden} vendor row(s)`
+        : `served by ${source} (${endpoint}) because FMP ${fmpReason(inputs.fmp[member] as AnyMemberResult)}`,
       severity: "info",
-      expected: inputs.fmpKeyless,
+      // A configured source choice is structural on any plan; an FMP shortfall
+      // is structural only on a keyless plan.
+      expected: overridden > 0 || inputs.fmpKeyless,
     });
   };
 
@@ -560,6 +577,34 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     gaps.push({ field: `keyless.${member}`, reason, severity: "warn", attemptedSources });
   };
 
+  /**
+   * `THESIS_STATEMENT_SOURCE=edgar` promises statements from filed facts
+   * alone. When EDGAR cannot build a member, the vendor's rows are NOT kept as
+   * a silent stand-in: the member becomes a gap naming both the EDGAR failure
+   * and the rows the policy set aside, so a run that asked for EDGAR-only
+   * never feeds vendor-normalised statements to Stage B under that label.
+   */
+  const withholdVendorRows = (
+    member: keyof KeylessMembers,
+    reason: string,
+    attemptedSources: string[],
+  ): void => {
+    const overridden = vendorRowsOverridden(member);
+    const original = inputs.fmp[member] as AnyMemberResult;
+    if (overridden === 0 || !original.ok) return;
+    (members as unknown as Record<string, AnyMemberResult>)[member] = {
+      ok: false,
+      gap: {
+        field: `statements.${member}`,
+        reason:
+          `${reason}; FMP's ${overridden} vendor row(s) were withheld because THESIS_STATEMENT_SOURCE=edgar builds statements from filed facts only`,
+        severity: "warn",
+        attemptedSources: [original.value.endpoint, ...attemptedSources],
+      },
+    };
+    notes.push(`${member}: FMP's ${overridden} vendor row(s) withheld under THESIS_STATEMENT_SOURCE=edgar`);
+  };
+
   /** Wrap a keyless fetch so a rejected promise can never escape as a throw. */
   const attempt = async <T>(field: string, run: () => Promise<FetchResult<T>>): Promise<FetchResult<T>> => {
     try {
@@ -584,13 +629,22 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   // Every consumer of `built` (the six statements, the profile, the derived
   // capitalization members) is issuer-bound, so an unconfirmed issuer skips the
   // whole build rather than doing the work and discarding it.
+  // The statements builder's own bank detection needs the ASC-606 revenue
+  // tags to be absent, so a bank that tags its fee revenue under them would
+  // publish fee income as revenue. The registrant's SIC decides instead, the
+  // same way Stage A's cross-check routes (validate.ts `routesAsFinancial`):
+  // a bank industry forces the bank chains; any other industry leaves the
+  // decision to the tagging heuristic, which still catches a bank whose SIC
+  // is missing.
+  const buildOptions = (cik: string): StatementBuildOptions => ({
+    symbol: inputs.symbol,
+    cik,
+    annualPeriods: inputs.annualPeriods,
+    quarterlyPeriods: inputs.quarterlyPeriods,
+    ...(bankStatementRouting(registrant) ? { bankRevenue: true } : {}),
+  });
   const built: BuiltStatements | null = inputs.edgar.companyFacts.ok && inputs.edgarConfirmedIssuer
-    ? buildStatementsFromCompanyFacts(inputs.edgar.companyFacts.value.data, {
-        symbol: inputs.symbol,
-        cik: cik10,
-        annualPeriods: inputs.annualPeriods,
-        quarterlyPeriods: inputs.quarterlyPeriods,
-      })
+    ? buildStatementsFromCompanyFacts(inputs.edgar.companyFacts.value.data, buildOptions(cik10))
     : null;
   // A split restatement changes every per-share and share-count figure the
   // report will cite, and a ratio that could NOT be applied leaves the series
@@ -755,19 +809,18 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   ): FetchResult<FmpPayload<TRow>> | null => {
     if (!needs(member)) return null;
     if (result === null) {
-      failKeyless(
-        member,
-        `EDGAR companyfacts unavailable: ${factsReason ?? "not fetched"}`,
-        ["edgar:companyfacts"],
-        true,
-      );
+      const reason = `EDGAR companyfacts unavailable: ${factsReason ?? "not fetched"}`;
+      failKeyless(member, reason, ["edgar:companyfacts"], true);
+      withholdVendorRows(member, reason, ["edgar:companyfacts"]);
       return null;
     }
     for (const note of result.notes) notes.push(`${member}: ${note}`);
     discloseStatementRows(member, result, null);
     if (result.rows.length === 0) {
       const why = result.gaps[0]?.reason ?? "no period resolved from the filed facts";
-      failKeyless(member, `EDGAR companyfacts produced no ${member} rows: ${why}${emptyStatementsContext}`, ["edgar:companyfacts", endpoint], true);
+      const reason = `EDGAR companyfacts produced no ${member} rows: ${why}${emptyStatementsContext}`;
+      failKeyless(member, reason, ["edgar:companyfacts", endpoint], true);
+      withholdVendorRows(member, reason, ["edgar:companyfacts", endpoint]);
       return null;
     }
     record(member, "edgar", endpoint);
@@ -891,7 +944,7 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   // reader that every multi-year figure measures only the successor's own
   // filing history while that history was in fact present and complete.
   const successorCarriesOwnHistory =
-    inputs.edgar.companyFacts.ok && usGaapConceptCount(inputs.edgar.companyFacts.value.data) > 0;
+    inputs.edgar.companyFacts.ok && hasOwnAnnualHistory(inputs.edgar.companyFacts.value.data);
   if (
     predecessor === null &&
     filedSuccessorForm &&
@@ -911,13 +964,25 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       ),
     );
   }
-  if (predecessor !== null && inputs.edgarConfirmedIssuer) {
-    const predecessorBuilt = buildStatementsFromCompanyFacts(predecessor.facts, {
-      symbol: inputs.symbol,
-      cik: predecessor.cik10,
-      annualPeriods: inputs.annualPeriods,
-      quarterlyPeriods: inputs.quarterlyPeriods,
+  // `THESIS_STATEMENT_SOURCE=fmp` keeps the statements vendor-only (D-12:
+  // "never backfill"); the predecessor's filed history is EDGAR rows like any
+  // other backfill and used to be appended in every mode.
+  if (predecessor !== null && inputs.edgarConfirmedIssuer && inputs.statementSource === "fmp") {
+    notes.push(
+      `predecessor history from CIK ${predecessor.cik10} not appended: THESIS_STATEMENT_SOURCE=fmp keeps the statements vendor-only`,
+    );
+    gaps.push({
+      field: "edgar.predecessor",
+      reason:
+        `the registrant is a successor issuer whose predecessor (CIK ${predecessor.cik10}) has filed history of its own, ` +
+        "but THESIS_STATEMENT_SOURCE=fmp keeps the statements vendor-only, so no pre-reorganization periods were appended",
+      severity: "info",
+      attemptedSources: [predecessor.endpoint],
+      expected: true,
     });
+  }
+  if (predecessor !== null && inputs.edgarConfirmedIssuer && inputs.statementSource !== "fmp") {
+    const predecessorBuilt = buildStatementsFromCompanyFacts(predecessor.facts, buildOptions(predecessor.cik10));
     let filledPeriods = 0;
     let oldest: string | null = null;
     let newest: string | null = null;
@@ -1168,7 +1233,7 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         // converted to domestic 10-K reporting as an ADR forever.
         isAdr: built !== null
           ? built.filesTwentyF
-          : registrant.forms.some((form) => form.trim().startsWith("20-F")),
+          : registrant.forms.some((form) => form.trim().startsWith("20-F") || form.trim().startsWith("40-F")),
         isActivelyTrading: true,
         description: null,
         ceo: null,
@@ -1285,6 +1350,66 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       const marketCapEp = marketCapEndpoint(shareSeries.basis);
       members.marketCapHistory = sourced(rows, "computed", marketCapEp, newestDate(rows, inputs.today), fetchedAt);
       record("marketCapHistory", "computed", marketCapEp);
+    }
+  } else if (
+    inputs.edgarConfirmedIssuer &&
+    inputs.fmp.marketCapHistory.ok &&
+    isPlanLimited(inputs.fmp.marketCapHistory.value.data)
+  ) {
+    // A plan that caps `limit` clamps this DATE-RANGE request to its newest
+    // few days (the cap is process-wide once any statement call has learned
+    // it), so five days of a five-year window came back as "served" and the
+    // buyback analysis found no market cap inside any fiscal window. The days
+    // the vendor could not serve are derived exactly as a keyless run derives
+    // them — close × the filed share count — and APPENDED older than the
+    // vendor's oldest date, each row carrying `source: "computed"`; no date
+    // mixes the two sources.
+    const current = inputs.fmp.marketCapHistory;
+    const planLimit = isPlanLimited(current.value.data) ? current.value.data.planLimit : null;
+    const vendorRows = current.value.data.rows;
+    const vendorDates = vendorRows
+      .map((row) => isoDay(row.date))
+      .filter((day): day is string => day !== null)
+      .sort();
+    const oldestVendor = vendorDates[0];
+    const derived: FmpMarketCapRow[] = [];
+    if (oldestVendor !== undefined) {
+      for (const bar of eodRows) {
+        const date = isoDay(bar.date);
+        if (date === null || date >= oldestVendor || !isFiniteNumber(bar.close)) continue;
+        const shares = sharesOnOrBefore(deiShares, date);
+        if (shares === null) continue;
+        derived.push({ symbol: inputs.symbol, date, marketCap: bar.close * shares, source: "computed" });
+      }
+    }
+    if (oldestVendor !== undefined && derived.length > 0 && planLimit !== null) {
+      derived.sort((left, right) => (left.date! < right.date! ? 1 : left.date! > right.date! ? -1 : 0));
+      const marketCapEp = marketCapEndpoint(shareSeries.basis);
+      const first = derived[derived.length - 1]!.date!;
+      const last = derived[0]!.date!;
+      members.marketCapHistory = {
+        ok: true,
+        value: {
+          ...current.value,
+          endpoint: `${current.value.endpoint} + ${marketCapEp} (older periods)`,
+          data: { ...current.value.data, rows: [...vendorRows, ...derived] },
+        },
+      };
+      notes.push(
+        `marketCapHistory: ${derived.length} older day(s) derived as close × ${sharesConcept(shareSeries.basis)} (${first} … ${last}); FMP's plan served ${vendorRows.length} day(s)`,
+      );
+      gaps.push({
+        field: "marketCapHistory.backfill",
+        reason:
+          `FMP served ${vendorRows.length} day(s) back to ${oldestVendor} (its subscription caps 'limit' at ${planLimit.applied}, ` +
+          `so ${planLimit.applied} of ${planLimit.requested} requested days arrived); ${derived.length} older day(s), ${first} to ${last}, ` +
+          `were derived as close × ${sharesConcept(shareSeries.basis)}, each row carrying source "computed" (${marketCapEp}). ` +
+          "No date mixes the two sources: the vendor's rows are untouched and only days it did not serve were added.",
+        severity: "info",
+        attemptedSources: [current.value.endpoint, marketCapEp],
+        expected: true,
+      });
+      replaced.push("marketCapHistory");
     }
   }
 
@@ -1450,6 +1575,18 @@ function describePublicFloatAge(
     }`,
     stale,
   };
+}
+
+/**
+ * Whether the registrant's SIC classifies it as a bank, so the statements
+ * builder routes revenue through the bank chains regardless of tagging. Only
+ * the bank industries qualify: an insurer, broker or asset manager has no
+ * net-interest-income line to protect, and forcing the bank chain there would
+ * discard a correct ASC-606 revenue.
+ */
+export function bankStatementRouting(registrant: EdgarRegistrant | null): boolean {
+  const industry = sectorIndustryForSic(registrant?.sic ?? null).industry;
+  return industry !== null && industry.toLowerCase().startsWith("banks");
 }
 
 /**

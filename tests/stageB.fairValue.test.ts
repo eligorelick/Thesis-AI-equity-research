@@ -136,3 +136,20 @@ describe("fairValue — suppressed (never fabricate)", () => {
     expect(r.perShare).toBeNull();
   });
 });
+
+describe("fairValue — limited-liability floor (audit 2026-09-06)", () => {
+  it("publishes 0 with the reason when the DCF values the equity below zero, and caps the upside at −100%", () => {
+    // Net debt far above enterprise value: the model's per-share is negative.
+    // The scenario block refuses such a number; fair value used to publish it
+    // as "available" with an upside below −100%.
+    const { assumptions } = buildDcf();
+    const dcf = runDcf(assumptions, { waccPct: 9, netDebt: 1_000_000, dilutedShares: 100 });
+    expect(dcf.perShare!).toBeLessThan(0);
+    const r = computeFairValue(makeInputs({ valuation: dcfValuation({ dcf }), currentPrice: 10 }));
+    expect(r.status).toBe("available");
+    expect(r.perShare!.value).toBe(0);
+    expect(r.upsidePct).toBeCloseTo(-100, 9);
+    expect(r.reasons.some((g) => g.field === "valuation.dcf.perShare.floor" && g.severity === "warn")).toBe(true);
+    expect(r.basis.some((b) => /limited liability/.test(b))).toBe(true);
+  });
+});

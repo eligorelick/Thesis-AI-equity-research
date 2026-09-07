@@ -14,7 +14,7 @@
  *     growth rates may differ marginally from FRED's own (rounded inputs).
  *
  * Rate policy: ≤2 req/s sustained; exponential backoff on 429 (docs publish no
- * number; ~120/min widely reported). See the provider data contract §1.4, the macro-series contract.
+ * number; ~120/min widely reported).
  */
 
 import "server-only";
@@ -74,7 +74,7 @@ export interface FredSeriesSpec {
 }
 
 /**
- * The 12-series core macro dashboard (the macro-series contract §8, all IDs
+ * The 12-series core macro dashboard (all IDs
  * LIVE-verified 2026-07-05).
  */
 export const CORE_SERIES: readonly FredSeriesSpec[] = [
@@ -107,7 +107,7 @@ export type GicsSector =
   | "Real Estate";
 
 /**
- * GICS sector → FRED series ids (the macro-series contract §9, all LIVE-verified
+ * GICS sector → FRED series ids (all LIVE-verified
  * 2026-07-05). Fetched on demand for the routed sector, on top of CORE_SERIES.
  */
 export const SECTOR_SERIES: Record<GicsSector, readonly string[]> = {
@@ -206,8 +206,12 @@ const FRED_FIGURE_UNITS: Readonly<Record<string, FredFigureUnit>> = {
   pp: AS_SERVED("pp"),
   index: AS_SERVED("index"),
   thousands: { unit: "count", scale: 1e3, qualifier: "persons (FRED serves thousands; shown ×1,000)" },
-  "thousands of units": { unit: "count", scale: 1e3, qualifier: "units (FRED serves thousands; shown ×1,000)" },
-  "millions of units": { unit: "count", scale: 1e6, qualifier: "units (FRED serves millions; shown ×1,000,000)" },
+  // HOUST and TOTALSA are published at a seasonally adjusted ANNUAL rate; the
+  // rate basis is part of the unit, and a qualifier that dropped it let the
+  // model read a 1.42-million annualised starts figure as a month's count
+  // (audit 2026-09-06, F224).
+  "thousands of units": { unit: "count", scale: 1e3, qualifier: "units at a seasonally adjusted annual rate (FRED serves thousands; shown ×1,000)" },
+  "millions of units": { unit: "count", scale: 1e6, qualifier: "units at a seasonally adjusted annual rate (FRED serves millions; shown ×1,000,000)" },
   "USD/bbl": { unit: "USD", scale: 1, qualifier: "USD per barrel" },
   "USD/MMBtu": { unit: "USD", scale: 1, qualifier: "USD per MMBtu" },
   "USD/gal": { unit: "USD", scale: 1, qualifier: "USD per gallon" },

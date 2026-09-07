@@ -69,6 +69,20 @@ describe("exact provenance matching", () => {
 });
 
 describe("provenance registry validation", () => {
+  it("accepts a faithful rounding that lands exactly on the tolerance (audit 2026-09-06, F180/F196)", () => {
+    // 187.32455 rendered at 4 dp is 187.3246 (or 187.3245 under half-even):
+    // both differ from the record by exactly 0.00005, the tolerance itself, and
+    // binary float noise used to push the subtraction a few ulps over it.
+    const tie: NumericProvenanceRecord = { ...record, value: 187.32455, displayPrecision: 4 };
+    for (const value of [187.3246, 187.3245]) {
+      expect(matchProvenanceRecord({ ...candidate, value }, [tie])).toMatchObject({ ok: true });
+    }
+    expect(matchProvenanceRecord({ ...candidate, value: 187.3247 }, [tie])).toMatchObject({
+      ok: false,
+      reason: "value-mismatch",
+    });
+  });
+
   it("rejects duplicate IDs", () => {
     expect(() => validateProvenanceRegistry([record, { ...record }])).toThrow(
       "Duplicate provenance ID: payload.quote.price",
@@ -154,6 +168,13 @@ describe("canonical traced units", () => {
 
   it("fails closed for an unknown unit", () => {
     expect(canonicalizeTracedUnit("widgets per fortnight", null)).toBeNull();
+  });
+
+  it("fails closed when a bare ISO unit contradicts the declared currency (audit 2026-09-06, F181)", () => {
+    expect(canonicalizeTracedUnit("EUR", "USD")).toBeNull();
+    expect(canonicalizeTracedUnit("EUR/share", "USD")).toBeNull();
+    expect(canonicalizeTracedUnit("EUR", "EUR")).toEqual({ unit: "currency", currency: "EUR" });
+    expect(canonicalizeTracedUnit("EUR/share", "eur")).toEqual({ unit: "currency-per-share", currency: "EUR" });
   });
 
   it.each([

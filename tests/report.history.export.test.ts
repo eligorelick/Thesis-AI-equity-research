@@ -46,7 +46,8 @@ import {
   FRED_ATTRIBUTION_TEXT,
 } from "@/report/export/markdown";
 import { reportToPrintHtml } from "@/report/export/printHtml";
-import { formatFinancialValue } from "@/report/format";
+import { formatFinancialValue, formatMoneyAmount } from "@/report/format";
+import { REPORT_SECTION_MANIFEST } from "@/report/sectionManifest";
 import {
   listReportsForSymbol,
   listRunRefsForSymbol,
@@ -257,7 +258,7 @@ describe("reportToMarkdown", () => {
     expect(renderedReact).toContain(">yes<");
   });
 
-  it("renders every SPEC §7 section header", () => {
+  it("renders every report section header", () => {
     for (const header of [
       "# Thesis Example Systems (DEMO)",
       "## 1. Verdict",
@@ -271,11 +272,60 @@ describe("reportToMarkdown", () => {
       "## 9. Competitive Landscape",
       "## 10. Catalysts & Risks",
       "## 11. Future Outlook",
-      "## 12. Macro Context",
-      "## 13. Appendix",
+      "## 12. Weighted Projections",
+      "## 13. Macro Context",
+      "## 14. Appendix",
     ]) {
       expect(md).toContain(header);
     }
+    // No stray pseudo-numbers: the scorecard is a sub-heading of the verdict.
+    expect(md).not.toMatch(/^## \d+b\./m);
+  });
+
+  it("numbers every section from the shared manifest, as the print export does", () => {
+    const md = reportToMarkdown(loadFixtureReport());
+    for (const section of REPORT_SECTION_MANIFEST) {
+      expect(md).toContain(`## ${section.index}. ${section.printTitle}`);
+    }
+  });
+
+  it("renders the DCF sensitivity grid in the per-share currency, on both exports", () => {
+    const r = clone(loadFixtureReport());
+    const perShare = r.valuation.dcf.perShare;
+    if (perShare === null) throw new Error("fixture has no DCF per-share value");
+    r.valuation.dcf.perShare = { ...perShare, unit: "TWD/share", currency: "TWD" };
+    const cell = r.valuation.dcf.sensitivityGrid.find((c) => c.perShare !== null);
+    if (cell === undefined || cell.perShare === null) throw new Error("fixture has no priced grid cell");
+    const expected = formatMoneyAmount(cell.perShare, "TWD", 0);
+    expect(expected).toMatch(/ TWD$/);
+
+    const md = reportToMarkdown(r);
+    const grid = md.slice(md.indexOf("### Sensitivity"), md.indexOf("###", md.indexOf("### Sensitivity") + 1));
+    expect(grid).toContain(expected);
+    expect(grid).not.toMatch(/\| \$\d/);
+
+    const html = reportToPrintHtml(r);
+    expect(html).toContain(expected);
+  });
+
+  it("carries the pass-execution disclosure the print export carries", () => {
+    const r = clone(loadFixtureReport());
+    r.meta.execution = [
+      {
+        step: "synthesize",
+        requestedModel: "claude-haiku-4-5",
+        effectiveModel: "claude-sonnet-5",
+        requestedEffort: "high",
+        effectiveEffort: "high",
+        fallbackUsed: false,
+        adjustments: ["model-floor"],
+        note: "synthesize: raised from claude-haiku-4-5 to claude-sonnet-5 (model-floor).",
+      },
+    ];
+    const md = reportToMarkdown(r);
+    expect(md).toContain(
+      "| Pass execution | synthesize: requested claude-haiku-4-5/high; effective claude-sonnet-5/high (model-floor) |",
+    );
   });
 
   it("includes each scenario name and its probability", () => {
@@ -444,10 +494,10 @@ describe("reportToMarkdown", () => {
   });
 
   it("renders the 1.1.0 scorecard, executive summary, interpretation, and projections", () => {
-    expect(md).toContain("## 1b. Scorecard (deterministic)");
+    expect(md).toContain("### Scorecard (deterministic)");
     expect(md).toContain("**Composite:");
     expect(md).toContain("### Executive summary");
-    expect(md).toContain("## 11b. Weighted Projections");
+    expect(md).toContain("## 12. Weighted Projections");
     expect(md).toMatch(/### Revenue \(USD\)/);
     // Balance sheet is now a graded aspect.
     expect(md).toContain("Balance Sheet & Capital — Grade");
@@ -472,7 +522,7 @@ describe("reportToMarkdown", () => {
     const currentMarkdown = reportToMarkdown(clone(report));
     const currentMarkdownStrip = currentMarkdown.slice(
       currentMarkdown.indexOf("### Grade strip"),
-      currentMarkdown.indexOf("## 1b. Scorecard"),
+      currentMarkdown.indexOf("### Scorecard"),
     );
     assertOrder(currentMarkdownStrip, labels);
     expect(currentMarkdownStrip.match(/\| Balance Sheet \|/g)).toHaveLength(1);
@@ -482,7 +532,7 @@ describe("reportToMarkdown", () => {
     const legacyMarkdown = reportToMarkdown(legacy);
     const legacyMarkdownStrip = legacyMarkdown.slice(
       legacyMarkdown.indexOf("### Grade strip"),
-      legacyMarkdown.indexOf("## 1b. Scorecard"),
+      legacyMarkdown.indexOf("### Scorecard"),
     );
     assertOrder(legacyMarkdownStrip, labels.filter((label) => label !== "Balance Sheet"));
     expect(legacyMarkdownStrip).not.toContain("Balance Sheet");
@@ -521,7 +571,7 @@ describe("reportToMarkdown", () => {
 
     const markdown = reportToMarkdown(scored);
     const scoreBlock = markdown.slice(
-      markdown.indexOf("## 1b. Scorecard (deterministic)"),
+      markdown.indexOf("### Scorecard (deterministic)"),
       markdown.indexOf("## 2. Business & Segments"),
     );
     expect(scoreBlock).toContain("**Composite: 64 / 100");

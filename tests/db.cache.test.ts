@@ -201,6 +201,29 @@ describe("cachedFetch — miss path", () => {
     expect(row?.asOf).toBe("2026-07-06");
   });
 
+  it("shares one fetch between concurrent misses for the same key (audit 2026-09-06, F231)", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetcher = vi.fn(async () => {
+      await gate;
+      return { body: { price: 1 }, asOf: "2026-09-06" };
+    });
+    const opts = { provider: "fmp" as const, endpoint: "quote", params: { symbol: "MSFT" }, ttlSeconds: 60, fetcher };
+    const first = cachedFetch(opts);
+    const second = cachedFetch(opts);
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(a.data).toEqual({ price: 1 });
+    expect(b.data).toEqual({ price: 1 });
+    expect(b.fetchedAt).toBe(a.fetchedAt);
+    // A different key is its own flight.
+    await cachedFetch({ ...opts, params: { symbol: "GOOG" } });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("propagates fetcher errors on a miss (hard transport failure)", async () => {
     await expect(
       cachedFetch({
@@ -677,7 +700,7 @@ describe("invalidate / purgeOlderThan", () => {
   });
 });
 
-describe("TTL constants (the provider data contract §3)", () => {
+describe("TTL constants", () => {
   it("match the spec values", () => {
     expect(TTL.QUOTE).toBe(900);
     expect(TTL.EOD).toBe(900);

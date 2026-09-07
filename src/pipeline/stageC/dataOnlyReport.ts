@@ -29,7 +29,8 @@ import { routeMetricsBlock, type ComputedMetrics } from "@/pipeline/compute";
 import type { DataBundle } from "@/pipeline/types";
 import type { ForensicFlag } from "@/pipeline/stageB/forensics";
 import { scoreToBand } from "@/pipeline/stageB/grading";
-import { CORE_SERIES } from "@/providers/fred";
+import { CORE_SERIES, fredFigureUnit, type FredUnits } from "@/providers/fred";
+import { calculateCoverage } from "@/pipeline/stageC/provenance";
 import {
   applyDcfDisplay,
   applyFairValue,
@@ -189,9 +190,14 @@ function gradeBlock(
   const source = `computed.scores.${key}`;
   if (aspect.score === null || aspect.band === null) {
     const reason = aspect.notApplicableReason ?? "no applicable signals for this route";
+    // The schema requires a letter, and the composite's own neutral point
+    // (50/100) falls in the D band of the house scale; the sentence names the
+    // letter as a placeholder so a reader never takes it for a failing mark
+    // (audit 2026-09-06, F175).
+    const placeholder = scoreToBand(NEUTRAL_MIDPOINT_SCORE);
     return {
-      grade: scoreToBand(NEUTRAL_MIDPOINT_SCORE),
-      oneLineWhy: `Not scored — ${reason}. Shown at the neutral midpoint, not as an assessment; no analyst pass ran.`,
+      grade: placeholder,
+      oneLineWhy: `Not scored — ${reason}. The letter ${placeholder} is the band of the composite's neutral midpoint (${NEUTRAL_MIDPOINT_SCORE}/100), shown because the schema requires one; it is a placeholder, not an assessment, and no analyst pass ran.`,
       reasoning: [
         fact(`Deterministic ${ASPECT_LABEL[key]} score unavailable: ${reason}.`, source, asOf),
         flagClaim,
@@ -574,12 +580,40 @@ function leadershipSection(stub: Report["leadership"], bundle: DataBundle, grade
   return { ...stub, graded, governanceNotes: notes };
 }
 
+/**
+ * The report-vocabulary unit and scaled value of one FRED observation, the
+ * same conversion the Stage C payload applies (payload.ts macroSection):
+ * percent transforms render as "%", scaled series (payrolls in thousands, PCE
+ * in billions) as a plain count or currency amount, levels as an index. Before
+ * the 2026-09-06 audit (F168/F176) every row was stamped "index" at the raw
+ * served value, so CPI YoY read as an index and payrolls were 1,000× short.
+ */
+function macroTraced(
+  seriesId: string,
+  units: FredUnits,
+  value: number,
+  asOf: string,
+): TracedNumber | null {
+  const figureUnit = fredFigureUnit(seriesId, units);
+  const source = `fred:${seriesId}`;
+  const scaled = figureUnit.scale === 1 ? value : Math.round(value * figureUnit.scale);
+  if (figureUnit.unit === "USD") {
+    return traced(scaled, "currency", source, asOf, { currency: "USD" });
+  }
+  if (figureUnit.unit === "") return traced(scaled, "index", source, asOf);
+  return traced(scaled, figureUnit.unit, source, asOf);
+}
+
 function macroSection(bundle: DataBundle, stub: Report["macro"]): Report["macro"] {
   const labels = new Map(CORE_SERIES.map((series) => [series.id, series.label]));
+  // Core series carry the transform the dashboard fetched them with (CPI is
+  // YoY %); sector series are fetched as levels (dataBundle: units "lin").
+  const coreUnits = new Map(CORE_SERIES.map((spec) => [spec.id, spec.units]));
   const rows: Report["macro"]["relevantSeries"] = [];
   const emit = (
     record: Record<string, DataBundle["macro"]["core"][string]>,
     relevance: string,
+    unitsOf: (seriesId: string) => FredUnits,
   ): void => {
     for (const seriesId of Object.keys(record).sort()) {
       const result = record[seriesId];
@@ -587,17 +621,22 @@ function macroSection(bundle: DataBundle, stub: Report["macro"]): Report["macro"
       const observations = result.value.data;
       const last = observations[observations.length - 1];
       if (!last) continue;
-      const latest = traced(last.value, "index", `fred:${seriesId}`, last.date);
+      const latest = macroTraced(seriesId, unitsOf(seriesId), last.value, last.date);
       if (latest === null) continue;
       rows.push({ seriesId, name: labels.get(seriesId) ?? seriesId, latest, relevance });
     }
   };
-  emit(bundle.macro.core, "Core macro series tracked for every issuer.");
+  emit(
+    bundle.macro.core,
+    "Core macro series tracked for every issuer.",
+    (seriesId) => coreUnits.get(seriesId) ?? "lin",
+  );
   emit(
     bundle.macro.sector,
     bundle.macro.gicsSector
       ? `Sector-routed series for ${bundle.macro.gicsSector}.`
       : "Sector-routed series.",
+    () => "lin",
   );
   return { ...stub, relevantSeries: rows };
 }
@@ -616,15 +655,22 @@ function segmentRows(
   const entries = Object.entries(data as Record<string, unknown>)
     .filter((entry): entry is [string, number] => isNum(entry[1]))
     .sort((a, b) => b[1] - a[1]);
-  const total = entries.reduce((acc, [, value]) => acc + (value > 0 ? value : 0), 0);
+  // The same denominator the LLM path uses (passes.ts applySegmentShares):
+  // the NET sum of every finite segment value, so an elimination or corporate
+  // row that the issuer reports negative reduces the total to reported revenue
+  // and the shares add to 100. A positive-only denominator (before the
+  // 2026-09-06 audit, F167/F177) gave the same feed different shares on the
+  // two paths.
+  const total = entries.reduce((acc, [, value]) => acc + value, 0);
   const rows: Report["business"]["segments"]["product"] = [];
   for (const [name, value] of entries) {
     const revenue = traced(value, "currency", source, asOf, { currency, period: asOf });
     if (revenue === null) continue;
+    const pct = total > 0 ? (value / total) * 100 : null;
     rows.push({
       name,
       revenue,
-      sharePct: total > 0 && value > 0 ? round((value / total) * 100, 1) : null,
+      sharePct: pct !== null && Number.isFinite(pct) ? round(pct, 1) : null,
     });
   }
   return rows;
@@ -689,6 +735,17 @@ function synthesis(
   return parts.join(" ");
 }
 
+/**
+ * A data-only claim is supported when its source is a deterministic pipeline
+ * path (`computed.*`) or a provider record tag the bundle fetched; the flag
+ * claim's `pipeline` source is neither, and a claim is counted rather than
+ * assumed (audit 2026-09-06, F182: every claim used to be scored supported
+ * without a check, in the same report whose manifest says no verification
+ * ran). Rates are the exact fraction: the schema pins `rate === supported /
+ * total`, which a 4-dp rounding broke for any non-terminating ratio (F169).
+ */
+const PIPELINE_OWNED_SOURCE = /^(?:computed\.|fmp:|edgar:|fred:|yahoo:)/;
+
 function provenanceCoverage(report: Report): ProvenanceCoverage {
   const numbers = collectTracedNumbers(report);
   const numericTotal = numbers.length;
@@ -696,12 +753,16 @@ function provenanceCoverage(report: Report): ProvenanceCoverage {
   const claims = collectClaims(report);
   const facts = claims.filter((claim) => claim.label === "FACT");
   const judgments = claims.filter((claim) => claim.label === "JUDGMENT");
-  const rate = (supported: number, total: number): number | null =>
-    total === 0 ? null : round(supported / total, 4);
+  const owned = (claim: SourcedClaim): boolean => PIPELINE_OWNED_SOURCE.test(claim.source);
+  const factsSupported = facts.filter(owned).length;
+  const judgmentsCited = judgments.filter(owned).length;
+  const numeric = calculateCoverage(numericSupported, numericTotal);
+  const factualClaims = calculateCoverage(factsSupported, facts.length);
+  const judgmentCoverage = calculateCoverage(judgmentsCited, judgments.length);
   return {
-    numeric: { supported: numericSupported, total: numericTotal, rate: rate(numericSupported, numericTotal) },
-    factualClaims: { supported: facts.length, total: facts.length, rate: rate(facts.length, facts.length) },
-    judgments: { cited: judgments.length, total: judgments.length, rate: rate(judgments.length, judgments.length) },
+    numeric,
+    factualClaims,
+    judgments: { cited: judgmentCoverage.supported, total: judgmentCoverage.total, rate: judgmentCoverage.rate },
   };
 }
 
@@ -775,6 +836,11 @@ export function enrichDataOnlyReport(stub: Report, args: EnrichDataOnlyReportArg
         quality: qualityGrade,
         leadership: leadershipGrade,
         moat: moatGrade,
+        // The judge is asked for a balance-sheet strip entry (prompts.ts) and
+        // the block is computed here anyway; leaving it off the strip (before
+        // the 2026-09-06 audit, F179) made the data-only strip one column
+        // short of the LLM path's.
+        balanceSheet: balanceSheetGrade,
       },
     },
     business: businessSection(stub.business, bundle, currency),

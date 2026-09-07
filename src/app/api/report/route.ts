@@ -13,10 +13,11 @@
  * subscribes to GET /api/report/[jobId]/stream (SSE) or polls
  * GET /api/report/[jobId] for progress.
  *
- * The Stage C passes are resolved at RUNTIME via a dynamic import so this route
- * (and the whole build) never hard-depends on src/pipeline/stageC/index.ts.
- * When that module is absent or exportless, the runner still runs
- * fetch/validate/compute and persists a data-only report.
+ * The Stage C passes are resolved lazily through a STATIC-specifier dynamic
+ * import (see resolvePasses.ts): the module must exist at build time — the
+ * bundler resolves the "@/pipeline/stageC" alias then — but its evaluation is
+ * deferred to first use, and a module that throws or is exportless degrades to
+ * a data-only report (fetch/validate/compute still run).
  *
  * Server-only route (nodejs runtime): imports @/db + provider clients.
  */

@@ -290,20 +290,34 @@ describe("sensitivityGrid", () => {
     }
   });
 
-  it("per-share can DECREASE as gTerm rises when ROIC < WACC (correct behaviour)", () => {
-    // Base fixture: roicTerm 10, base WACC 10 -> the WACC 11 row has ROIC < WACC,
-    // so higher terminal growth destroys value (reinvestment g/ROIC outpaces the
-    // excess return). Assert the top WACC row is non-increasing across gTerm.
+  it("holds the terminal EXCESS over the WACC fixed per cell, so a zero-excess base is flat across gTerm in every row", () => {
+    // Audit 2026-09-06. Base fixture: roicTerm 10 = base WACC 10 (zero excess).
+    // Each cell keeps that zero excess at its own WACC, so terminal growth adds
+    // nothing in any row — the house convention. At a fixed LEVEL the WACC 9
+    // row earned a phantom +1pp excess and the WACC 11 row a −1pp deficit, and
+    // the g-axis reversed sign across rows while the assumption block said
+    // terminal ROIC = WACC.
+    // At zero excess TV = NOPAT·(1+g)/WACC: value is non-decreasing in g in
+    // EVERY row (the (1+g) on next year's NOPAT), never reversing sign.
     const g = sensitivityGrid(a, base);
-    const topRow = g.perShare[g.waccPcts.length - 1].filter((v): v is number => v !== null);
-    let sawDecrease = false;
-    for (let j = 1; j < topRow.length; j++) {
-      if (topRow[j] < topRow[j - 1]) sawDecrease = true;
+    for (const row of g.perShare) {
+      const cells = row.filter((v): v is number => v !== null);
+      for (let j = 1; j < cells.length; j++) expect(cells[j]).toBeGreaterThanOrEqual(cells[j - 1] - 1e-9);
     }
-    expect(sawDecrease).toBe(true);
+    expect(g.notes.some((n) => /terminal ROIC held at WACC \+ 0pp in every cell/.test(n))).toBe(true);
   });
 
-  it("nulls grid cells only below the 1.5pp guard (spec §3), never a huge number", () => {
+  it("per-share DECREASES as gTerm rises when the terminal ROIC sits BELOW the WACC (negative excess kept per cell)", () => {
+    const deficit = explicitAssumptions({ gTermPct: 2, roicTermPct: 8 });
+    const g = sensitivityGrid(deficit, base);
+    for (const row of g.perShare) {
+      const cells = row.filter((v): v is number => v !== null);
+      for (let j = 1; j < cells.length; j++) expect(cells[j]).toBeLessThan(cells[j - 1]);
+    }
+    expect(g.notes.some((n) => /terminal ROIC held at WACC − 2pp in every cell/.test(n))).toBe(true);
+  });
+
+  it("nulls grid cells only below the 1.5pp guard, never a huge number", () => {
     // Grid cells use the LOOSER 1.5pp guard, not the 2.0pp base-case guard, so a
     // cell with spread in [1.5, 2.0) computes a finite value (it was null before
     // the guard split). base WACC 3.5 -> [2.5,3,3.5,4,4.5]; gTerm base 3 -> [2,2.5,3,3.5,4].
@@ -780,7 +794,7 @@ describe("buildDcfAssumptions", () => {
     ).toBe(true);
   });
 
-  it("clamps near-term growth into [-10, +25] (spec §2.2)", () => {
+  it("clamps near-term growth into [-10, +25]", () => {
     const a = buildDcfAssumptions({
       ...baseInputs,
       revenueCagr3yPct: 200,
@@ -2290,6 +2304,81 @@ describe("buildDcfAssumptions — revenue history with a spike or a collapse", (
     expect(a.growthPath.value[0]).toBeCloseTo(-6, 9);
     expect(a.growthAnchor.rangePct).toBeNull();
     expect(a.growthAnchor.basis).toContain("single method; no range");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit 2026-09-06 — assumption provenance: the margin cap, the tax basis,
+// the REIT enterprise value
+// ---------------------------------------------------------------------------
+
+describe("buildDcfAssumptions — the margin cap and the tax basis (audit 2026-09-06)", () => {
+  const highMargin = (over: Partial<DcfAssumptionInputs> = {}): DcfAssumptionInputs => ({
+    revenueCagr3yPct: 10,
+    revenueCagr5yPct: 10,
+    analystEstimates: null,
+    waccPct: 9,
+    riskFreePct: 4,
+    // A payments network: 67% TTM margin on a 64–67% five-year history.
+    incomeTtm: { date: "2025-12-31", revenue: 1000, operatingIncome: 670, incomeBeforeTax: 650, incomeTaxExpense: 130 },
+    incomeHistory: [
+      { date: "2021-12-31", revenue: 700, operatingIncome: 448, incomeBeforeTax: 430, incomeTaxExpense: 90 },
+      { date: "2022-12-31", revenue: 780, operatingIncome: 507, incomeBeforeTax: 490, incomeTaxExpense: 100 },
+      { date: "2023-12-31", revenue: 850, operatingIncome: 561, incomeBeforeTax: 540, incomeTaxExpense: 110 },
+      { date: "2024-12-31", revenue: 920, operatingIncome: 607, incomeBeforeTax: 590, incomeTaxExpense: 120 },
+      { date: "2025-12-31", revenue: 1000, operatingIncome: 670, incomeBeforeTax: 650, incomeTaxExpense: 130 },
+    ],
+    balance: { date: "2025-12-31", basis: "annual", totalDebt: 200, totalStockholdersEquity: 800, cashAndShortTermInvestments: 300 },
+    marketCap: 5000,
+    ...over,
+  });
+
+  it("never caps the margin path below a level the issuer's own history has demonstrably earned", () => {
+    const built = buildDcfAssumptions(highMargin());
+    const a = built.assumptions!;
+    // A flat 45% cap removed a third of this DCF under a rule no document described.
+    expect(Math.min(...a.ebitMarginPath.value)).toBeGreaterThanOrEqual(64);
+    expect(built.notes.some((n) => /EBIT margin \(pct\) clamped/.test(n))).toBe(false);
+  });
+
+  it("still caps a TTM margin above both the house ceiling and the issuer's own history, in one note", () => {
+    // A mis-scaled TTM figure (90%) is not evidence for its own cap; the
+    // ceiling is the history's 67%.
+    const built = buildDcfAssumptions(
+      highMargin({ incomeTtm: { date: "2025-12-31", revenue: 1000, operatingIncome: 900, incomeBeforeTax: 880, incomeTaxExpense: 176 } }),
+    );
+    const a = built.assumptions!;
+    expect(Math.max(...a.ebitMarginPath.value)).toBeCloseTo(67, 6);
+    const clampNotes = built.notes.filter((n) => /EBIT margin \(pct\) clamped/.test(n));
+    expect(clampNotes).toHaveLength(1);
+    expect(clampNotes[0]).toMatch(/ceiling raised from 45 to the issuer's own observed maximum margin/);
+  });
+
+  it("says when no current tax rate was observed instead of printing the historical median as a TTM rate", () => {
+    const built = buildDcfAssumptions(
+      highMargin({ incomeTtm: { date: "2025-12-31", revenue: 1000, operatingIncome: 100, incomeBeforeTax: -50, incomeTaxExpense: 5 } }),
+    );
+    const a = built.assumptions!;
+    expect(a.taxRatePath.basis).toMatch(/effective rate not computable/);
+    expect(a.taxRatePath.basis).not.toMatch(/effective rate \d/);
+    expect(built.gaps.some((g) => g.field === "valuation.dcf.ttmTaxRate" && g.severity === "info")).toBe(true);
+    expect(built.notes.some((n) => /held at the company historical median/.test(n))).toBe(true);
+  });
+});
+
+describe("reitValuation — the house enterprise value (audit 2026-09-06)", () => {
+  const base = { ffoApprox: 500, affoApprox: 400, sharePrice: 50, shares: 100, netDebt: 2000, noiApprox: 500, submap: "equity" as const };
+
+  it("adds preferred and minority interest and removes the operating-lease slice, like the multiples and the DCF bridge", () => {
+    const r = reitValuation({ ...base, preferredStock: 300, minorityInterest: 700, operatingLeaseLiability: 100 });
+    // 5,000 + 2,000 − 100 + 300 + 700
+    expect(r.enterpriseValue).toBe(7900);
+    expect(r.impliedCapRatePct).toBeCloseTo((500 / 7900) * 100, 9);
+    expect(r.notes.some((n) => /the house definition the multiples and the DCF bridge use/.test(n))).toBe(true);
+    const kept = reitValuation({ ...base, preferredStock: 300, minorityInterest: 700, operatingLeaseLiability: 100, includeLeasesInEv: true });
+    expect(kept.enterpriseValue).toBe(8000);
+    // Undisclosed claims are zero, the provider's convention.
+    expect(reitValuation(base).enterpriseValue).toBe(7000);
   });
 });
 

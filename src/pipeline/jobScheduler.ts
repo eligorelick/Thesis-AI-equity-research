@@ -24,6 +24,7 @@ import {
   reports,
 } from "@/db/schema";
 import {
+  costRowBelongsToAttempt,
   REQUEST_ATTEMPT_SEPARATOR,
   persistPassSettlementInTransaction,
   preparePassSettlement,
@@ -304,6 +305,17 @@ function finalizeTerminalPaidLeasesInTransaction(
  * The row carries `presumedAttemptId` rather than `attemptId` so the billed
  * attempt slot stays free: a settlement that arrives after expiry can still be
  * recorded in full, and it deletes the presumed row in the same transaction.
+ *
+ * The row is dated at the lease's ACQUISITION, not at the sweep. Reconciliation
+ * against Anthropic's reported totals buckets rows by `createdAt`, and the
+ * evidence for a call is the total of the day the call billed on — which is
+ * bounded by when it was authorized. A sweep runs whenever some later
+ * transaction happens to prune, typically the next morning after a crash, and
+ * dating the row then compared a $12.50 evening reservation with the next
+ * day's $0 total and lowered it to nothing (the real charge vanished from the
+ * caps and the report), while `npm run costs:reconcile` never even fetched the
+ * day that held the charge. The rolling-window cap reads the same column and
+ * wants the same answer: spend enters the window when it happened.
  */
 function presumeExpiredPaidLeasesInTransaction(db: ThesisDb, nowIso: string): number {
   const expired = db.select()
@@ -350,7 +362,7 @@ function presumeExpiredPaidLeasesInTransaction(db: ThesisDb, nowIso: string): nu
       costUsd: Number(reservedMicro) / MICRO_USD,
       fallbackUsed: false,
       reconciledAt: null,
-      createdAt: nowIso,
+      createdAt: lease.acquiredAt,
     }).run();
   }
   return expired.length;
@@ -441,6 +453,18 @@ export interface RequestCostSettlement {
  * A presumed settlement (the request was sent and then timed out) is recorded
  * as such so `npm run costs:reconcile` can lower it later; a reported one is
  * final.
+ *
+ * Like {@link settlePaidPassLease}, a measured cost above the reservation is
+ * COMMITTED and only then reported as an invariant failure
+ * ({@link PaidPassOverReservationError} with `inserted: true`). Refusing the
+ * write threw away the one measurement of what the request billed, left the
+ * lease to expire, and had the sweep presume the request at the smaller
+ * reserved figure — a known charge replaced by a lower guess.
+ *
+ * Every settlement also versions the parent snapshot: the SSE route and the
+ * client both drop a snapshot whose revision has not moved, and the cost
+ * total and `settlementsPending` this changes are derived from exactly the
+ * rows written here.
  */
 export function settleRequestCost(
   lease: PaidPassLease,
@@ -451,7 +475,7 @@ export function settleRequestCost(
   if (!Number.isFinite(settlement.costUsd) || settlement.costUsd < 0) {
     throw new Error("jobScheduler: request settlement cost must be a nonnegative finite number");
   }
-  return db.transaction((tx) => {
+  const outcome = db.transaction((tx) => {
     const authority = authorityDate(now, "request settlement");
     const authorityAt = authority.toISOString();
     const existing = tx.select({ id: costLog.id, costUsd: costLog.costUsd })
@@ -465,23 +489,12 @@ export function settleRequestCost(
       .get();
     if (existing !== undefined) {
       // Idempotent replay: the exact request already settled.
-      tx.delete(jobLlmLeases).where(exactLeaseWhere(lease)).run();
-      return { recorded: false, costUsd: existing.costUsd };
+      const released = tx.delete(jobLlmLeases).where(exactLeaseWhere(lease)).run().changes > 0;
+      if (released) versionRequestSettlementInTransaction(tx as ThesisDb, lease.jobId, authority);
+      return { recorded: false, costUsd: existing.costUsd, overReservation: false, released };
     }
     const reservedMicro = BigInt(reservationMicroUsd(lease.reservedCostUsd));
     const settledMicro = settledMicroUsd(settlement.costUsd);
-    if (settledMicro > reservedMicro) {
-      throw new PaidPassOverReservationError({
-        inserted: false,
-        currentGeneration: false,
-        telemetry: null,
-        overReservation: true,
-        currentRevision: null,
-        currentSteps: null,
-        currentTotalCostUsd: null,
-        projectionError: null,
-      } as unknown as SettlePaidPassResult);
-    }
     // A presumed row for this request (its lease expired earlier) is
     // superseded by whatever is written below. Deleted BEFORE the insert
     // because a presumed settlement now claims the same `presumedAttemptId`,
@@ -523,9 +536,49 @@ export function settleRequestCost(
         createdAt: authorityAt,
       }).run();
     }
-    tx.delete(jobLlmLeases).where(exactLeaseWhere(lease)).run();
-    return { recorded: settledMicro > 0n, costUsd: Number(settledMicro) / MICRO_USD };
+    const released = tx.delete(jobLlmLeases).where(exactLeaseWhere(lease)).run().changes > 0;
+    versionRequestSettlementInTransaction(tx as ThesisDb, lease.jobId, authority);
+    return {
+      recorded: settledMicro > 0n,
+      costUsd: Number(settledMicro) / MICRO_USD,
+      overReservation: settledMicro > reservedMicro,
+      released,
+    };
   }, { behavior: "immediate" });
+  // A deleted lease may have been the one a queued retry or a capacity-bound
+  // acquisition was waiting on; the other two deletion paths wake the pump
+  // and so does this one.
+  if (outcome.released) requestPump(schedulerPumpState());
+  if (outcome.overReservation) {
+    throw new PaidPassOverReservationError({
+      inserted: outcome.recorded,
+      currentGeneration: false,
+      telemetry: null,
+      overReservation: true,
+      currentRevision: null,
+      currentSteps: null,
+      currentTotalCostUsd: null,
+      projectionError: null,
+    } as unknown as SettlePaidPassResult);
+  }
+  return { recorded: outcome.recorded, costUsd: outcome.costUsd };
+}
+
+/**
+ * Version the snapshot after a request settlement changed what it derives
+ * from the ledger and the retained lease rows. A terminal parent whose last
+ * retained lease this was is finalized (and versioned) by the shared helper;
+ * any other parent gets a plain revision bump — the settlement is immutable
+ * truth whoever holds the claim, so no fence applies.
+ */
+function versionRequestSettlementInTransaction(tx: ThesisDb, jobId: string, authority: Date): void {
+  if (finalizeTerminalPaidLeasesInTransaction(tx, jobId, authority.toISOString())) return;
+  mutateJobSnapshotInTransaction(tx, {
+    jobId,
+    now: authority,
+    forceRevision: true,
+    mutate: () => ({}),
+  });
 }
 
 export interface PresumedCostRow {
@@ -582,9 +635,10 @@ export interface PresumedReconciliation {
  * (Usage & Cost API). The API reports totals per time bucket, not per
  * request, so the only sound inference is an upper bound: within a bucket,
  * presumed spend cannot exceed what Anthropic says the whole bucket cost,
- * minus the actual settlements already recorded there. The remainder is split
- * across that bucket's presumed rows in proportion to their reserved amounts,
- * and a row is only ever lowered, never raised.
+ * minus the spend already recorded there — actual settlements and the
+ * presumed rows an earlier run has already lowered. The remainder is split
+ * across that bucket's unreconciled presumed rows in proportion to their
+ * reserved amounts, and a row is only ever lowered, never raised.
  *
  * Pure over its inputs so it can be exercised offline; the fetch that
  * produces `buckets` lives in the reconcile script.
@@ -598,24 +652,42 @@ export function reconcilePresumedCostsAgainstReportedTotals(
   return db.transaction((tx): PresumedReconciliation[] => {
     const applied: PresumedReconciliation[] = [];
     for (const bucket of buckets) {
-      if (!(bucket.startTime < bucket.endTime) || !Number.isFinite(bucket.reportedUsd)) {
+      const startMs = Date.parse(bucket.startTime);
+      const endMs = Date.parse(bucket.endTime);
+      if (
+        !Number.isFinite(startMs) || !Number.isFinite(endMs) || !(startMs < endMs) ||
+        !Number.isFinite(bucket.reportedUsd)
+      ) {
         throw new Error("jobScheduler: invalid reported cost bucket");
       }
+      // `createdAt` is always `toISOString()` (millisecond precision) while the
+      // Cost API's bounds arrive without milliseconds, and as TEXT
+      // "…T00:00:00.000Z" sorts BEFORE "…T00:00:00Z": compared raw, every row
+      // from the first second of a day fell into the previous day's bucket.
+      // Both sides are compared in the one representation the ledger writes.
+      const startIso = new Date(startMs).toISOString();
+      const endIso = new Date(endMs).toISOString();
       const inBucket = tx.select().from(costLog)
         .where(and(
-          gte(costLog.createdAt, bucket.startTime),
-          lt(costLog.createdAt, bucket.endTime),
+          gte(costLog.createdAt, startIso),
+          lt(costLog.createdAt, endIso),
         ))
         .all();
       const presumed = inBucket.filter(
         (row) => row.settlementKind === "presumed" && row.reconciledAt === null && row.presumedAttemptId !== null,
       );
       if (presumed.length === 0) continue;
-      const actualMicro = inBucket
-        .filter((row) => row.settlementKind !== "presumed")
+      // Everything else in the bucket is spend the bucket already accounts
+      // for: actual settlements AND presumptions an earlier run lowered.
+      // Leaving the reconciled ones out handed their amount back to the
+      // remainder, so a second run over the same day (a new lease expired in
+      // between) raised the bucket above the reported total.
+      const unreconciled = new Set(presumed.map((row) => row.id));
+      const accountedMicro = inBucket
+        .filter((row) => !unreconciled.has(row.id))
         .reduce((total, row) => total + settledMicroUsd(row.costUsd), 0n);
       const reportedMicro = settledMicroUsd(Math.max(0, bucket.reportedUsd));
-      const remainingMicro = reportedMicro > actualMicro ? reportedMicro - actualMicro : 0n;
+      const remainingMicro = reportedMicro > accountedMicro ? reportedMicro - accountedMicro : 0n;
       const presumedTotalMicro = presumed.reduce(
         (total, row) => total + settledMicroUsd(row.costUsd),
         0n,
@@ -1579,6 +1651,23 @@ export interface SettlePaidPassInput<T> {
   step?: { finishedAt?: string; detail?: string };
 }
 
+/** Did any provider request settle beneath this pass attempt (D-10 `#rN` rows)? */
+function attemptHasSettledRequestsInTransaction(tx: ThesisDb, lease: PaidPassLease): boolean {
+  return tx.select({ attemptId: costLog.attemptId })
+    .from(costLog)
+    .where(and(
+      eq(costLog.jobId, lease.jobId),
+      eq(costLog.runGeneration, lease.runGeneration),
+      eq(costLog.step, lease.pass),
+    ))
+    .all()
+    .some((row) =>
+      row.attemptId !== null &&
+      row.attemptId !== lease.attemptId &&
+      costRowBelongsToAttempt(row.attemptId, lease.attemptId),
+    );
+}
+
 export interface SettlePaidPassResult extends PersistPassSettlementResult {
   overReservation: boolean;
   /** Revision committed with a new exact-current settlement; null otherwise. */
@@ -1675,11 +1764,30 @@ export function settlePaidPassLease<T>(
         eq(costLog.step, lease.pass),
       ))
       .get();
-    if (exact === undefined && presumed === undefined) {
+    // Authority to record the immutable truth of an authorized attempt never
+    // depends on which transaction happened to run first:
+    //  - an exact lease that has EXPIRED but not yet been swept is the same
+    //    authority as the presumed row a sweep would have made of it — the
+    //    reservation was counted while it lived, and the end state (measured
+    //    row, no lease) is identical either way. Refusing it here while
+    //    accepting it after an unrelated prune meant a laptop that slept past
+    //    the TTL dropped the measured partial cost and later booked the whole
+    //    reservation as presumed;
+    //  - a request-reservation pass lease is resized to $0 after its first
+    //    request and, holding nothing, is swept without a presumed marker. The
+    //    requests settled beneath the attempt (`<attemptId>#rN`) are still
+    //    proof that it was authorized and billed, so the pass artifact they
+    //    belong to is welcome — without it the artifact was lost, the resume
+    //    reader saw "cost row exists without its artifact", and a retry
+    //    re-ran and re-billed a pass whose output had already been paid for.
+    // What a stale owner may NOT do is touch the current snapshot: that is the
+    // projection fence below (`exactLiveCurrent`), which is keyed on the job
+    // claim, not on the paid lease.
+    if (
+      exact === undefined && presumed === undefined &&
+      !attemptHasSettledRequestsInTransaction(tx as ThesisDb, lease)
+    ) {
       throw new Error("jobScheduler: stale paid-pass lease has no settlement authority");
-    }
-    if (exact !== undefined && exact.leaseExpiresAt <= authorityAt && presumed === undefined) {
-      throw new Error("jobScheduler: expired paid-pass lease has no settlement authority");
     }
     const persisted = persistPassSettlementInTransaction(tx, settlementInput, prepared, {
       jobLeaseOwner: lease.jobLeaseOwner,

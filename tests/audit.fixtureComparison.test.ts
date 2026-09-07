@@ -173,7 +173,7 @@ describe("Task 32 provider-free historical fixture comparison", () => {
         reportSha256: AUDITED_REPORT_SHA256,
       },
       generator: {
-        helperSha256: "73e890f2ec86463f5c86cb220e7ee65c8955ba4e0fdcbbc7eea6baff5e035bfe",
+        helperSha256: "48af864a1d2a5bb165eb2832871bc2651f34a5951959450d2074512e4a7a26d7",
         basePackageLockBlob: "66f7242846b6d20cfe99e21400d2dada27bbfbfd",
         comparisonPackageLockBlob: "58d0f8390e3ee80281eec42f1dce8133f8d7daf2",
         generationNode: "v24.11.1",

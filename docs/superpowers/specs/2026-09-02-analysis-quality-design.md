@@ -134,8 +134,9 @@ returns section reports (`compute.ts` passes `roic.series`); the valuation
 context gained `roic: RoicResult`. The reinvestment rate stays `g / ROICterm`
 (Damodaran consistency), so a higher terminal ROIC lowers terminal
 reinvestment rather than inventing growth. The sensitivity grid varies WACC
-and g around a fixed terminal ROIC. Effect on the sweep issuers is recorded
-under live validation below.
+and g; since the 2026-09-06 audit each cell keeps the base case's excess over
+its own WACC rather than a fixed terminal-ROIC level. Effect on the sweep
+issuers is recorded under live validation below.
 
 ### 2. Statement stand-ins (`src/edgar/statements.ts`, `src/pipeline/keyless.ts`)
 
@@ -232,6 +233,12 @@ judge's retries are.
 
 ### 8. No-trend growth anchor (`src/pipeline/stageB/valuation.ts`)
 
+**Superseded by WS6 decision D-18** (recorded in
+[DECISIONS.md](../../audit/DECISIONS.md) and METHODOLOGY "Growth anchor"): the
+anchor is now the median of the available growth methods, and neither the
+lower-of-two-CAGRs rule nor the sign-disagreement rule below is in the code.
+The text is kept as the record of what this spec implemented.
+
 The near-term growth rate anchors on the lower of the three- and five-year
 revenue CAGRs. When the two disagree in sign, the history holds a spike or a
 collapse rather than a trend, and near-term growth is set to the terminal
@@ -303,7 +310,8 @@ even when an OCF exists. General routes are unchanged.
 - `tests/stageB.valuation.test.ts` — `terminalRoic` (default, cap, modest
   spread, one year below, short history, thin spread, newest-five window),
   the assumption-block integration (higher EV for an evidenced compounder;
-  hold note when history falls short), and the sign-disagreement growth rule.
+  hold note when history falls short), and the sign-disagreement growth rule
+  (since retired by D-18; the test now asserts the median anchor).
 - `tests/edgar.statements.test.ts`, `tests/keyless.test.ts`,
   `tests/edgar.client.test.ts`, `tests/dataBundle.edgarForms.test.ts` — the
   stand-ins (interest, EBIT, the bank guard, equity), the maturities
@@ -345,8 +353,8 @@ the day; "after" is the build carrying every change above.
 | Issuer | Before | After |
 | --- | --- | --- |
 | CAT | no DCF (WACC had no cost of debt; then invested capital missing) | DCF $201.02 (−74.5% vs quote); terminal ROIC = WACC 9.93% + 2.95pp (ROIC > WACC 2021–2025, median spread 5.91pp); interest and equity stand-ins in the manifest; balance anchor fell back to the 2025-12-31 annual row because the 2026-06-30 10-Q row lacks totalDebt (`valuation.balanceAnchor` info gap) |
-| PFE | no DCF; then −88% (negative 3y CAGR extrapolated) | DCF $8.82 (−69.4%); near-term growth = terminal 2.5% under the no-trend rule; EBIT stand-in disclosed |
-| GE | no DCF | DCF $104.03 (−68.6%); no-trend rule applied; `valuation.dcf.ttmEbitMargin` still a gap: GE files `InterestPaidNet` only in its 10-K, so the quarterly rows have no interest figure and the EBIT stand-in resolves for no recent quarter (annual EBIT is derived; TTM is not) |
+| PFE | no DCF; then −88% (negative 3y CAGR extrapolated) | DCF $8.82 (−69.4%); near-term growth = terminal 2.5% under the no-trend rule (since retired by D-18); EBIT stand-in disclosed |
+| GE | no DCF | DCF $104.03 (−68.6%); no-trend rule applied (since retired by D-18); `valuation.dcf.ttmEbitMargin` still a gap: GE files `InterestPaidNet` only in its 10-K, so the quarterly rows have no interest figure and the EBIT stand-in resolves for no recent quarter (annual EBIT is derived; TTM is not) |
 | JPM | −49%, with a derived "EBIT" on the bank income statement | −49.3%; no operating-income stand-in on the bank route |
 | AAPL | −64% | −62.0%; terminal ROIC = WACC 9.04% + 5pp (cap; median spread 70.44pp) |
 | KO | −58% | −50.6%; terminal ROIC = WACC 6.56% + 4.81pp (median spread 9.62pp) |
@@ -357,7 +365,8 @@ the day; "after" is the build carrying every change above.
 
 The valuation aspect still grades F for most of these issuers. What remains
 is WACC of 9–10% against a 2.5% terminal rate and a growth anchor on the
-lower of two historical CAGRs — conservatism with a stated basis, not a
+lower of two historical CAGRs (D-18 later replaced that rule with the median
+of the available methods) — conservatism with a stated basis, not a
 data defect. Any further move needs its own citable rule.
 
 Haiku report on CAT (`ANALYSIS_MODEL=claude-haiku-4-5`, judge floored to

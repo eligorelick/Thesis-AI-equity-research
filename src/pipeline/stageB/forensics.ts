@@ -7,7 +7,7 @@
  * All formulas, coefficients, and denominators are primary-source-verified in
  * the forensic methodology — that document is authoritative. Field names on
  * the input rows match FMP's stable-API statement responses exactly
- * (the provider data contract §2.3); the integration layer wires the DataBundle in.
+ *; the integration layer wires the DataBundle in.
  *
  * Contract (Stage B design rules):
  * - NO network, NO db, NO LLM. Plain typed inputs → typed results.
@@ -23,7 +23,7 @@
 import type { CompanyRoute, ManifestEntry } from "@/types/core";
 
 // ---------------------------------------------------------------------------
-// Input row contracts — field names exactly as FMP names them (the provider data contract).
+// Input row contracts — field names exactly as FMP names them.
 // All numeric fields are optional `number | null`: undefined and null are both
 // treated as "missing". NOTE: FMP emits 0 for some undisclosed items; fields
 // where 0 is implausible (SG&A, interest expense) are re-nulled internally.
@@ -151,7 +151,7 @@ function posOrNull(v: Num): number | null {
 
 /**
  * FMP zero-for-undisclosed policy: 0 treated as null for fields where a true
- * zero is implausible (interest expense, SG&A). SPEC §3 / DATA_MAP §1.1.
+ * zero is implausible (interest expense, SG&A). House rule.
  */
 function zeroAsNull(v: Num): number | null {
   const n = nv(v);
@@ -391,13 +391,16 @@ export function computeAltman(inputs: AltmanInputs, variant: AltmanVariant): Alt
     if (ebit !== null) notes.push("EBIT missing — operatingIncome used for X3 (fallback).");
   }
   if (ebit === null) {
-    const ni = nv(inc.netIncome);
+    // X3 is OPERATING earnings: a discontinued operation's result is not, so
+    // the reconstruction starts from continuing operations where the filer
+    // reports them (the same base Beneish and Piotroski use).
+    const ni = continuingNetIncome(inc);
     const tax = nv(inc.incomeTaxExpense);
     const interest = zeroAsNull(inc.interestExpense); // 0 = FMP undisclosed artifact
     if (ni !== null && tax !== null && interest !== null) {
       ebit = ni + tax + interest;
       notes.push(
-        "EBIT reconstructed as netIncome + incomeTaxExpense + interestExpense (last-resort fallback).",
+        "EBIT reconstructed as net income from continuing operations (netIncome where the continuing figure is not reported) + incomeTaxExpense + interestExpense (last-resort fallback).",
       );
     }
   }
@@ -564,7 +567,9 @@ export interface AltmanVariantSelection {
 /**
  * Variant-selection rule (research §1.4):
  * - financials (bank/insurer routes, mortgage REITs, sector "Financial
- *   Services", SIC 6000–6799) → no Z-score, with an explanatory note;
+ *   Services", SIC 6000–6499 or 6700–6799 — major group 65, real-estate
+ *   operators, is deliberately outside the band) → no Z-score, with an
+ *   explanatory note;
  * - SIC 2000–3999 → manufacturer → original 1968 Z;
  * - emerging-market listing → Z″ + 3.25 constant (zones 4.35/5.85);
  * - everything else → Z″ without the constant (zones 1.10/2.60).
@@ -605,7 +610,7 @@ export function selectAltmanVariant(
   }
   if (sicNum !== null && isFinancialSicBand(sicNum) && route.base !== "reit") {
     notes.push(
-      `Altman Z not computed: SIC ${sicNum} is in the financial range 6000–6799 (research §6.3 classifier).`,
+      `Altman Z not computed: SIC ${sicNum} is in the financial range (6000–6499 or 6700–6799; research §6.3 classifier).`,
     );
     return { variant: null, notes };
   }
@@ -725,7 +730,16 @@ export interface BeneishResult {
  * carries the largest coefficient). Not valid for financial companies —
  * suppression happens in runForensics.
  */
-export function computeBeneish(current: ForensicsPeriod, prior: ForensicsPeriod): BeneishResult {
+export interface BeneishOptions {
+  /**
+   * Revenue floor (reporting-currency units) below which the indices are
+   * withheld in either year (research §6.1). Defaults to the house floor;
+   * toy-scale callers pass their own.
+   */
+  revenueFloor?: number;
+}
+
+export function computeBeneish(current: ForensicsPeriod, prior: ForensicsPeriod, options?: BeneishOptions): BeneishResult {
   const notes: string[] = [];
   const gaps: ManifestEntry[] = [];
   const neutralized: BeneishIndexName[] = [];
@@ -759,7 +773,22 @@ export function computeBeneish(current: ForensicsPeriod, prior: ForensicsPeriod)
     gaps.push(
       gapEntry(
         "forensics.beneish",
-        "pre-revenue/near-zero or undisclosed revenue — manipulation indices not meaningful (research §6.1)",
+        "pre-revenue or undisclosed revenue — manipulation indices not meaningful (research §6.1)",
+        "warn",
+      ),
+    );
+    return base(null);
+  }
+  // Research §6.1: the indices are ratios of ratios of revenue, and below the
+  // house floor they are arithmetic on noise (a $20k → $5M year clamps SGI to
+  // 10 and SGAI to 0.1 and prints a "flag" M-score). The floor is the one the
+  // support flags already apply to growth comparisons.
+  const revenueFloor = options?.revenueFloor ?? FORENSICS_HOUSE_RULES.revenueFloor;
+  if (salesT < revenueFloor || salesP < revenueFloor) {
+    gaps.push(
+      gapEntry(
+        "forensics.beneish",
+        `revenue below the house floor of ${revenueFloor} in at least one of the two years (${salesP} → ${salesT}) — the manipulation indices are ratios of ratios of revenue and are withheld rather than computed on a near-zero base (research §6.1)`,
         "warn",
       ),
     );
@@ -854,6 +883,14 @@ export function computeBeneish(current: ForensicsPeriod, prior: ForensicsPeriod)
       "DEPI: depreciation rate built from the income statement for BOTH years (cash-flow D&A unavailable in one or both) — one basis, never mixed.",
     );
   }
+  if (drT !== null && drP !== null) {
+    // Beneish (1999) defines the rate on DEPRECIATION of PP&E; the statements
+    // carry one combined D&A line, so amortisation of intangibles is inside
+    // the numerator. Said once, on the number (research §2.1).
+    notes.push(
+      "DEPI: rate built from combined depreciation AND amortisation over (D&A + net PP&E) — the statements do not separate depreciation; Beneish's index is on depreciation of PP&E alone, so an acquisitive issuer's intangible amortisation moves this index for reasons unrelated to depreciation policy (research §2.1).",
+    );
+  }
   const depiRaw = drT !== null && drP !== null && drT > 0 ? drP / drT : null;
 
   // SGAI — SG&A zero treated as undisclosed; fallback G&A + S&M
@@ -914,7 +951,7 @@ export function computeBeneish(current: ForensicsPeriod, prior: ForensicsPeriod)
   const levP = leverage(prior.balance);
   const lvgiRaw = levT !== null && levP !== null && levP > 0 ? levT / levP : null;
 
-  // TATA — PRIMARY: cash-flow construction (Hribar–Collins; Thesis decision §2.2)
+  // TATA — PRIMARY: cash-flow construction (Hribar–Collins; research §4.2)
   const niT = continuingNetIncome(current.income);
   if (niT !== null && nv(current.income?.netIncomeFromContinuingOperations) === null) {
     notes.push("TATA: netIncomeFromContinuingOperations unavailable — netIncome used (fallback).");
@@ -1267,26 +1304,30 @@ export function computePiotroski(
   {
     const deMin = options?.equityIssuanceDeMinimis ??
       FORENSICS_HOUSE_RULES.piotroskiEquityIssuanceDeMinimisDefault;
-    let iss = nv(current.cashFlow?.commonStockIssuance);
+    const iss = nv(current.cashFlow?.commonStockIssuance);
     if (iss === null) {
-      iss = 0;
-      notes.push(
-        "EQ_OFFER: commonStockIssuance missing — treated as no issuance (verify against diluted share-count trend).",
-      );
+      // Not evaluable, like every other signal with a missing input: the
+      // paper awards the point only when the firm demonstrably issued no
+      // equity, and an undisclosed figure (the keyless path resolves one
+      // element only; a filer tagging its proceeds under another element
+      // arrives as null) demonstrates nothing. Scoring it as a pass biased
+      // every such score upward by a free point.
+      s7 = na("commonStockIssuance not disclosed — equity-issuance test not evaluable (verify against the diluted share-count trend)");
       gaps.push(
         gapEntry(
           "forensics.piotroski.commonStockIssuance",
-          "commonStockIssuance missing — equity-issuance test assumed no issuance",
+          "commonStockIssuance missing — equity-issuance test not evaluated (signal withheld, denominator reduced)",
           "info",
         ),
       );
+    } else {
+      if (deMin > 0) {
+        notes.push(
+          `House rule: equity-issuance de-minimis of ${deMin} applied (paper is strict no-issuance; threshold left open in research notes).`,
+        );
+      }
+      s7 = sig(iss <= deMin, `commonStockIssuance ${iss}${deMin > 0 ? ` vs de-minimis ${deMin}` : ""}`);
     }
-    if (deMin > 0) {
-      notes.push(
-        `House rule: equity-issuance de-minimis of ${deMin} applied (paper is strict no-issuance; threshold left open in research notes).`,
-      );
-    }
-    s7 = sig(iss <= deMin, `commonStockIssuance ${iss}${deMin > 0 ? ` vs de-minimis ${deMin}` : ""}`);
   }
 
   // 8. F_ΔMARGIN — gross margin ratio rose
@@ -1316,14 +1357,6 @@ export function computePiotroski(
         : na("revenue or beginning-of-year total assets missing");
   }
 
-  if (!prior2 && !balanceSheetFunded) {
-    notes.push(
-      "Only 2 fiscal years supplied — ΔROA and Δturnover unavailable; F-score reported out of 7 (research §6.2).",
-    );
-  } else if (!prior2) {
-    notes.push("Only 2 fiscal years supplied — ΔROA unavailable in addition to the withheld financial signals.");
-  }
-
   const signals: Record<PiotroskiSignalName, PiotroskiSignal> = {
     roaPositive: s1,
     cfoPositive: s2,
@@ -1347,6 +1380,18 @@ export function computePiotroski(
   const missing = (Object.entries(signals) as [PiotroskiSignalName, PiotroskiSignal][])
     .filter(([, s]) => s.value === null)
     .map(([name]) => name);
+  // The two-year note states the denominator ACTUALLY used: with the financial
+  // signals also withheld a two-year FIN-OTHER issuer is out of 3, not 7, and
+  // a data gap can drop a further signal.
+  if (!prior2 && !balanceSheetFunded && !finSuppressed) {
+    notes.push(
+      `Only 2 fiscal years supplied — ΔROA and Δturnover unavailable; F-score reported out of ${outOf} (research §6.2).`,
+    );
+  } else if (!prior2) {
+    notes.push(
+      `Only 2 fiscal years supplied — ΔROA unavailable in addition to the withheld financial signals; F-score reported out of ${outOf}.`,
+    );
+  }
   if (outOf < 9) {
     gaps.push(
       gapEntry(
@@ -1358,7 +1403,9 @@ export function computePiotroski(
   }
 
   // WS5: the label carries the scale. A 3-of-3 on a bank must never be read
-  // against the paper's 9-point scale, and the payload/UI render this string.
+  // against the paper's 9-point scale; the Stage C payload renders this string
+  // as the figure's label (payload.ts), and grading weights the signal by the
+  // share of the nine signals that were evaluable.
   const variant: PiotroskiResult["variant"] = finSuppressed ? "financial" : "standard";
   // The count comes from the signals actually withheld, never from the gate
   // flag: a DATA gap can drop a seventh signal, and saying "six" while seven
@@ -1666,15 +1713,18 @@ export function computeSupportFlags(
     const invT = nv(balT.inventory);
     const invP = nv(balP.inventory);
     const invGrowth = growthPct(invT, invP);
-    const rawRevGrowth = growthPct(revT, revPrior);
-    if (invGrowth !== null && rawRevGrowth !== null && rawRevGrowth < H.inventoryOverhangRevenueDeclinePct) {
+    // The overhang notice is a growth-based flag like its siblings: it honours
+    // the revenue floor and the non-positive-base guard (revGrowth is null in
+    // both cases), rather than printing a percentage on the very base the
+    // module has just declared meaningless.
+    if (invGrowth !== null && revGrowth !== null && revGrowth < H.inventoryOverhangRevenueDeclinePct) {
       // Demand collapse mechanically inflates DIO — different message.
       if (invGrowth > 0) {
         flags.push({
           id: "inventory-overhang",
           severity: "info",
-          message: `Revenue fell ${fmt1(Math.abs(rawRevGrowth))}% while inventory grew ${fmt1(invGrowth)}% — inventory overhang from a demand decline; growth-gap heuristics suppressed.`,
-          metrics: { inventoryGrowthPct: invGrowth, revenueGrowthPct: rawRevGrowth },
+          message: `Revenue fell ${fmt1(Math.abs(revGrowth))}% while inventory grew ${fmt1(invGrowth)}% — inventory overhang from a demand decline; growth-gap heuristics suppressed.`,
+          metrics: { inventoryGrowthPct: invGrowth, revenueGrowthPct: revGrowth },
           rule: `house rule: growth-gap comparison suppressed when revenue growth < ${H.inventoryOverhangRevenueDeclinePct}%`,
           heuristic: true,
           asOf: growthDates,
@@ -1794,6 +1844,12 @@ export interface ForensicsInputs {
   /** Overrides route.evidence for variant selection / financial detection. */
   classification?: AltmanClassification;
   isEmergingMarket?: boolean;
+  /**
+   * House revenue floor (reporting-currency units) below which the Beneish
+   * indices and the growth-based support flags are withheld. Defaults to
+   * FORENSICS_HOUSE_RULES.revenueFloor; toy-scale fixtures pass 0.
+   */
+  revenueFloor?: number;
   /** Piotroski equity-issuance de-minimis (default 0 = paper-strict). */
   equityIssuanceDeMinimis?: number;
 }
@@ -1873,7 +1929,7 @@ export function alignForensicPeriods(
   for (const record of records) {
     // Attach to the nearest existing cluster within tolerance, EVEN IF that
     // statement kind is already filled. A second same-kind row sharing a
-    // fiscal-period end is an FMP restatement double-row (DATA_MAP §1.1): it must
+    // fiscal-period end is an FMP restatement double-row: it must
     // be DEDUPED into the existing period, never spawned as a phantom cluster.
     // A phantom would sort between the real consecutive years and gate out every
     // change-based metric (Beneish/Piotroski deltas/accruals/growth flags) with a
@@ -1933,13 +1989,6 @@ export interface ForensicsReport {
   gaps: ManifestEntry[];
 }
 
-/**
- * True when Altman Z / Beneish M / accrual ratios must be suppressed:
- * bank/insurer/mortgage-REIT routes, FMP sector "Financial Services", or
- * SIC 6000–6799 (except the equity-REIT route, which SPEC §6 keeps on the
- * general forensic map with a caution). Piotroski is still computed for
- * financials (all 9 inputs exist) with a validation-sample caveat.
- */
 /**
  * SIC major groups whose balance sheets break Altman, Beneish and the accrual
  * ratios: depositories, credit agencies, brokers and insurers (60-64), and
@@ -2100,9 +2149,16 @@ export function runForensics(route: CompanyRoute, inputs: ForensicsInputs): Fore
         if (priv.score !== null) {
           // Carry the original attempt's gaps and notes: they are the only
           // record of WHY market equity was unusable, and dropping them left
-          // the substitution unexplained in the manifest.
-          priv.gaps.push(...altman.gaps);
-          priv.notes.push(...altman.notes);
+          // the substitution unexplained in the manifest. Only what the
+          // private computation did not already say: it ran on the same rows
+          // and emitted the same EBIT-fallback and derivation notes, which
+          // used to print twice.
+          for (const g of altman.gaps) {
+            if (!priv.gaps.some((existing) => existing.field === g.field && existing.reason === g.reason)) priv.gaps.push(g);
+          }
+          for (const n of altman.notes) {
+            if (!priv.notes.includes(n)) priv.notes.push(n);
+          }
           priv.notes.push(
             "Original-variant X4 (market value of equity) unusable — Altman Z' (1983, BOOK equity) " +
               "substituted; its zones (1.23 / 2.90) are applied, not the original's.",
@@ -2146,7 +2202,7 @@ export function runForensics(route: CompanyRoute, inputs: ForensicsInputs): Fore
       ),
     );
   } else {
-    beneish = computeBeneish(cur, pri);
+    beneish = computeBeneish(cur, pri, { revenueFloor: inputs.revenueFloor });
   }
 
   // --- Piotroski (still computed for financials, with a caveat) ---
@@ -2214,7 +2270,7 @@ export function runForensics(route: CompanyRoute, inputs: ForensicsInputs): Fore
       income: periods.map((period) => period.income ?? null),
       balance: periods.map((period) => period.balance ?? null),
     },
-    { periodsConsecutive: priorConsecutive },
+    { periodsConsecutive: priorConsecutive, revenueFloor: inputs.revenueFloor },
   );
   const flags = [...support.flags];
   // Mirror the gaps aggregation below. `notes` is the ONLY notes channel the

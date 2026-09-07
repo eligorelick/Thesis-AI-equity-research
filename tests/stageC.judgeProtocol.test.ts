@@ -450,6 +450,12 @@ describe("judge case order (THESIS_JUDGE_ORDER)", () => {
     // read the fact in prose.
     expect(protocol?.note).toContain("read the bear case first");
     expect(protocol?.note).toContain("THESIS_JUDGE_ORDER=bear-first");
+    // A pinned order is fixed by configuration; the note must not claim it was
+    // drawn from the seed or that first position floated (audit 2026-09-06, F174).
+    expect(protocol?.note).toContain("pins that order");
+    expect(protocol?.note).toContain("fixed to the bear side by configuration");
+    expect(protocol?.note).not.toContain("not fixed to one side");
+    expect(protocol?.note).not.toContain("drawn from seed");
     expect(
       report.appendix.missingData.some(
         (entry) => entry.field === "llm.judge.case-order" && entry.reason === protocol?.note,
@@ -524,6 +530,38 @@ describe("THESIS_JUDGE_ORDER=both", () => {
     // Two paid requests, one settled pass: the cost log must see both.
     expect(run.result.costUsd).toBeCloseTo(1.0, 10);
     expect(run.result.usage.input_tokens).toBe(2000);
+  });
+
+  /**
+   * A validation retry carries the primary's "repair this JSON in place" turn.
+   * A mirrored request anchored on that same previous output is not an
+   * independent draw, so on a retry the mirror is not run and the
+   * reconciliation is disclosed as not performed — instead of reporting that
+   * two repairs of one document "agreed".
+   */
+  it("does not run the mirrored pass on a repair-in-place retry and discloses why", async () => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { costUsd: 0.4 });
+    mock.onJson("llm.judge", fakeJudgeOutput(), { costUsd: 0.6 });
+
+    const run = await runJudgePass(
+      makeDeps(mock, { judgeOrder: "both" }),
+      payload,
+      analystCase("bull"),
+      analystCase("bear"),
+      "invalid_value at valuation.scenarios\n\nYOUR PREVIOUS OUTPUT (repair this JSON in place — do not start over):\n{}",
+    );
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+
+    const calls = mock.calls.filter((call) => call.field === "llm.judge");
+    expect(calls).toHaveLength(1);
+    expect(JSON.stringify(calls[0].messages)).toContain("repair this JSON in place");
+    expect(run.result.costUsd).toBeCloseTo(0.4, 10);
+    const reconciliation = run.result.judgeProtocol?.reconciliation;
+    expect(reconciliation?.performed).toBe(false);
+    expect(run.result.judgeProtocol?.disclosures.some((entry) => /repair-in-place/.test(entry.reason))).toBe(true);
   });
 
   it("reports agreement when the mirrored pass produced the same grades and probabilities", async () => {
@@ -781,6 +819,65 @@ describe("analyst case length cap", () => {
     expect(oversized.catalysts).toHaveLength(60);
   });
 
+  it("drops evidence entries before any claim, in the order the analyst prompt states (audit 2026-09-06, F163/F166)", () => {
+    const filler = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        text: `claim ${i} ${"x".repeat(200)}`,
+        label: "FACT" as const,
+        source: "payload",
+        asOf: null,
+      }));
+    const evidence = Array.from({ length: 200 }, (_, i) => ({
+      value: i,
+      unit: "%",
+      source: `computed.growth-margins.revenue-cagr-${i}-${"e".repeat(150)}`,
+      asOf: "2025-09-27",
+      verified: null,
+    }));
+    const oversized = analystCase("bull", { evidence, keyDrivers: filler(20), catalysts: filler(20), risksToCase: filler(20) });
+    const capped = capAnalystCase(oversized);
+    expect(capped.presentation.chars).toBeLessThanOrEqual(ANALYST_CASE_CHAR_CAP);
+    // Evidence went first and the claims were untouched.
+    expect(capped.value.evidence.length).toBeLessThan(200);
+    expect(capped.value.catalysts.length).toBe(20);
+    expect(capped.value.risksToCase.length).toBe(20);
+    expect(capped.value.keyDrivers.length).toBe(20);
+    expect(buildBullFraming()).toContain("trailing evidence entries are dropped first, then catalysts, then risks, then drivers");
+  });
+
+  it("shortens a single runaway claim instead of erasing it (audit 2026-09-06, F164/F165)", () => {
+    // One 30,000-char thesis and nothing droppable: the old 40-char floor left
+    // the thesis as a bare truncation marker, and the marker was longer than
+    // the budget it was given.
+    const oversized = analystCase("bull", {
+      thesis: [{ text: `The thesis begins here. ${"t".repeat(30_000)}`, label: "JUDGMENT", source: "payload", asOf: null }],
+    });
+    const capped = capAnalystCase(oversized);
+    expect(capped.presentation.chars).toBeLessThanOrEqual(ANALYST_CASE_CHAR_CAP);
+    expect(capped.presentation.droppedItems).toBe(0);
+    const thesis = capped.value.thesis[0].text;
+    expect(thesis.startsWith("The thesis begins here.")).toBe(true);
+    expect(thesis).toContain("[TRUNCATED");
+    expect(thesis.length).toBeLessThan(30_000);
+    expect(capped.disclosure).toContain("1 claim text was shortened");
+    expect(capped.disclosure).not.toContain("still");
+  });
+
+  it("says so when the remaining bulk sits outside the claim texts and the cap cannot hold", () => {
+    // A single evidence entry with a 30,000-char source: nothing to drop
+    // (never below one entry), nothing to shorten (sources are not texts).
+    const oversized = analystCase("bull", {
+      evidence: [{ value: 1, unit: "%", source: `computed.${"s".repeat(30_000)}`, asOf: "2025-09-27", verified: null }],
+    });
+    const capped = capAnalystCase(oversized);
+    expect(capped.presentation.truncated).toBe(true);
+    expect(capped.presentation.chars).toBeGreaterThan(ANALYST_CASE_CHAR_CAP);
+    expect(capped.value.thesis[0].text).toBe("bull thesis marker");
+    expect(capped.disclosure).toContain("still");
+    expect(capped.disclosure).toContain("over the cap");
+    expect(capped.disclosure).toContain("outside the claim texts");
+  });
+
   it("caps both sides identically and tells the judge both lengths", () => {
     const { payload } = buildInputs();
     const bull = analystCase("bull");
@@ -839,6 +936,9 @@ describe("analyst case length cap", () => {
     expect(report.meta.judgeProtocol?.bull?.truncated).toBe(true);
     expect(report.meta.judgeProtocol?.bear?.truncated).toBe(false);
     expect(report.meta.judgeProtocol?.note).toContain("after truncation");
+    // Random setting: the order really was drawn, and the note says so.
+    expect(report.meta.judgeProtocol?.note).toContain("drawn from seed");
+    expect(report.meta.judgeProtocol?.note).toContain("not fixed to one side");
     const entry = report.appendix.missingData.find((m) => m.field === "llm.bull.length-cap");
     expect(entry?.severity).toBe("warn");
     expect(entry?.reason).toContain("Both sides share the same cap");

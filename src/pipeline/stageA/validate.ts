@@ -1,5 +1,5 @@
 /**
- * Stage A validation (the application contract §3) — pure, deterministic, no network/db/LLM.
+ * Stage A validation  — pure, deterministic, no network/db/LLM.
  *
  * Four validation families, all report-renderable:
  *  1. Balance-sheet identity |assets − (liabilities + equity)| / assets ≤ 0.5%
@@ -7,11 +7,11 @@
  *  2. FMP ↔ EDGAR XBRL cross-check on revenue + netIncome for the latest FY
  *     and latest quarter, via src/edgar/xbrl.ts concept chains (bank chains
  *     included) with the critical form-filtered dedup. Tolerance 0.5%.
- *  3. Staleness flags per DATA_MAP §3 TTL expectations: fundamentals more than
+ *  3. Staleness flags per the cache TTL expectations: fundamentals more than
  *     ~120 d behind the expected quarter end, stale quotes, 13F older than the
  *     latest quarter whose 45-day deadline has passed.
  *  4. Zero-as-null sweep: implausible FMP zeros (interestExpense, SG&A) are
- *     marked as undisclosed (DATA_MAP §1.1) — recorded, never silently used.
+ *     marked as undisclosed — recorded, never silently used.
  *
  * Every house-rule threshold is annotated in the returned `flags` array
  * rather than silently applied. Missing inputs produce "skipped" checks and
@@ -39,17 +39,25 @@ import {
 // House-rule constants (every one surfaced in flags when applied)
 // ---------------------------------------------------------------------------
 
-/** Balance-sheet identity tolerance, percent of total assets (SPEC §3). */
+/** Balance-sheet identity tolerance, percent of total assets (house rule). */
 export const IDENTITY_TOLERANCE_PCT = 0.5;
 /** Annual periods the identity check covers. */
 export const IDENTITY_PERIODS = 4;
-/** FMP↔XBRL cross-check tolerance, percent (DATA_MAP §2.3). */
+/** FMP↔XBRL cross-check tolerance, percent (house rule). */
 export const CROSS_CHECK_TOLERANCE_PCT = 0.5;
 /** Fundamentals staleness: newest statement should cover the latest calendar
  * quarter that ended ≥ this many days ago (10-Q deadline ≈ 40–45 d + slack). */
 export const FUNDAMENTALS_STALE_LAG_DAYS = 120;
 /** Slack for 52/53-week fiscal calendars when comparing period ends. */
 export const FISCAL_CALENDAR_SLACK_DAYS = 10;
+/**
+ * A foreign private issuer (an ADR) files Form 20-F annually and 6-K ad hoc —
+ * no 10-Q — and many report half-yearly, so its newest statement period may
+ * legitimately be a half-year plus the 20-F filing window old. Assuming the
+ * 10-Q cadence flagged every semi-annual 20-F filer as "more than one filing
+ * cycle behind" for months each year and fed the flag to the analyst passes.
+ */
+export const FOREIGN_PRIVATE_ISSUER_HALF_YEAR_DAYS = 183;
 /** Quote asOf older than this (calendar days) is flagged. */
 export const QUOTE_STALE_DAYS = 7;
 /** Fields where an FMP `0` is implausible and means "not disclosed". */
@@ -100,6 +108,8 @@ export interface ValidateProfileRow {
   [key: string]: unknown;
   sector?: string | null;
   industry?: string | null;
+  /** True for an American depositary share — the filer's cadence is 20-F/6-K, not 10-Q. */
+  isAdr?: boolean | null;
 }
 
 export interface ValidatableBundle {
@@ -201,7 +211,7 @@ function parseDateMs(d: string): number {
  * Equity for the identity: totalEquity (includes minority interest) preferred;
  * FMP-zero (undisclosed) falls back to totalStockholdersEquity + minorityInterest.
  * Note: legitimately negative equity is accepted — only 0/missing is treated
- * as undisclosed (DATA_MAP §1.1 zero-vs-undisclosed).
+ * as undisclosed (the zero-vs-undisclosed policy).
  */
 function pickEquity(row: ValidateBalanceRow): { value: number; basis: string } | null {
   if (isFiniteNumber(row.totalEquity) && row.totalEquity !== 0) {
@@ -238,7 +248,7 @@ function checkBalanceSheetIdentity(bundle: ValidatableBundle, c: Collector): voi
 
   addFlag(
     c,
-    `House rule: balance-sheet identity tolerance ${IDENTITY_TOLERANCE_PCT}% of total assets, latest ${IDENTITY_PERIODS} annual periods (SPEC §3).`,
+    `House rule: balance-sheet identity tolerance ${IDENTITY_TOLERANCE_PCT}% of total assets, latest ${IDENTITY_PERIODS} annual periods.`,
   );
 
   const rows = byDateDesc(balance.value.data.rows).slice(0, IDENTITY_PERIODS);
@@ -362,7 +372,7 @@ const CROSS_SPECS: CrossSpec[] = [
  * stageB/sectorRouting.ts (industry prefix first, then sector) — it only
  * decides whether the FMP↔XBRL revenue cross-check should prefer total-revenue
  * bank tags over ASC-606 RFC fee tags. Insurance BROKERS are fee-based and
- * route GENERAL (sectorRouting §3), so they are excluded here too.
+ * route GENERAL (sectorRouting), so they are excluded here too.
  */
 function routesAsFinancial(bundle: ValidatableBundle): boolean {
   const res = bundle.profile;
@@ -537,7 +547,7 @@ function checkFmpXbrlCross(bundle: ValidatableBundle, c: Collector): void {
 
   addFlag(
     c,
-    `House rule: FMP↔XBRL cross-check tolerance ${CROSS_CHECK_TOLERANCE_PCT}% on revenue and net income, latest FY + latest quarter (DATA_MAP §2.3).`,
+    `House rule: FMP↔XBRL cross-check tolerance ${CROSS_CHECK_TOLERANCE_PCT}% on revenue and net income, latest FY + latest quarter.`,
   );
 
   // Bank-revenue routing (L1): prefer total-revenue bank tags over ASC-606 RFC
@@ -658,7 +668,36 @@ function newestStatementEnd(bundle: ValidatableBundle): string | null {
 function checkStaleness(bundle: ValidatableBundle, now: Date, c: Collector): void {
   // -- fundamentals cadence ---------------------------------------------------
   const newest = newestStatementEnd(bundle);
-  if (newest !== null) {
+  const profileRow = bundle.profile?.ok ? bundle.profile.value.data.rows[0] : undefined;
+  const foreignPrivateIssuer = profileRow?.isAdr === true;
+  if (newest !== null && foreignPrivateIssuer) {
+    const limitDays = FOREIGN_PRIVATE_ISSUER_HALF_YEAR_DAYS + FUNDAMENTALS_STALE_LAG_DAYS + FISCAL_CALENDAR_SLACK_DAYS;
+    addFlag(
+      c,
+      `House rule: the issuer is an ADR (a foreign private issuer files Form 20-F annually and 6-K ad hoc — no 10-Q), so fundamentals are flagged stale only when the newest statement period end is more than ${limitDays} days old (a half-year cadence plus the ${FUNDAMENTALS_STALE_LAG_DAYS}-day filing window and ±${FISCAL_CALENDAR_SLACK_DAYS} d slack).`,
+    );
+    const ageDays = Math.floor((now.getTime() - parseDateMs(newest)) / DAY_MS);
+    const stale = ageDays > limitDays;
+    c.checks.push({
+      id: "staleness.fundamentals",
+      name: "Fundamentals filing cadence",
+      status: stale ? "fail" : "pass",
+      detail: `newest statement period end ${newest} (${ageDays} days old); foreign private issuer — semi-annual expectation, at most ${limitDays} days`,
+      asOf: newest,
+    });
+    if (stale) {
+      c.flags.push(
+        `STALE FUNDAMENTALS: newest statement period end ${newest} is ${ageDays} days old — more than a semi-annual filing cycle plus the 20-F window (${limitDays} days) for a foreign private issuer.`,
+      );
+      c.gaps.push(
+        gapEntry(
+          "validation.staleness.fundamentals",
+          `fundamentals stale — newest statement ${newest} is ${ageDays} days old against a ${limitDays}-day semi-annual expectation (foreign private issuer)`,
+          "warn",
+        ),
+      );
+    }
+  } else if (newest !== null) {
     addFlag(
       c,
       `House rule: fundamentals flagged stale when the newest statement period end predates the latest calendar quarter end ≥${FUNDAMENTALS_STALE_LAG_DAYS} days old (10-Q deadline + slack; ±${FISCAL_CALENDAR_SLACK_DAYS} d for 52/53-week fiscal calendars).`,
@@ -843,7 +882,7 @@ function sweepImplausibleZeros(bundle: ValidatableBundle, c: Collector): void {
         c.gaps.push(
           gapEntry(
             `statements.${t.label}[${date}].${field}`,
-            `FMP reported 0 for ${field} — treated as undisclosed (null), not a real zero (DATA_MAP §1.1 zero-vs-undisclosed policy); do not use as a ratio input`,
+            `FMP reported 0 for ${field} — treated as undisclosed (null), not a real zero (zero-vs-undisclosed policy); do not use as a ratio input`,
             "info",
           ),
         );
@@ -860,7 +899,7 @@ function sweepImplausibleZeros(bundle: ValidatableBundle, c: Collector): void {
   if (sweptAny) {
     addFlag(
       c,
-      `House rule: FMP zeros treated as undisclosed (null) for implausible-zero fields: ${IMPLAUSIBLE_ZERO_FIELDS.join(", ")} (DATA_MAP §1.1).`,
+      `House rule: FMP zeros treated as undisclosed (null) for implausible-zero fields: ${IMPLAUSIBLE_ZERO_FIELDS.join(", ")}.`,
     );
   }
 }

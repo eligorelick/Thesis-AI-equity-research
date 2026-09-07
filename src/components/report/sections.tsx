@@ -1,15 +1,16 @@
 /**
- * One component per report section (the application contract §7 sections 1–13). Each is dense,
+ * One component per report section (report sections 1–13). Each is dense,
  * consistent, and provenance-first: figures render as {@link TracedFigure}s
  * (value + citation-coverage indicator + as-of on hover), claims as
  * {@link ClaimText} (label chip + source), graded sections lead with a
  * {@link GradeReasoning} block.
  *
  * Server Component — static presentational markup, no data fetching. The
- * click-to-reveal claim source line and the chart panels are the only
- * interactive leaves (client islands imported transitively via primitives.tsx
- * and components/charts/*); everything else here renders and streams from the
- * server with zero hydration cost. Consumed by ReportView.
+ * claim source line is a native <details> (ClaimText.tsx, a Server Component
+ * that ships no client JS); the chart panels and the export buttons are the
+ * only client islands (components/charts/*, ExportButtons). Everything else
+ * here renders and streams from the server with zero hydration cost. Consumed
+ * by ReportView.
  */
 
 import type { ReactNode } from "react";
@@ -847,7 +848,12 @@ function SensitivityGrid({ dcf }: { dcf: Valuation["dcf"] }) {
   const baseG = gs[Math.floor(gs.length / 2)] ?? null;
 
   return (
-    <SensitivityHeatmap cells={cells} baseWacc={baseWacc} baseG={baseG} />
+    <SensitivityHeatmap
+      cells={cells}
+      baseWacc={baseWacc}
+      baseG={baseG}
+      currency={dcf.perShare?.currency ?? null}
+    />
   );
 }
 
@@ -889,8 +895,12 @@ function MultiplesTable({ rows }: { rows: readonly MultipleRow[] }) {
                 pct={m.own5yPercentile}
                 tone={m.own5yPercentile >= 70 ? "warn" : "accent"}
                 label={
+                  // A 0–100 percentile rank among N quarters, printed the way
+                  // the Markdown and print exports print it; "rank 85 of 12
+                  // quarters" read as an impossible ordinal (audit
+                  // 2026-09-06, F214).
                   typeof m.ownHistoryObservations === "number"
-                    ? `rank ${m.own5yPercentile.toFixed(0)} of ${m.ownHistoryObservations} quarters`
+                    ? `rank ${m.own5yPercentile.toFixed(0)}/100 of ${m.ownHistoryObservations} quarters`
                     : `rank ${m.own5yPercentile.toFixed(0)}`
                 }
               />
@@ -1591,8 +1601,11 @@ const SIGNIFICANCE_TONE: Record<"high" | "medium" | "low", Tone> = {
 };
 
 /**
- * The Catalysts & Risks panel — SPEC §8 requires it be VISUALLY PROMINENT.
- * Rendered with a strong accent border and pinned near the top of the report
+ * The Catalysts & Risks panel — the design requires it to be VISUALLY PROMINENT.
+ * Rendered with a strong accent border, in manifest order as section 10
+ * (between Competitive and Outlook; it is NOT hoisted above the numbered
+ * sections — audit 2026-09-06, F215). The weight comes from the border,
+ * the significance chips and the two-column layout,
  * (ReportView places it above the numbered sections). Catalysts are a dated
  * timeline with direction arrows + significance; risks are placed on a
  * severity × probability matrix and also listed with their sources.
@@ -2194,6 +2207,11 @@ export function ReportMetaStrip({
           Data completeness · {presentation.statusText}
         </span>
       </div>
+      {/* WS6 (D-19): the stored disclaimer, verbatim, on the page that shows
+          seven letter grades and three price targets — the Markdown and print
+          exports already printed it; the live view did not (audit 2026-09-06,
+          F207). */}
+      <p className="basis-full text-[10px] leading-snug text-faint">{m.disclaimer}</p>
     </div>
   );
 }

@@ -142,6 +142,14 @@ describe("sentence boundaries are punctuation-aware", () => {
     expect(conflicts("ATTAIN-1 showed orforglipron delivered 24.5 percent weight loss.")).toHaveLength(0);
   });
 
+  it("does not split on 'vs.' before a capitalised name (audit 2026-09-06, F193)", () => {
+    // Split at "vs. R", the second fragment names ATTAIN-1 beside retatrutide
+    // with orforglipron absent, and a correct sentence raised a conflict.
+    expect(
+      conflicts("ATTAIN-1 results for orforglipron vs. Retatrutide in ATTAIN-1 were not head-to-head."),
+    ).toHaveLength(0);
+  });
+
   it("does not split a single-letter abbreviation", () => {
     expect(
       conflicts("In the U.S. ATTAIN-1 showed orforglipron delivered 12 percent weight loss."),

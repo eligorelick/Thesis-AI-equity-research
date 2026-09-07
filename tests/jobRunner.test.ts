@@ -90,7 +90,18 @@ vi.mock("@/providers/anthropic", () => ({
   runPass: providerBoundaryMocks.runPass,
   runPassStreaming: providerBoundaryMocks.runPassStreaming,
   webSearchTool: providerBoundaryMocks.webSearchTool,
+  // The real Stage C passes validate a request before taking a lease; the
+  // request shape is not what these tests exercise, so the validator is inert.
+  validateRunPassOptions: vi.fn(() => undefined),
 }));
+
+// Stage B is pure and normally runs for real here; one test makes it throw to
+// drive the runner's compute-failure degradation, so the module is wrapped
+// (not replaced) and every other test still runs the real implementation.
+vi.mock("@/pipeline/compute", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/pipeline/compute")>();
+  return { ...actual, runStageB: vi.fn(actual.runStageB) };
+});
 
 import {
   maximumPassCostUsd,
@@ -131,6 +142,9 @@ import {
   NO_KEY_SKIP_REASON,
   MAX_JUDGE_RETRIES,
   MODEL_RESOLUTION_SKIP_PREFIX,
+  COMPUTE_FAILURE_DATA_ONLY_REASON,
+  LAUNCH_AUTHORITY_SKIP_REASON,
+  LLM_FAILURE_DATA_ONLY_REASON,
   type PipelinePasses,
   type PassResultLike,
   type RunJobOptions,
@@ -144,7 +158,11 @@ import {
   readCurrentGenerationPassArtifacts,
 } from "@/pipeline/jobArtifacts";
 import { readJobResumeState } from "@/pipeline/jobStore";
-import { claimNextQueuedJob, configuredSchedulerLimits } from "@/pipeline/jobScheduler";
+import {
+  claimNextQueuedJob,
+  configuredSchedulerLimits,
+  PaidPassOverReservationError,
+} from "@/pipeline/jobScheduler";
 import {
   _clearJobSubscribers,
   subscribeJob,
@@ -1359,6 +1377,13 @@ describe("runJob - durable paid-pass settlements", () => {
     expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
     expect(handle.db.select().from(jobPassArtifacts).all()).toEqual([]);
     expect(handle.db.select().from(costLog).all()).toEqual([]);
+    // The report names the cause; the shared wording would have sent the
+    // reader to pass errors no pass ever produced.
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const llmGap = ReportSchema.parse(JSON.parse(row.reportJson!)).appendix.missingData
+      .find((entry) => entry.field === "analysis.llm");
+    expect(llmGap?.reason).toContain(LAUNCH_AUTHORITY_SKIP_REASON);
+    expect(llmGap?.reason).not.toBe(LLM_FAILURE_DATA_ONLY_REASON);
   });
 
   it.each(["bull", "bear"] as const)(
@@ -2106,6 +2131,93 @@ describe("runJob - durable paid-pass settlements", () => {
     ]);
   });
 
+  /**
+   * The runner registers this side's admission in `beforePass` and the REAL
+   * passes snapshot it when they build the request. Every other admission test
+   * here replaces runBullThenBear with a mock that encodes the hook order
+   * itself, which is how a production build that captured `undefined` stayed
+   * invisible (audit 2026-09-06, F202). This one drives the real runner through
+   * the real Stage C passes with only the provider boundary faked.
+   */
+  it("carries the runner's checkpoint admission on the real analyst requests (D-10)", async () => {
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 2,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 900_000,
+      jobLeaseTtlMs: 900_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "real-passes-admission", new Date(), limits)!;
+    const captured: Array<{ field: string; admission: unknown }> = [];
+    const usage = { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+    const analystSuccess = (field: string) => ({
+      ok: true as const,
+      value: {
+        data: {
+          message: {
+            id: "msg_test",
+            type: "message",
+            role: "assistant",
+            model: "claude-opus-4-8",
+            content: [{ type: "text", text: JSON.stringify(fakeAnalystCase()), citations: null }],
+            stop_reason: "end_turn",
+            stop_sequence: null,
+            stop_details: null,
+            usage,
+          },
+          fetchedUrls: [],
+          usage,
+          costUsd: 0.01,
+          fallbackUsed: false,
+          model: "claude-opus-4-8",
+        },
+        asOf: "2026-07-06",
+        source: "anthropic" as const,
+        endpoint: field,
+        fetchedAt: NOW().toISOString(),
+      },
+    });
+    const priorStreaming = providerBoundaryMocks.runPassStreaming.getMockImplementation();
+    const priorRunPass = providerBoundaryMocks.runPass.getMockImplementation();
+    const priorTool = providerBoundaryMocks.webSearchTool.getMockImplementation();
+    providerBoundaryMocks.runPassStreaming.mockImplementation(((args: { field: string; admission?: unknown }) => {
+      captured.push({ field: args.field, admission: args.admission });
+      return { firstToken: Promise.resolve("streamEvent"), result: Promise.resolve(analystSuccess(args.field)) };
+    }) as never);
+    providerBoundaryMocks.runPass.mockImplementation((async (args: { field: string }) => ({
+      ok: false,
+      gap: { field: args.field, reason: "judge stubbed out for this test", severity: "critical" },
+      error: { kind: "transport", message: "judge stubbed out for this test" },
+    })) as never);
+    providerBoundaryMocks.webSearchTool.mockImplementation(
+      (() => ({ type: "web_search_20250305", name: "web_search", max_uses: 8 })) as never,
+    );
+    try {
+      const result = await runJob(jobId, pipelinePasses, {
+        bundle: fakeBundle(),
+        hasAnthropicKey: true,
+        now: NOW,
+        claim,
+        schedulerLimits: limits,
+      });
+      // The judge is stubbed to fail, so the job does not complete; the two
+      // analyst requests were still built by the real passes.
+      expect(result.status).not.toBe("queued");
+      expect(captured.map((call) => call.field).sort()).toEqual(["llm.bear", "llm.bull"]);
+      for (const call of captured) {
+        expect(call.admission, `${call.field} must carry the checkpoint admission the runner registered`).toBeDefined();
+        expect(typeof (call.admission as { reserve?: unknown }).reserve).toBe("function");
+      }
+    } finally {
+      providerBoundaryMocks.runPassStreaming.mockImplementation(priorStreaming as never);
+      providerBoundaryMocks.runPass.mockImplementation(priorRunPass as never);
+      providerBoundaryMocks.webSearchTool.mockImplementation(priorTool as never);
+    }
+  });
+
   it("lets bull and bear hold request leases at the same time at the default of 2", async () => {
     const { jobId } = createJob("AAPL");
     const scheduler = await import("@/pipeline/jobScheduler");
@@ -2205,6 +2317,73 @@ describe("runJob - durable paid-pass settlements", () => {
     ]));
   });
 
+  /**
+   * A process that died holding a lease cannot write its own report, so its
+   * presumption is only ever reported by a LATER generation — and that
+   * generation's total includes it (every cost figure sums the whole job
+   * ledger). Filtering the disclosure to the current generation left the
+   * resumed report's total silently inflated by the very row it exists for.
+   */
+  it("discloses an earlier generation's presumed spend in the generation that reports the total", async () => {
+    const { jobId } = createJob("AAPL");
+    // Generation 0: bull settled (so the job is resumable) ...
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "gen0-bull",
+      pass: "bull",
+      settlement: testSuccessSettlement(testAnalystPass("bull")),
+      payloadFingerprint: "fp",
+      settledAt: NOW().toISOString(),
+    });
+    // ... and bear's owner died mid-pass: its reservation expired into presumed spend.
+    handle.db.insert(costLog).values({
+      jobId,
+      runGeneration: 0,
+      attemptId: null,
+      presumedAttemptId: "gen0-bear-dead",
+      settlementKind: "presumed",
+      step: "bear",
+      model: "claude-sonnet-5",
+      costUsd: 3.86,
+      createdAt: NOW().toISOString(),
+    }).run();
+    handle.db.update(jobs)
+      .set({ status: "error", error: "abandoned: durable job lease expired" })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    const base = mockPasses();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: () => "fp",
+      runAnalystPass: async (_deps, side, settlement, beforeProviderLaunch) => {
+        await beforeProviderLaunch?.();
+        const fresh = testAnalystPass(side);
+        await settlement?.(testSuccessSettlement(fresh));
+        return fresh;
+      },
+    };
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      resume: true,
+    });
+
+    expect(result.status).toBe("done");
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(1);
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const parsed = ReportSchema.parse(JSON.parse(row.reportJson!));
+    // The total the report shows includes the presumed $3.86 ...
+    expect(parsed.meta.costUsd).toBeCloseTo(0.9 + 3.86 + 0.47 + 0.4 + 0.2, 6);
+    // ... so the report says which part of it is a bound (D-07).
+    expect(parsed.meta.presumedCostUsd).toBe(3.86);
+    expect(parsed.appendix.missingData).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "cost.presumed", severity: "warn" }),
+    ]));
+  });
+
   it("omits the presumed-spend disclosure when nothing in the run was presumed", async () => {
     const { jobId } = createJob("MSFT");
 
@@ -2218,6 +2397,126 @@ describe("runJob - durable paid-pass settlements", () => {
     const parsed = ReportSchema.parse(JSON.parse(row.reportJson!));
     expect(parsed.meta.presumedCostUsd).toBeUndefined();
     expect(parsed.appendix.missingData.some((gap) => gap.field === "cost.presumed")).toBe(false);
+  });
+
+  /**
+   * A billable verify adapter reserves each of its provider requests through
+   * the pass's admission like the other three passes. Its checkpoint used to
+   * be created without registering the admission, so every verify request
+   * went out unadmitted against a lease sized for exactly one of them.
+   */
+  it("registers the verify pass's request admission before launching a billable verify", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    let verifyAdmission: RequestAdmission | undefined;
+    let leasesDuringVerify: Array<{ pass: string; attemptId: string }> = [];
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runVerifyPass: async (...raw: unknown[]) => {
+        const deps = raw[0] as { admissionFor?: (pass: string) => RequestAdmission | undefined };
+        verifyAdmission = deps.admissionFor?.("verify");
+        expect(verifyAdmission, "verify's request admission must be registered").toBeDefined();
+        const permit = await admittedWithin(
+          verifyAdmission!.reserve({ attempt: 1, kind: "stream", maximumUsd: 0.2 }),
+          "verify's request was never admitted",
+        );
+        leasesDuringVerify = handle.db.select().from(jobLlmLeases).all()
+          .map((row) => ({ pass: row.pass, attemptId: row.attemptId }));
+        await verifyAdmission!.settle(permit, {
+          model: "claude-opus-4-8",
+          usage: { input_tokens: 12_000, output_tokens: 4_000, cache_read_input_tokens: 75_000 },
+          webSearches: 0,
+          costUsd: 0.2,
+          fallbackUsed: false,
+        });
+        return base.passes.runVerifyPass(...(raw as Parameters<PipelinePasses["runVerifyPass"]>));
+      },
+    };
+
+    const result = await runJob(jobId, passes, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: false });
+    expect(leasesDuringVerify).toEqual(expect.arrayContaining([
+      expect.objectContaining({ pass: "verify", attemptId: expect.stringMatching(/#r1$/) }),
+    ]));
+    // The request settled under its own `#rN` identity; the pass artifact
+    // then carries the figure without charging it again (D-10).
+    const verifyRows = handle.db.select().from(costLog)
+      .where(eq(costLog.jobId, jobId)).all()
+      .filter((row) => row.step === "verify");
+    expect(verifyRows).toEqual([
+      expect.objectContaining({ attemptId: expect.stringMatching(/#r1$/), costUsd: 0.2 }),
+    ]);
+  });
+
+  /**
+   * A measured request cost above its reservation is committed before the
+   * invariant fires; the pass then fails loudly. The runner keeps the
+   * request's identity until the write has committed, so the retry the
+   * provider makes for the same permit is an idempotent no-op rather than a
+   * settlement that never happened.
+   */
+  it("commits a request's measured cost above its reservation and then fails the pass loudly", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T00:00:00.000Z"));
+    const { jobId } = createJob("AAPL");
+    const scheduler = await import("@/pipeline/jobScheduler");
+    const limits = {
+      maxActiveJobs: 1,
+      maxActiveLlmCalls: 2,
+      maxRollingCostUsd: null,
+      rollingCostWindowMs: 60 * 60 * 1000,
+      paidPassLeaseTtlMs: 900_000,
+      jobLeaseTtlMs: 900_000,
+    };
+    const claim = scheduler.claimQueuedJobById(jobId, "over-reservation", new Date(), limits)!;
+    const base = mockPasses();
+    let settleError: unknown;
+    const passes: PipelinePasses = {
+      ...base.passes,
+      runBullThenBear: async (deps, lifecycle) => {
+        await launchTestAnalystSide(lifecycle, "bull");
+        const admission = deps.admissionFor?.("bull") as RequestAdmission;
+        const permit = await admittedWithin(
+          admission.reserve({ attempt: 1, kind: "stream", maximumUsd: 0.1 }),
+          "bull's first request was never admitted",
+        );
+        const measured = {
+          model: "claude-sonnet-5",
+          usage: { input_tokens: 20_000, output_tokens: 800, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          webSearches: 0,
+          costUsd: 0.25,
+          fallbackUsed: false,
+        };
+        try {
+          await admission.settle(permit, measured);
+        } catch (error) {
+          settleError = error;
+        }
+        // The provider's catch path settles the same permit again.
+        await admission.settle(permit, measured);
+        throw new Error("bull failed after its settlement invariant fired");
+      },
+    };
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      claim,
+      schedulerLimits: limits,
+    });
+
+    // A plain adapter throw degrades the run to data-only; the invariant
+    // itself surfaced to the adapter as the typed error.
+    expect(result).toMatchObject({ status: "done", dataOnly: true });
+    expect(settleError).toBeInstanceOf(PaidPassOverReservationError);
+    expect((settleError as PaidPassOverReservationError).result.inserted).toBe(true);
+    // The measurement is the record, exactly once.
+    expect(handle.db.select().from(costLog).all()).toEqual([
+      expect.objectContaining({ costUsd: 0.25, settlementKind: "actual", step: "bull" }),
+    ]);
+    expect(handle.db.select().from(jobLlmLeases).all()).toEqual([]);
   });
 
   it("still records a late measured settlement after a request lease renewal lost authority", async () => {
@@ -3657,6 +3956,82 @@ describe("runJob - durable paid-pass settlements", () => {
       handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all()
         .map((row) => [row.step, row.costUsd]),
     ).toEqual([["synthesize", 0.4]]);
+  });
+
+  /**
+   * A reused durable synthesize artifact has no analyst outputs to re-judge
+   * against, so its one assembly attempt is all there is. The terminal
+   * detail (step and manifest) used to claim every retry was spent — "after
+   * 3 attempt(s)" — for a single, provider-free attempt.
+   */
+  it("names a single provider-free assembly attempt when a reused synthesize artifact cannot be assembled", async () => {
+    const { jobId } = createJob("AAPL");
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "source-synthesize-unassemblable",
+      pass: "synthesize",
+      settlement: testSuccessSettlement({
+        data: fakeJudgeOutput(),
+        model: "claude-opus-4-8",
+        costUsd: 0.4,
+        fallbackUsed: false,
+      }),
+      payloadFingerprint: "1.3.0:synthesize-unassemblable",
+      settledAt: NOW().toISOString(),
+    });
+    handle.db
+      .update(jobs)
+      .set({ status: "error", error: "worker stopped before verify", reportId: null })
+      .where(eq(jobs.id, jobId))
+      .run();
+    expect(claimJobForResume(jobId, "error")).toBe(true);
+    clearPreparedResumeProcessCache();
+    setSetting("analysisModel", "claude-sonnet-5");
+    setSetting("analysisEffort", "medium");
+
+    const base = mockPasses();
+    const judge = vi.fn(async () => {
+      throw new Error("durable synthesize must not launch judge");
+    });
+    const result = await runJob(
+      jobId,
+      {
+        ...base.passes,
+        verifyCapability: { billable: false },
+        fingerprintPayload: () => "1.3.0:synthesize-unassemblable",
+        runBullThenBear: async () => {
+          throw new Error("durable synthesize must not launch analysts");
+        },
+        runJudgePass: judge,
+        // Verify fails, so assembly falls through to assembleReport ...
+        runVerifyPass: async () => {
+          throw new Error("verify transport failure");
+        },
+        // ... which rejects the reused output under a newer schema.
+        assembleReport: () => {
+          throw new Error("valuation.scenarios: schema constraint violation");
+        },
+      },
+      { bundle: fakeBundle(), hasAnthropicKey: false, now: NOW, resume: true },
+    );
+
+    expect(result).toMatchObject({ status: "done", dataOnly: true });
+    expect(judge).not.toHaveBeenCalled();
+    const steps = JSON.parse(
+      handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.stepsJson ?? "[]",
+    ) as StepProgress[];
+    const synthesize = steps.find((step) => step.step === "synthesize");
+    expect(synthesize?.status).toBe("error");
+    expect(synthesize?.detail).toMatch(
+      /^synthesize failed: durable synthesize artifact could not be assembled without rerunning upstream paid work: valuation\.scenarios/,
+    );
+    expect(synthesize?.detail).not.toMatch(/attempt\(s\)/);
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const judgeGap = ReportSchema.parse(JSON.parse(row.reportJson!)).appendix.missingData
+      .find((entry) => entry.field === "llm.judge");
+    expect(judgeGap?.reason).toBe(synthesize?.detail);
+    expect(judgeGap?.attemptedSources).toEqual([]);
   });
 
   it("queued resume re-derives a source verify artifact and persists it without paid work", async () => {
@@ -6391,8 +6766,62 @@ describe("runJob — LLM pass failure", () => {
 });
 
 /* ------------------------------------------------------------------------ *
- * runJob — model-resolution failure degrades to data-only (Fix §1)
+ * runJob — model-resolution failure degrades to data-only
  * ------------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------------ *
+ * runJob — Stage B exception degrades to data-only
+ * ------------------------------------------------------------------------ */
+
+describe("runJob — Stage B failure", () => {
+  /**
+   * Compute is pure, so a throw is a programming error — but the run degrades
+   * to a data-only report rather than crashing, and that report is the
+   * durable record: the exception lands in the manifest and the data-only
+   * reason names it, instead of pointing at pass errors no pass produced.
+   */
+  it("records the compute exception in the manifest and names it as the data-only cause", async () => {
+    const { jobId } = createJob("AAPL");
+    const { passes, calls } = mockPasses();
+    vi.mocked(runStageB).mockImplementationOnce(() => {
+      throw new Error("stage B blew up on a malformed statement row");
+    });
+
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: true });
+    expect(result.reportId).not.toBeNull();
+    // Nothing downstream of compute ran — not even payload assembly.
+    expect(calls).toEqual([]);
+
+    const jobRow = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
+    const steps = JSON.parse(jobRow?.stepsJson ?? "[]") as StepProgress[];
+    const byStep = new Map(steps.map((s) => [s.step, s]));
+    expect(byStep.get("compute")?.status).toBe("error");
+    expect(byStep.get("compute")?.detail).toContain("stage B blew up");
+    for (const step of LLM_STEPS) expect(byStep.get(step)?.status).toBe("skipped");
+    expect(handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all()).toEqual([]);
+
+    const repRow = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get();
+    const parsed = ReportSchema.parse(JSON.parse(repRow?.reportJson ?? "{}"));
+    expect(parsed.appendix.missingData).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: "pipeline.compute",
+        severity: "critical",
+        reason: expect.stringContaining("stage B blew up"),
+      }),
+    ]));
+    const llmGap = parsed.appendix.missingData.find((m) => m.field === "analysis.llm");
+    expect(llmGap?.severity).toBe("critical");
+    expect(llmGap?.reason).toBe(COMPUTE_FAILURE_DATA_ONLY_REASON);
+    // The stub stays empty: nothing Stage B did not compute is filled in.
+    expect(parsed.verdict.gradeStrip.fundamentals.grade).toBe("F");
+  });
+});
 
 describe("runJob — model-resolution failure", () => {
   it("marks LLM steps skipped with the resolution reason and persists a data-only report (job done, not error)", async () => {
@@ -6448,6 +6877,11 @@ describe("runJob — model-resolution failure", () => {
       expect(parsed.data.meta.symbol).toBe("AAPL");
       const llmGap = parsed.data.appendix.missingData.find((m) => m.field === "analysis.llm");
       expect(llmGap?.severity).toBe("critical");
+      // The resolution error is the durable cause, not "the failed pass
+      // errors are disclosed" — no pass ran.
+      expect(llmGap?.reason).toContain(MODEL_RESOLUTION_SKIP_PREFIX);
+      expect(llmGap?.reason).toContain("transport error");
+      expect(llmGap?.reason).not.toBe(LLM_FAILURE_DATA_ONLY_REASON);
     }
 
     // Terminal "done" event, no "error" event emitted.
@@ -6512,10 +6946,10 @@ describe("runJob — model-resolution failure", () => {
 });
 
 /* ------------------------------------------------------------------------ *
- * runJob — judge/verify/assemble retry-on-validation contract (SPEC §2, Fix §2)
+ * runJob — judge/verify/assemble retry-on-validation contract
  * ------------------------------------------------------------------------ */
 
-describe("runJob — judge retry on schema-validation failure (SPEC §2)", () => {
+describe("runJob — judge retry on schema-validation failure", () => {
   it("retries the judge on schema-invalid output twice then succeeds (2 retries, then done)", async () => {
     const { jobId } = createJob("AAPL");
     const { passes, calls } = mockPasses();
@@ -8382,6 +8816,128 @@ describe("analyst repair attempt after schema-invalid output", () => {
     expect(JSON.parse(failed[0]!) as { failure: { kind?: string } }).toMatchObject({
       failure: { kind: "schema", retryable: true },
     });
+  });
+
+  /**
+   * The adapter classifies a rejected output as "schema" or "parse"; when it
+   * did not settle the side itself, the runner's fallback settlement used to
+   * record every retryable rejection as "schema", so a not-JSON bear was
+   * disclosed as "did not satisfy the report schema" on one settlement path
+   * and "was not valid JSON" on the other.
+   */
+  it("classifies a not-JSON rejection the adapter did not settle as the adapter would", async () => {
+    const { jobId } = createJob("AAPL");
+    const { passes } = mockPasses();
+    const bull = testAnalystPass("bull");
+    const bear = testAnalystPass("bear");
+    const PARSE_ERROR = "bear pass failed (parse): llm.bear returned text that is not JSON";
+    passes.runBullThenBear = async (_deps, hooks) => {
+      await launchTestAnalystSide(hooks, "bull");
+      await launchTestAnalystSide(hooks, "bear");
+      throw Object.assign(new Error(PARSE_ERROR), {
+        bull,
+        bearError: PARSE_ERROR,
+        bearBilledAttempt,
+        bearRetryable: true,
+        bearRawText: "Sure! Here is the case: {",
+        bearFailureKind: "parse",
+      });
+    };
+    passes.runAnalystPass = async (_deps, side, settlement, beforeProviderLaunch) => {
+      void side;
+      await beforeProviderLaunch?.();
+      await settlement?.(testSuccessSettlement(bear));
+      return bear;
+    };
+
+    const result = await runJob(jobId, passes, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW });
+    expect(result.status).toBe("done");
+
+    const rejected = handle.db.select().from(jobPassArtifacts)
+      .where(eq(jobPassArtifacts.jobId, jobId)).all()
+      .filter((row) => row.pass === "bear")
+      .map((row) => parsePassArtifactEnvelope("bear", row.outcomeJson))
+      .find((envelope) => envelope.outcome === "failure");
+    expect(rejected?.outcome === "failure" && rejected.failure.kind).toBe("parse");
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const report = ReportSchema.parse(JSON.parse(row.reportJson!));
+    const wasted = report.appendix.costBreakdown.find((entry) => entry.discarded === true);
+    expect(wasted?.discardedReason).toBe("its output was not valid JSON");
+  });
+
+  /**
+   * The breakdown and total a resumed report shows span every generation the
+   * job billed, so the marking of what bought nothing has to span the same
+   * lineage: a bear rejected in generation 0 and repaired by the retry is in
+   * the retry's total, and used to sit there as an unmarked second row.
+   */
+  it("marks a prior generation's rejected attempt in the generation that reports the total", async () => {
+    const { jobId } = createJob("AAPL");
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "gen0-bull",
+      pass: "bull",
+      settlement: testSuccessSettlement(testAnalystPass("bull")),
+      payloadFingerprint: "fp",
+      settledAt: NOW().toISOString(),
+    });
+    // Generation 0 bear: output received, rejected by the schema, billed $0.31;
+    // the worker died before the repair.
+    persistPassSettlement({
+      jobId,
+      runGeneration: 0,
+      attemptId: "gen0-bear-rejected",
+      pass: "bear",
+      settlement: {
+        outcome: "failure",
+        failure: {
+          name: "PassRunError",
+          message: "schema-invalid structured output for llm.bear",
+          kind: "schema",
+          retryable: true,
+        },
+        telemetry: testTelemetry(testAnalystPass("bear", 0.31)),
+      },
+      payloadFingerprint: "fp",
+      settledAt: NOW().toISOString(),
+    });
+    handle.db.update(jobs)
+      .set({ status: "error", error: "worker died before the repair" })
+      .where(eq(jobs.id, jobId))
+      .run();
+
+    const base = mockPasses();
+    const passes: PipelinePasses = {
+      ...base.passes,
+      fingerprintPayload: () => "fp",
+      runAnalystPass: async (_deps, side, settlement, beforeProviderLaunch) => {
+        await beforeProviderLaunch?.();
+        const fresh = testAnalystPass(side);
+        await settlement?.(testSuccessSettlement(fresh));
+        return fresh;
+      },
+    };
+    const result = await runJob(jobId, passes, {
+      bundle: fakeBundle(),
+      hasAnthropicKey: true,
+      now: NOW,
+      resume: true,
+    });
+
+    expect(result).toMatchObject({ status: "done", dataOnly: false });
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.runGeneration).toBe(1);
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const report = ReportSchema.parse(JSON.parse(row.reportJson!));
+    const bearRows = report.appendix.costBreakdown.filter((entry) => entry.step === "bear");
+    expect(bearRows).toHaveLength(2);
+    expect(report.meta.costUsd).toBeCloseTo(0.9 + 0.31 + 0.47 + 0.4 + 0.2, 6);
+    const wasted = bearRows.find((entry) => entry.discarded === true);
+    expect(wasted?.costUsd).toBe(0.31);
+    expect(wasted?.discardedReason).toBe("its output did not satisfy the report schema");
+    expect(bearRows.find((entry) => entry.discarded === undefined)?.costUsd).toBe(0.47);
+    const disclosed = report.appendix.missingData.find((entry) => entry.field === "llm.bear.discardedAttempt");
+    expect(disclosed?.reason).toContain("$0.3100");
   });
 
   it("persists data-only when the repair attempt fails too, naming the second failure", async () => {

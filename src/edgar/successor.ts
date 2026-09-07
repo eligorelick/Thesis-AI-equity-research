@@ -29,7 +29,7 @@
  */
 import type { ManifestEntry } from "@/types/core";
 import type { FilingFiler } from "@/providers/edgar";
-import type { CompanyFacts } from "@/edgar/xbrl";
+import { conceptFactsSchema, filterToCoreForms, parseFactPoints, type CompanyFacts } from "@/edgar/xbrl";
 
 /** The form a successor issuer files to register under the predecessor's listing. */
 export const SUCCESSOR_FORM = "8-K12B";
@@ -145,6 +145,36 @@ export function predecessorFromFilers(
 export function usGaapConceptCount(facts: CompanyFacts | null): number {
   if (facts === null) return 0;
   return Object.keys(facts.facts["us-gaap"] ?? {}).length;
+}
+
+const ANNUAL_MIN_DAYS = 300;
+const ANNUAL_MAX_DAYS = 400;
+const DAY_MS = 86_400_000;
+
+/**
+ * Whether a payload carries at least one ANNUAL us-gaap fact on a core form —
+ * the test for "this successor has a history of its own". Counting concepts
+ * was the wrong test: a reorganized issuer's first 10-Q alone fills dozens of
+ * concepts with one quarter each, and the predecessor's ninety years were then
+ * never fetched because the successor "had history".
+ */
+export function hasOwnAnnualHistory(facts: CompanyFacts | null): boolean {
+  if (facts === null) return false;
+  const concepts = facts.facts["us-gaap"];
+  if (concepts === undefined || concepts === null || typeof concepts !== "object") return false;
+  for (const raw of Object.values(concepts as Record<string, unknown>)) {
+    const parsed = conceptFactsSchema.safeParse(raw);
+    if (!parsed.success) continue;
+    for (const rawPoints of Object.values(parsed.data.units)) {
+      if (!Array.isArray(rawPoints)) continue;
+      for (const p of filterToCoreForms(parseFactPoints(rawPoints))) {
+        if (p.start === undefined) continue;
+        const days = (Date.parse(`${p.end}T00:00:00Z`) - Date.parse(`${p.start}T00:00:00Z`)) / DAY_MS;
+        if (days >= ANNUAL_MIN_DAYS && days <= ANNUAL_MAX_DAYS) return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**

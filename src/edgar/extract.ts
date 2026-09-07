@@ -3,9 +3,9 @@
  *
  * Research basis (live-verified across AAPL, JPM, BAC, WFC, C, MXC, FRD,
  * Seneca; failure modes F1–F25):
- *   - the EDGAR extraction contract §3
- *   - the EDGAR extraction contract §3.4 (layered decision rule)
- *   - the bank-filing extraction contract §2 (bank modes, F15–F25)
+ *   - the EDGAR extraction contract
+ *   - the EDGAR extraction contract (layered decision rule)
+ *   - the bank-filing extraction contract (bank modes, F15–F25)
  *
  * Layers:
  *   0. Citi mode — zero item headers anywhere; FORM 10-K CROSS-REFERENCE INDEX
@@ -852,7 +852,17 @@ export function detectStub(text: string, minChars = STUB_MIN_CHARS): { isStub: b
   return { isStub: false, reason: "" };
 }
 
-const NOT_REQUIRED_RE = /(?:^|[.\s])(not[\s]+required|none|not[\s]+applicable)[.\s]*$/i;
+/**
+ * A body that IS the absence statement. Either it ends on the phrase ("Not
+ * required.", "None.", "Not applicable.") or, for the smaller-reporting-
+ * company wording, it OPENS with it and says for whom in one short sentence
+ * ("Not required for smaller reporting companies.", "Not applicable to
+ * smaller reporting companies as defined in Rule 12b-2."); a body that only
+ * ENDS a longer discussion with "none" is not an absence statement, so the
+ * opening form is confined to a single sentence.
+ */
+const NOT_REQUIRED_RE =
+  /(?:^|[.\s])(not[\s]+required|none|not[\s]+applicable)[.\s]*$|(?:^|[.\s])(?:not[\s]+required|not[\s]+applicable|omitted)\b[^.!?]{0,160}(?:smaller[\s]+reporting[\s]+compan|rule[\s]+12b-2|regulation[\s]+s-k)[^.!?]{0,80}[.!?]?[\s"”]*$/i;
 const UNCHANGED_10K_RE = /refer[\s]+to[\s\S]{0,220}?(?:form[\s]+10-?k|annual[\s]+report[\s]+on[\s]+form[\s]+10-?k)|no[\s]+material[\s]+changes[\s\S]{0,220}?10-?k/i;
 const EXHIBIT_PHRASE_RE = /annual[\s]+report[\s]+to[\s]+(?:share|stock)holders|exhibit[\s]+13|(?:attached|included)[\s]+as[\s]+exhibit/i;
 
@@ -889,6 +899,7 @@ function tryMiniTocRedirect(
   kind: SectionKind,
   excludeTargets: Set<string>,
   minChars: number,
+  notes: string[],
 ): string | null {
   const titleEntries = entries.filter((e) => e.item === undefined && e.title !== "" && !excludeTargets.has(e.target));
   if (titleEntries.length === 0) return null;
@@ -899,25 +910,43 @@ function tryMiniTocRedirect(
   const startPos = pos.get(start.target) as number;
 
   const boundaries = BOUNDARY_SYNONYMS[kind];
-  let endPos = html.length;
-  let found = false;
-  for (const e of titleEntries) {
+  const after = titleEntries.flatMap((e) => {
     const p = pos.get(e.target);
-    if (p === undefined || p <= startPos || e.target === start.target) continue;
+    return p === undefined || p <= startPos || e.target === start.target ? [] : [{ e, p }];
+  });
+  // A NAMED boundary wins; the all-caps peer rule is a fallback, as in
+  // extractFromExhibit. Treated as an equal alternative it ended the slice at
+  // the first all-caps SUBSECTION of an all-caps section ("RESULTS OF
+  // OPERATIONS" inside "MANAGEMENT'S DISCUSSION AND ANALYSIS") and returned
+  // that fragment as the whole MD&A, with no note saying so.
+  let endPos = html.length;
+  let namedBoundary = false;
+  for (const { e, p } of after) {
     const n = normalizeTitle(e.title);
-    const isBoundary = boundaries.some((b) => n.includes(b)) || (isAllCaps(start.title) && isAllCaps(e.title));
-    if (isBoundary && p < endPos) {
-      endPos = p;
-      found = true;
+    if (boundaries.some((b) => n.includes(b))) {
+      namedBoundary = true;
+      if (p < endPos) endPos = p;
     }
   }
-  if (!found) {
+  if (!namedBoundary && isAllCaps(start.title)) {
+    for (const { e, p } of after) {
+      if (isAllCaps(e.title) && p < endPos) endPos = p;
+    }
+  }
+  if (endPos === html.length) {
     // No recognizable boundary in the contents TOC: slicing to EOF inside a
     // primary document would swallow the financial statements — refuse.
     return null;
   }
   const text = htmlToText(html.slice(startPos, endPos));
-  return text.length >= minChars ? text : null;
+  if (text.length < minChars) return null;
+  if (!namedBoundary) {
+    notes.push(
+      "mini-TOC slice bounded by the next ALL-CAPS heading (no named section boundary followed the start) — " +
+        "the section may be truncated at a subsection heading.",
+    );
+  }
+  return text;
 }
 
 /**
@@ -1199,7 +1228,7 @@ export function extractSection(html: string, spec: SectionSpec, opts: ExtractOpt
   // 3a — same-doc mini-TOC redirect (JPM).
   layersTried.push("layer3a-mini-toc");
   const exclude = new Set<string>(startTarget !== undefined ? [startTarget] : []);
-  const redirected = tryMiniTocRedirect(pre, entries, specKind(spec), exclude, minChars);
+  const redirected = tryMiniTocRedirect(pre, entries, specKind(spec), exclude, minChars, notes);
   if (redirected !== null) {
     const check = detectStub(redirected, minChars);
     if (!check.isStub) {
@@ -1367,14 +1396,27 @@ export function extractFromExhibit(exhibitHtml: string, opts: ExhibitExtractOpti
   };
 }
 
+/**
+ * A title quoted in the stub names the exhibit section the item was
+ * incorporated from — but a stub can quote MORE than its own target ("see
+ * 'Risk Factors' and 'Management's Discussion and Analysis' in the Annual
+ * Report"), and every quoted title used to outrank the generic synonyms for
+ * whichever section was being extracted. A quoted title that names ANOTHER
+ * section kind is therefore left out: kept, it selected the MD&A as the risk
+ * factors of a two-title stub.
+ */
 function buildSynonyms(kind: SectionKind, quoted: string[]): string[] {
   const out: string[] = [];
+  const otherKinds = (Object.keys(TITLE_SYNONYMS) as SectionKind[]).filter((k) => k !== kind);
+  const namesAnotherKind = (title: string): boolean =>
+    !titleMatchesKind(title, kind) && otherKinds.some((k) => titleMatchesKind(title, k));
   for (const q of quoted) {
     const n = normalizeTitle(q);
+    if (namesAnotherKind(n)) continue;
     if (n.length >= 3 && !out.includes(n)) out.push(n);
     // "Financial Review – Risk Factors" → also try the segment after the dash.
     const seg = n.split(" - ").pop();
-    if (seg !== undefined && seg !== n && seg.length >= 3 && !out.includes(seg)) out.push(seg);
+    if (seg !== undefined && seg !== n && seg.length >= 3 && !out.includes(seg) && !namesAnotherKind(seg)) out.push(seg);
   }
   for (const s of TITLE_SYNONYMS[kind]) if (!out.includes(s)) out.push(s);
   return out;

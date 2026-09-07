@@ -1,5 +1,5 @@
 /**
- * Stage C — Context payload assembly (the application contract §5).
+ * Stage C — Context payload assembly.
  *
  * assembleContextPayload(bundle, computed, validation) produces a DETERMINISTIC,
  * cache-friendly structured object containing EVERYTHING the LLM is allowed to
@@ -15,7 +15,7 @@
  * here. Given identical (bundle, computed, validation) inputs, this module
  * emits byte-identical output and a stable {@link payloadFingerprint}.
  *
- * Provenance is the whole point (the application contract §1 rules #1 and #5): every figure in
+ * Provenance is the whole point (rules #1 and #5): every figure in
  * the serialized payload appears as `value [source · as-of]` so the LLM can
  * cite it and the verification pass can trace it back. This module is the
  * single authority on WHAT the model may see; the prompts (prompts.ts) enforce
@@ -61,12 +61,14 @@ import type {
  * We budget by CHARACTER count, not tokens: a token count would require a
  * model-specific tokenizer (unavailable offline) and would make the payload
  * model-dependent, breaking determinism. ~4 chars/token is the standard rough
- * ratio, so a 60K-char transcript budget ≈ 15K tokens — matching the SPEC's
- * "~15-20k chars" transcript budget. Every truncation is DISCLOSED inline.
+ * ratio, so the 18K-char transcript budget below ≈ 4.5K tokens — inside the
+ * SPEC's "~15-20k chars" transcript budget. Every truncation is DISCLOSED
+ * inline: the text excerpts carry a marker, and the news section carries a
+ * note when rows were clipped or dropped.
  * ------------------------------------------------------------------------ */
 
 export const PAYLOAD_BUDGETS = {
-  /** Latest earnings-call transcript text (SPEC §5: ~15-20k chars). */
+  /** Latest earnings-call transcript text (~15-20k chars). */
   transcriptChars: 18_000,
   /** Annual risk-factors excerpt: 10-K Item 1A or 20-F Item 3.D. */
   item1aChars: 14_000,
@@ -76,9 +78,9 @@ export const PAYLOAD_BUDGETS = {
   tenQMdnaChars: 8_000,
   /** Free-text news/press snippet total (many small rows). */
   newsChars: 6_000,
-  /** Annual statement periods kept in the compact extract (SPEC §5: last 5). */
+  /** Annual statement periods kept in the compact extract (last 5). */
   annualPeriods: 5,
-  /** Quarterly statement periods kept in the compact extract (SPEC §5: last 4). */
+  /** Quarterly statement periods kept in the compact extract (last 4). */
   quarterlyPeriods: 4,
   /** Rows kept for list-shaped sources (insiders, holders, peers, estimates). */
   listRows: 12,
@@ -275,8 +277,12 @@ export function truncateWithDisclosure(
     return { text, truncated: false, originalChars };
   }
   const dropped = originalChars - maxChars;
-  const marker = `\n\n${TRUNCATION_MARKER} ${dropped} of ${originalChars} chars omitted to fit the payload budget]`;
-  // Reserve room for the marker so the total stays within budget.
+  const full = `\n\n${TRUNCATION_MARKER} ${dropped} of ${originalChars} chars omitted to fit the payload budget]`;
+  // Reserve room for the marker so the total stays within budget. When the
+  // budget cannot hold the counted marker plus any text, fall back to the bare
+  // marker — still visibly cut, and never longer than the budget it was given
+  // (audit 2026-09-06, F165: a marker-only result used to exceed `maxChars`).
+  const marker = maxChars >= full.length + 1 ? full : `${TRUNCATION_MARKER}]`.slice(0, Math.max(0, maxChars));
   const keep = Math.max(0, maxChars - marker.length);
   return { text: text.slice(0, keep) + marker, truncated: true, originalChars };
 }
@@ -459,7 +465,10 @@ function computedSections(
     { label: "Altman zone", value: fx.altman?.zone ?? null, unit: "", source: "computed.forensics.altman.zone", asOf: fx.altman?.asOf.balanceSheet ?? null },
     { label: "Beneish M", value: fx.beneish?.score ?? null, unit: "score", source: "computed.forensics.beneish", asOf: fx.beneish?.asOf.current ?? null },
     { label: "Beneish verdict", value: fx.beneish?.verdict ?? null, unit: "", source: "computed.forensics.beneish.verdict", asOf: fx.beneish?.asOf.current ?? null },
-    { label: `Piotroski F (/${fx.piotroski?.outOf ?? 9})`, value: fx.piotroski?.score ?? null, unit: "score", source: "computed.forensics.piotroski", asOf: fx.piotroski?.asOf.current ?? null },
+    // The forensic layer's own label carries the scale (variant, denominator
+    // and the withheld signals by name), so a 3-of-3 on a bank is never read
+    // against the paper's 9-point scale.
+    { label: fx.piotroski?.label ?? "Piotroski F", value: fx.piotroski?.score ?? null, unit: "score", source: "computed.forensics.piotroski", asOf: fx.piotroski?.asOf.current ?? null },
     { label: "accrual ratio (cash-flow)", value: fx.accruals?.cashFlowAccrualRatio ?? null, unit: "x", source: "computed.forensics.accruals", asOf: fx.accruals?.asOf.current ?? null },
     { label: "accrual band", value: fx.accruals?.band ?? null, unit: "", source: "computed.forensics.accruals.band", asOf: fx.accruals?.asOf.current ?? null },
   ];
@@ -953,21 +962,36 @@ function newsSection(bundle: DataBundle): PayloadSection {
   const figures: PayloadFigureInput[] = [];
   const notes: string[] = [];
   let used = 0;
+  let clippedRows = 0;
+  let droppedRows = 0;
   const budget = PAYLOAD_BUDGETS.newsChars;
   const addRows = (rows: FmpRawRow[], tag: string): void => {
     for (const r of rows) {
-      if (used >= budget) break;
+      if (used >= budget) {
+        droppedRows += 1;
+        continue;
+      }
       const d = isoDay(r.publishedDate) ?? "unknown";
       const title = strOrNull(r.title) ?? "";
       const text = strOrNull(r.text) ?? "";
       const line = `${d} [${tag}] ${strOrNull(r.publisher) ?? "?"}: ${title}${text ? ` — ${text}` : ""}`;
       const clipped = line.length + used > budget ? line.slice(0, Math.max(0, budget - used)) : line;
+      if (clipped.length < line.length) clippedRows += 1;
       notes.push(`${clipped} [fmp:${tag} · ${d}]`);
       used += clipped.length;
     }
   };
   addRows(rowsOf(bundle.news).slice(0, PAYLOAD_BUDGETS.listRows), "news");
   addRows(rowsOf(bundle.pressReleases).slice(0, PAYLOAD_BUDGETS.listRows), "press-release");
+  // Every truncation is disclosed (module rule): a snippet cut mid-line or a
+  // row left out for the budget used to vanish silently (audit 2026-09-06,
+  // F171). The note carries no source tag, so it registers no citation.
+  if (clippedRows > 0 || droppedRows > 0) {
+    const parts: string[] = [];
+    if (clippedRows > 0) parts.push(`${clippedRows} snippet${clippedRows === 1 ? "" : "s"} clipped mid-line`);
+    if (droppedRows > 0) parts.push(`${droppedRows} row${droppedRows === 1 ? "" : "s"} omitted`);
+    notes.push(`${TRUNCATION_MARKER} ${parts.join("; ")} to fit the ${budget}-char news budget]`);
+  }
   return payloadSection({ title: "Recent news & press releases (snippets)", figures, notes });
 }
 
@@ -1582,7 +1606,7 @@ export function serializePayloadForPrompt(payload: ContextPayload): string {
         `${payload.route.sector ?? "n/a"} | ${payload.route.industry ?? "n/a"}`,
       ),
       "",
-      "This payload is the ONLY permitted source of financial figures (SPEC §1 rule #1).",
+      "This payload is the ONLY permitted source of financial figures (rule #1).",
       "Every figure below is tagged [source · as-of]. Cite that tag; if a figure is not here or in a fetched web source, do not state it.",
     ].join("\n"),
   );
@@ -1608,7 +1632,7 @@ export function serializePayloadForPrompt(payload: ContextPayload): string {
   for (const f of payload.validationFlags) vflags.push(`- ${f}`);
   parts.push(vflags.join("\n"));
 
-  const missing = ["## Missing-data manifest (gaps are DISCLOSED, never filled — SPEC §1 rule #4)"];
+  const missing = ["## Missing-data manifest (gaps are DISCLOSED, never filled — rule #4)"];
   if (payload.missingData.length === 0) missing.push("- (no recorded gaps)");
   for (const m of payload.missingData) {
     missing.push(`- [${m.severity}] ${m.field}: ${m.reason}`);

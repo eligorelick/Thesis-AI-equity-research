@@ -1,14 +1,14 @@
 /**
  * Stage C — System prompt + per-pass framing for the four grounded LLM passes
- * (the application contract §5).
+ *.
  *
  * These strings ARE the analytical contract with the model. They embed the five
- * non-negotiable analysis rules VERBATIM (the application contract §1) plus the FACT/ESTIMATE/
+ * non-negotiable analysis rules VERBATIM plus the FACT/ESTIMATE/
  * JUDGMENT labeling instruction and the hard citation rule. Prompts are kept
  * tight and declarative — Opus 4.8 / Fable 5 follow instructions closely, so
  * over-prescription hurts more than it helps.
  *
- * Prompt-caching discipline (the cost model §2, the Anthropic API contract §4): Anthropic
+ * Prompt-caching discipline: Anthropic
  * caches a PREFIX in `tools -> system -> messages` render order — any byte
  * difference anywhere in that prefix (including inside `system`) breaks the
  * match for everything after it. So `system` is SHARED_RULES_BLOCK ONLY, sent
@@ -33,8 +33,8 @@ import {
 } from "@/pipeline/stageC/judgeProtocol";
 
 /* ------------------------------------------------------------------------ *
- * The five non-negotiable rules — VERBATIM from the application contract §1.
- * If SPEC §1 changes, change it HERE too (single source for the prompt copy).
+ * The five non-negotiable rules — the single source for the prompt copy.
+ * If they change, change them HERE.
  * ------------------------------------------------------------------------ */
 
 export const NON_NEGOTIABLE_RULES = [
@@ -81,17 +81,28 @@ export const SHARED_RULES_BLOCK = [
 ].join("\n");
 
 /* ------------------------------------------------------------------------ *
- * Leadership-grading guidance (the application contract §5 — evidence-based, credibility
+ * Leadership-grading guidance (evidence-based, credibility
  * graded separately from strategy). Shared by the analyst passes and the judge.
  * ------------------------------------------------------------------------ */
 
 /**
- * Evidence-based leadership-grading inputs (the application contract §5). Returned as a prompt
+ * Evidence-based leadership-grading inputs . Returned as a prompt
  * fragment the analyst/judge passes append when reasoning about executives.
  * Credibility (do they do what they say?) is graded SEPARATELY from strategy
  * (are the decisions good?).
  */
-export function buildLeadershipGuidance(): string {
+export interface LeadershipGuidanceOptions {
+  /**
+   * Whether the pass this fragment is written for can search the web. The
+   * analyst passes can; the judge request carries no tools (passes.ts), so its
+   * copy must not tell it to search (audit 2026-09-06, F172).
+   */
+  webSearch: boolean;
+}
+
+export function buildLeadershipGuidance(
+  options: LeadershipGuidanceOptions = { webSearch: true },
+): string {
   return [
     "LEADERSHIP GRADING (evidence-based — grade credibility SEPARATELY from strategy):",
     "Grade each key executive A–F on the evidence in the payload, not on reputation. Inputs:",
@@ -99,7 +110,8 @@ export function buildLeadershipGuidance(): string {
     // report emits and was the one grounded in the weakest source. Web search
     // is now out of bounds for it; the verifier enforces the same rule.
     "- NAMED-INDIVIDUAL RULE (enforced by the verification pass, not a suggestion): any claim that",
-    "  NAMES A PERSON must cite a filing (edgar:*), an earnings-call transcript, or a payload figure.",
+    "  NAMES A PERSON must cite a filing (edgar:*), an earnings-call transcript, a payload figure, or",
+    "  one of the payload's own key-executive / insider-trade rows (cite the row's tag).",
     "  A web-search result is NOT an acceptable source for a claim about a named individual, and",
     "  neither is no source at all. Such a claim is rejected with a reason and shown as rejected in",
     "  the report. If the only thing you have is a search result, write about the COMPANY, not the",
@@ -108,8 +120,13 @@ export function buildLeadershipGuidance(): string {
     "  the payload carries NO guidance-vs-actuals record; never invent one from memory. Every claim in",
     "  an executive's `reasoning` or `evidence.guidanceVsActuals`, and every claim in",
     "  `outlook.guidanceCredibility`, may cite ONLY a payload figure or a filing/transcript excerpt.",
-    "- ROIC / margin trend over the executive's tenure (use the computed series + tenure dates).",
-    "- Capital-allocation record: buyback timing vs price paid, dividend history, M&A (web search for deals).",
+    // The payload carries the computed growth-and-margin figures, the returns
+    // section and the multi-year statement extracts — not a per-year ROIC
+    // series and not a dividend history (audit 2026-09-06, F178). The inputs
+    // name what is actually there.
+    "- ROIC / margin trend over the executive's tenure: the computed growth & margins and returns",
+    "  figures plus the statement extracts, read against the titleSince dates.",
+    `- Capital-allocation record: buyback timing vs price paid (the capital section's buyback-price analysis and the cash-flow extract), M&A${options.webSearch ? " (web search for deals)" : " (as the analyst cases cite it — this pass has no web search)"}.`,
     "- Insider net activity trailing 12 months (payload insider trades + statistics).",
     "- Compensation vs performance (executive-compensation rows vs the return/margin trend).",
     "- Tenure and turnover (titleSince dates; frequent C-suite churn is a JUDGMENT signal).",
@@ -119,7 +136,7 @@ export function buildLeadershipGuidance(): string {
 }
 
 /* ------------------------------------------------------------------------ *
- * Analyst passes (bull / bear) — SPEC §5 passes 1–2.
+ * Analyst passes (bull / bear) — passes 1–2.
  * ------------------------------------------------------------------------ */
 
 /**
@@ -146,8 +163,9 @@ function analystLengthRule(capChars: number): string {
     `LENGTH CAP: your complete ANALYST_CASE JSON must serialize to at most ${capChars} characters.`,
     "Both sides get exactly the same cap and the judge is told both lengths, so writing more cannot",
     "win the argument — it can only cost you material. A case over the cap is TRUNCATED by the",
-    "pipeline (trailing catalysts, then risks, then drivers are dropped, and the report discloses",
-    "that it happened), so choose your strongest evidence rather than listing everything.",
+    "pipeline (trailing evidence entries are dropped first, then catalysts, then risks, then drivers,",
+    "and the report discloses that it happened), so choose your strongest evidence rather than",
+    "listing everything.",
   ].join("\n");
 }
 
@@ -226,7 +244,7 @@ export function buildBearFraming(capChars: number = ANALYST_CASE_CHAR_CAP): stri
 }
 
 /* ------------------------------------------------------------------------ *
- * Judge / synthesis pass — SPEC §5 pass 3.
+ * Judge / synthesis pass — pass 3.
  * ------------------------------------------------------------------------ */
 
 /**
@@ -344,18 +362,18 @@ export function buildJudgeFraming(
     "Every number you emit is a TracedNumber citing the payload path or a case's cited source. Every",
     "claim is a labeled SourcedClaim.",
     "",
-    buildLeadershipGuidance(),
+    buildLeadershipGuidance({ webSearch: false }),
   ].join("\n");
 }
 
 /* ------------------------------------------------------------------------ *
- * Verification pass — SPEC §5 pass 4.
+ * Verification pass — pass 4.
  * ------------------------------------------------------------------------ */
 
 /**
  * Verification-pass system prompt. Extracts every numeric claim from the report
  * JSON, traces each to a payload path or cited URL, marks verified true/false,
- * and flags untraceable numbers [unverified] (never silently deletes — SPEC §5).
+ * and flags untraceable numbers [unverified] (never silently deletes).
  *
  * NOTE: the deterministic tracing in passes.ts (numeric match against payload
  * figures, or presence of a cited web/source tag) is the authority for the
@@ -384,7 +402,7 @@ export function buildVerifySystem(): string {
     "   removed, and a note) and the overall verification rate = traced / total.",
     "",
     "Flagging beats deleting: a disclosed unverified number is honest; a silently removed one hides",
-    "a data-quality problem (SPEC §5). Only mark 'removed' when a number is outright fabricated with",
+    "a data-quality problem. Only mark 'removed' when a number is outright fabricated with",
     "no plausible source at all.",
   ].join("\n");
 }

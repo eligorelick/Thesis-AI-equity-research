@@ -76,6 +76,44 @@ describe("read-only legacy export safety", () => {
     expect(ReportSchema.safeParse(result.report).success).toBe(true);
   });
 
+  it("leaves the judge's own entity-conflict record alone (audit 2026-09-06, F184)", () => {
+    // The judge is told to restate every deterministic entity conflict as a
+    // kind=entity disagreement; its bull/bear views therefore contain the
+    // disputed association by design. Withholding them blocked every clean
+    // report on every read.
+    const report = fixtureReport("DEMO");
+    const resolution = {
+      topic: "DEMO-TRIAL attribution",
+      bullView: "DEMO-TRIAL evaluates ControlMed.",
+      bearView: "DEMO-TRIAL is the DemoMed programme.",
+      kind: "entity" as const,
+      judgeResolution: "DEMO-TRIAL is registered to DemoMed; ControlMed is a separate entity.",
+    };
+    report.disagreements = [resolution];
+
+    const result = sanitizeLegacyEntityConflicts(report, SYNTHETIC_ENTITY_REGISTRY);
+
+    expect(result.withheldCount).toBe(0);
+    expect(result.issues).toEqual([]);
+    expect(result.report.disagreements[0]).toEqual(resolution);
+    expect(result.report.appendix.missingData.some((gap) => gap.field === "legacy.entityValidation")).toBe(false);
+  });
+
+  it("counts a withheld statement once even when the verification log carries a copy (audit 2026-09-06, F194)", () => {
+    const report = fixtureReport("DEMO");
+    const text = "DEMO-TRIAL evaluates ControlMed.";
+    report.verdict.synthesis = text;
+    report.appendix.verificationLog = [{ claim: text, outcome: "verified" }];
+
+    const result = sanitizeLegacyEntityConflicts(report, SYNTHETIC_ENTITY_REGISTRY);
+
+    expect(result.withheldCount).toBe(1);
+    expect(result.report.verdict.synthesis).toContain("Legacy statement withheld");
+    expect(result.report.appendix.verificationLog?.[0].claim).toContain("Legacy statement withheld");
+    const entry = result.report.appendix.missingData.find((gap) => gap.field === "legacy.entityValidation");
+    expect(entry?.reason).toContain("1 legacy statement(s)");
+  });
+
   it("does not withhold prose that merely uses an acronym alias as an ordinary verb", () => {
     // The real LLY registry carries trial acronyms that are also English verbs
     // (ACHIEVE, ATTAIN, TRIUMPH, TRANSCEND). Matching them case-insensitively

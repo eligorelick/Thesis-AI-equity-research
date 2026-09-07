@@ -72,7 +72,10 @@ interface TransportLog {
  * companyfacts CIK0000034088 returns, so a test can make the co-registrant
  * useless and watch the scan carry on.
  */
-function xomTransport(log: TransportLog, opts?: { predecessorFacts?: CompanyFacts | null }): EdgarTransport {
+function xomTransport(
+  log: TransportLog,
+  opts?: { predecessorFacts?: CompanyFacts | null; successorFacts?: CompanyFacts },
+): EdgarTransport {
   const body = (value: unknown): string => (typeof value === "string" ? value : JSON.stringify(value));
   const respond = (value: unknown): Promise<EdgarTransportResponse> =>
     Promise.resolve({ status: 200, body: body(value), fetchedAt: NOW.toISOString(), fromCache: false, stale: false });
@@ -90,7 +93,7 @@ function xomTransport(log: TransportLog, opts?: { predecessorFacts?: CompanyFact
       if (url.includes("submissions/CIK0002115436.json")) return respond(sample("xom_successor_submissions.json"));
       // The successor's own payload starts at the reorganization: no us-gaap.
       if (url.includes("companyfacts/CIK0002115436.json")) {
-        return respond({ cik: SUCCESSOR_CIK, entityName: "ExxonMobil Holdings Corp", facts: {} });
+        return respond(opts?.successorFacts ?? { cik: SUCCESSOR_CIK, entityName: "ExxonMobil Holdings Corp", facts: {} });
       }
       if (url.includes("companyfacts/CIK0000034088.json")) {
         return predecessorFacts === null ? missing() : respond(predecessorFacts);
@@ -138,7 +141,7 @@ function noNetworkConfigs(): { fred: FredConfig; finnhub: FinnhubConfig; finra: 
   };
 }
 
-async function xomBundle(opts?: { predecessorFacts?: CompanyFacts | null }): Promise<{
+async function xomBundle(opts?: { predecessorFacts?: CompanyFacts | null; successorFacts?: CompanyFacts }): Promise<{
   predecessor: { cik10: string; name: string | null; via: { accession: string; form: string } } | null;
   headerReads: string[];
 }> {
@@ -174,6 +177,48 @@ describe("resolving a successor's predecessor from recorded SEC payloads", () =>
     expect(headerReads).toHaveLength(2);
     expect(headerReads[0]).toContain(EIGHT_K_12B);
     expect(headerReads[1]).toContain(TEN_Q);
+  });
+
+  it("still hops when the successor's own facts hold a single quarter and no year", async () => {
+    // The first 10-Q after the reorganization fills the successor's concept
+    // list; counting concepts read that as "has its own history" and never
+    // fetched the predecessor's ninety years.
+    const quarterOnly: CompanyFacts = {
+      cik: SUCCESSOR_CIK,
+      entityName: "ExxonMobil Holdings Corp",
+      facts: {
+        "us-gaap": Object.fromEntries(
+          ["Revenues", "NetIncomeLoss", "Assets"].map((tag) => [
+            tag,
+            {
+              label: tag,
+              units: {
+                USD: [
+                  {
+                    ...(tag === "Assets" ? {} : { start: "2026-04-01" }),
+                    end: "2026-06-30",
+                    val: 1,
+                    accn: "0001193125-26-300000",
+                    fy: 2026,
+                    fp: "Q2",
+                    form: "10-Q",
+                    filed: "2026-08-01",
+                  },
+                ],
+              },
+            },
+          ]),
+        ),
+      },
+    };
+    const { predecessor } = await xomBundle({ successorFacts: quarterOnly });
+    expect(predecessor?.cik10).toBe("0000034088");
+  });
+
+  it("does not hop when the successor carries an annual history of its own", async () => {
+    const { predecessor, headerReads } = await xomBundle({ successorFacts: factsWith(SUCCESSOR_CIK, "ExxonMobil Holdings Corp", 3) });
+    expect(predecessor).toBeNull();
+    expect(headerReads).toHaveLength(0);
   });
 
   it("does not adopt a co-registrant whose own payload carries no history", async () => {

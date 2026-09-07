@@ -5,7 +5,7 @@
  * Responsibilities:
  *  - per-provider token-bucket rate limiting (`makeLimiter`, provider registry)
  *  - exponential backoff + jitter retries on 429 / 5xx / network errors (max 3)
- *  - NO retry on other 4xx (auth / plan errors are deterministic — DATA_MAP §1.1)
+ *  - NO retry on other 4xx (auth / plan errors are deterministic)
  *  - request timeout via AbortController
  *  - bandwidth accounting hook (bytes per provider — FMP has a 150 GB/30d cap)
  *
@@ -88,25 +88,27 @@ export function makeLimiter(
 // ---------------------------------------------------------------------------
 
 /**
- * Default client-side throttles per DATA_MAP §1 policies:
+ * Default client-side throttles, for the clients
+ * that go through {@link fetchWithPolicy}: FMP, EDGAR and Yahoo.
  *  fmp:     ≤10 req/s sustained (well under Ultimate 3,000/min). Burst 40 =
  *           one cold /company/[symbol] volley (~38 concurrent calls) admitted
  *           without queuing behind the refill rate; worst-case minute is
  *           40 + 600 sustained ≪ 3,000. Burst 10 serialized every first visit
  *           ~3 s behind the bucket.
  *  edgar:   ≤5 req/s (official max 10/s; we stay at half)
- *  finra:   generous docs allowance; Thesis uses ~2 calls/report
- *  fred:    ≤2 req/s sustained (~120/min widely reported). Burst 8 = one
- *           sector-overlay volley (≤6 series) admitted at once; burst 2 added
- *           ~0.5 s/series of queueing to the first ticker in each sector.
- *  finnhub: 60 calls/min free tier → 1/s
+ *
+ * FRED, FINRA and Finnhub do NOT flow through this registry: their clients
+ * call {@link fetchWithRedirectPolicy} directly and pace themselves (fred.ts
+ * serializes at 500 ms per request, ≤2 req/s; finra.ts and finnhub.ts carry
+ * their own retry loops). Registry rows for them — with a "burst 8 admits one
+ * sector-overlay volley" rationale and a test pinning it — described pacing
+ * no request ever received (audit 2026-09-06, F222/F230), so they are gone;
+ * `getProviderLimiter("fred")` now returns the generic fallback and governs
+ * nothing.
  */
 const DEFAULT_PROVIDER_RATES: Record<string, { ratePerSec: number; burst: number }> = {
   fmp: { ratePerSec: 10, burst: 40 },
   edgar: { ratePerSec: 5, burst: 5 },
-  finra: { ratePerSec: 5, burst: 5 },
-  fred: { ratePerSec: 2, burst: 8 },
-  finnhub: { ratePerSec: 1, burst: 5 },
   // Unofficial endpoint: the same numbers as FALLBACK_RATE, made explicit so
   // the pace Yahoo is queried at is a declared policy rather than a default
   // that a later change to FALLBACK_RATE could move without anyone noticing.
@@ -223,7 +225,20 @@ export interface FetchPolicy {
   onBytes?: BandwidthRecorder;
   /** Injectable sleep (tests). */
   sleepImpl?: (ms: number) => Promise<void>;
+  /**
+   * Largest response body accepted, in bytes. Default {@link DEFAULT_MAX_BODY_BYTES}.
+   * A declared Content-Length above it is refused before a byte is read; an
+   * undeclared body is read in chunks and abandoned the moment the running
+   * total passes it. Not retried: a body that is too large will be too large
+   * again (audit 2026-09-06, F229 — `response.text()` used to materialise
+   * whatever a provider or a same-origin redirect target streamed, with only
+   * the 30 s timeout bounding it, and then retry the download).
+   */
+  maxBodyBytes?: number;
 }
+
+/** 64 MiB: the largest EDGAR filing index this pipeline reads is a few MB. */
+export const DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 export interface HttpResult {
   url: string;
@@ -306,6 +321,58 @@ export class HttpTransportError extends Error {
     this.provider = opts.provider;
     this.attempts = opts.attempts;
   }
+}
+
+/** A response body larger than the policy's `maxBodyBytes`; never retried. */
+export class HttpBodyTooLargeError extends HttpTransportError {
+  readonly limitBytes: number;
+  constructor(opts: { url: string; provider: string; attempts: number; limitBytes: number; observedBytes: number | null }) {
+    super(
+      `response body for ${opts.provider} exceeds the ${opts.limitBytes}-byte limit${opts.observedBytes === null ? "" : ` (${opts.observedBytes} bytes declared)`}`,
+      { url: opts.url, provider: opts.provider, attempts: opts.attempts },
+    );
+    this.name = "HttpBodyTooLargeError";
+    this.limitBytes = opts.limitBytes;
+  }
+}
+
+/**
+ * Read a response body as text without ever holding more than `maxBodyBytes`
+ * of it: a declared Content-Length above the limit is refused unread, and an
+ * undeclared body is accumulated chunk by chunk and abandoned at the limit.
+ */
+async function readBodyText(
+  response: Response,
+  maxBodyBytes: number,
+  where: { url: string; provider: string; attempts: number },
+): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBodyBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new HttpBodyTooLargeError({ ...where, limitBytes: maxBodyBytes, observedBytes: declared });
+  }
+  if (response.body === null) return response.text();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value === undefined) continue;
+    total += value.byteLength;
+    if (total > maxBodyBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new HttpBodyTooLargeError({ ...where, limitBytes: maxBodyBytes, observedBytes: null });
+    }
+    chunks.push(value);
+  }
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(joined);
 }
 
 /** Caller/job cancellation. Unlike a transport failure, this is never retried. */
@@ -391,7 +458,11 @@ export async function fetchWithPolicy(
         { ...init, signal: attemptSignal },
         fetchImpl,
       );
-      const bodyText = await response.text();
+      const bodyText = await readBodyText(
+        response,
+        policy.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
+        { url, provider, attempts },
+      );
       const bytes = byteLength(bodyText);
       recordBandwidth(provider, bytes, url);
       if (onBytes) {
@@ -431,6 +502,7 @@ export async function fetchWithPolicy(
       if (externalSignal?.aborted) {
         throw abortedError(url, provider, attempts, externalSignal.reason ?? err);
       }
+      if (err instanceof HttpBodyTooLargeError) throw err;
       lastError = err;
       if (attempt < maxRetries) {
         await waitBeforeRetry(

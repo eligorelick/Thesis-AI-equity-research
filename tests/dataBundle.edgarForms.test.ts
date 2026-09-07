@@ -64,6 +64,15 @@ describe("selectAnnualFiling", () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.data.form).toBe("10-K");
   });
+
+  it("uses Form 40-F, the multijurisdictional annual report, when neither a 10-K nor a 20-F is on file", () => {
+    const result = selectAnnualFiling(submissions(["40-F", "6-K"]), "CNQ");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.data.form).toBe("40-F");
+    // A 20-F still comes first: it is the itemised form the section jobs can read.
+    const both = selectAnnualFiling(submissions(["40-F", "20-F"]), "DUAL");
+    expect(both.ok && both.value.data.form).toBe("20-F");
+  });
 });
 
 describe("selectInterimFiling", () => {
@@ -161,7 +170,7 @@ describe("selectAnnualFiling — no annual form on file", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.gap.severity).toBe("critical");
-      expect(result.gap.reason).toMatch(/^no "10-K" or "20-F" among 3 recent filings/);
+      expect(result.gap.reason).toMatch(/^no "10-K", "20-F" or "40-F" among 3 recent filings/);
       expect(result.gap.reason).toMatch(/successor issuer \(Form 8-K12B filed 2026-03-01\)/);
     }
   });
@@ -170,7 +179,7 @@ describe("selectAnnualFiling — no annual form on file", () => {
     const result = selectAnnualFiling(submissions(["10-Q"]), "NEW");
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.gap.reason).toMatch(/^no "10-K" or "20-F" among 1 recent filings/);
+      expect(result.gap.reason).toMatch(/^no "10-K", "20-F" or "40-F" among 1 recent filings/);
       expect(result.gap.reason).not.toMatch(/successor/);
     }
   });

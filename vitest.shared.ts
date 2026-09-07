@@ -103,4 +103,17 @@ export const RISK_SOURCE_MANIFEST = [
   "src/db/paths.ts",
   "src/db/schema.ts",
   "src/watchlist/watchlist.ts",
+  // Added 2026-09-06 (audit F200): risk-bearing modules that sat outside both
+  // coverage manifests. compute.ts is the Stage B orchestrator the audit
+  // baseline pins; registry.ts is the model policy (D-01..D-06); leaseTiming.ts
+  // owns the model-stage deadline; consistency.ts, dataOnlyReport.ts and
+  // judgeProtocol.ts are Stage C logic added on 2026-09-01/02 after the
+  // manifest's last edit. tests/risk.coverage.test.ts now walks src/ so a new
+  // module cannot be left out silently again.
+  "src/pipeline/compute.ts",
+  "src/models/registry.ts",
+  "src/pipeline/leaseTiming.ts",
+  "src/pipeline/stageC/consistency.ts",
+  "src/pipeline/stageC/dataOnlyReport.ts",
+  "src/pipeline/stageC/judgeProtocol.ts",
 ];

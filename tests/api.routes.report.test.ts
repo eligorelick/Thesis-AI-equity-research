@@ -647,6 +647,47 @@ describe("POST /api/report/[jobId]/retry", () => {
     expect(handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()?.status).toBe("done");
   });
 
+  /**
+   * The target's OWN expired owner is reconciled before its status is judged:
+   * a running row whose worker died used to answer "still active" on every
+   * retry, and the route never repaired it either.
+   */
+  it("reconciles the target's own expired owner before judging whether it is still active", async () => {
+    const target = seedResumableJob("AAPL");
+    handle.db.update(jobs).set({
+      status: "running",
+      revision: 1,
+      leaseOwner: "crashed:owner",
+      heartbeatAt: new Date(Date.now() - 2_000).toISOString(),
+      leaseExpiresAt: new Date(Date.now() - 1_000).toISOString(),
+    }).where(eq(jobs.id, target)).run();
+
+    const res = await retryPOST(...retryReq(target));
+
+    const body = await res.clone().json();
+    expect(res.status, JSON.stringify(body)).toBe(202);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, target)).get())
+      .toMatchObject({ status: "queued", runGeneration: 1 });
+    expect(kickJobSchedulerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a running target whose lease is live as a retry conflict", async () => {
+    const target = seedResumableJob("AAPL");
+    handle.db.update(jobs).set({
+      status: "running",
+      revision: 1,
+      leaseOwner: "live:owner",
+      heartbeatAt: new Date().toISOString(),
+      leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }).where(eq(jobs.id, target)).run();
+
+    const res = await retryPOST(...retryReq(target));
+    expect(res.status).toBe(409);
+    expect(handle.db.select().from(jobs).where(eq(jobs.id, target)).get())
+      .toMatchObject({ status: "running", leaseOwner: "live:owner" });
+    expect(kickJobSchedulerMock).not.toHaveBeenCalled();
+  });
+
   it("reconciles an expired same-symbol owner before enqueueing a resumable retry", async () => {
     const target = seedResumableJob("AAPL");
     const { jobId: expired } = createJobReal("AAPL");

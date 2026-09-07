@@ -3,7 +3,7 @@
  * multiples framework, sector-override models).
  *
  * PURE, deterministic TypeScript: no network, no db, no LLM. Inputs are plain
- * typed rows whose field names match FMP exactly (see the provider data contract §2.3/§2.5);
+ * typed rows whose field names match FMP exactly;
  * the integration agent wires the DataBundle into these interfaces.
  *
  * Conventions:
@@ -39,7 +39,7 @@ export interface Assumption<T> {
 
 /** House-rule constants (annotated in notes whenever they fire). */
 export const DCF_HORIZON_YEARS = 10;
-// Spec §2.2 (the valuation methodology line 276): clamp starting growth
+// docs/METHODOLOGY.md "Growth anchor": clamp starting growth
 // g_1 ∈ [−10%, +25%]. (Every other clamp here matches its spec value exactly;
 // this one had drifted to [-15, 40], inflating the DCF for high-growth names
 // with no analyst estimates — corrected back to spec.)
@@ -72,12 +72,12 @@ export const TERMINAL_EXCESS_RETURN_MIN_YEARS = 4;
 export const TERMINAL_EXCESS_RETURN_CARRY = 0.5;
 /** Below this carried spread the evidence is noise; the default applies. */
 export const TERMINAL_EXCESS_RETURN_MIN_PP = 0.5;
-/** Base-case Gordon TV guard: require WACC − g_term ≥ 2.0pp (spec §2.3 line 313). */
+/** Base-case Gordon TV guard: require WACC − g_term ≥ 2.0pp (docs/METHODOLOGY.md "Fade and horizon"). */
 export const TV_GUARD_PP = 2.0;
 /**
- * Sensitivity-grid cells use a LOOSER guard than the base case: spec §3 (line
- * 385) renders a cell "n/m" only when WACC − g_term < 1.5%. Reusing the 2.0pp
- * base-case guard nulled corner cells the spec wants computed.
+ * Sensitivity-grid cells use a LOOSER guard than the base case (docs/METHODOLOGY.md,
+ * Fade and horizon): a cell renders "n/m" only when WACC − g_term < 1.5%. Reusing
+ * the 2.0pp base-case guard nulled corner cells the grid exists to show.
  */
 export const GRID_TV_GUARD_PP = 1.5;
 export const MARGIN_CLAMP_PP: readonly [number, number] = [-20, 45];
@@ -187,7 +187,7 @@ export const medianOf = (values: number[]): number | null => quantile(values, 0.
 
 /**
  * Percentile rank (0–100) of v within values, linear interpolation between
- * order statistics (the valuation methodology §5.4). Needs >= 2 values.
+ * order statistics (docs/METHODOLOGY.md "Multiples and own-history ranks"). Needs >= 2 values.
  */
 export function percentileRank(values: number[], v: number): number | null {
   const s = values.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
@@ -785,9 +785,31 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
       `EBIT margin regime ${regime}: dated 5y slope ${slopeBasis}; target ${fmtNum(targetMargin)}% versus current ${fmtNum(m0)}% and median ${fmtNum(median5y)}%`,
     );
   }
-  marginPath = marginPath.map((m) =>
-    clampWithNote(m, MARGIN_CLAMP_PP[0], MARGIN_CLAMP_PP[1], "EBIT margin (pct)", notes),
-  );
+  // The margin cap is a broken-input guard, not a view on what a company can
+  // earn, so it never binds below a margin the issuer has demonstrably earned:
+  // a flat 45% cap removed a third of the DCF of a 65%-margin payments network
+  // under a rule no document described, one note per year. The ceiling is the
+  // house figure or the issuer's own observed maximum in the five-year
+  // history (the TTM figure is not evidence for its own cap), whichever is
+  // higher; the floor is unchanged; one note when it binds (METHODOLOGY "Fade and horizon", RESEARCH §7.5).
+  const observedMargins = histMargins.filter((v): v is number => isNum(v));
+  const observedMax = observedMargins.length > 0 ? Math.max(...observedMargins) : MARGIN_CLAMP_PP[1];
+  const marginCeiling = Math.max(MARGIN_CLAMP_PP[1], observedMax);
+  const marginClampedYears: string[] = [];
+  marginPath = marginPath.map((m, i) => {
+    const clamped = Math.min(marginCeiling, Math.max(MARGIN_CLAMP_PP[0], m));
+    if (clamped !== m) marginClampedYears.push(`year ${i + 1}: ${fmtNum(m)} -> ${fmtNum(clamped)}`);
+    return clamped;
+  });
+  if (marginClampedYears.length > 0) {
+    notes.push(
+      `EBIT margin (pct) clamped to the house rule range [${MARGIN_CLAMP_PP[0]}, ${fmtNum(marginCeiling)}]` +
+        (marginCeiling > MARGIN_CLAMP_PP[1]
+          ? ` (ceiling raised from ${MARGIN_CLAMP_PP[1]} to the issuer's own observed maximum margin)`
+          : "") +
+        ` in ${marginClampedYears.length} of ${marginPath.length} years: ${marginClampedYears.join("; ")}`,
+    );
+  }
   if (marginPath.some((m) => m < MARGIN_WARN_BAND_PP[0] || m > MARGIN_WARN_BAND_PP[1])) {
     notes.push(
       `EBIT margin path leaves [${MARGIN_WARN_BAND_PP[0]}%, ${MARGIN_WARN_BAND_PP[1]}%] — unusual outside software; review (house-rule warning)`,
@@ -820,9 +842,27 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
   }
   const tEff = currentTaxRate ?? (terminalTaxRate as number);
   const taxTerminal = terminalTaxRate as number;
-  const taxBasis = historicalTaxRates.length > 0
-    ? `${periodBasis} effective rate ${fmtNum(tEff)}% fading to company historical median ${fmtNum(taxTerminal)}% by year ${years}`
-    : `${periodBasis} effective rate ${fmtNum(tEff)}% held flat; no historical/domicile marginal tax dataset available`;
+  if (currentTaxRate === null) {
+    // The substitution is a note and a gap, as the margin fallback's is, and
+    // the basis says no current rate was observed: it used to print "TTM
+    // effective rate 22%" for an issuer with a pre-tax loss.
+    notes.push(
+      `${periodBasis} effective tax rate not computable (pre-tax income ≤ 0, or tax expense missing/negative) — tax path held at the company historical median ${fmtNum(taxTerminal)}%`,
+    );
+    gaps.push(
+      gapEntry(
+        "valuation.dcf.ttmTaxRate",
+        `${periodBasis} effective tax rate not computable (non-positive pre-tax income or missing tax expense) — the company historical median ${fmtNum(taxTerminal)}% is used for the whole path`,
+        "info",
+      ),
+    );
+  }
+  const taxBasis =
+    currentTaxRate === null
+      ? `${periodBasis} effective rate not computable (pre-tax income ≤ 0 or tax expense missing) — held at the company historical median ${fmtNum(taxTerminal)}% for all ${years} years`
+      : historicalTaxRates.length > 0
+        ? `${periodBasis} effective rate ${fmtNum(tEff)}% fading to company historical median ${fmtNum(taxTerminal)}% by year ${years}`
+        : `${periodBasis} effective rate ${fmtNum(tEff)}% held flat; no historical/domicile marginal tax dataset available`;
   const taxRatePath = fadePath(tEff, taxTerminal, years);
 
   // --- Sales-to-capital ------------------------------------------------------
@@ -951,10 +991,26 @@ export interface DcfYearRow {
   pv: number;
 }
 
+/** The EV→equity→per-share bridge a DCF result was computed with. */
+export interface DcfBridge {
+  netDebt: number | null;
+  dilutedShares: number | null;
+  minorityInterest: number | null;
+  preferred: number | null;
+}
+
 export interface DcfResult {
   enterpriseValue: number;
   equityValue: number | null;
   perShare: number | null;
+  /**
+   * The bridge this result used. Every consumer that re-runs the DCF for a
+   * scenario (scenarioTargets.ts, projections.ts) reads it from here, so bull,
+   * base and bear can never bridge on different net debt: valueCompany removes
+   * the operating-lease liability before bridging, and a re-run on the raw
+   * figure published a bull target below base for every lease-heavy issuer.
+   */
+  bridge: DcfBridge;
   pvExplicit: number;
   pvTerminal: number;
   /** pvTerminal / enterpriseValue (share of value in the terminal). */
@@ -1163,6 +1219,12 @@ function bridgeToPerShare(
  */
 export function runDcf(assumptions: DcfAssumptions, opts: DcfRunOptions): DcfResult {
   const gaps: ManifestEntry[] = [];
+  const bridge: DcfBridge = {
+    netDebt: opts.netDebt,
+    dilutedShares: opts.dilutedShares,
+    minorityInterest: opts.minorityInterest ?? null,
+    preferred: opts.preferred ?? null,
+  };
   const core = dcfCore(assumptions, opts.waccPct, { guardMode: "clamp" });
   if (core === null) {
     // Only reachable for degenerate WACC (<= -100%); keep a total-function shape.
@@ -1170,6 +1232,7 @@ export function runDcf(assumptions: DcfAssumptions, opts: DcfRunOptions): DcfRes
       enterpriseValue: 0,
       equityValue: null,
       perShare: null,
+      bridge,
       pvExplicit: 0,
       pvTerminal: 0,
       terminalShare: null,
@@ -1196,6 +1259,7 @@ export function runDcf(assumptions: DcfAssumptions, opts: DcfRunOptions): DcfRes
     enterpriseValue: core.enterpriseValue,
     equityValue,
     perShare,
+    bridge,
     pvExplicit: core.pvExplicit,
     pvTerminal: core.pvTerminal,
     terminalShare: safeDiv(core.pvTerminal, core.enterpriseValue),
@@ -1225,12 +1289,12 @@ export interface SensitivityGrid {
 /**
  * 5x5 per-share sensitivity: WACC +/-1pp x gTerm +/-1pp in 0.5 steps. The
  * cash-flow path is held fixed; only discounting + terminal are recomputed.
- * Cells violating the grid TV guard (WACC - g < 1.5pp, spec §3) are null, never
+ * Cells violating the grid TV guard (WACC - g < 1.5pp) are null, never
  * a huge number — a looser bound than the 2.0pp base-case guard on purpose.
  */
 export function sensitivityGrid(assumptions: DcfAssumptions, base: DcfRunOptions): SensitivityGrid {
   const notes: string[] = [
-    `grid cells with WACC - gTerm < ${GRID_TV_GUARD_PP}pp rendered null (Gordon TV guard, spec §3)`,
+    `grid cells with WACC - gTerm < ${GRID_TV_GUARD_PP}pp rendered null (Gordon TV guard; docs/METHODOLOGY.md, Fade and horizon)`,
   ];
   const gaps: ManifestEntry[] = [];
   const waccPcts = SENSITIVITY_STEPS_PP.map((s) => base.waccPct + s);
@@ -1251,9 +1315,26 @@ export function sensitivityGrid(assumptions: DcfAssumptions, base: DcfRunOptions
       gaps,
     };
   }
-  const perShare = waccPcts.map((w) =>
-    gTermPcts.map((g) => {
-      const core = dcfCore(assumptions, w, { gTermPct: g, guardMode: "null", guardPp: GRID_TV_GUARD_PP });
+  // Terminal ROIC is defined RELATIVE to the WACC (the terminal-value house
+  // convention: WACC plus any evidenced excess), so each cell keeps the base
+  // case's EXCESS rather than its level. At a fixed level a −1pp WACC row
+  // earned a phantom +1pp excess and a +1pp row a phantom deficit, and under
+  // the default rule the g-axis reversed sign across rows while the assumption
+  // block said terminal ROIC = WACC.
+  const terminalExcessPp = assumptions.terminal.roicTermPct.value - base.waccPct;
+  notes.push(
+    `terminal ROIC held at WACC ${terminalExcessPp >= 0 ? "+" : "−"} ${fmtNum(Math.abs(terminalExcessPp))}pp in every cell (the house convention defines it relative to the discount rate)`,
+  );
+  const perShare = waccPcts.map((w) => {
+    const cellAssumptions: DcfAssumptions = {
+      ...assumptions,
+      terminal: {
+        ...assumptions.terminal,
+        roicTermPct: { ...assumptions.terminal.roicTermPct, value: w + terminalExcessPp },
+      },
+    };
+    return gTermPcts.map((g) => {
+      const core = dcfCore(cellAssumptions, w, { gTermPct: g, guardMode: "null", guardPp: GRID_TV_GUARD_PP });
       if (core === null) return null;
       const bridged = bridgeToPerShare(
         core.enterpriseValue,
@@ -1264,8 +1345,8 @@ export function sensitivityGrid(assumptions: DcfAssumptions, base: DcfRunOptions
         base.preferred ?? null,
       );
       return bridged.perShare;
-    }),
-  );
+    });
+  });
   return { waccPcts, gTermPcts, perShare, notes, gaps };
 }
 
@@ -1510,7 +1591,7 @@ export type MultipleKey =
   | "priceToFfo"
   | "priceToAffo";
 
-/** Sector -> valid multiples (the application contract §6; banks NEVER get EV multiples). */
+/** Sector -> valid multiples (banks NEVER get EV multiples). */
 export const SECTOR_APPROPRIATE_MULTIPLES: Record<SectorRoute, MultipleKey[]> = {
   general: ["peTtm", "evToEbitda", "evToSales", "priceToFcf", "priceToBook"],
   bank: ["peTtm", "priceToTbv", "priceToBook"],
@@ -1672,6 +1753,15 @@ export interface MultiplesFrameworkInputs {
   /** REIT-only: FFO/AFFO totals provided by the caller (labeled approximate upstream). */
   ffoApprox?: number | null;
   affoApprox?: number | null;
+  /**
+   * REIT-only: true when the CURRENT FFO is the plain net income + total D&A
+   * construction — the only definition the own-history series can rebuild
+   * from quarterly statements. A NAREIT FFO that netted property-sale gains,
+   * impairments or real-estate-only depreciation is a different quantity, and
+   * ranking it inside a net-income-plus-D&A history biased the rank; the P/FFO
+   * and P/AFFO bands are withheld in that case with a disclosing gap.
+   */
+  ffoHistoryComparable?: boolean;
   /**
    * WS6 (D-19): keep the OPERATING-lease liability in enterprise value
    * (THESIS_EV_INCLUDE_LEASES=1). OFF by default, because under US GAAP
@@ -1903,17 +1993,18 @@ function deriveOwnHistory(
           b.cashAndShortTermInvestments -
           (removeOperatingLease ? (windowOperatingLease as number) : 0)
         : null;
-    // FFO/AFFO, derived exactly as the CURRENT values are (compute.ts builds
-    // ffoApprox = netIncome + D&A and affoApprox = ffoApprox - |capex|). Without
-    // these, `priceToFfo`/`priceToAffo` had no derived source at all, so every
-    // equity REIT's only two multiples carried no own-history band, its
-    // valuation aspect scored null, and its composite was permanently shrunk
-    // for evidence the pipeline could have computed all along.
-    // INCOME-statement D&A only, matching how compute.ts builds the CURRENT
-    // ffoApprox (ttmInc.depreciationAndAmortization, no cash-flow fallback).
-    // mergeQuarterly falls back to the cash-flow figure, so allowing it here
-    // ranked a current P/FFO built on one D&A definition against a history
-    // built on another.
+    // FFO/AFFO history on the net income + income-statement D&A construction
+    // (AFFO = FFO − |capex|), the only definition four quarterly statements
+    // can rebuild. The CURRENT FFO is computeNareitFfo's fiscal-year figure;
+    // the caller says through `ffoHistoryComparable` whether that figure IS
+    // this construction (no gains, impairments or real-estate-only D&A
+    // netted), and the framework withholds these bands when it is not, so a
+    // NAREIT FFO is never ranked inside a differently-defined history. Without
+    // the history, `priceToFfo`/`priceToAffo` had no own-history band at all,
+    // so every equity REIT's only two multiples scored null and its composite
+    // was permanently shrunk for evidence the pipeline could compute.
+    // INCOME-statement D&A only: mergeQuarterly falls back to the cash-flow
+    // figure, and allowing it here ranked one D&A definition against another.
     const ttmDa = sum((r) => r.incomeDepreciationAndAmortization ?? null);
     const ttmCapex = sum((r) => r.capitalExpenditure);
     const ttmFfo = isNum(ttmNi) && isNum(ttmDa) ? ttmNi + ttmDa : null;
@@ -2172,7 +2263,7 @@ export function multiplesFramework(
 
   const financialsRoute = route === "bank" || route === "insurer" || route === "reit-mortgage";
   if (financialsRoute) {
-    notes.push("EV multiples suppressed for financials — debt is raw material, EV is meaningless (house rule per SPEC §6)");
+    notes.push("EV multiples suppressed for financials — debt is raw material, EV is meaningless (house rule; docs/METHODOLOGY.md, Financial-company routes)");
   }
 
   // --- Current multiples from raw fields ------------------------------------
@@ -2259,6 +2350,23 @@ export function multiplesFramework(
     notes.push(reason);
     gaps.push(gapEntry("valuation.multiples.ownHistory.evLeaseBasis", reason, "info"));
   }
+  // The current FFO is NAREIT (gains, impairments or real-estate-only D&A
+  // netted) while the history can only be net income + D&A: withhold the FFO
+  // bands rather than rank two definitions against each other (the same rule
+  // the lease basis applies to EV above).
+  const ffoKeys: readonly MultipleKey[] = ["priceToFfo", "priceToAffo"];
+  if (route === "reit" && inputs.ffoHistoryComparable === false) {
+    const reason =
+      "the current FFO is the NAREIT figure (property-sale gains, impairments or real-estate-only depreciation netted, on the latest fiscal year) " +
+      "while the own-history series can only be rebuilt as net income + D&A per rolling four quarters — the P/FFO and P/AFFO bands are withheld " +
+      "rather than ranking one definition inside a history built on another";
+    for (const key of ffoKeys) {
+      delete derived.series[key];
+      delete vendor[key];
+    }
+    notes.push(`own-history FFO basis: ${reason}`);
+    gaps.push(gapEntry("valuation.multiples.ownHistory.ffoBasis", reason, "info"));
+  }
   const historyKeys: readonly MultipleKey[] = [
     ...DERIVED_HISTORY_KEYS,
     "priceToTbv",
@@ -2275,6 +2383,9 @@ export function multiplesFramework(
         derivedBasis +
         (removeOperatingLease && vendorEvKeys.includes(key)
           ? ". Each historical enterprise value removes that quarter's OWN operating-lease liability, the same adjustment the current EV carries"
+          : "") +
+        (ffoKeys.includes(key)
+          ? ". FFO per window = net income + income-statement D&A over four quarters (AFFO = FFO − |capex|); the current figure is the latest fiscal year's on the same construction"
           : "");
     } else if ((vendorValues?.length ?? 0) >= MIN_HISTORY_OBS_FOR_BAND) {
       history[key] = vendorValues;
@@ -2965,6 +3076,18 @@ export interface ReitInputs {
   submap?: "equity" | "mortgage" | "undetermined" | null;
   /** WS5: the routing reason for an undetermined sub-map, repeated on each withheld figure. */
   submapReason?: string | null;
+  /**
+   * Claims senior to common in the HOUSE enterprise value — the definition the
+   * multiples framework and the DCF bridge use. 0 when absent (the provider's
+   * convention). The sketch used market cap + net debt alone, so a UPREIT
+   * with OP-unit non-controlling interest and preferred carried two EVs in
+   * one report and its implied cap rate was overstated.
+   */
+  preferredStock?: number | null;
+  minorityInterest?: number | null;
+  /** The operating-lease slice inside net debt; removed unless `includeLeasesInEv` (the EV bridge's rule). */
+  operatingLeaseLiability?: number | null;
+  includeLeasesInEv?: boolean;
 }
 
 export interface ReitValuationResult {
@@ -3056,9 +3179,21 @@ export function reitValuation(inputs: ReitInputs): ReitValuationResult {
   if (ffo === null) {
     gaps.push(gapEntry("valuation.reit.ffo", "FFO missing or non-positive — P/FFO n/m", "warn"));
   }
-  const ev = mcap !== null && isNum(inputs.netDebt) ? mcap + inputs.netDebt : null;
+  const operatingLease =
+    isNum(inputs.operatingLeaseLiability) && inputs.operatingLeaseLiability > 0 ? inputs.operatingLeaseLiability : 0;
+  const leaseRemoved = inputs.includeLeasesInEv === true ? 0 : operatingLease;
+  const preferred = isNum(inputs.preferredStock) ? inputs.preferredStock : 0;
+  const minority = isNum(inputs.minorityInterest) ? inputs.minorityInterest : 0;
+  const ev =
+    mcap !== null && isNum(inputs.netDebt) ? mcap + inputs.netDebt - leaseRemoved + preferred + minority : null;
   if (ev === null) {
     gaps.push(gapEntry("valuation.reit.enterpriseValue", "net debt or market cap missing — EV/implied cap rate unavailable", "info"));
+  } else {
+    notes.push(
+      `enterprise value = market cap ${fmtNum(mcap as number)} + net debt ${fmtNum(inputs.netDebt as number)}` +
+        (leaseRemoved > 0 ? ` − operating-lease liability ${fmtNum(leaseRemoved)}` : "") +
+        ` + preferred ${fmtNum(preferred)} + minority interest ${fmtNum(minority)} = ${fmtNum(ev)} — the house definition the multiples and the DCF bridge use`,
+    );
   }
   const noi = posOrNull(inputs.noiApprox);
   let impliedCapRatePct: number | null = null;
@@ -3225,7 +3360,7 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
       ),
     );
     if (route.base === "reit-mortgage") {
-      notes.push("mortgage REIT routed to the book-value (excess-return) map per SPEC §6");
+      notes.push("mortgage REIT routed to the book-value (excess-return) map (docs/METHODOLOGY.md, Financial-company routes)");
     }
     const er = inputs.excessReturn
       ? excessReturnModel(inputs.excessReturn)

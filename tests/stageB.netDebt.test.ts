@@ -79,4 +79,20 @@ describe("resolveNetDebt — one house convention", () => {
     expect(result.value).toBeNull();
     expect(result.cashBasis).toBeNull();
   });
+
+  // Audit 2026-09-06: short-term investments cannot be negative, so a combined
+  // field below the cash balance alone is a contradiction whether or not the
+  // investments component is reported. A vendor zero-fill of the combined
+  // field used to overstate net debt by the whole cash balance.
+  it("refuses a combined field below the cash balance even when short-term investments are unreported", () => {
+    const result = resolveNetDebt({
+      date: "2025-12-31",
+      totalDebt: 600,
+      cashAndCashEquivalents: 100,
+      cashAndShortTermInvestments: 0,
+    });
+    expect(result.value).toBeNull();
+    expect(result.conflict).toBe(true);
+    expect(result.reason).toMatch(/below the reported cash balance/);
+  });
 });

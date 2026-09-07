@@ -1,6 +1,6 @@
 /**
  * Keyless / degraded END-TO-END report + accuracy-consistency tests
- * (Phase 4 gate, the application contract §10 + §1 rules #1/#4).
+ * (Phase 4 gate).
  *
  * Two guarantees are proven here, both executable:
  *
@@ -32,7 +32,7 @@ import {
   serializePayloadForPrompt,
   type ContextPayload,
 } from "@/pipeline/stageC/payload";
-import { collectTracedNumbers } from "@/pipeline/stageC/passes";
+import { applySegmentShares, collectTracedNumbers } from "@/pipeline/stageC/passes";
 import { buildDataOnlyReport } from "@/pipeline/jobRunner";
 import { ReportSchema, DISCLAIMER_TEXT, type Report, type TracedNumber } from "@/report/schema";
 import type { DataBundle } from "@/pipeline/types";
@@ -165,7 +165,13 @@ function fixtureBundle(symbol = "AAPL"): DataBundle {
     shortInterestTrend: gap,
     insiderSentiment: gap,
     macro: {
-      core: { DGS10: ok([{ date: "2026-07-04", value: 4.4 }], "2026-07-04", "/fred/series/observations?series_id=DGS10", "fred") },
+      core: {
+        DGS10: ok([{ date: "2026-07-04", value: 4.4 }], "2026-07-04", "/fred/series/observations?series_id=DGS10", "fred"),
+        // A percent-change transform and a scaled count, so the data-only macro
+        // table's unit handling is exercised (audit 2026-09-06, F168/F176).
+        CPIAUCSL: ok([{ date: "2026-05-01", value: 2.7 }], "2026-05-01", "/fred/series/observations?series_id=CPIAUCSL", "fred"),
+        PAYEMS: ok([{ date: "2026-06-01", value: 147 }], "2026-06-01", "/fred/series/observations?series_id=PAYEMS", "fred"),
+      },
       sector: {},
       gicsSector: "Technology",
       attribution: "This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
@@ -302,6 +308,78 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
     );
   });
 
+  it("renders macro rows in the payload's units and scale, not as raw indices (audit 2026-09-06, F168/F176)", () => {
+    const report = dataOnly();
+    const byId = new Map(report.macro.relevantSeries.map((row) => [row.seriesId, row.latest]));
+    expect(byId.get("DGS10")).toMatchObject({ value: 4.4, unit: "%" });
+    expect(byId.get("CPIAUCSL")).toMatchObject({ value: 2.7, unit: "%" });
+    // Payrolls are served in thousands and shown as a plain count, ×1,000.
+    expect(byId.get("PAYEMS")).toMatchObject({ value: 147_000, unit: "count" });
+    expect(() => ReportSchema.parse(report)).not.toThrow();
+  });
+
+  it("computes segment shares on the same net denominator as the LLM path (audit 2026-09-06, F167/F177)", () => {
+    const { bundle, computed, validation } = buildInputs();
+    const segmented = {
+      ...bundle,
+      segmentation: {
+        product: fmpPayload(
+          [{ date: "2025-09-27", reportedCurrency: "USD", data: { iPhone: 200, Services: 100, Eliminations: -50 } }],
+          "2025-09-27",
+          "revenue-product-segmentation",
+        ),
+        geographic: gap,
+      },
+    } as DataBundle;
+    const report = buildDataOnlyReport({
+      symbol: "AAPL",
+      companyName: "Apple Inc.",
+      generatedAt: GENERATED_AT,
+      model: "none",
+      costUsd: 0,
+      bundle: segmented,
+      validation,
+      computed,
+      costBreakdown: [],
+      reason: "ANTHROPIC_API_KEY not set — analysis passes skipped",
+    });
+    const rows = report.business.segments.product;
+    expect(rows.map((row) => [row.name, row.sharePct])).toEqual([
+      ["iPhone", 80],
+      ["Services", 40],
+      ["Eliminations", -20],
+    ]);
+    // Byte-for-byte what the LLM path's deterministic overwrite would give.
+    const llmPath = applySegmentShares({ segments: { product: rows, geographic: [] } } as never, segmented);
+    expect(llmPath.segments.product.map((row) => row.sharePct)).toEqual(rows.map((row) => row.sharePct));
+  });
+
+  it("states a not-scored aspect's letter as a placeholder, carries the balance-sheet strip entry, and counts coverage honestly (audit 2026-09-06, F175/F179/F182/F170)", () => {
+    const report = dataOnly();
+    const { computed } = buildInputs();
+    const strip = report.verdict.gradeStrip;
+    expect(strip.balanceSheet).toEqual(report.balanceSheet.graded);
+    for (const [aspect, block] of Object.entries(strip) as [keyof typeof computed.scores.aspects, (typeof strip)["fundamentals"]][]) {
+      if (computed.scores.aspects[aspect].band !== null) continue;
+      expect(block.grade).toBe("D");
+      expect(block.oneLineWhy).toContain("placeholder, not an assessment");
+      expect(block.oneLineWhy).toContain("neutral midpoint (50/100)");
+    }
+    for (const block of collectGradeBlocks(report)) {
+      expect(block.reasoning.some((c) => c.text.includes("no analyst grade exists"))).toBe(true);
+      expect(block.reasoning.some((c) => /ungraded/i.test(c.text))).toBe(false);
+    }
+    const coverage = report.meta.provenanceCoverage;
+    expect(coverage).toBeDefined();
+    // The flag claim's `pipeline` source is not a citation, so the judgment
+    // rate is below 1 and is the exact fraction the schema pins.
+    expect(coverage!.judgments.cited).toBeLessThan(coverage!.judgments.total);
+    expect(coverage!.judgments.rate).toBe(coverage!.judgments.cited / coverage!.judgments.total);
+    expect(coverage!.factualClaims.rate).toBe(
+      coverage!.factualClaims.total === 0 ? null : coverage!.factualClaims.supported / coverage!.factualClaims.total,
+    );
+  });
+
   it("carries only pipeline-computed numbers, each traced to a computed source, and no scenario odds", () => {
     const report = dataOnly();
     const numbers: TracedNumber[] = collectTracedNumbers(report);
@@ -388,6 +466,95 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
     expect(report.leadership.executives).toEqual([]);
     expect(report.verdict.synthesis).toContain("Data-only report");
     expect(report.verdict.synthesis).toContain("deterministic composite score");
+  });
+
+  it("prints executive rows, the margin-solve reverse DCF, the buyback and share-count sentences, and a fair value without a quote (audit 2026-09-06, §5 risk coverage)", () => {
+    const { bundle, computed, validation } = buildInputs();
+    if (computed.valuation.kind !== "dcf") throw new Error("fixture must route to the DCF");
+    if (computed.fairValue.status !== "available" || computed.fairValue.perShare === null) {
+      throw new Error("fixture must carry an available fair value");
+    }
+    // Executive rows: a dated one, an undated one (an invalid calendar day is
+    // not a date), one with a non-string name and one with an empty title —
+    // the last two are skipped, never rendered half-filled.
+    const executives = fmpPayload(
+      [
+        { name: "Tim Cook", title: "Chief Executive Officer", titleSince: "2011-08-24" },
+        { name: "Jane Doe", title: "Chief Financial Officer", titleSince: "2026-02-30" },
+        { name: "Bob Ray", title: "Chief Operating Officer", titleSince: 12345 },
+        { name: 42, title: "Chair" },
+        { name: "Nameless Title", title: "" },
+      ],
+      "2026-06-30",
+      "key-executives",
+    );
+    const mutatedBundle = { ...bundle, executives, quote: gap } as unknown as DataBundle;
+    const mutated: ComputedMetrics = {
+      ...computed,
+      valuation: {
+        ...computed.valuation,
+        reverseDcf: { method: "margin", impliedRevenueGrowthPct: null, impliedTerminalMarginPct: 31.4, notes: [], gaps: [] },
+      },
+      fairValue: {
+        ...computed.fairValue,
+        perShare: { ...computed.fairValue.perShare, currency: null },
+        upsidePct: null,
+      },
+      capital: {
+        ...computed.capital,
+        shareCount: {
+          ...computed.capital.shareCount,
+          trendPct: -7.5,
+          annualizedPct: null,
+          direction: "buyback",
+          startDate: "2022-09-24",
+          endDate: "2025-09-27",
+        },
+        buybackPriceAnalysis: {
+          ...computed.capital.buybackPriceAnalysis,
+          totalRepurchased: 90_000_000_000,
+          premiumDiscountPct: -12.5,
+          note: "Average price proxy: repurchase dollars over the change in diluted shares.",
+        },
+      },
+    };
+    const report = buildDataOnlyReport({
+      symbol: "AAPL",
+      companyName: "Apple Inc.",
+      generatedAt: GENERATED_AT,
+      model: "none",
+      costUsd: 0,
+      bundle: mutatedBundle,
+      validation,
+      computed: mutated,
+      costBreakdown: [],
+      reason: "ANTHROPIC_API_KEY not set — analysis passes skipped",
+    });
+    expect(ReportSchema.safeParse(report).success).toBe(true);
+
+    const executiveNotes = report.leadership.governanceNotes.filter((note) => note.source === "fmp:key-executives");
+    expect(executiveNotes.map((note) => note.text)).toEqual([
+      "Tim Cook — Chief Executive Officer (since 2011-08-24).",
+      "Jane Doe — Chief Financial Officer.",
+      "Bob Ray — Chief Operating Officer.",
+    ]);
+    expect(executiveNotes.every((note) => note.label === "FACT" && note.asOf === "2026-06-30")).toBe(true);
+
+    expect(report.valuation.reverseDcf.narrative).toBe(
+      "The market price is consistent with a 31.4% terminal EBIT margin, with growth held at its base path (margin-solve fallback). Deterministic solve; no narrative analysis ran.",
+    );
+
+    const serialized = JSON.stringify(report);
+    expect(serialized).toContain("Diluted share count changed -7.5% between 2022-09-24 and 2025-09-27 (buyback).");
+    expect(serialized).toContain(
+      "Repurchased 90B USD of stock across the analysed years at an average price proxy 12.5% above the current price.",
+    );
+    expect(serialized).toContain("Average price proxy: repurchase dollars over the change in diluted shares.");
+    // No quote: the fair value is stated per share in the statements' currency
+    // (the per-share unit fell back to it), with no comparison to a price.
+    expect(serialized).toMatch(/model: [\d.,]+ USD per share\./);
+    expect(serialized).not.toContain("against a");
+    expect(serialized).not.toContain("versus the quote");
   });
 
   it("stays a bare stub when Stage B itself did not run", () => {

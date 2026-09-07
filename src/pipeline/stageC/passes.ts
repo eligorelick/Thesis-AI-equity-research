@@ -1,17 +1,17 @@
 /**
- * Stage C — the four grounded LLM pass runners plus report assembly (SPEC §5).
+ * Stage C — the four grounded LLM pass runners plus report assembly.
  *
  * Every runner takes the anthropic `runPass` fn INJECTED (a {@link RunPassFn})
  * so tests and the keyless dry-run path drive the passes without a live API.
  * The runners never crash the app: a keyless / refusal / max_tokens outcome
  * comes back as a typed failure the orchestrator can branch on and file as a
- * gap (SPEC §3 rule #4).
+ * gap (rule #4).
  *
  * Passes:
  *  - runBullPass / runBearPass: web search on (max ~8 uses), ANALYST_CASE_SCHEMA
  *    structured output. runBullThenBear sequences them per the prompt-cache
  *    rule (fire bull, await its first streamed token so the cache entry becomes
- *    readable, then fire bear — avoids a double 1.25x cache write, the cost model §2).
+ *    readable, then fire bear — avoids a double 1.25x cache write, the prompt-cache rule).
  *  - runJudgePass: payload + both cases -> JSON-only JUDGE_OUTPUT_SCHEMA,
  *    validated locally with Zod. The full judge schema is NOT sent as
  *    Anthropic strict structured output because the live grammar compiler rejects
@@ -24,7 +24,7 @@
  *    re-derive formulas or validate whether a cited source itself is correct.
  *  - assembleReport: wraps a JudgeOutput with meta + appendix and validates the
  *    whole thing against ReportSchema (throws a typed error on failure so the
- *    runner can retry the judge with the Zod error — max 2 retries per SPEC §2).
+ *    runner can retry the judge with the Zod error — max 2 retries).
  *
  * SERVER-ONLY in production (the real runPass reads ANTHROPIC_API_KEY), but this
  * module imports NO provider client directly — runPass is injected — so it is
@@ -191,6 +191,8 @@ export interface PassErrorLike {
   webSearches?: number;
   /** Internal sequencing marker: the pass never crossed the provider boundary. */
   notLaunched?: boolean;
+  /** The caller aborted the request; the provider did not fail it. */
+  aborted?: boolean;
 }
 
 /** Structural mirror of the provider's RunPassResult. */
@@ -203,7 +205,7 @@ export type RunPassOutcome =
  * imported from the SDK) so this module stays provider-agnostic. Used to mark a
  * prompt-cache breakpoint: Anthropic caches everything in the `tools -> system
  * -> messages` prefix up to and including the block carrying `cache_control`
- * (the Anthropic API contract §4).
+ * .
  */
 export interface RunPassContentBlock {
   type: "text";
@@ -341,7 +343,7 @@ export type PassRun<T> =
  * Constants
  * ------------------------------------------------------------------------ */
 
-/** Web-search cap per analyst pass (SPEC §5 design budget ~8). */
+/** Web-search cap per analyst pass (design budget ~8). */
 export const ANALYST_MAX_WEB_SEARCHES = 8;
 /**
  * maxTokens for the analyst passes (adaptive thinking billed as output).
@@ -365,7 +367,7 @@ export const ANALYST_MAX_TOKENS = 64_000;
  */
 export const JUDGE_MAX_TOKENS = 96_000;
 /** Rounding tolerance for tracing a report number to a payload figure. */
-/** Max judge retries on a Zod-validation failure (SPEC §2). */
+/** Max judge retries on a Zod-validation failure. */
 export const MAX_JUDGE_RETRIES = 2;
 
 /**
@@ -511,7 +513,7 @@ export function payloadUserTurn(payload: ContextPayload): string {
 /**
  * Build the single user message every analyst/judge pass sends: the
  * byte-identical payload as the FIRST content block, carrying the
- * `cache_control` breakpoint (the Anthropic API contract §4 — a cache entry
+ * `cache_control` breakpoint (a cache entry
  * covers everything in the prefix up to and including this block, so `tools`
  * and `system` being identical across passes is what lets bear/subsequent
  * passes read the entry bull's request writes), followed by the pass-specific
@@ -554,9 +556,9 @@ interface StructuredPassArgs<T> {
  * still isn't byte-identical to bull/bear's `max_uses:8` tool, so it bought no
  * cache-prefix parity anyway, and (b) permits the judge model to legally issue
  * one live web search on the SAME request as `output_config.format` (structured
- * output) — a combination the Anthropic API contract §8 explicitly flags as
+ * output) — a combination the Anthropic API contract explicitly flags as
  * PENDING LIVE VERIFICATION, and the judge/verify design intent (the cost model,
- * the Anthropic API contract §7) is "no web search" for these passes. Omitting
+ * the Anthropic API contract) is "no web search" for these passes. Omitting
  * `tools` entirely enforces that intent instead of merely making it likely.
  */
 function toolsFor(deps: PassDeps, useWebSearch: boolean, model: string): unknown[] | undefined {
@@ -689,7 +691,11 @@ const LOWER_ENUM_VALUES_BY_KEY: Record<string, ReadonlySet<string>> = {
   probability: new Set(["high", "medium", "low"]),
   direction: new Set(["positive", "negative", "mixed"]),
   strength: new Set(["none", "narrow", "wide"]),
-  kind: new Set(["fact", "interpretation"]),
+  // Every member of the schema's disagreement kind. `entity` was missing, so a
+  // judge writing `kind: "Entity"` — on exactly the entry the prompt forces it
+  // to emit for a deterministic entity conflict — failed validation and burned
+  // a paid judge retry while `Fact` and `Interpretation` were silently fixed.
+  kind: new Set(["fact", "interpretation", "entity"]),
 };
 
 function normalizeUpperEnum(value: unknown, allowed: ReadonlySet<string>): unknown {
@@ -1065,6 +1071,91 @@ function hardFailure(field: string, err: unknown): PassRun<AnalystCase> {
   };
 }
 
+/**
+ * Whether a failed analyst run leaves the whole job unable to produce a report.
+ *
+ * The runner pays for one repair attempt per side whose output was RECEIVED and
+ * rejected by the schema (`validationError`), and only then synthesizes. Any
+ * other failure — transport, refusal, a stalled stream the idle guard
+ * abandoned — is not repairable, so `recoverable` in the runner is false and
+ * the job degrades to a data-only report whatever the sibling does next.
+ *
+ * The sibling used to keep generating anyway: on 2026-09-03 bull was abandoned
+ * at 19:05:00 and bear billed on until the user cancelled it by hand at
+ * 19:13:12, eight minutes of paid output for a report that could no longer be
+ * written. A side's output is only worth finishing because a partial resume can
+ * reuse it, and a resume re-runs the failed side regardless — so the sibling's
+ * remaining spend buys, at best, one pass on a run the user may never resume.
+ */
+function endsTheRun(run: PassRun<AnalystCase>): boolean {
+  return !run.ok && run.validationError === undefined;
+}
+
+/** A per-side signal that aborts with the job's, or on its own. */
+function siblingAbortSignal(
+  base: AbortSignal | undefined,
+  controller: AbortController,
+): AbortSignal {
+  return base === undefined ? controller.signal : AbortSignal.any([base, controller.signal]);
+}
+
+/**
+ * The abort reason a doomed run hands its surviving side. A sentinel, so the
+ * relabel below can tell an abort WE issued from one the job signal issued: a
+ * cancel or a stage deadline aborts both sides at once, both then satisfy
+ * `endsTheRun`, and each side's controller fires for the other — without the
+ * sentinel both would be labelled "abandoned because the sibling failed" for a
+ * run nobody's sibling failed.
+ */
+class SiblingAbandonedSignal extends Error {
+  constructor(readonly failed: "bull" | "bear") {
+    super(`${failed} pass failed unrecoverably; the run cannot produce a report`);
+    this.name = "SiblingAbandonedSignal";
+  }
+}
+
+/**
+ * Relabel a side we abandoned on purpose. The provider reports a deliberate
+ * abort as an ordinary transport failure ("request aborted by the caller"),
+ * which reads like a provider fault. The billed figures on the run are kept
+ * exactly as the provider settled them: what the request reported before the
+ * abort plus a presumed remainder for the output it may have generated
+ * unread (DECISIONS D-09), flagged presumed so `npm run costs:reconcile` can
+ * lower it — the abort stops further billing, it does not make the spend so
+ * far knowable.
+ */
+function abandonedSibling(
+  run: PassRun<AnalystCase>,
+  side: "bull" | "bear",
+  failed: "bull" | "bear",
+): PassRun<AnalystCase> {
+  if (run.ok) return run;
+  const message =
+    `${side} pass abandoned because the ${failed} pass failed unrecoverably — ` +
+    "the run could no longer produce a report, so its request was aborted; what it billed up to " +
+    "the abort is settled as reported usage plus a presumed remainder";
+  return {
+    ...run,
+    gap: { ...run.gap, reason: message },
+    error: { ...run.error, message },
+  };
+}
+
+/**
+ * A side that never reached the provider because its sibling had already ended
+ * the run. `notLaunched` keeps the runner from settling or billing it at all.
+ */
+function siblingNeverLaunched(side: "bull" | "bear", failed: "bull" | "bear"): PassRun<AnalystCase> {
+  const message =
+    `${side} pass not launched because the ${failed} pass failed unrecoverably — ` +
+    "the run could no longer produce a report, so no second analyst request was paid for";
+  return {
+    ok: false,
+    gap: { field: `llm.${side}`, reason: message, severity: "critical", attemptedSources: [] },
+    error: { kind: "transport", message, notLaunched: true },
+  };
+}
+
 function bearNotLaunched(reason: string): PassRun<AnalystCase> {
   const message = `bear pass not launched because bull stream did not reach a first token (${reason})`;
   return {
@@ -1075,7 +1166,7 @@ function bearNotLaunched(reason: string): PassRun<AnalystCase> {
 }
 
 /**
- * Sequence bull then bear per the prompt-cache write rule (the cost model §2): fire the
+ * Sequence bull then bear per the prompt-cache write rule : fire the
  * bull pass, AWAIT its first streamed token so the payload cache entry becomes
  * readable, then fire bear so it READS the cache bull wrote instead of paying a
  * second 1.25x write. When no streaming runner is injected (tests / dry-run), it
@@ -1089,18 +1180,74 @@ export async function runBullThenBear(
   settlements: BullBearSettlementHooks = {},
 ): Promise<BullBearResult> {
   if (deps.runPassStreaming) {
-    const bullRequest = buildAnalystRunPassArgs(deps, payload, "bull");
-    deps.validateRunPass?.(bullRequest);
+    // Validate a throwaway build FIRST so an invalid request never takes a
+    // durable lease, then build the request that is actually sent AFTER the
+    // hooks — `beforePass` is where the runner registers this side's
+    // per-request admission, and the args snapshot `deps.admissionFor(side)`
+    // at construction. Building before the hook captured `undefined` and
+    // silently disabled per-request admission for both analyst passes: no
+    // request reserved or settled on its own, and a stalled stream's presumed
+    // remainder was booked as an `actual` cost the reconciler cannot lower.
+    // The non-streaming fallback below has always had this order.
+    deps.validateRunPass?.(buildAnalystRunPassArgs(deps, payload, "bull"));
     await hooks.beforePass?.("bull");
     safeHook(hooks.onPassStart, "bull");
     await hooks.beforeProviderLaunch?.("bull");
-    const bullHandle = deps.runPassStreaming(bullRequest);
+    // Either side may end the run (see endsTheRun); when one does, the other is
+    // aborted at once rather than left billing for output nothing can use.
+    const abandon = { bull: new AbortController(), bear: new AbortController() };
+    const abandonSibling = (side: "bull" | "bear", failed: "bull" | "bear"): void => {
+      if (abandon[side].signal.aborted) return;
+      abandon[side].abort(new SiblingAbandonedSignal(failed));
+    };
+    /**
+     * Relabel a side only when OUR abort is what ended it: the sibling
+     * controller fired with its sentinel, the job signal did not, and the
+     * provider reports a caller abort (`error.aborted`). A side that failed on
+     * its own in the same instant keeps its own message: whether the abort or
+     * the provider got there first is a microtask race, and the provider's
+     * flag settles it without one.
+     */
+    const wasCutShort = (side: "bull" | "bear", run: PassRun<AnalystCase>): boolean =>
+      abandon[side].signal.aborted &&
+      abandon[side].signal.reason instanceof SiblingAbandonedSignal &&
+      deps.signal?.aborted !== true &&
+      !run.ok &&
+      run.error.aborted === true;
+    /**
+     * The run exactly as it is settled AND returned. The relabel has to reach
+     * the settlement hook: the durable pass artifact and the step detail it
+     * writes are what a resume, the pipeline page and a post-mortem read, and
+     * they used to record the provider's raw abort message while the manifest
+     * said the run abandoned the side on purpose.
+     */
+    const labelled = (side: "bull" | "bear", run: PassRun<AnalystCase>): PassRun<AnalystCase> =>
+      wasCutShort(side, run) ? abandonedSibling(run, side, side === "bull" ? "bear" : "bull") : run;
+    const bullHandle = deps.runPassStreaming({
+      ...buildAnalystRunPassArgs(deps, payload, "bull"),
+      signal: siblingAbortSignal(deps.signal, abandon.bull),
+    });
     const bullRun = tapFinish(bullHandle.result, hooks, "bull").then(
       (outcome) => finishStructuredPass(outcome, parseAnalystCase, "llm.bull", deps.model),
       (error: unknown) => hardFailure("llm.bull", error),
     );
+    // Attached before bear is launched, so an already-doomed bull hands bear a
+    // signal that is aborted the moment its request is created.
+    void bullRun.then(
+      (run) => {
+        if (endsTheRun(run)) abandonSibling("bear", "bull");
+      },
+      () => undefined,
+    );
     // Cache entry becomes readable only once bull actually emits a stream event.
-    const firstEvent = await bullHandle.firstToken;
+    // Raced with the result itself: the provider's contract is that firstToken
+    // settles on every terminal exit, and the race keeps a slip in that
+    // contract from leaving the orchestrator waiting on a side that has
+    // already finished (a cancel during a pre-token retry backoff once did).
+    const firstEvent = await Promise.race([
+      bullHandle.firstToken,
+      bullRun.then(() => "error" as const),
+    ]);
     if (firstEvent !== "streamEvent") {
       const bull = await bullRun;
       const settledBull = settlePassRun(bull, deps.model, settlements.bull);
@@ -1120,8 +1267,7 @@ export async function runBullThenBear(
       const { settledBear } = await setupBearAfterLaunchedBull(
         settledBull,
         async () => {
-          const bearRequest = buildAnalystRunPassArgs(deps, payload, "bear");
-          deps.validateRunPass?.(bearRequest);
+          deps.validateRunPass?.(buildAnalystRunPassArgs(deps, payload, "bear"));
           await hooks.beforePass?.("bear");
           safeHook(hooks.onPassStart, "bear");
           await hooks.beforeProviderLaunch?.("bear");
@@ -1144,37 +1290,60 @@ export async function runBullThenBear(
       if (outcomes[1].status === "rejected") throw outcomes[1].reason;
       return { bull, bear: outcomes[1].value };
     }
-    const settledBull = bullRun.then((run) => settlePassRun(run, deps.model, settlements.bull));
+    const settledBull = bullRun.then((run) =>
+      settlePassRun(labelled("bull", run), deps.model, settlements.bull),
+    );
     let bearLaunched = false;
     const bearHandle = await setupBearAfterLaunchedBull(
       settledBull,
       async () => {
-        const bearRequest = buildAnalystRunPassArgs(deps, payload, "bear");
-        deps.validateRunPass?.(bearRequest);
+        // The run is already lost: do not open a paid request just to kill it.
+        if (abandon.bear.signal.aborted) return null;
+        deps.validateRunPass?.(buildAnalystRunPassArgs(deps, payload, "bear"));
         await hooks.beforePass?.("bear");
+        // Re-checked after the permit gate: bull can end the run inside that
+        // await, and this is the last point before the request is authorized
+        // where backing out still releases the lease as a prelaunch (a request
+        // opened with an already-aborted signal dies unbilled, but it should
+        // not have been opened at all).
+        if (abandon.bear.signal.aborted) return null;
         safeHook(hooks.onPassStart, "bear");
         await hooks.beforeProviderLaunch?.("bear");
         bearLaunched = true;
-        return deps.runPassStreaming!(bearRequest);
+        return deps.runPassStreaming!({
+          ...buildAnalystRunPassArgs(deps, payload, "bear"),
+          signal: siblingAbortSignal(deps.signal, abandon.bear),
+        });
       },
       () => bearLaunched,
     );
-    const settledBear = tapFinish(bearHandle.result, hooks, "bear")
-      .then(
-        (outcome) => finishStructuredPass(outcome, parseAnalystCase, "llm.bear", deps.model),
-        (error: unknown) => hardFailure("llm.bear", error),
-      )
-      .then((run) => settlePassRun(run, deps.model, settlements.bear));
+    if (bearHandle === null) {
+      // Bull ended the run before bear was launched, so bear never reached the
+      // provider and never billed.
+      const bullOnly = await Promise.allSettled([settledBull]);
+      if (bullOnly[0].status === "rejected") throw bullOnly[0].reason;
+      return { bull: bullOnly[0].value, bear: siblingNeverLaunched("bear", "bull") };
+    }
+    const bearRun = tapFinish(bearHandle.result, hooks, "bear").then(
+      (outcome) => finishStructuredPass(outcome, parseAnalystCase, "llm.bear", deps.model),
+      (error: unknown) => hardFailure("llm.bear", error),
+    );
+    void bearRun.then(
+      (run) => {
+        if (endsTheRun(run)) abandonSibling("bull", "bear");
+      },
+      () => undefined,
+    );
+    const settledBear = bearRun.then((run) =>
+      settlePassRun(labelled("bear", run), deps.model, settlements.bear),
+    );
     const [bullOutcome, bearOutcome] = await Promise.allSettled([
       settledBull,
       settledBear,
     ]);
     if (bullOutcome.status === "rejected") throw bullOutcome.reason;
     if (bearOutcome.status === "rejected") throw bearOutcome.reason;
-    return {
-      bull: bullOutcome.value,
-      bear: bearOutcome.value,
-    };
+    return { bull: bullOutcome.value, bear: bearOutcome.value };
   }
 
   // Non-streaming fallback: sequential (bull completes, then bear reads cache).
@@ -1187,6 +1356,12 @@ export async function runBullThenBear(
     "bull",
   );
   const settledBull = settlePassRun(bull, deps.model, settlements.bull);
+  // Sequential path: bull is already known here, so a run it has ended never
+  // opens a bear request at all (see endsTheRun).
+  if (endsTheRun(bull)) {
+    await settledBull;
+    return { bull, bear: siblingNeverLaunched("bear", "bull") };
+  }
   let bearLaunched = false;
   const { settledBear } = await setupBearAfterLaunchedBull(
     settledBull,
@@ -1224,7 +1399,7 @@ export async function runBullThenBear(
  * (byte-identical to the analyst passes' payload block, so with an identical
  * `tools`+`system` prefix this can in principle share bull/bear's cache entry —
  * subject to the separate, documented `output_config.format` cache-invalidation
- * caveat for structured-output requests, the Anthropic API contract §4 quirk #3),
+ * caveat for structured-output requests, the Anthropic API contract, quirk #3),
  * followed by the judge framing + both cases as a second, volatile block.
  * JSON.stringify is COMPACT (no pretty-print indent) — the model's JSON parsing
  * is whitespace-insensitive, so indentation is pure token overhead, repeated on
@@ -1603,7 +1778,22 @@ export async function runJudgePass(
   // spend is reserved and settled like any other request; the merged telemetry
   // below is what the cost log records for the pass.
   let result = run.result;
-  if (presentation.secondaryOrder !== null) {
+  const repairTurn = validationFeedback !== undefined && validationFeedback.length > 0;
+  if (presentation.secondaryOrder !== null && repairTurn) {
+    // A validation retry carries the primary's "repair this JSON in place"
+    // turn. A mirrored request anchored on that same previous output is not
+    // an independent draw — reconciling two repairs of one document measured
+    // nothing about order sensitivity while the report said the two passes
+    // agreed — so the mirror is not run and the reconciliation is disclosed as
+    // not performed.
+    draft = withReconciliation(
+      draft,
+      reconciliationNotPerformed(
+        "retry attempt: the mirrored (opposite-order) judge pass is not run against a repair-in-place turn, " +
+          "because a mirror anchored on the previous output is not an independent draw",
+      ),
+    );
+  } else if (presentation.secondaryOrder !== null) {
     // `attempt()` can REJECT rather than return a failure shape: a validate
     // hook throws, an abort throws, and an over-reservation error is rethrown
     // by the provider because it is neither an APIError nor retryable. Awaiting
@@ -1860,6 +2050,23 @@ function resolveOmittedIdentity(
  * own `leadership.executives[].name` list, which the judge filled from the
  * payload — no name guessing required for those.
  */
+/**
+ * The issuer's and its peers' company names, so an honorific inside a company
+ * name ("Dr Pepper") is not read as a person (consistency.ts, F187). Peer
+ * figures are labelled "SYMBOL — Company Name" (payload.ts peersSection).
+ */
+function payloadOrganizationNames(payload: ContextPayload): string[] {
+  const names: string[] = [];
+  if (payload.companyName) names.push(payload.companyName);
+  for (const figure of payload.peers?.figures ?? []) {
+    const parts = figure.label.split(" — ");
+    if (parts.length >= 2 && parts[1].trim().length > 0 && parts[1].trim() !== "?") {
+      names.push(parts[1].trim());
+    }
+  }
+  return names;
+}
+
 function reportExecutiveNames(root: unknown): string[] {
   const leadership = (root as { leadership?: { executives?: unknown } }).leadership;
   const executives = leadership?.executives;
@@ -1922,6 +2129,7 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
       insiderNotes: payload.insiders?.notes,
       executiveNames: reportExecutiveNames(verifiedReport),
     }),
+    organizationNames: payloadOrganizationNames(payload),
   });
 
   const log: VerificationLogEntry[] = [];
@@ -2176,7 +2384,7 @@ export interface AssembleReportArgs {
    * and legacy paths, which never ran a judge.
    */
   judgeProtocol?: JudgeProtocolDraft;
-  /** Pipeline version stamped into meta (SPEC §2). Defaults to REPORT_SPEC_VERSION. */
+  /** Pipeline version stamped into meta . Defaults to REPORT_SPEC_VERSION. */
   pipelineVersion?: string;
   /**
    * Stage A validation gaps (balance-sheet identity breaks, FMP↔XBRL
@@ -2219,7 +2427,7 @@ function buildAsOfMap(bundle: DataBundle): Record<string, string> {
  * Wrap a JudgeOutput with meta + appendix into a full Report, then validate the
  * whole thing against ReportSchema. Throws {@link ReportValidationError} (with
  * the Zod error) on failure so the runner can retry the judge with the error fed
- * back (max 2 retries, SPEC §2).
+ * back (max 2 retries).
  *
  * `generatedAt` is provided injectably for deterministic tests; production omits
  * it and gets the current time (the only clock read in Stage C, on the persisted
@@ -2674,7 +2882,7 @@ function dedupManifest(entries: ManifestEntry[]): ManifestEntry[] {
 }
 
 /**
- * Run the judge pass with automatic retry on ReportSchemaZod failure (SPEC §2).
+ * Run the judge pass with automatic retry on ReportSchemaZod failure.
  * On a validation failure, re-runs the judge with the Zod error appended to the
  * user turn (max {@link MAX_JUDGE_RETRIES} extra attempts), then fails loudly.
  *
@@ -2706,7 +2914,25 @@ export async function runJudgeVerifyAssemble(
   let lastRawOutput: string | null = null;
 
   // WS7 (D-20): same seeded order and same per-side caps as the runner's path.
-  const presentation = judgePresentationFor(deps, payload, bull, bear);
+  // This loop issues ONE judge request per attempt and never runs the mirrored
+  // pass, so a `both` setting is narrowed to the seeded single order: the
+  // request is framed as the one pass it is, the protocol records the order
+  // that ran, and the missing reconciliation is disclosed.
+  const configured = judgePresentationFor(deps, payload, bull, bear);
+  const presentation: JudgePresentation =
+    configured.secondaryOrder === null
+      ? configured
+      : { ...configured, setting: configured.order, secondaryOrder: null };
+  const protocolDraft = (): JudgeProtocolDraft =>
+    configured.secondaryOrder === null
+      ? buildJudgeProtocolDraft(presentation)
+      : withReconciliation(
+          buildJudgeProtocolDraft(presentation),
+          reconciliationNotPerformed(
+            `${JUDGE_ORDER_ENV_KEY}=both is configured, but this judge path runs a single ${presentation.order} pass; ` +
+              "the mirrored pass and its reconciliation are only run by the job runner",
+          ),
+        );
 
   for (let attempt = 0; attempt <= MAX_JUDGE_RETRIES; attempt++) {
     const baseTurns = judgeUserTurns(payload, bull, bear, presentation);
@@ -2808,7 +3034,7 @@ export async function runJudgeVerifyAssemble(
           model: deps.model,
           pipelineVersion: assemble.pipelineVersion,
           validationGaps: assemble.validationGaps,
-          judgeProtocol: buildJudgeProtocolDraft(presentation),
+          judgeProtocol: protocolDraft(),
         },
         generatedAt,
       );

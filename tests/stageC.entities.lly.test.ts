@@ -98,6 +98,31 @@ describe("canonical entity validation", () => {
     );
   });
 
+  it("counts a resolution that names either alternate of a parenthesised canonical name (audit 2026-09-06, F195)", () => {
+    const registry = getEntityRegistry("LLY") as EntityRegistry;
+    const conflicts = collectEntityConflicts(["ATTAIN-1 evaluated retatrutide."], [], registry);
+    expect(conflicts.some((issue) => issue.code === "relationship-conflict")).toBe(true);
+    // The canonical drug is "Foundayo (orforglipron)"; the judge wrote only
+    // "orforglipron", which used to count as unresolved and trigger retries.
+    expect(
+      validateJudgeEntityResolution(conflicts, [
+        {
+          kind: "entity",
+          topic: "ATTAIN attribution",
+          bullView: "ATTAIN-1 evaluated retatrutide.",
+          bearView: "ATTAIN-1 is the orforglipron programme.",
+          judgeResolution: "ATTAIN-1 studies orforglipron; retatrutide is the TRIUMPH programme.",
+        },
+      ]),
+    ).toEqual([]);
+    // Naming neither alternate is still unresolved.
+    expect(
+      validateJudgeEntityResolution(conflicts, [
+        { kind: "entity", topic: "ATTAIN", bullView: "x", bearView: "y", judgeResolution: "ATTAIN-1 is a trial." },
+      ]),
+    ).toHaveLength(conflicts.filter((issue) => issue.code === "relationship-conflict").length);
+  });
+
   it("requires the judge to resolve every synthetic entity conflict", () => {
     const bull = ["DemoMedd launch remains early."];
     const bear = ["DEMO-TRIAL evaluated ControlMed."];

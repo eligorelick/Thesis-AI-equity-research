@@ -1,10 +1,10 @@
 # Keyless data path — design
 
 **Date:** 2026-09-02
-**Status:** implemented on `feat/keyless-data-path` (2026-09-02). Live keyless verification, no FMP key, isolated data directory: AAPL resolved through EDGAR; six statement members from company facts, prices from Yahoo, profile/enterprise values/market-cap history computed; forensics, multiples, a DCF and the composite score produced; free cash flow, capex intensity, operating margins, net debt and technicals identical to the FMP-based run, with ten fiscal years of history where the entry-tier FMP plan served five. JPM took the bank route with return on tangible common equity and the excess-return valuation. A fictional ticker rendered the not-found page. Deviations from this design: the fallback gate is issuer identity (an EDGAR-sourced CIK, or a registrant whose own ticker list contains the requested symbol) rather than "a CIK exists", because the fixtures carry placeholder CIKs and SEC merely answering for an FMP-supplied CIK proves the CIK exists, not that the ticker belongs to it; the SPY and sector-ETF fallbacks also run for keyed plans without issuer confirmation; the profile does not carry a fiscal year end; total debt includes lease obligations to match FMP; bank cash and interest tags were added; current ROE falls back to the DuPont figure; financial routes skip cost-of-debt inference; `isEtf`/`isFund` come from Yahoo's `instrumentType` rather than from a "no core forms on file" rule, which would have marked 40-F filers and newly listed issuers unsupported; `cashAndShortTermInvestments` sums whichever of cash and short-term investments a filer tags, rather than requiring both; the debt chains record which tag won each field and net out five us-gaap overlaps (combined debt-and-leases against a separate finance-lease tag, the `LongTermDebt` total against `LongTermDebtCurrent`, `CommercialPaper` inside `ShortTermBorrowings`, the combined `LongTermDebtAndCapitalLeaseObligationsCurrent` beside `LongTermDebtCurrent`, and the debt maturity schedule's next-twelve-months figure beside either current tag — standing in for the current portion when neither is filed) so `totalDebt` counts each obligation once, with the composition in the row notes; shares outstanding fall back to the non-dimensional `us-gaap:CommonStockSharesOutstanding` when a per-class reporter files no `dei:EntityCommonStockSharesOutstanding` at all, with the basis named in the profile, enterprise-value, market-cap-history and shares-float run-log notes and in the shares-float and market-cap-history endpoint strings; the cost-of-debt suppression and the `returns.wacc.interestExpense` warn severity cover all three financial routes (bank, insurer, mortgage REIT) on keyed plans as well as keyless ones, because none of them consumes a WACC cost of debt.
+**Status:** implemented on `feat/keyless-data-path` (2026-09-02). Live keyless verification, no FMP key, isolated data directory: AAPL resolved through EDGAR; six statement members from company facts, prices from Yahoo, profile/enterprise values/market-cap history computed; forensics, multiples, a DCF and the composite score produced; free cash flow, capex intensity, operating margins, net debt and technicals identical to the FMP-based run, with ten fiscal years of history where the entry-tier FMP plan served five. JPM took the bank route with return on tangible common equity and the excess-return valuation. A fictional ticker rendered the not-found page. Deviations from this design: the fallback gate is issuer identity (an EDGAR-sourced CIK, or a registrant whose own ticker list contains the requested symbol) rather than "a CIK exists", because the fixtures carry placeholder CIKs and SEC merely answering for an FMP-supplied CIK proves the CIK exists, not that the ticker belongs to it; the SPY and sector-ETF fallbacks also run for keyed plans without issuer confirmation; the profile does not carry a fiscal year end; total debt includes lease obligations to match FMP; bank cash and interest tags were added; current ROE falls back to the DuPont figure; financial routes skip cost-of-debt inference; `isEtf`/`isFund` come from Yahoo's `instrumentType` rather than from a "no core forms on file" rule, which would have marked 40-F filers and newly listed issuers unsupported; `cashAndShortTermInvestments` sums whichever of cash and short-term investments a filer tags, rather than requiring both; the debt chains record which tag won each field and net out five us-gaap overlaps (combined debt-and-leases against a separate finance-lease tag, the `LongTermDebt` total against `LongTermDebtCurrent`, `CommercialPaper` inside `ShortTermBorrowings`, the combined `LongTermDebtAndCapitalLeaseObligationsCurrent` beside `LongTermDebtCurrent`, and the debt maturity schedule's next-twelve-months figure beside either current tag — standing in for the current portion when neither is filed) so `totalDebt` counts each obligation once, with the composition in the row notes; shares outstanding fall back to the non-dimensional `us-gaap:CommonStockSharesOutstanding` when a per-class reporter files no `dei:EntityCommonStockSharesOutstanding` at all, with the basis named in the profile, enterprise-value, market-cap-history and shares-float run-log notes and in the shares-float and market-cap-history endpoint strings; the cost-of-debt suppression and the `returns.wacc.interestExpense` warn severity cover all three financial routes (bank, insurer, mortgage REIT) on keyed plans as well as keyless ones, because none of them consumes a WACC cost of debt. Deviations recorded by the audit of 2026-09-06 (`docs/superpowers/audits/2026-09-06-full-codebase-audit.md` §3.3): `Revenues` precedes the ASC-606 elements in every revenue chain, because it is the taxonomy's total and the vendor's figure; `commonDividendsPaid` is its own chain (common element, else total less preferred, else total) rather than an alias of the total; the superseded `original` of a sign-flipped field carries the row's sign; the newest quarters take the 10-Q's own `fy`; a same-ratio split re-tag is measured from the previous re-tag and is never applied again on no restated evidence; Form 40-F is a core form; SIC 4953/4955/4959 route as industrials; the successor's "own history" test is an annual core-form fact, not a concept count.
 
 **Original status:** approved for implementation (owner directive of 2026-09-02: "make sure it works if users don't have an FMP subscription")
-**Plan:** [`../plans/2026-09-02-keyless-data-path.md`](../plans/2026-09-02-keyless-data-path.md)
+**Plan:** executed on 2026-09-02; the step-by-step plan was retired by the audit of 2026-09-06 (this document and its deviations paragraph are the record).
 
 ## Problem
 
@@ -94,10 +94,11 @@ Rules:
 1. Facts from core forms only (`CORE_FACT_FORMS`), one value per period by
    `dedupFactPoints` (max `filed`, amendments win ties).
 2. Annual rows: duration facts 300–400 days ending at a fiscal year end that
-   has a `10-K`/`20-F` point for at least one anchor concept (revenue, net
-   income or assets). `period: "FY"`, `fiscalYear` from the point's `fy` when
-   its `fp` is `FY`, else the end date's year.
-3. Quarterly income rows: 3-month (70–110 day) duration facts. Where a
+   has a `10-K`/`20-F`/`40-F` point for at least one anchor concept (revenue,
+   net income or assets). `period: "FY"`, `fiscalYear` from the point's `fy`
+   when its `fp` is `FY`, else the end date's year.
+3. Quarterly income rows: 3-month (70–125 day; the upper bound admits a
+   16- or 17-week fourth quarter on a 12-12-12-16 calendar) duration facts. Where a
    quarter has only a year-to-date fact, the quarter is derived as
    `YTD_n − YTD_(n−1)` within the same fiscal year. The fourth quarter is
    derived as `FY − YTD_Q3` (or `FY − (Q1+Q2+Q3)`). Derived rows carry
@@ -168,7 +169,10 @@ Rules:
 
 Concept chains per field are a documented table in the module (first match
 per period wins, same as `CONCEPT_CHAINS`). Bank-style filers resolve revenue
-through the existing bank chain when `looksLikeBankTagging` is true.
+through the existing bank chain when `looksLikeBankTagging` is true or when
+the caller's `bankRevenue` option says so — `keyless.ts` sets it from the
+registrant's SIC (`bankStatementRouting`), because the tagging heuristic
+cannot see a bank that also tags its fee revenue under ASC 606.
 
 ### `src/edgar/sic.ts` — `sectorIndustryForSic`
 
@@ -195,7 +199,7 @@ returns replacements for: `profile`, `quote`, the six statement members,
 `enterpriseValues`, `marketCapHistory`, `sharesFloat`.
 
 - Profile: EDGAR submissions (name, cik, SIC → sector/industry, exchange,
-  fiscal year end, `isAdr` = files 20-F), Yahoo meta (currency, exchange name,
+  fiscal year end, `isAdr` = files 20-F or 40-F), Yahoo meta (currency, exchange name,
   `firstTradeDate` → `ipoDate`), `price` = Yahoo quote, `marketCap` = price ×
   latest `dei:EntityCommonStockSharesOutstanding` (else latest diluted
   weighted shares), `beta` = `estimateBeta` result. `isEtf` =
@@ -241,8 +245,8 @@ string: SEC emits the string form for registrants created recently
 (ExxonMobil Holdings Corp, CIK 2115436), and rejecting it discarded every
 fact of a reorganized issuer. When the body check rejects a response the gap
 reason is the check's own text, not "HTTP 200". `selectAnnualFiling` reports
-a miss as `no "10-K" or "20-F"` and appends the successor-issuer notice when a
-Form 8-K12B is on file.
+a miss as `no "10-K", "20-F" or "40-F"` and appends the successor-issuer
+notice when a Form 8-K12B is on file.
 
 ### `src/pipeline/dataBundle.ts` wiring
 

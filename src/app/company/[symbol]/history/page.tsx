@@ -1,5 +1,5 @@
 /**
- * /company/[symbol]/history — report history for a ticker (the application contract §8).
+ * /company/[symbol]/history — report history for a ticker .
  *
  * Server component. Lists every persisted report for the symbol newest-first in
  * a dense, terminal-grade table: date, model, the current seven-grade (or

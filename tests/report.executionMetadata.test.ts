@@ -40,6 +40,23 @@ describe("per-step execution metadata", () => {
   });
 
   /**
+   * The floor is a synthesize-only rule keyed on the registry's
+   * judgeFloorModelId; an analyst pass that somehow ran on Sonnet is not
+   * "floored", and must not carry the judge's adjustment and note.
+   */
+  it("does not label an analyst pass with the judge floor", () => {
+    expect(
+      buildExecutionMetadataEntry({
+        step: "bull",
+        requestedModel: "claude-haiku-4-5",
+        effectiveModel: "claude-sonnet-5",
+        requestedEffort: null,
+        fallbackUsed: false,
+      }),
+    ).toMatchObject({ adjustments: [] });
+  });
+
+  /**
    * D-02's disclosure clause: a stored model id the registry refuses degrades
    * the run to a data-only report, and the reason is named here rather than
    * living only in a transient step detail.

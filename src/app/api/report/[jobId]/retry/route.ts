@@ -46,6 +46,13 @@ export async function POST(
   if (crossSite !== null) return crossSite;
 
   const { jobId } = await params;
+  // This is a mutating admission surface: reconcile physical expired owners
+  // BEFORE the target row is read, so the status gate judges reconciled truth.
+  // A running row whose owner died (lease expired) is abandoned, not active:
+  // read first, it answered "still active" on every retry until some other
+  // surface happened to reconcile it. GET/SSE stay read-only, and an expired
+  // sibling cannot spuriously force a retry 409 either.
+  reconcileExpiredJobClaims();
   const row = getDb().select().from(jobs).where(eq(jobs.id, jobId)).get();
   if (row === undefined) {
     return NextResponse.json({ error: `no job with id "${jobId}"` }, { status: 404 });
@@ -65,10 +72,6 @@ export async function POST(
   if (row.status !== "done" && row.status !== "error") {
     return NextResponse.json({ error: `job status ${row.status} cannot be retried` }, { status: 409 });
   }
-  // This is a mutating admission surface: reconcile physical expired owners
-  // before the active-symbol check/unique-index transition. GET/SSE stay
-  // read-only, while an expired sibling cannot spuriously force a retry 409.
-  reconcileExpiredJobClaims();
   if (isSymbolJobActive(row.symbol)) {
     return NextResponse.json(
       { error: `another job for ${row.symbol} is already active` },

@@ -84,11 +84,18 @@ readings on the safe side.
 
 **House rule.** The published models do not tell you which variant to use for
 an arbitrary issuer; the selection rule is this project's, and the report names
-the variant it used. In order: a financial company gets no Z at all (§6.3); an
-issuer whose market capitalisation is unavailable, or is quoted in a different
-currency from its statements, cannot use `original` and falls back to a
-book-equity variant; a manufacturer uses `original`; everything else uses `z2`.
-`z2-em` is used where the issuer's filings are in an emerging-market context.
+the variant it used. In order: a financial company gets no Z at all (§6.3); a
+manufacturer (SIC 2000–3999, or a manufacturing sector/industry string when no
+SIC is on file) uses `original`; everything else uses `z2`. A manufacturer
+whose quote is in a different currency from its statements cannot use
+`original` (its X4 would divide two currencies) and falls back to `z′`, the
+book-equity variant, with the substitution and its zones named. A manufacturer
+whose market capitalisation is merely unavailable has its Z **withheld**, not
+re-modelled: a missing quote is usually a transient fetch failure, a currency
+mismatch is a structural fact about the filings, and only the second justifies
+a silent change of model. `z2-em` exists in the code for an emerging-market
+listing, but the pipeline derives no emerging-market flag from the profile, so
+it is never selected automatically.
 
 The currency check matters more than it sounds. For an ADR whose statements are
 in one currency and whose quote is in another, computing X4 as market cap over
@@ -137,6 +144,15 @@ SGI deserves its own caution: growth is not misconduct. It is in the model
 because growth creates the *incentive* to sustain a trend, which is why fast
 growers trip the M-score routinely and why a flagged score is a prompt to look,
 never a finding.
+
+**House rule — the DEPI basis.** Beneish defines the depreciation rate on
+depreciation of PP&E, net of the amortisation of intangibles. The filed
+statements carry one combined depreciation-and-amortisation line, so the index
+here is built on combined D&A over (D&A + net PP&E), the cash-flow figure for
+both years where it exists and the income-statement figure for both otherwise,
+never one of each. The substitution is stated on the number: for an acquisitive
+issuer the amortisation of acquired intangibles moves DEPI for reasons that
+have nothing to do with depreciation policy.
 
 ### 2.2 The estimation sample
 
@@ -229,6 +245,25 @@ interest-expense line, which for a large bank is a double-digit-percentage
 error, and it flows into every margin, multiple and growth rate downstream.
 
 ---
+
+### 2.8 The default chain's order
+
+**Evidence — the taxonomy definitions.** For every issuer that is not routed
+as a bank, `Revenues` is tried before the ASC-606 elements. The US GAAP
+taxonomy defines `Revenues` as the amount recognized from goods sold, services
+rendered, insurance premiums or other activities that constitute an earning
+process, *including* investment and interest income "recognized as a component
+of revenue"; it defines `RevenueFromContractWithCustomerExcludingAssessedTax`
+as revenue from the satisfaction of performance obligations under ASC 606. The
+first is the income-statement total; the second is the subset of it that ASC
+606 governs. A filer that tags both for one period (a lessor whose rental
+income is outside ASC 606, an oil major whose "total revenues and other income"
+line includes equity-method and other income) reports the total on the face of
+its statements, and the total is what the vendor's `revenue` column carries —
+so the cross-check compares like with like only when `Revenues` wins. The
+resolution is period-scoped: an issuer whose `Revenues` element stops in an
+old year (Apple's stops at FY2018) still resolves the ASC-606 element for
+every later period, because no `Revenues` fact exists for those periods.
 
 ## 3. Piotroski F-Score
 
@@ -327,10 +362,13 @@ the same underlying observation, reported where it cannot be averaged away.
 
 **House rule.** Two flags. `inventory-vs-revenue` fires when inventory grows
 materially faster than revenue — the classic precursor to a write-down, and the
-inventory analogue of the receivables tie-in above. `inventory-overhang` fires
-on a sustained elevated level rather than a single year's growth, because a
-one-year build ahead of a product launch is ordinary and a multi-year one is
-not.
+inventory analogue of the receivables tie-in above. `inventory-overhang` is the
+demand-decline case: when revenue fell by more than the stated threshold while
+inventory still grew, a growth-gap comparison would read the mechanical rise in
+days-inventory as a build, so the comparison is suppressed and an informational
+flag names the decline instead. Both honour the revenue floor above; neither is
+a multi-year level test — a one-year build ahead of a product launch is
+ordinary and the flags say only what the two years show.
 
 ### 5.3 One-time items
 
@@ -403,11 +441,21 @@ profitability signal (Piotroski) and swamps operating accruals entirely
 What the report does:
 
 - **Altman Z is not computed at all** for a financial company — identified by
-  sector or by SIC in the 6000–6799 range — and the reason is disclosed.
+  sector, or by SIC in 6000–6499 or 6700–6799 (major group 65, real-estate
+  operators, agents and managers, is deliberately outside the band: those are
+  operating companies with a working-capital cycle) — and the reason is
+  disclosed. The one exception is the equity-REIT route: SIC 6798 sits inside
+  the band, but an equity REIT is an operating landlord, so Z″ is shown with a
+  caution note rather than withheld (`selectAltmanVariant`; METHODOLOGY
+  *Altman Z, Beneish M, accrual ratios*).
 - **Accrual ratios are suppressed** for financial companies.
-- **The Piotroski operating-cash-flow signal is withheld**, and where the
-  F-score is shown for a financial company it carries the validation-sample
-  caveat on the number itself.
+- **The Piotroski cash-flow signals are withheld** — both of them, with the
+  current ratio and gross margin, on every financial route, and ΔLEVER and
+  ΔTURN too on the bank, insurer and mortgage-REIT routes. The score is
+  reported over the signals that remain, with its own denominator
+  (METHODOLOGY *Piotroski F, on three scales*), and where it is shown for a
+  financial company it carries the validation-sample caveat on the number
+  itself.
 - **Sector routing** carries the same caveat, so a financial company's route
   never presents these scores as though the models had been validated on it.
 
@@ -514,9 +562,13 @@ as one.
 ### 7.5 What the clamps are and are not
 
 Every bound in this section — the beta clamp, the ERP band, the cost-of-debt
-plausibility range, the WACC clamp of [max(6%, rf + 1%), 20%] — exists to stop
-a **broken input** producing a confident number. None of them is a view about
-what a company's cost of capital should be.
+plausibility range, the WACC clamp of [max(6%, rf + 1%), 20%] — and the two
+that bound the DCF's paths — the EBIT-margin range of [−20%, max(45%, the
+issuer's own five-year maximum)] and the sales-to-capital range of [0.5, 5]
+(METHODOLOGY "Fade and horizon") — exists to stop a **broken input** producing
+a confident number. None of them is a view about what a company's cost of
+capital or margin should be; the margin ceiling in particular never binds
+below a level the issuer has demonstrably earned.
 
 The distinction matters when one binds. A clamp that moves the WACC by 0.5
 percentage points or more is disclosed in the manifest, because at that point

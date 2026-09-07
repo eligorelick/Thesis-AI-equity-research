@@ -84,6 +84,19 @@ export function resolveNetDebt(inputs: NetDebtInputs): NetDebtResolution {
   }
 
   if (combinedCash !== null) {
+    // Short-term investments cannot be negative, so a combined field BELOW the
+    // cash balance alone is the same contradiction as a mismatch against the
+    // full component sum — and a vendor zero-fill of the combined field would
+    // otherwise overstate net debt by the whole cash balance in every consumer.
+    if (cash !== null && combinedCash < cash - Math.max(1, Math.abs(cash) * 1e-6)) {
+      return {
+        ...base,
+        value: null,
+        cashBasis: null,
+        conflict: true,
+        reason: "combined cash-and-short-term-investments is below the reported cash balance",
+      };
+    }
     if (cash !== null && shortTermInvestments !== null) {
       const componentSum = cash + shortTermInvestments;
       const tolerance = Math.max(1, Math.abs(combinedCash) * 1e-6);

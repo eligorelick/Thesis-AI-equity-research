@@ -13,7 +13,15 @@
  * Loopback (`127.0.0.1`, `localhost`, `::1`) passes through to the real fetch
  * so tests that stand up a local server keep working. `EDGAR_LIVE_SMOKE=1`
  * — the existing opt-in for the two-request live smoke in
- * `tests/edgar.client.test.ts` — disables the guard entirely.
+ * `tests/edgar.client.test.ts` — lets requests to `sec.gov` hosts through and
+ * NOTHING ELSE: the smoke needs two SEC URLs, and every other test in the
+ * same run keeps the guard (before the 2026-09-06 audit, F203, the opt-in
+ * disabled the guard for the whole suite).
+ *
+ * Scope: this guard replaces `fetch` in the vitest process it is installed in.
+ * The TypeScript worker fixtures under `tests/fixtures/` import it themselves;
+ * child processes spawned by tests (the CLI tests) are separate processes with
+ * their own `fetch`, and nothing here reaches them (F204).
  *
  * Tests that install their own `globalThis.fetch` and restore the previous
  * value (`tests/helpers/auditFixtureComparison.ts`) keep working: the value
@@ -64,10 +72,20 @@ export function isLoopbackUrl(url: string): boolean {
  * Wrap `realFetch` so non-loopback requests reject. Exported for the guard's
  * own test, which observes the pass-through without opening a socket.
  */
+/** The only hosts the EDGAR live smoke opt-in may reach. */
+export function isLiveSmokeUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "sec.gov" || host.endsWith(".sec.gov");
+  } catch {
+    return false;
+  }
+}
+
 export function createNoLiveNetworkFetch(realFetch: FetchFn): FetchFn {
   const guarded: FetchFn = (input, init) => {
-    if (process.env.EDGAR_LIVE_SMOKE === "1") return realFetch(input, init);
     const url = urlOf(input);
+    if (process.env.EDGAR_LIVE_SMOKE === "1" && isLiveSmokeUrl(url)) return realFetch(input, init);
     if (isLoopbackUrl(url)) return realFetch(input, init);
     return Promise.reject(
       new Error(`live network is disabled in the test suite: ${methodOf(input, init)} ${url}`),

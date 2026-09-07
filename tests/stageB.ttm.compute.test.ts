@@ -1072,6 +1072,18 @@ describe("runStageB wiring — the SEC SIC reaches Altman variant selection", ()
     expect(computed.forensics.altmanSelection.variant).toBe("original");
   });
 
+  it("stamps the Altman market cap with the observation date of the envelope that supplied it", () => {
+    const bundle = wiringBundle({ sic: "3571" });
+    const computed = runStageB(bundle);
+
+    // The profile supplied the market cap; its envelope is dated 2026-07-01.
+    // The fiscal-year end of the statement beside it (2025-12-31) is NOT when
+    // a market cap was observed.
+    expect(bundle.profile.ok && bundle.profile.value.asOf).toBe("2026-07-01");
+    expect(computed.forensics.altman?.asOf.marketCap).toBe("2026-07-01");
+    expect(computed.forensics.altman?.asOf.incomeStatement).toBe("2025-12-31");
+  });
+
   it("falls back to the sector heuristic (non-manufacturer) when no SIC is available", () => {
     const computed = runStageB(wiringBundle());
 
@@ -1251,20 +1263,23 @@ describe("runStageB wiring — gated-null TTM WACC inputs fall back to annual (a
     ).toBe(true);
   });
 
-  it("uses the annual operating income for the synthetic-rating ICR when TTM ebit AND operatingIncome are gated null", () => {
+  it("moves BOTH coverage legs to the annual statement when TTM ebit AND operatingIncome are gated null (one basis)", () => {
     const computed = runStageB(
       wiringBundle({ partialQuarterlyEbit: true, bigQuarterlyInterest: true }),
     );
     const w = computed.returns.wacc;
-    // TTM interest 4×25 = 100; Rd_eff = 100/295·100 ≈ 33.9% — outside [3, 23]
-    // → synthetic path. ICR must use the annual operating income 200:
-    // ICR = 200/100 = 2.0 → Ba2/BB (spread 1.84) → Rd = 4 + 1.84 = 5.84.
-    // The old code passed ebitTtm = null → clamped-effective fallback instead.
-    expect(w.costOfDebtMethod).toBe("synthetic");
-    expect(w.interestCoverageRatio).toBeCloseTo(2.0, 9);
-    expect(w.syntheticRating).toBe("Ba2/BB");
-    expect(w.costOfDebtPct).toBeCloseTo(4 + 1.84, 9);
-    expect(computed.returns.notes.some((n) => /EBIT/i.test(n) && /annual/i.test(n))).toBe(true);
+    // Audit 2026-09-06: the two fallbacks used to be independent, so the TTM
+    // interest (4×25 = 100) was scored against the ANNUAL operating income
+    // (200) under a note that said "on TTM". With the TTM pair incomplete and
+    // the annual pair complete, the annual figures serve BOTH legs: the
+    // effective rate is the annual interest 15 over the average debt 295 =
+    // 5.08%, inside the band, so the cost of debt is effective — on one basis.
+    expect(w.costOfDebtMethod).toBe("effective");
+    expect(w.costOfDebtPct).toBeCloseTo((15 / 295) * 100, 9);
+    expect(
+      computed.returns.notes.some((n) => /TTM pair is incomplete \(EBIT/.test(n) && /BOTH legs/.test(n)),
+    ).toBe(true);
+    expect(w.debtBasis).toMatch(/latest two fiscal-year-end balances/);
   });
 
   it("control: with complete TTM quarters the TTM interest expense is used (no annual-fallback note)", () => {

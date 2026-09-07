@@ -18,7 +18,8 @@ source path and an as-of date.
   and selected vendor figures against EDGAR XBRL.
 - Computes growth, returns, capital structure, valuation, scenarios,
   technicals, grades and forensic indicators in deterministic TypeScript, on a
-  route decided by what the filer actually tags.
+  sector route drawn from the industry label and SIC code and checked against
+  what the filer actually tags — tags decide only where those are silent.
 - Optionally runs independent Anthropic bull and bear analyses and a judge
   pass, verifies every cited number without another model call, and turns
   missing inputs into disclosed gaps rather than fabricated values.
@@ -40,7 +41,8 @@ Open <http://127.0.0.1:3000>; development and production both bind to
 come from SEC EDGAR and Yahoo. With no key at all, `/report/sample` renders a
 fictional report, and `/company/DEMO` and `/company/DBNK` are reserved strings
 served from `fixtures/fmp` whatever keys are set. None of the three reaches a
-provider and each says so in the manifest; any other symbol is a live request.
+provider: the two company slices say so in the manifest and the sample is
+labelled synthetic throughout; any other symbol is a live request.
 
 ## Configuration
 
@@ -66,10 +68,10 @@ carries the long form of each one, so the two cannot drift apart.
 | `THESIS_MAX_JOB_COST_USD` | unset | Optional exact USD caps. |
 | `THESIS_MAX_ROLLING_COST_USD` | unset | Optional exact USD caps. |
 | `THESIS_RESERVATION_MODE` | `request` | How paid work is admitted against these caps: one reservation per provider request, or one per pass. |
-| `THESIS_STREAM_IDLE_SECONDS` | `120` | Gap with no stream event after which a paid request is abandoned. |
+| `THESIS_STREAM_IDLE_SECONDS` | `300` | Base gap with no stream event after which a paid request is abandoned, scaled by analysis effort. |
 | `THESIS_ROLLING_COST_WINDOW_MINUTES` | `1440` | Maximum supported window: 52,560,000 minutes (100 years). |
-| `THESIS_PAID_PASS_LEASE_SECONDS` | `900` | Anthropic requests hard-timeout after 600 seconds. |
-| `THESIS_JOB_LEASE_SECONDS` | `900` | Anthropic requests hard-timeout after 600 seconds. |
+| `THESIS_PAID_PASS_LEASE_SECONDS` | `900` | Anthropic requests time out after 600 seconds waiting for response headers. |
+| `THESIS_JOB_LEASE_SECONDS` | `900` | Anthropic requests time out after 600 seconds waiting for response headers. |
 | `THESIS_RESUME_ON_START` | `1` | Startup hold. |
 | `THESIS_EV_INCLUDE_LEASES` | `1` (opt in) | Keep the OPERATING-lease liability in enterprise value and in the DCF equity bridge. |
 | `THESIS_ALLOWED_HOST` | unset | `npm run dev` and `npm start` bind to 127.0.0.1 by default. |
@@ -77,6 +79,7 @@ carries the long form of each one, so the two cannot drift apart.
 | `THESIS_DB_PATH` | unset (opt in) | The SQLite DB defaults to the OS app-data directory (so its WAL/SHM writes do not trigger Next.js dev-server rebuilds from inside the repo). |
 | `THESIS_DATA_DIR` | unset (opt in) | The SQLite DB defaults to the OS app-data directory (so its WAL/SHM writes do not trigger Next.js dev-server rebuilds from inside the repo). |
 | `THESIS_IMPORT_LEGACY_DB` | `1` (opt in) | One-time migration only. |
+| `NEXT_TELEMETRY_DISABLED` | `1` | The Next.js CLI behind `npm run dev` / `npm run build` posts anonymous usage events to telemetry.nextjs.org unless this is set. |
 
 <!-- END GENERATED: config -->
 
@@ -143,11 +146,11 @@ reconciles every grade and probability, for two judge passes.
 
 The verification pass makes no model call. It measures citation coverage — can
 each figure be traced to the record it cites — and separately checks the prose
-around those figures: a direction word must match the sign of its change, a
-period naming a year must match the cited period, a unit word must match the
-registered unit, and a claim naming a person must cite a filing or a transcript
-rather than a web search. Checked is printed beside cited and never merged into
-it: a figure can be perfectly cited by a sentence that contradicts it.
+around figures it can locate: a direction word must match the sign of its
+change, a period naming a year must match the cited year, a unit word must fit
+the registered unit, and a claim naming a person must rest on a filing, a
+transcript, a registry figure or the payload's own executive rows; any other
+source, or none, fails it. Checked is printed beside cited, never merged into it.
 
 `ANALYSIS_MODEL` takes `auto` or a model from `config/models.json`, which is
 also where prices and limits come from; anything else is rejected, because the
@@ -163,29 +166,42 @@ against the spend caps before it is sent, bounded by the model's full context
 window priced as a five-minute cache write, its maximum output, and eight web
 searches at $0.01 (the judge never searches).
 
-| Analysis model | One analyst request | One synthesize request | Analyst pass worst case | Estimated run |
-| --- | ---: | ---: | ---: | ---: |
-| Claude Fable 5.1 | $18.98 | $18.90 | $683.28 | $4.46 |
-| Claude Fable 5 | $18.98 | $18.90 | $683.28 | $4.60 |
-| Claude Opus 5 | $9.53 | $9.45 | $343.08 | $2.34 |
-| Claude Opus 4.8 | $9.53 | $9.45 | $343.08 | $2.34 |
-| Claude Sonnet 5 | $3.86 | $3.78 | $138.96 | $0.98 |
-| Claude Haiku 4.5 | $0.65 | $3.78 | $23.40 | $0.69 |
+| Analysis model | One analyst request | One synthesize request | Analyst pass worst case | Analyst output ceiling | Estimated run |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Claude Fable 5.1 | $18.98 | $18.90 | $683.28 | $3.20 → $6.40 | $4.46 |
+| Claude Fable 5 | $18.98 | $18.90 | $683.28 | $3.20 → $6.40 | $4.60 |
+| Claude Opus 5 | $9.53 | $9.45 | $343.08 | $1.60 → $3.20 | $2.34 |
+| Claude Opus 4.8 | $9.53 | $9.45 | $343.08 | $1.60 → $3.20 | $2.34 |
+| Claude Sonnet 5 | $3.86 | $3.78 | $138.96 | $0.64 → $1.28 | $0.98 |
+| Claude Haiku 4.5 | $0.65 | $3.78 | $23.40 | $0.32 | $0.69 |
 
 The worst case is every request one pass could make (36: six transport attempts,
-each able to pause and resume five times); it is reported, not reserved, so a job
-cap need only cover the requests in flight. The estimate is a calculation,
-not a measurement: the fixture run shape at registry rates, with Haiku's
-synthesize figures those of Sonnet 5 because that pass is raised to it.
-Measured: Haiku $1.43; Opus 5 on MSFT $5.31 over six requests — each of the three
-passes was schema-rejected once and repaired, so its winning requests were $2.66.
+each able to pause and resume five times); in the default request mode it is
+reported, not reserved, so a job cap need only cover the requests in flight, while
+`THESIS_RESERVATION_MODE=pass` reserves it whole. Neither reservation column varies
+with effort — both bound a request at the model's full context and output ceiling.
+
+The output ceiling is the one part of per-effort cost that is derivable, and
+thinking bills as output: below `high` a pass is capped at its own constant
+(analyst 64K, judge 96K), at `high` and above at the model's registry ceiling — so
+an abandoned Fable 5.1 request at effort `max` settles at $6.40 of presumed output.
+
+The estimated run is a calculation, not a measurement: the fixture shape at effort
+`high` and registry rates, Haiku's synthesize figures those of Sonnet 5
+because that pass is raised to it. It does NOT scale with effort — nothing is
+measured at the other levels — so read it as a floor at `xhigh` and `max`, where the
+same passes think longer inside the same ceiling. Measured on the maintainer's own
+runs (not reproducible from the repository): Haiku $1.43; Opus 5 on MSFT $5.31 over
+six requests, each pass schema-rejected once and repaired, so its winning requests were $2.66.
 
 <!-- END GENERATED: pricing -->
 
 ## Running it safely
 
-Thesis sends nothing to Thesis: no telemetry, no analytics, no update check.
-The only outbound traffic goes to the providers you configure.
+Thesis sends nothing to Thesis: no telemetry, no analytics, no update check;
+its own outbound traffic goes only to the providers you configure. The Next.js
+CLI has separate anonymous telemetry, off when the shipped
+`NEXT_TELEMETRY_DISABLED=1` is in your `.env` (or `npx next telemetry disable`).
 [Privacy and safety](docs/PRIVACY.md) names what each receives, where the local
 database lives, and how to delete it.
 

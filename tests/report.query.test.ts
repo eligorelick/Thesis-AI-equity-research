@@ -429,13 +429,11 @@ describe("getLatestDoneReport", () => {
     expect(getLatestDoneReport("BRK.B")?.symbol).toBe("BRK.B");
   });
 
-  it("createdAt tie: pins CURRENT behavior — the higher-id (later-inserted) row wins", () => {
-    // NOTE: the query orders by createdAt DESC only, with NO explicit id
-    // tiebreak. With better-sqlite3 the (symbol, createdAt) index is scanned
-    // descending, so among equal createdAt values the larger rowid surfaces
-    // first. This test pins that observed behavior; it is an implementation
-    // detail, not a documented contract (an explicit `desc(reports.id)`
-    // tiebreak in src/report/query.ts would make it contractual).
+  it("createdAt tie: the higher-id (later-inserted) row wins by contract", () => {
+    // The query orders by createdAt DESC, id DESC (src/report/query.ts) — the
+    // same rule listReportsForSymbol / listRunRefsForSymbol apply in
+    // history.ts — so among equal createdAt values the later-inserted row is
+    // the contractual winner, not an index-scan accident.
     const tieIso = "2026-07-10T00:00:00.000Z";
     const firstId = seedReport({ createdAt: tieIso, costUsd: 1.0 });
     const secondId = seedReport({ createdAt: tieIso, costUsd: 2.0 });

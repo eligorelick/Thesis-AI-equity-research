@@ -239,10 +239,15 @@ export const STRAIGHT_LINE_RENT_TAGS = [
   "StraightLineRent",
   "AmortizationOfDeferredLeasingFeesAndStraightLineRent",
 ] as const;
-export const RECURRING_CAPEX_TAGS = [
-  "PaymentsForCapitalImprovements",
-  "PaymentsToDevelopRealEstateAssets",
-] as const;
+/**
+ * Recurring (maintenance) capital expenditure only. `PaymentsToDevelopRealEstateAssets`
+ * is the cash outflow to DEVELOP real estate — growth spending — and was
+ * subtracted here under the recurring label with the result marked exact; a
+ * developer REIT's AFFO was understated by its whole pipeline. A filer that
+ * tags development but no recurring element falls to the all-capex floor
+ * below, which says it is approximate and in which direction.
+ */
+export const RECURRING_CAPEX_TAGS = ["PaymentsForCapitalImprovements"] as const;
 export const DEPRECIATION_AMORTIZATION_TAGS = [
   "DepreciationDepletionAndAmortization",
   "DepreciationAndAmortization",
@@ -1049,6 +1054,13 @@ export interface NareitFfoResult {
   ffoApproximate: boolean;
   /** True when AFFO could not subtract recurring capex / straight-line rent. */
   affoApproximate: boolean;
+  /**
+   * True when FFO is exactly net income + TOTAL depreciation and amortization
+   * — no property-sale gain, impairment or real-estate-only depreciation was
+   * netted — which is the one construction the multiples framework can
+   * rebuild per quarter for an own-history P/FFO band.
+   */
+  netIncomePlusTotalDa: boolean;
   ffoBasis: string;
   affoBasis: string;
   sources: string[];
@@ -1117,6 +1129,7 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
       affo: null,
       ffoApproximate: false,
       affoApproximate: false,
+      netIncomePlusTotalDa: false,
       ffoBasis: "not computed (no net income)",
       affoBasis: "not computed (no FFO)",
       sources,
@@ -1151,6 +1164,7 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
       affo: null,
       ffoApproximate: false,
       affoApproximate: false,
+      netIncomePlusTotalDa: false,
       ffoBasis: "not computed (no depreciation add-back)",
       affoBasis: "not computed (no FFO)",
       sources,
@@ -1174,6 +1188,7 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
   const gainsValue = gains?.value ?? 0;
   const impairmentsValue = impairments?.value ?? 0;
   const ffo = netIncome + daValue - gainsValue + impairmentsValue;
+  const netIncomePlusTotalDa = !daIsRealEstate && gains === null && impairments === null;
 
   const ffoParts = [
     `net income ${netIncome}`,
@@ -1289,6 +1304,7 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
     affo,
     ffoApproximate: ffoApproximateReasons.length > 0,
     affoApproximate,
+    netIncomePlusTotalDa,
     ffoBasis,
     affoBasis,
     sources,

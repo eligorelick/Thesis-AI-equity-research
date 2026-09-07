@@ -777,7 +777,7 @@ describe("fmpCacheKey", () => {
     expect(fmpQueryString({ symbol: "^GSPC" })).toBe("symbol=%5EGSPC");
   });
 
-  it("passes the canonical key + DATA_MAP §3 TTL to cachedFetch", async () => {
+  it("passes the canonical key + TTL to cachedFetch", async () => {
     const seen: Array<{ key: string; ttlMs: number }> = [];
     const cachedFetch: CachedFetchFn = async (key, ttlMs, loader) => {
       seen.push({ key, ttlMs });

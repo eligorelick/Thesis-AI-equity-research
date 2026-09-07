@@ -240,7 +240,9 @@ export async function buildAuditFixtureComparison(
     const pristineBundle = structuredClone(bundle);
     const validation = validateBundle(bundle, { now: fixedDate });
     const computed = runStageB(bundle);
-    assertUnchanged("bundle before Stage B", bundle, pristineBundle);
+    // The bracket spans BOTH validateBundle and runStageB: a mutation by either
+    // is reported here, so the label names both (audit 2026-09-06, F206).
+    assertUnchanged("bundle across validateBundle + runStageB", bundle, pristineBundle);
 
     const fixture = ReportSchema.parse(JSON.parse(await BunlessRead(paths.reportFixture)));
     const pipelineOwnedReportKeys = new Set([

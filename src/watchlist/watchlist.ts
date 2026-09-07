@@ -1,5 +1,5 @@
 /**
- * Watchlist data layer — server-only (the application contract §8: sidebar watchlist with
+ * Watchlist data layer — server-only (sidebar watchlist with
  * add/remove; last report date, grade chips, price snapshot, next earnings).
  *
  * Two responsibilities:
@@ -20,6 +20,8 @@
  */
 
 import "server-only";
+
+import { cache } from "react";
 
 import { asc, eq, sql } from "drizzle-orm";
 
@@ -44,7 +46,7 @@ import type { Grade } from "@/types/core";
 
 export type WatchlistEntry = WatchlistRow;
 
-/** The graded sections of the verdict strip (the application contract §7.1). */
+/** The graded sections of the verdict strip . */
 export interface WatchlistGrades {
   fundamentals: Grade;
   valuation: Grade;
@@ -145,7 +147,14 @@ export function listWatchlist(): WatchlistEntry[] {
  * Enrichment
  * ------------------------------------------------------------------------ */
 
-/** Options for {@link getWatchlistView} — the FMP client is injectable for tests. */
+/**
+ * Options for {@link getWatchlistView} — the FMP client is injectable for tests.
+ *
+ * The view is wrapped in React's `cache` so the sidebar and the home panel,
+ * which render in parallel in one request, share one enrichment instead of
+ * each issuing the FMP quote and earnings calls (audit 2026-09-06, F217).
+ * Outside a server render `cache` is a pass-through, so tests see plain calls.
+ */
 export interface WatchlistViewOptions {
   /** Override the FMP client (tests). Defaults to a cache-wired live/fixture client. */
   fmp?: FmpClient;
@@ -161,7 +170,7 @@ export interface WatchlistViewOptions {
  * Fixture mode (no FMP key) is expected: price/change/earnings become gaps, the
  * report join still works from the local DB.
  */
-export async function getWatchlistView(
+export const getWatchlistView = cache(async function getWatchlistView(
   options: WatchlistViewOptions = {},
 ): Promise<WatchlistRowView[]> {
   const entries = listWatchlist();
@@ -169,7 +178,7 @@ export async function getWatchlistView(
   const fmp = options.fmp ?? defaultFmpClient();
 
   return Promise.all(entries.map((entry) => enrichSymbol(entry.symbol, fmp, now)));
-}
+});
 
 /**
  * Cache-wired FMP client (live when a key is present, fixtures otherwise).

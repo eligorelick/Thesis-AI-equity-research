@@ -1,6 +1,6 @@
 /**
  * ReportView — the centerpiece renderer for a persisted {@link Report}
- * (src/report/schema.ts). Renders the full report (the application contract §7 sections 1–13)
+ * (src/report/schema.ts). Renders the full report (report sections 1–13)
  * as a dense, navigable, terminal-grade page:
  *
  *   - a sticky top bar holding the current 7-grade strip (Fundamentals,
@@ -8,9 +8,10 @@
  *     Moat), while legacy reports omit only Balance Sheet — each present grade
  *     is a clickable GradeChip that scroll-anchors to its full GradeReasoning;
  *   - the verdict synthesis, prominently, right under the grades;
- *   - the Catalysts & Risks panel PINNED near the top with strong visual weight
- *     (SPEC §8) — accent-bordered, above the numbered deep-dive sections;
- *   - all sections in SPEC §7 order as anchored blocks;
+ *   - the Catalysts & Risks panel with strong visual weight —
+ *     accent-bordered — rendered in manifest order as section 10, between
+ *     Competitive and Outlook (it is not hoisted above the numbered sections);
+ *   - all sections in manifest order as anchored blocks;
  *   - a right-rail sticky anchor nav (the denser option vs. tabs) for jumping.
  *
  * Data-only reports (the multi-pass analysis is absent, including attempted

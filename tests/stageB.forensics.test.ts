@@ -30,6 +30,9 @@ import type { CompanyRoute } from "@/types/core";
 // Shared fixtures
 // ---------------------------------------------------------------------------
 
+/** The fixtures below are toy-scale (revenue in the hundreds), so the house revenue floor is switched off. */
+const TOY_FLOOR = { revenueFloor: 0 };
+
 const generalRoute: CompanyRoute = {
   base: "general",
   overlays: [],
@@ -203,6 +206,21 @@ describe("computeAltman — verified coefficients", () => {
     const gap = r.gaps.find((g) => g.field === "forensics.altman.retainedEarnings");
     expect(gap).toBeDefined();
     expect(gap?.severity).toBe("warn");
+  });
+
+  it("reconstructs X3 from CONTINUING net income when neither EBIT nor operating income is reported", () => {
+    const income = { ...aaplAltmanInputs.income } as Record<string, unknown>;
+    delete income.ebit;
+    delete income.operatingIncome;
+    income.netIncome = 80;
+    income.netIncomeFromContinuingOperations = 20;
+    income.incomeTaxExpense = 10;
+    income.interestExpense = 5;
+    const r = computeAltman({ ...aaplAltmanInputs, income: income as unknown as AltmanInputs["income"] }, "original");
+    const ta = aaplAltmanInputs.balance.totalAssets as number;
+    // 20 + 10 + 5, not 80 + 10 + 5: a discontinued operation's result is not operating earnings.
+    expect(r.components.x3).toBeCloseTo(35 / ta, 12);
+    expect(r.notes.some((n) => /net income from continuing operations/.test(n))).toBe(true);
   });
 
   it("marketCap missing for the original variant -> null score + gap (no silent degrade)", () => {
@@ -469,9 +487,35 @@ describe("computeBeneish — coefficient exactness", () => {
     });
   });
 
+  it("withholds the M-score when revenue is below the house floor in either year (research §6.1)", () => {
+    const { current, prior } = beneishSteadyStatePeriods();
+    current.income!.revenue = 5_000_000;
+    prior.income!.revenue = 20_000;
+    const r = computeBeneish(current, prior);
+    expect(r.score).toBeNull();
+    expect(r.verdict).toBeNull();
+    const gap = r.gaps.find((g) => g.field === "forensics.beneish");
+    expect(gap?.severity).toBe("warn");
+    expect(gap?.reason).toMatch(/below the house floor of 10000000/);
+    expect(gap?.reason).toMatch(/20000 → 5000000/);
+  });
+
+  it("says on the number that DEPI is built on combined D&A, not depreciation alone", () => {
+    const { current, prior } = beneishSteadyStatePeriods();
+    const r = computeBeneish(current, prior, TOY_FLOOR);
+    expect(r.indices.depi).not.toBeNull();
+    expect(r.notes.some((n) => /DEPI: rate built from combined depreciation AND amortisation/.test(n))).toBe(true);
+    // Not claimed when DEPI was not built.
+    delete current.balance!.propertyPlantEquipmentNet;
+    const without = computeBeneish(current, prior, TOY_FLOOR);
+    expect(without.indices.depi).toBe(1); // neutralised, the paper's own convention
+    expect(without.neutralized).toContain("DEPI");
+    expect(without.notes.some((n) => /combined depreciation AND amortisation/.test(n))).toBe(false);
+  });
+
   it("steady state (all indices 1, TATA 0) -> M = -2.480 exactly", () => {
     const { current, prior } = beneishSteadyStatePeriods();
-    const r = computeBeneish(current, prior);
+    const r = computeBeneish(current, prior, TOY_FLOOR);
     expect(r.indices.dsri).toBeCloseTo(1, 12);
     expect(r.indices.gmi).toBeCloseTo(1, 12);
     expect(r.indices.aqi).toBeCloseTo(1, 12);
@@ -487,7 +531,7 @@ describe("computeBeneish — coefficient exactness", () => {
 
   it("manipulator fixture: every index and M to 1e-6 against hand-computed anchors", () => {
     const { current, prior } = beneishManipulatorPeriods();
-    const r = computeBeneish(current, prior);
+    const r = computeBeneish(current, prior, TOY_FLOOR);
     expect(r.indices.dsri!).toBeCloseTo(1.5384615385, 6);
     expect(r.indices.gmi!).toBeCloseTo(1.0810810811, 6);
     expect(r.indices.aqi!).toBeCloseTo(1.0277777778, 6);
@@ -518,7 +562,7 @@ describe("computeBeneish — neutral-1.0 fallback and clamping", () => {
     const { current, prior } = beneishManipulatorPeriods();
     delete current.income!.sellingGeneralAndAdministrativeExpenses;
     delete prior.income!.sellingGeneralAndAdministrativeExpenses;
-    const r = computeBeneish(current, prior);
+    const r = computeBeneish(current, prior, TOY_FLOOR);
     expect(r.indices.sgai).toBe(1);
     expect(r.neutralized).toContain("SGAI");
     expect(r.notes.some((n) => n.includes("SGAI") && n.includes("neutral 1.0"))).toBe(true);
@@ -527,6 +571,7 @@ describe("computeBeneish — neutral-1.0 fallback and clamping", () => {
     const base = computeBeneish(
       beneishManipulatorPeriods().current,
       beneishManipulatorPeriods().prior,
+      TOY_FLOOR,
     );
     expect(r.score! - base.score!).toBeCloseTo(-0.172 * (1 - 0.9230769231), 6);
   });
@@ -535,7 +580,7 @@ describe("computeBeneish — neutral-1.0 fallback and clamping", () => {
     const { current, prior } = beneishManipulatorPeriods();
     current.income!.sellingGeneralAndAdministrativeExpenses = 0;
     prior.income!.sellingGeneralAndAdministrativeExpenses = 0;
-    const r = computeBeneish(current, prior);
+    const r = computeBeneish(current, prior, TOY_FLOOR);
     expect(r.indices.sgai).toBe(1);
     expect(r.neutralized).toContain("SGAI");
   });
@@ -543,7 +588,7 @@ describe("computeBeneish — neutral-1.0 fallback and clamping", () => {
   it("missing D&A -> DEPI neutralized (paper's own convention for missing COMPUSTAT #65)", () => {
     const { current, prior } = beneishManipulatorPeriods();
     delete current.cashFlow!.depreciationAndAmortization;
-    const r = computeBeneish(current, prior);
+    const r = computeBeneish(current, prior, TOY_FLOOR);
     expect(r.indices.depi).toBe(1);
     expect(r.neutralized).toContain("DEPI");
   });
@@ -551,7 +596,7 @@ describe("computeBeneish — neutral-1.0 fallback and clamping", () => {
   it("extreme DSRI is clamped to 10 with a house-rule note", () => {
     const { current, prior } = beneishManipulatorPeriods();
     current.balance!.accountsReceivables = 100000; // AR/Sales ratio explodes
-    const r = computeBeneish(current, prior);
+    const r = computeBeneish(current, prior, TOY_FLOOR);
     expect(r.indices.dsri).toBe(10);
     expect(r.clamped).toContain("DSRI");
     expect(r.notes.some((n) => n.includes("House rule") && n.includes("DSRI"))).toBe(true);
@@ -560,7 +605,7 @@ describe("computeBeneish — neutral-1.0 fallback and clamping", () => {
   it("negative gross margin -> GMI neutralized + standalone RED note", () => {
     const { current, prior } = beneishManipulatorPeriods();
     current.income!.costOfRevenue = 1400; // > revenue 1300
-    const r = computeBeneish(current, prior);
+    const r = computeBeneish(current, prior, TOY_FLOOR);
     expect(r.indices.gmi).toBe(1);
     expect(r.neutralized).toContain("GMI");
     expect(r.notes.some((n) => n.includes("negative gross margin"))).toBe(true);
@@ -569,7 +614,7 @@ describe("computeBeneish — neutral-1.0 fallback and clamping", () => {
   it("TATA not computable (no cash-flow statement) -> M unavailable with critical gap", () => {
     const { current, prior } = beneishManipulatorPeriods();
     current.cashFlow = null;
-    const r = computeBeneish(current, prior);
+    const r = computeBeneish(current, prior, TOY_FLOOR);
     expect(r.score).toBeNull();
     expect(r.verdict).toBeNull();
     expect(r.indices.tata).toBeNull();
@@ -581,7 +626,7 @@ describe("computeBeneish — neutral-1.0 fallback and clamping", () => {
   it("pre-revenue / missing revenue -> M unavailable with explanatory gap", () => {
     const { current, prior } = beneishManipulatorPeriods();
     prior.income!.revenue = 0;
-    const r = computeBeneish(current, prior);
+    const r = computeBeneish(current, prior, TOY_FLOOR);
     expect(r.score).toBeNull();
     expect(r.gaps.some((g) => g.reason.includes("pre-revenue"))).toBe(true);
   });
@@ -707,12 +752,33 @@ describe("computePiotroski — verified denominators", () => {
     expect(lenient.notes.some((n) => n.includes("de-minimis") && n.includes("House rule"))).toBe(true);
   });
 
-  it("missing commonStockIssuance -> treated as no issuance with note + info gap", () => {
+  it("missing commonStockIssuance -> signal not evaluable (denominator reduced) with an info gap", () => {
+    // The paper awards EQ_OFFER only when the firm demonstrably issued no
+    // equity; an undisclosed figure demonstrates nothing, and scoring it as a
+    // pass was a free point on every keyless filer whose proceeds sit under an
+    // element the synonym table does not map.
     const { current, prior, prior2 } = piotroskiPeriods();
+    const full = computePiotroski(current, prior, prior2);
     delete current.cashFlow!.commonStockIssuance;
     const r = computePiotroski(current, prior, prior2);
-    expect(r.signals.noEquityIssuance.value).toBe(1);
-    expect(r.gaps.some((g) => g.field === "forensics.piotroski.commonStockIssuance")).toBe(true);
+    expect(r.signals.noEquityIssuance.value).toBeNull();
+    expect(r.outOf).toBe(full.outOf - 1);
+    expect(r.score).toBe(full.score! - full.signals.noEquityIssuance.value!);
+    expect(r.gaps.some((g) => g.field === "forensics.piotroski.commonStockIssuance" && /not evaluated/.test(g.reason))).toBe(true);
+    expect(r.notes.some((n) => /treated as no issuance/.test(n))).toBe(false);
+  });
+
+  it("names the denominator actually used in the two-year note, including the financial variant", () => {
+    const { current, prior } = piotroskiPeriods();
+    const standard = computePiotroski(current, prior, null);
+    expect(standard.notes).toContain(
+      `Only 2 fiscal years supplied — ΔROA and Δturnover unavailable; F-score reported out of ${standard.outOf} (research §6.2).`,
+    );
+    const financial = computePiotroski(current, prior, null, { financialsSuppressed: true });
+    expect(financial.notes.some((n) => /reported out of 7/.test(n))).toBe(false);
+    expect(financial.notes).toContain(
+      `Only 2 fiscal years supplied — ΔROA unavailable in addition to the withheld financial signals; F-score reported out of ${financial.outOf}.`,
+    );
   });
 
   it("zero long-term debt in both years -> point awarded with non-canonical note", () => {
@@ -832,7 +898,7 @@ describe("computeAccruals", () => {
 describe("computeSupportFlags", () => {
   const B = 1_000_000_000;
 
-  it("receivables grew 25% vs revenue 8% -> warn flag with the SPEC §4 sentence", () => {
+  it("receivables grew 25% vs revenue 8% -> warn flag with the house-rule sentence", () => {
     const r = computeSupportFlags({
       income: [
         { date: "2025-12-31", revenue: 1.08 * B },
@@ -883,6 +949,23 @@ describe("computeSupportFlags", () => {
     expect(flag!.severity).toBe("flag");
     expect(flag!.message).toContain("Inventory grew 35.0% while revenue grew 5.0%");
     expect(flag!.message).toContain("obsolescence");
+  });
+
+  it("the overhang notice honours the revenue floor like every other growth flag", () => {
+    // Base-year revenue below the floor: the module says growth flags are
+    // suppressed, so it must not print an overhang percentage on that base.
+    const r = computeSupportFlags({
+      income: [
+        { date: "2025-12-31", revenue: 4_000_000 },
+        { date: "2024-12-31", revenue: 5_000_000 },
+      ],
+      balance: [
+        { date: "2025-12-31", inventory: 105_000 },
+        { date: "2024-12-31", inventory: 100_000 },
+      ],
+    });
+    expect(r.flags.find((f) => f.id === "inventory-overhang")).toBeUndefined();
+    expect(r.notes.some((n) => /below floor/.test(n))).toBe(true);
   });
 
   it("revenue collapse suppresses the inventory gap flag -> overhang info instead", () => {
@@ -1048,6 +1131,7 @@ describe("runForensics", () => {
       balance: [current.balance!, prior.balance!, prior2.balance!],
       cashFlow: [current.cashFlow!, prior.cashFlow!],
       marketCap: 500,
+      ...TOY_FLOOR,
     };
   }
 
@@ -1062,6 +1146,33 @@ describe("runForensics", () => {
     expect(report.notes.some((n) => n.includes("Accrual") && n.includes("suppressed"))).toBe(true);
     expect(report.notes.some((n) => n.includes("Piotroski") && n.includes("non-financial"))).toBe(true);
     expect(isFinancialForensicsSuppressed(bankRoute)).toBe(true);
+  });
+
+  it("does not print the private computation's own notes twice when Z′ stands in on a currency mismatch", () => {
+    const income = { ...aaplAltmanInputs.income } as Record<string, unknown>;
+    delete income.ebit;
+    delete income.operatingIncome;
+    income.netIncome = 80;
+    income.incomeTaxExpense = 10;
+    income.interestExpense = 5;
+    const report = runForensics(generalRoute, {
+      income: [income as never],
+      balance: [aaplAltmanInputs.balance as never],
+      cashFlow: [],
+      marketCap: 500,
+      classification: { sector: "Technology", industry: "Computer Hardware", sicCode: "3571" },
+      reportedCurrency: "TWD",
+      quoteCurrency: "USD",
+      ...TOY_FLOOR,
+    } as never);
+    expect(report.altman?.variant).toBe("private");
+    const notes = report.altman!.notes;
+    expect(notes.some((n) => /Altman Z' \(1983, BOOK equity\) substituted/.test(n))).toBe(true);
+    // The EBIT reconstruction ran in both computations; it is said once.
+    expect(notes.filter((n) => /EBIT reconstructed/.test(n))).toHaveLength(1);
+    expect(new Set(notes).size).toBe(notes.length);
+    const gapKeys = report.altman!.gaps.map((g) => `${g.field}|${g.reason}`);
+    expect(new Set(gapKeys).size).toBe(gapKeys.length);
   });
 
   it("general route: everything computed; AAPL-style sector routing picks z2", () => {
@@ -1221,6 +1332,7 @@ describe("runForensics", () => {
       balance: [current.balance!, prior.balance!],
       cashFlow: [current.cashFlow!, prior.cashFlow!],
       marketCap: 5000,
+      ...TOY_FLOOR,
     });
     expect(report.beneish!.verdict).not.toBe("flag");
     const dsriFlag = report.flags.find((f) => f.id === "dsri-elevated");
@@ -1347,6 +1459,7 @@ describe("runForensics — withheld batteries reach the manifest, not only the n
       balance: [current.balance!, prior.balance!, prior2.balance!],
       cashFlow: [current.cashFlow!, prior.cashFlow!],
       marketCap: 500,
+      ...TOY_FLOOR,
     };
   }
 

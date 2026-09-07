@@ -1,5 +1,5 @@
 /**
- * Mid-pipeline outage simulation (Phase 4 gate, the application contract §10):
+ * Mid-pipeline outage simulation (Phase 4 gate):
  *
  *   "simulated outage → graceful degradation"
  *

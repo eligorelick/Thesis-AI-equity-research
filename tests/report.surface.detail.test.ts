@@ -62,6 +62,16 @@ function renderSurfaces(report: Report): Surfaces {
   };
 }
 
+/** React's static-markup escaping, for asserting verbatim text inside HTML. */
+function htmlEscaped(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
 function values(surfaces: Surfaces): string[] {
   return [surfaces.live, surfaces.markdown, surfaces.print];
 }
@@ -163,6 +173,17 @@ function assertTracedRow(
     for (const label of identityLabels) expect(row).toContain(label);
   }
 }
+
+describe("the stored disclaimer (WS6 D-19; audit 2026-09-06, F207)", () => {
+  it("is printed verbatim on the live view as well as the Markdown and print exports", () => {
+    const report = task28SentinelReport();
+    const surfaces = renderSurfaces(report);
+    expect(report.meta.disclaimer.length).toBeGreaterThan(40);
+    expect(surfaces.markdown).toContain(report.meta.disclaimer);
+    expect(surfaces.print).toContain(report.meta.disclaimer);
+    expect(surfaces.live).toContain(htmlEscaped(report.meta.disclaimer));
+  });
+});
 
 describe("Task 28 complete report surfaces", () => {
   it("pins the literal score/evidence/projection domain and every raw sentinel", () => {
@@ -718,6 +739,16 @@ describe("route metrics reach every rendered surface (WS5, D-17)", () => {
       expect(html, `${surface}: stand-in marker`).toContain("stand-in");
       expect(html, `${surface}: route note`).toContain("Bank route metrics are computed");
     }
+    // Markdown cells are serialised exactly once: no doubled escapes, and the
+    // stand-in marker is plain text rather than literal underscores.
+    const markdown = surfaces.markdown;
+    const routeTable = markdown.slice(
+      markdown.indexOf("### Route metrics"),
+      markdown.indexOf("###", markdown.indexOf("### Route metrics") + 1),
+    );
+    expect(routeTable).toContain("(stand-in) |");
+    expect(routeTable).not.toContain("\\_(stand-in)\\_");
+    expect(routeTable).not.toContain("\\\\");
   });
 
   it("leaves a report without route metrics exactly as it was", () => {

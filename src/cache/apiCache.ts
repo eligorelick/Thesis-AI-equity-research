@@ -1,5 +1,5 @@
 /**
- * API response cache — serve-stale-while-revalidate per the provider data contract §3:
+ * API response cache — serve-stale-while-revalidate :
  * "always render cached data with its as-of date; refresh in background when
  * TTL expired."
  *
@@ -21,62 +21,62 @@ import { decodeCacheBody, encodeCacheBody } from "@/cache/compression";
 import type { DataSource, Sourced } from "@/types/core";
 
 // ---------------------------------------------------------------------------
-// TTL constants (seconds) — the provider data contract §3 "Cache TTL policy"
+// TTL constants (seconds) — cache TTL policy
 // ---------------------------------------------------------------------------
 
 /**
- * Stand-in for "immutable — cache forever" (§3 rows for transcripts and SEC
+ * Stand-in for "immutable — cache forever" (the rows for transcripts and SEC
  * filed documents). Finite so the INTEGER column and age math stay sane.
  */
 const TEN_YEARS_SECONDS = 10 * 365 * 86_400; // 315,360,000
 
 /**
- * REFERENCE TTL table (DATA_MAP §3). No production caller reads it — the
+ * REFERENCE TTL table. No production caller reads it — the
  * live TTLs are the constants in each provider client (FMP_TTLS in fmp.ts,
  * EDGAR_TTL in edgar.ts, ttlForFredSeries in fred.ts, FINRA_TTL_SECONDS in
  * finra.ts); when this table and a provider constant disagree, the provider
  * constant wins. Kept (and test-pinned) as the documented design intent.
  */
 export const TTL = {
-  /** §3: quotes / aftermarket / batch / index quotes — 15 min (FMP cycle "Real-Time"). */
+  /** quotes / aftermarket / batch / index quotes — 15 min (FMP cycle "Real-Time"). */
   QUOTE: 900,
   /**
-   * §3 design intent: EOD 24 h with a 15-min current-trading-day tail. The
+   * Design intent: EOD 24 h with a 15-min current-trading-day tail. The
    * tail is NOT implemented — the wired TTL is FMP_TTLS.historicalPriceEodFull
    * (flat 24 h in fmp.ts); this 900 encodes the aspirational tail only.
    */
   EOD: 900,
   /**
-   * §3: statements, key-metrics, ratios, growth, scores, owner-earnings,
+   * statements, key-metrics, ratios, growth, scores, owner-earnings,
    * enterprise-values — 24 h. (A latest-financial-statements.dateAdded
    * invalidation channel was researched but is deliberately NOT wired — see
    * invalidate() below; restatements ride the 24 h TTL.)
    */
   FUNDAMENTALS: 86_400,
-  /** §3: analyst estimates, price targets, grades, ratings, earnings — 24 h. */
+  /** analyst estimates, price targets, grades, ratings, earnings — 24 h. */
   ESTIMATES: 86_400,
-  /** §3: transcripts — immutable once final (fetch once, forever). */
+  /** transcripts — immutable once final (fetch once, forever). */
   TRANSCRIPT: TEN_YEARS_SECONDS,
-  /** §3: SEC filed documents / index-headers — immutable, cache forever. */
+  /** SEC filed documents / index-headers — immutable, cache forever. */
   FILINGS: TEN_YEARS_SECONDS,
-  /** §3: insider trades / stats / 13D-G — 24 h. */
+  /** insider trades / stats / 13D-G — 24 h. */
   INSIDER: 86_400,
-  /** §3: 13F institutional ownership — 24 h. */
+  /** 13F institutional ownership — 24 h. */
   THIRTEEN_F: 86_400,
-  /** §3: news / press releases / 8-K feed — 6 h. */
+  /** news / press releases / 8-K feed — 6 h. */
   NEWS: 21_600,
   /**
-   * §3: FMP economic indicators — 4 h (FMP cycle). FRED series do NOT read
+   * FMP economic indicators — 4 h (FMP cycle). FRED series do NOT read
    * this table: they use src/providers/fred.ts (ttlForFredSeries — 4 h
    * default, 2 h for the daily rates set FRED_TREASURY_SERIES).
    */
   MACRO: 14_400,
-  /** §3: treasury rates (FMP) — 2 h (FMP cycle "2 Hours"). */
+  /** treasury rates (FMP) — 2 h (FMP cycle "2 Hours"). */
   TREASURY: 7_200,
-  /** §3: sector & industry performance + P/E snapshots — 1 h (FMP cycle). */
+  /** sector & industry performance + P/E snapshots — 1 h (FMP cycle). */
   SECTOR: 3_600,
   /**
-   * §3: FINRA partitions checked ~daily (publish events ~2×/month); rows are
+   * FINRA partitions checked ~daily (publish events ~2×/month); rows are
    * valid until a newer partition appears.
    */
   SHORT_INTEREST: 86_400,
@@ -248,6 +248,14 @@ const preservedEmptyRefreshes = new Set<string>();
 /** In-flight background refreshes, deduped by cacheKey. */
 const inFlightRefreshes = new Map<string, Promise<void>>();
 
+/**
+ * In-flight MISS fetches, deduped by cacheKey. A page load and a report job
+ * for the same symbol starting within the same second on a cold cache used to
+ * fetch every member twice and race to store the same row (audit 2026-09-06,
+ * F231); the refresh path was single-flight, the miss path was not.
+ */
+const inFlightMisses = new Map<string, Promise<unknown>>();
+
 function startBackgroundRefresh<T>(cacheKey: string, opts: CachedFetchOptions<T>): void {
   if (inFlightRefreshes.has(cacheKey)) return; // one refresh per key at a time
   const refresh = (async () => {
@@ -297,7 +305,7 @@ export async function flushPendingRefreshes(): Promise<void> {
 }
 
 /**
- * Serve-stale-while-revalidate cached fetch (the provider data contract §3).
+ * Serve-stale-while-revalidate cached fetch.
  *
  * Freshness is judged against the caller's `ttlSeconds` (not the TTL stored
  * at write time), so TTL policy changes take effect without a cache flush.
@@ -338,6 +346,17 @@ export async function cachedFetch<T>(opts: CachedFetchOptions<T>): Promise<Sourc
     };
   }
 
+  /** Single-flight wrapper: concurrent callers of one key share one fetch. */
+  function fetchStoreReturnOnce(): Promise<Sourced<T>> {
+    const existing = inFlightMisses.get(cacheKey);
+    if (existing !== undefined) return existing as Promise<Sourced<T>>;
+    const pending = fetchStoreReturn().finally(() => {
+      if (inFlightMisses.get(cacheKey) === pending) inFlightMisses.delete(cacheKey);
+    });
+    inFlightMisses.set(cacheKey, pending);
+    return pending;
+  }
+
   const row = db.select().from(apiCache).where(eq(apiCache.cacheKey, cacheKey)).get();
 
   if (row) {
@@ -350,7 +369,7 @@ export async function cachedFetch<T>(opts: CachedFetchOptions<T>): Promise<Sourc
       // throwing synchronously and crash-looping the job until TTL expiry
       // (L6). Nothing sensitive is logged (the body could hold provider data).
       db.delete(apiCache).where(eq(apiCache.cacheKey, cacheKey)).run();
-      return fetchStoreReturn();
+      return fetchStoreReturnOnce();
     }
     const cachedBodyProblem = opts.validateBody?.(data) ?? null;
     if (cachedBodyProblem !== null) {
@@ -358,7 +377,7 @@ export async function cachedFetch<T>(opts: CachedFetchOptions<T>): Promise<Sourc
       // admission existed. Delete only the selected key, then self-heal now;
       // never return the poison once, even if the row was otherwise fresh.
       db.delete(apiCache).where(eq(apiCache.cacheKey, cacheKey)).run();
-      return fetchStoreReturn();
+      return fetchStoreReturnOnce();
     }
     const ageSeconds = (Date.now() - Date.parse(row.fetchedAt)) / 1000;
     const fresh = Number.isFinite(ageSeconds) && ageSeconds <= ttlSeconds;
@@ -373,7 +392,7 @@ export async function cachedFetch<T>(opts: CachedFetchOptions<T>): Promise<Sourc
       fetchedAt: row.fetchedAt,
     };
     if (fresh) return sourced;
-    if (tooStale) return fetchStoreReturn();
+    if (tooStale) return fetchStoreReturnOnce();
     startBackgroundRefresh(cacheKey, opts);
     return {
       ...sourced,
@@ -384,9 +403,10 @@ export async function cachedFetch<T>(opts: CachedFetchOptions<T>): Promise<Sourc
     };
   }
 
-  // Miss — fetch, store, return. Fetcher errors propagate to the caller.
+  // Miss — fetch, store, return. Fetcher errors propagate to the caller (to
+  // every concurrent caller sharing the flight).
   preservedEmptyRefreshes.delete(cacheKey);
-  return fetchStoreReturn();
+  return fetchStoreReturnOnce();
 }
 
 // ---------------------------------------------------------------------------
@@ -400,7 +420,7 @@ export async function cachedFetch<T>(opts: CachedFetchOptions<T>): Promise<Sourc
  *
  * NOTE (audit 2026-07-11 #6): this is a maintenance utility with NO production
  * caller today — it is intentionally NOT wired to a
- * latest-financial-statements.dateAdded restatement trigger (the provider data contract §3 once
+ * latest-financial-statements.dateAdded restatement trigger (an earlier design once
  * described that as a use case). FMP restatements are currently picked up by the
  * normal 24h fundamentals TTL (serve-stale + background refresh) plus the
  * EDGAR XBRL max(filed) dedup, which already prefers the latest restated value.

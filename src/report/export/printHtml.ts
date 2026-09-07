@@ -80,6 +80,7 @@ import { citationOutcomeLabel } from "@/report/schema";
 import {
   formatCostUsd,
   formatFinancialValue,
+  formatMoneyAmount,
   peerColumnKeys,
   formatPct,
   roundedDisplayedCostTotal,
@@ -598,7 +599,8 @@ function sectionValuation(
       `${w.toFixed(1)}%`,
       ...gterms.map((g) => {
         const ps = lookup.get(`${w}|${g}`);
-        return ps === undefined || ps === null ? DASH : `$${ps.toFixed(0)}`;
+        // In the currency of the per-share value beside it (see markdown.ts).
+        return ps === undefined || ps === null ? DASH : esc(formatMoneyAmount(ps, dcfPs?.currency ?? null, 0));
       }),
     ]);
     parts.push(

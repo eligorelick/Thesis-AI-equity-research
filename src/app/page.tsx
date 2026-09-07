@@ -170,14 +170,17 @@ export default async function Home() {
             <span className="mono font-semibold uppercase tracking-[0.08em]">
               synthetic fixture mode
             </span>{" "}
-            — no FMP_API_KEY configured. No current market data is shown. Try the
+            — no FMP_API_KEY configured. FMP-backed fields (watchlist quotes,
+            earnings dates, analyst data) are disclosed gaps, and this page shows
+            no current market data; real US filers are still served live from SEC
+            EDGAR and Yahoo on their company pages once EDGAR_CONTACT is set. The
             fictional general-company ticker{" "}
             <Link href="/company/DEMO" className="font-semibold underline">
               DEMO
             </Link>{" "}
-            or fictional bank ticker <span className="mono font-semibold">DBNK</span>;
-            unsupported symbols become disclosed gaps. Add a key to{" "}
-            <span className="mono">.env</span> and restart for live provider data.
+            and bank ticker <span className="mono font-semibold">DBNK</span> are
+            synthetic fixtures; unsupported symbols become disclosed gaps. Add a
+            key to <span className="mono">.env</span> and restart for FMP data.
           </div>
         )}
 
@@ -195,7 +198,7 @@ export default async function Home() {
             <KeyRow
               name="FMP_API_KEY"
               configured={config.hasFmpKey}
-              detail="primary fundamentals + market data (FMP Ultimate)"
+              detail="primary fundamentals + market data (any FMP plan; lower tiers cap history at 5 periods)"
             />
             <KeyRow
               name="FINNHUB_API_KEY"
@@ -205,7 +208,7 @@ export default async function Home() {
             <KeyRow
               name="FRED_API_KEY"
               configured={config.hasFredKey}
-              detail="macro series (falls back to keyless fredgraph.csv in dev)"
+              detail="macro series (keyless fredgraph.csv fallback when no key is set or the API fails)"
             />
             <KeyRow
               name="ANTHROPIC_API_KEY"

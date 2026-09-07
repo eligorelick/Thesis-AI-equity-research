@@ -10,7 +10,7 @@
  * The color scale + range come from ./format (unit-tested there).
  */
 
-import { EM_DASH, heatmapColor, heatmapRange, money, normalizeToRange, pct } from "./format";
+import { EM_DASH, heatmapColor, heatmapRange, moneyIn, normalizeToRange, pct } from "./format";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -37,6 +37,11 @@ export interface SensitivityHeatmapProps {
   baseG?: number | null;
   /** Per-share decimals (default 0 — dense). */
   digits?: number;
+  /**
+   * Currency of the per-share values (that of `valuation.dcf.perShare`);
+   * null/absent renders "$" (the legacy-report path, never a default).
+   */
+  currency?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +89,7 @@ export function SensitivityHeatmap({
   baseWacc = null,
   baseG = null,
   digits = 0,
+  currency = null,
 }: SensitivityHeatmapProps) {
   const rows = waccAxis && waccAxis.length > 0 ? [...waccAxis] : deriveAxis(cells, "waccPct");
   const cols = gAxis && gAxis.length > 0 ? [...gAxis] : deriveAxis(cells, "gTermPct");
@@ -156,10 +162,10 @@ export function SensitivityHeatmap({
                       aria-label={
                         v === null
                           ? `WACC ${w}% growth ${g}%: no value`
-                          : `WACC ${w}% growth ${g}%: ${money(v, digits)} per share`
+                          : `WACC ${w}% growth ${g}%: ${moneyIn(v, currency, digits)} per share`
                       }
                     >
-                      {v === null ? EM_DASH : money(v, digits)}
+                      {v === null ? EM_DASH : moneyIn(v, currency, digits)}
                     </td>
                   );
                 })}

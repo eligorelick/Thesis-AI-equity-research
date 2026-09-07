@@ -569,6 +569,108 @@ describe("FRD 10-K (F8/F9/F10)", () => {
 // MXC — title-only TOC links + header-in-table + F7 cross-reference trap
 // ---------------------------------------------------------------------------
 
+describe("mini-TOC redirect — a named boundary outranks an all-caps peer (audit 2026-09-06)", () => {
+  const K = "iaudit20260906";
+  const build = (entries: readonly (readonly [string, string])[]): string =>
+    [
+      "<table>",
+      itemRow(`${J}_61`, "Item 7.", "Management&#8217;s Discussion and Analysis of Financial Condition and Results of Operations."),
+      itemRow(`${J}_64`, "Item 7A.", "Quantitative and Qualitative Disclosures About Market Risk."),
+      "</table>",
+      "<table>",
+      ...entries.map(([id, title]) => `<tr><td><a href="#${K}_${id}">${title}</a></td><td><a href="#${K}_${id}">9</a></td></tr>`),
+      "</table>",
+      sample("jpm_10k_item7_stub.html"),
+      `<div id="${J}_64"></div><div><span>Item 7A. Refer to the Market Risk Management section.</span></div>`,
+      `<div id="${K}_a"></div><div><span style="font-weight:700">MANAGEMENT&#8217;S DISCUSSION AND ANALYSIS</span></div>`,
+      para(4000, "MDNAPART1"),
+      `<div id="${K}_b"></div><div><span style="font-weight:700">RESULTS OF OPERATIONS</span></div>`,
+      para(4000, "MDNAPART2"),
+      `<div id="${K}_c"></div><div><span style="font-weight:700">Management&#8217;s report on internal control over financial reporting</span></div>`,
+      para(600, "MGMTREPORT"),
+    ].join("\n");
+
+  it("runs the redirected slice to the named boundary, past an all-caps subsection", () => {
+    const r = extractSection(
+      build([
+        ["a", "MANAGEMENT&#8217;S DISCUSSION AND ANALYSIS"],
+        ["b", "RESULTS OF OPERATIONS"],
+        ["c", "Management&#8217;s Report on Internal Control Over Financial Reporting"],
+      ]),
+      { form: "10-K", item: "7" },
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.method).toBe("mini-toc-redirect");
+    expect(r.text).toContain("MDNAPART1");
+    expect(r.text).toContain("MDNAPART2"); // used to be cut here, silently
+    expect(r.text).not.toContain("MGMTREPORT");
+    expect(r.diagnostics.notes.join(" ")).not.toMatch(/ALL-CAPS/);
+  });
+
+  it("falls back to the all-caps peer, and says so, when no named boundary follows", () => {
+    const r = extractSection(
+      build([
+        ["a", "MANAGEMENT&#8217;S DISCUSSION AND ANALYSIS"],
+        ["b", "RESULTS OF OPERATIONS"],
+      ]),
+      { form: "10-K", item: "7" },
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.method).toBe("mini-toc-redirect");
+    expect(r.text).toContain("MDNAPART1");
+    expect(r.text).not.toContain("MDNAPART2");
+    expect(r.diagnostics.notes.join(" ")).toMatch(/mini-TOC slice bounded by the next ALL-CAPS heading/);
+  });
+});
+
+describe("absence statements and quoted titles (audit 2026-09-06)", () => {
+  it("reads 'Not required for smaller reporting companies.' as a not-required body, not a stub", () => {
+    const doc = [
+      `<p><b>Item&#160;1A.&#160;&#160;Risk Factors</b></p>`,
+      `<p>Not required for smaller reporting companies.</p>`,
+      `<p><b>Item&#160;1B.&#160;&#160;Unresolved Staff Comments</b></p>`,
+      `<p>None.</p>`,
+    ].join("\n");
+    const r = extractSection(doc, { form: "10-K", item: "1A" });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.kind).toBe("not_required");
+    const rule = [
+      `<p><b>Item&#160;1A.&#160;&#160;Risk Factors</b></p>`,
+      `<p>Not applicable to smaller reporting companies as defined in Rule 12b-2 of the Exchange Act.</p>`,
+      `<p><b>Item&#160;1B.&#160;&#160;Unresolved Staff Comments</b></p>`,
+      `<p>None.</p>`,
+    ].join("\n");
+    const r2 = extractSection(rule, { form: "10-K", item: "1A" });
+    expect(!r2.ok && r2.error.kind).toBe("not_required");
+  });
+
+  it("ignores a quoted title that names ANOTHER section when choosing the exhibit start", () => {
+    // A stub that quotes both of its targets ("see 'Risk Factors' and
+    // 'Management's Discussion and Analysis' in the Annual Report") used to
+    // hand the MD&A title to the risk-factor search as its top synonym.
+    const X = "iexhibitkind";
+    const headings = ["MANAGEMENT'S DISCUSSION AND ANALYSIS", "RISK FACTORS", "CONTROLS AND PROCEDURES"];
+    const exhibit = [
+      "<table>",
+      ...headings.map((t, i) => `<tr><td><a href="#${X}_${i}">${t}</a></td></tr>`),
+      "</table>",
+      ...headings.flatMap((t, i) => [`<div id="${X}_${i}"></div><div><span>${t}</span></div>`, para(4000, `BODY${i}`)]),
+    ].join("\n");
+    const r = extractFromExhibit(exhibit, {
+      section: "riskFactors",
+      quotedTitles: ["Management's Discussion and Analysis", "Risk Factors"],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.text).toContain("BODY1");
+    expect(r.text).not.toContain("BODY0");
+    expect(r.text).not.toContain("BODY2");
+  });
+});
+
 describe("MXC 10-K (F3/F7/F11)", () => {
   const body = [
     sample("mxc_10k_item1a_header_in_table.html"), // ALL-CAPS <b> header split across <td>s, <span id="s_004"> anchor

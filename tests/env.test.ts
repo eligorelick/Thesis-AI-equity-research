@@ -199,7 +199,7 @@ describe("parseEnv", () => {
   // its claim was handed to another process, so startup fails fast.
   it("enforces the lease invariants at startup", () => {
     expect(parseEnv({}).jobLeaseTtlMs).toBe(900_000);
-    expect(parseEnv({}).streamIdleTimeoutMs).toBe(120_000);
+    expect(parseEnv({}).streamIdleTimeoutMs).toBe(300_000);
 
     // Shorter than two job-claim heartbeats.
     expect(() => parseEnv({ THESIS_JOB_LEASE_SECONDS: "599" })).toThrow(/greater than 599|heartbeat/i);

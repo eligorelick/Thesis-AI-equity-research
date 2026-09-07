@@ -143,6 +143,15 @@ export function requestOriginMatchesHost(request: Request, origin: string): bool
   );
 }
 
+function requestProtocol(request: Request): "http:" | "https:" | null {
+  try {
+    const protocol = new URL(request.url).protocol.toLowerCase();
+    return protocol === "http:" || protocol === "https:" ? protocol : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Reject a request whose direct Host is neither loopback nor the exact LAN allowlist. */
 export function assertAllowedHost(request: Request): NextResponse | null {
   const authority = requestAuthority(request);
@@ -150,7 +159,19 @@ export function assertAllowedHost(request: Request): NextResponse | null {
   if (isLoopback(authority)) return null;
 
   const configured = configuredAuthority();
-  if (configured !== null && sameAuthority(authority, configured)) return null;
+  if (configured !== null) {
+    // Browsers never serialize a default port in Host (RFC 9110 §7.2), so
+    // `host:80` over http and `host:443` over https ARE the bare host — the
+    // rule the Origin comparison above already applies. Compared literally,
+    // an operator who wrote the default port into THESIS_ALLOWED_HOST (as the
+    // "exact port" wording invited) locked every request out with a 403 that
+    // called it cross-origin.
+    const protocol = requestProtocol(request);
+    const same = protocol === null
+      ? sameAuthority(authority, configured)
+      : sameAuthority(withoutDefaultPort(authority, protocol), withoutDefaultPort(configured, protocol));
+    if (same) return null;
+  }
   return forbidden("host authority is not loopback or explicitly allowed");
 }
 

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { makeFmpCachedFetch } from "@/pipeline/dataBundle";
-import { createFmpClient } from "@/providers/fmp";
+import { makeFmpCachedFetch, makeYahooCachedFetch } from "@/pipeline/dataBundle";
+import { createFmpClient, FMP_TTLS } from "@/providers/fmp";
 import { makeLimiter } from "@/providers/http";
+import { createYahooClient, YAHOO_TTLS } from "@/providers/yahoo";
 import { flushPendingRefreshes } from "@/cache/apiCache";
 import { createDatabase, setDbForTests, type DatabaseHandle } from "@/db";
 import { apiCache } from "@/db/schema";
@@ -47,6 +48,70 @@ function client(fetchImpl: () => Promise<Response>) {
 }
 
 describe("FMP schema drift never reaches the durable cache", () => {
+  it("rejects an object body on an array endpoint before it can displace the last-good row (audit 2026-09-06, F221)", async () => {
+    // A non-error 200 envelope ({"message": ...}) on an optional-scope
+    // statement endpoint normalised to zero rows and — not being an empty
+    // ARRAY — was admitted and overwrote the previous statement row for the
+    // full TTL.
+    let call = 0;
+    const good = [{ symbol: "AAPL", date: "2025-09-27", period: "FY", revenue: 100 }];
+    const fetchImpl = vi.fn(async () => {
+      call += 1;
+      return call === 1 ? json({ message: "temporarily unavailable" }) : json(good);
+    });
+
+    const drifted = await client(fetchImpl).incomeStatement("AAPL", "annual", 5);
+    expect(drifted.ok).toBe(false);
+    if (drifted.ok) return;
+    expect(drifted.gap.reason).toContain("object body where an array was expected");
+    expect(cacheRows()).toEqual([]);
+
+    const recovered = await client(fetchImpl).incomeStatement("AAPL", "annual", 5);
+    expect(recovered.ok).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(cacheRows()).toHaveLength(1);
+  });
+
+  it("stores the millisecond TTLs of the provider clients as seconds (audit 2026-09-06, F232)", async () => {
+    const fmpFetch = vi.fn(async () => json([{ symbol: "AAPL", price: 201 }]));
+    const quote = await client(fmpFetch).quote("AAPL");
+    expect(quote.ok).toBe(true);
+    const fmpRow = cacheRows().find((row) => row.provider === "fmp");
+    expect(fmpRow?.ttlSeconds).toBe(FMP_TTLS.quote / 1000);
+
+    const start = 1_756_857_600; // 2026-09-03 00:00 UTC
+    const chart = {
+      chart: {
+        result: [
+          {
+            meta: {
+              currency: "USD",
+              symbol: "AAPL",
+              exchangeName: "NMS",
+              instrumentType: "EQUITY",
+              regularMarketTime: start + 23_400,
+              gmtoffset: 0,
+              regularMarketPrice: 101,
+              chartPreviousClose: 100,
+            },
+            timestamp: [start],
+            indicators: { quote: [{ open: [100], high: [102], low: [99], close: [101], volume: [10] }] },
+          },
+        ],
+        error: null,
+      },
+    };
+    const yahooFetch = vi.fn(async () => json(chart));
+    const meta = await createYahooClient({
+      fetchImpl: yahooFetch as unknown as typeof fetch,
+      limiter: makeLimiter(1000, 1000),
+      cachedFetch: makeYahooCachedFetch(),
+    }).meta("AAPL");
+    expect(meta.ok).toBe(true);
+    const yahooRow = cacheRows().find((row) => row.provider === "yahoo");
+    expect(yahooRow?.ttlSeconds).toBe(YAHOO_TTLS.quote / 1000);
+  });
+
   it("does not cache a drifted body, and recovers on the next call", async () => {
     let call = 0;
     const fetchImpl = vi.fn(async () => {

@@ -93,6 +93,17 @@ export function blumeAdjust(beta: number): number {
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
+/**
+ * True when an observation date can be a calendar month's last trading day:
+ * on or after the 26th. No month's final US session falls earlier (a
+ * weekend plus a holiday at most pushes it to the 27th–28th), so anything
+ * before that is a month still in progress.
+ */
+export function isMonthComplete(isoDate: string): boolean {
+  const day = Number(isoDate.slice(8, 10));
+  return Number.isFinite(day) && day >= 26;
+}
+
 /** Last observation of each calendar month, newest first. */
 export function monthEndCloses(points: readonly ClosePoint[]): ClosePoint[] {
   const byMonth = new Map<string, ClosePoint>();
@@ -118,8 +129,26 @@ export function estimateBeta(
 ): BetaEstimate {
   const maxMonths = opts.maxMonths ?? BETA_MAX_MONTHS;
   const minMonths = opts.minMonths ?? BETA_MIN_MONTHS;
-  const symbolEnds = monthEndCloses(symbolCloses);
-  const benchByMonth = new Map(monthEndCloses(benchmarkCloses).map((p) => [p.date.slice(0, 7), p]));
+  const symbolEndsAll = monthEndCloses(symbolCloses);
+  const benchEndsAll = monthEndCloses(benchmarkCloses);
+  // The month in progress is not a monthly observation. A history that ends
+  // on the fetch date closes with a stub of a few sessions, and one earnings
+  // day regressed at the weight of a full month moved the slope by a tenth in
+  // the probe. The newest month of EITHER series is dropped unless its last
+  // observation falls in the month's closing days (the last trading day of a
+  // US month is never earlier than the 26th).
+  const partialMonths = new Set<string>();
+  for (const newest of [symbolEndsAll[0], benchEndsAll[0]]) {
+    if (newest !== undefined && !isMonthComplete(newest.date)) partialMonths.add(newest.date.slice(0, 7));
+  }
+  const symbolEnds = symbolEndsAll.filter((p) => !partialMonths.has(p.date.slice(0, 7)));
+  const benchByMonth = new Map(
+    benchEndsAll.filter((p) => !partialMonths.has(p.date.slice(0, 7))).map((p) => [p.date.slice(0, 7), p]),
+  );
+  const partialMonthNote =
+    partialMonths.size === 0
+      ? ""
+      : `; the partial month ${[...partialMonths].sort().join(", ")} in progress is excluded`;
   // Shared month-ends, newest first, at most maxMonths + 1 levels (→ maxMonths returns).
   const shared = symbolEnds
     .filter((p) => benchByMonth.has(p.date.slice(0, 7)))
@@ -192,7 +221,7 @@ export function estimateBeta(
     `beta ${beta.toFixed(3)}` +
     (standardError === null ? "" : ` ± ${standardError.toFixed(3)} (OLS standard error)`) +
     `, Blume-adjusted ${betaBlume.toFixed(3)}, from ${months} monthly log returns of ${priceNote} vs the benchmark ` +
-    `(${windowStart} → ${windowEnd}); vendor betas use the same 5-year-monthly convention`;
+    `(${windowStart} → ${windowEnd}); vendor betas use the same 5-year-monthly convention${partialMonthNote}`;
   return {
     beta,
     months,

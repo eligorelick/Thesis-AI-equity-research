@@ -2,7 +2,7 @@
  * The Report Zod schema — THE contract for the entire Thesis Report object.
  *
  * This module is the single source of truth for the shape of a generated
- * report (the application contract §7 sections 1–13). It is consumed by:
+ * report (report sections 1–13). It is consumed by:
  *   - the LLM passes, which request output via Anthropic structured outputs
  *     (`output_config.format`) using {@link reportToJsonSchema} / the pass-level
  *     sub-schemas, and are additionally validated with Zod on the way back;
@@ -10,7 +10,7 @@
  *     output and persists the parsed `Report`;
  *   - the UI, which renders `Report` and diffs two of them (see ./diff.ts).
  *
- * Design principles (non-negotiable analysis rules, the application contract §1):
+ * Design principles (the non-negotiable analysis rules):
  *   1. Every LLM-authored claim is a {@link SourcedClaim} carrying its label
  *      (FACT | ESTIMATE | JUDGMENT), a `source` payload-path/citation, and an
  *      `asOf` date. Rule #2 ("every claim is labeled") and #5 ("every figure
@@ -46,7 +46,7 @@ export const REPORT_SPEC_VERSION = "1.2.0" as const;
  * Legacy-read leniency
  *
  * The asOf ISO-date format and the rating-language gates are SAVE-time
- * contracts (SPEC §1 rule #3 says "before a report can be saved"). Reports
+ * contracts (rule #3: "before a report can be saved"). Reports
  * persisted under earlier spec versions contain asOf strings like "2026-06"
  * or "2025-12-31/2026-05-05" and prose the newer regex battery would reject —
  * re-validating them retroactively on READ would make already-paid reports
@@ -83,11 +83,11 @@ export const IsoDateSchema = z.string().refine(
 );
 
 /* ------------------------------------------------------------------------ *
- * Buy/sell/hold guard (the application contract §1 rule #3)
+ * Buy/sell/hold guard (rule #3)
  * ------------------------------------------------------------------------ */
 
 /**
- * Rejects investment *ratings* phrased as buy / sell / hold (SPEC §1 rule #3).
+ * Rejects investment *ratings* phrased as buy / sell / hold (rule #3).
  *
  * A structural tripwire, not a semantic classifier. The key distinction: buy /
  * sell / hold used as a RATING / DIRECTIVE about the security is prohibited; the same
@@ -115,9 +115,14 @@ const RATING_PATTERNS: readonly RegExp[] = [
   // buy/sell/hold labelled a rating / recommendation / call (either order).
   /\b(?:buy|sell|hold)(?:\s*\/\s*(?:buy|sell|hold))*[\s-]+(?:rating|recommendation|call)s?\b/i,
   /\b(?:rating|recommendation|call)s?\b[\s:=—–-]+(?:of\s+|to\s+|is\s+|was\s+|remains?\s+|stays?\s+)?(?:a\s+|an\s+)?(?:strong\s+)?(?:buy|sell|hold)\b/i,
-  // First-person / analyst recommendation to act on the security.
-  /\b(?:we|i|you|they|analysts?)\b[\s\w',]{0,20}\b(?:would|should|'?d)\b[\s\w',]{0,14}\b(?:buy|sell|hold)\b/i,
-  /\brecommend(?:s|ed|ing|ation)?\b[\s\w',]{0,14}\b(?:buy(?:ing)?|sell(?:ing)?|hold(?:ing)?)\b/i,
+  // First-person / analyst recommendation to act on the security. The
+  // lookahead keeps an OPERATIONAL object out: "management should hold the
+  // line on costs", "they should hold margins steady", "recommended selling
+  // the consumer unit" are business verbs, not directives about the shares —
+  // the docstring lists two of them as ALLOWED and every false positive here
+  // discards a billed attempt.
+  /\b(?:we|i|you|they|analysts?)\b[\s\w',]{0,20}\b(?:would|should|'?d)\b[\s\w',]{0,14}\b(?:buy|sell|hold)\b(?!-|\s+(?:margins?\b|the\s+line\b|market\s+share\b|steady\b|now\b|more\b|additional\b|new\b|of\b|in\b|through\b|the\s+(?!stock\b|shares?\b|position\b|name\b|security\b|equity\b|dip\b)\w))/i,
+  /\brecommend(?:s|ed|ing|ation)?\b[\s\w',]{0,14}\b(?:buy(?:ing)?|sell(?:ing)?|hold(?:ing)?)\b(?!-|\s+(?:margins?\b|the\s+line\b|market\s+share\b|steady\b|now\b|more\b|additional\b|new\b|of\b|in\b|through\b|the\s+(?!stock\b|shares?\b|position\b|name\b|security\b|equity\b|dip\b)\w))/i,
   // Directive about the SECURITY itself: "Sell the position/stock", "buy the
   // dip", "buy/sell into strength" — NOT operational objects (margins, tier…).
   /\b(?:buy|sell|hold)\s+(?:the\s+|this\s+|these\s+|its\s+|your\s+|our\s+)?(?:stock|shares?|position|name|security|equity|dip)\b/i,
@@ -132,10 +137,12 @@ const RATING_PATTERNS: readonly RegExp[] = [
   /(?:^|[.!?;]\s+)(?:please\s+)?reduce\s+(?:your\s+|our\s+|the\s+)?(?:portfolio\s+)?exposure\b/i,
   /\b(?:we|you|investors?|shareholders?)\s+(?:should|must|need\s+to)\s+reduce\s+(?:their\s+|your\s+|our\s+)?(?:portfolio\s+)?exposure\b/i,
   // A bare rating label: "a clear sell", "an outright buy", "it's a Hold".
-  /\b(?:a|an)\s+(?:clear\s+|outright\s+|obvious\s+|strong\s+|decisive\s+|near-?\s*)?(?:buy|sell|hold)\b(?!-|\s+(?:on|of|in|over|to|the\s+line|margins?|shares?|steady))/i,
+  // "a buy now, pay later platform" is a product, not a label.
+  /\b(?:a|an)\s+(?:clear\s+|outright\s+|obvious\s+|strong\s+|decisive\s+|near-?\s*)?(?:buy|sell|hold)\b(?!-|\s+(?:on|of|in|over|to|now\b|the\s+line|margins?|shares?|steady))/i,
   // Sentence-initial imperative directive — excludes operational verbs like
-  // "Hold margins", "Sell more seats", and hyphen compounds ("Sell-side …").
-  /(?:^|[.!?;]\s+)(?:strong\s+)?(?:buy|sell|hold)\b(?!-|\s+(?:margins?|the\s+line|market\s+share|shares?\b|steady|off\b|back\b|out\b|up\b|onto\b|through\b|more\b|additional\b|new\b|of\b))/i,
+  // "Hold margins", "Sell more seats", "Buy now, pay later", "Sell in to
+  // distributors", and hyphen compounds ("Sell-side …").
+  /(?:^|[.!?;]\s+)(?:strong\s+)?(?:buy|sell|hold)\b(?!-|\s+(?:margins?|the\s+line|market\s+share|shares?\b|steady|now\b|in\b|off\b|back\b|out\b|up\b|onto\b|through\b|more\b|additional\b|new\b|of\b))/i,
   // The whole trimmed value is nothing but a rating word.
   /^(?:strong\s+)?(?:buy|sell|hold)[.!]?$/i,
 ];
@@ -145,8 +152,16 @@ export function noBuySellHold(text: string): boolean {
   return !RATING_PATTERNS.some((re) => re.test(text));
 }
 
-const NO_RATING_MESSAGE =
-  "buy/sell/hold rating language is prohibited (the application contract §1 rule #3) — use probability-weighted scenarios and 'what would have to be true' framing instead";
+/**
+ * The gate's own diagnostic. Worded so that it does NOT itself match any
+ * RATING_PATTERNS entry: this message is quoted back into pass-failure text,
+ * which the runner files as a manifest reason, and the earlier wording
+ * ("buy/sell/hold rating language …") matched the rating-label pattern — so a
+ * data-only report that disclosed WHY a pass was rejected failed the same
+ * gate and was sterilised down to a shell with no sources at all.
+ */
+export const NO_RATING_MESSAGE =
+  "investment-rating language (buy, sell or hold used as a recommendation on the security) is prohibited (non-negotiable rule #3) — use probability-weighted scenarios and 'what would have to be true' framing instead";
 
 /** Attach the buy/sell/hold refine to a string schema (save-time gate). */
 function ratingSafeString() {
@@ -158,6 +173,11 @@ function ratingSafeString() {
 /** Machine identifiers are not prose and must not be interpreted as ratings. */
 const NON_NARRATIVE_STRING_KEYS = new Set([
   "source",
+  // The canonical citation identity (`web:<url>`, `fmp:profile`, …) is the same
+  // string as `source` and was scanned while `source` was exempt: a cited
+  // article slug such as ".../is-nvidia-a-strong-buy/" failed a whole pass.
+  "sourceId",
+  "attemptedSources",
   "symbol",
   "companyName",
   "unit",
@@ -284,7 +304,7 @@ export const TracedNumberSchema = z
     /** Legacy display/source field retained for persisted-report compatibility. */
     source: z.string().trim().min(1),
     asOf: IsoDateSchema.nullable(),
-    /** null = not yet verified; set by the verification pass (the application contract §5). */
+    /** null = not yet verified; set by the verification pass. */
     verified: z.boolean().nullable(),
     verificationNote: z.string().optional(),
   })
@@ -306,7 +326,7 @@ export const GradeBlockSchema = z
      * Fuller "what this means" interpretation for the aspect (rating-safe).
      * Optional for backward-compat with 1.0.0 reports; the judge is prompted to
      * fill it on 1.1.0+ so each graded section reads like an analyst's note, not
-     * a terse one-liner (the application contract §7 "feel interpreted").
+     * a terse one-liner ("feel interpreted").
      */
     interpretation: ratingSafeString().optional(),
   })
@@ -458,7 +478,7 @@ export const ConsistencyChecksSchema = z
   .object({
     /** A direction word ("rose", "fell") vs the sign of the cited delta. */
     direction: CheckRateSchema,
-    /** A period phrase ("in Q3", "in FY2025") vs the cited record's period. */
+    /** A period phrase naming a year ("in FY2025", "in Q3 2025") vs the YEAR of the cited record's period; a bare quarter is not checked. */
     period: CheckRateSchema,
     /** A unit word ("%", "bps", "billion") vs the cited record's registry unit. */
     unit: CheckRateSchema,
@@ -663,7 +683,7 @@ export const MetaSchema = z
      * renderers display the stored text as written.
      */
     disclaimer: z.string().min(1),
-    /** field dot-path -> ISO as-of date (the application contract §1 rule #5). */
+    /** field dot-path -> ISO as-of date (rule #5). */
     asOfMap: z.record(z.string(), z.string()),
   })
   .strict();
@@ -682,7 +702,7 @@ export const GradeStripSchema = z
     leadership: GradeBlockSchema,
     moat: GradeBlockSchema,
     /**
-     * Balance sheet & capital as a first-class graded aspect (the application contract §7.4 is a
+     * Balance sheet & capital as a first-class graded aspect (it was a
      * section but was ungraded in 1.0.0). Optional so 1.0.0 reports still parse;
      * the judge fills it on 1.1.0+.
      */
@@ -693,7 +713,7 @@ export type GradeStrip = z.infer<typeof GradeStripSchema>;
 
 export const VerdictSchema = z
   .object({
-    /** 3–5 sentence synthesis; rating-safe (the application contract §7.1). */
+    /** 3–5 sentence synthesis; rating-safe. */
     synthesis: ratingSafeString(),
     gradeStrip: GradeStripSchema,
     /**
@@ -771,7 +791,7 @@ export type Fundamentals = z.infer<typeof FundamentalsSchema>;
 export const BalanceSheetSchema = z
   .object({
     /**
-     * Balance-sheet & capital grade (the application contract §7.4). Optional for backward-compat
+     * Balance-sheet & capital grade. Optional for backward-compat
      * with 1.0.0 reports; the judge fills it on 1.1.0+, anchored to the
      * deterministic `scores.aspects.balanceSheet` band.
      */
@@ -835,7 +855,7 @@ export const DcfSchema = z
      */
     perShare: TracedNumberSchema.nullable(),
     assumptions: z.array(DcfAssumptionSchema),
-    /** Flat list of cells (5×5 grid flattened; the application contract §4 sensitivity). */
+    /** Flat list of cells (5×5 grid flattened; sensitivity). */
     sensitivityGrid: z.array(SensitivityCellSchema),
     upsidePct: z.number().nullable(),
   })
@@ -1351,7 +1371,7 @@ export const AppendixSchema = z
 export type Appendix = z.infer<typeof AppendixSchema>;
 
 /* ------------------------------------------------------------------------ *
- * Judge disagreements (the application contract §5)
+ * Judge disagreements
  * ------------------------------------------------------------------------ */
 
 export const DisagreementSchema = z
@@ -1378,7 +1398,7 @@ export type Disagreement = z.infer<typeof DisagreementSchema>;
  * "computed.scores.<aspect>.<signal>"), so they flow through the verify pass.
  * `dataCompleteness` (0–1) is the fraction of intended signal weight actually
  * available — an aspect scored on half its inputs is disclosed, not silently
- * defaulted (the application contract §1 rule #4).
+ * defaulted.
  * ------------------------------------------------------------------------ */
 
 export const ScoreAspectSchema = z.enum([
@@ -1687,7 +1707,7 @@ export type RouteMetrics = z.infer<typeof RouteMetricsSchema>;
  * The judge output — everything the judge/synthesis pass must emit.
  *
  * This is the full report MINUS `meta` and `appendix`, which the pipeline
- * fills (the application contract §5). The judge emits section content + disagreements; the job
+ * fills. The judge emits section content + disagreements; the job
  * runner wraps it with meta (symbol/model/cost/asOfMap) and appendix (sources
  * /manifest/verification log/cost breakdown). `.strict()` so any extra key the
  * model invents fails validation.
@@ -1786,7 +1806,7 @@ export const ReportSchema = ReportObjectSchema.superRefine(
 export type Report = z.infer<typeof ReportSchema>;
 
 /* ------------------------------------------------------------------------ *
- * Analyst-case schema — bull & bear passes (the application contract §5 passes 1–2)
+ * Analyst-case schema — bull & bear passes (passes 1–2)
  * ------------------------------------------------------------------------ */
 
 export const AnalystPriceTargetSchema = z
@@ -1841,7 +1861,7 @@ export type AnalystCase = z.infer<typeof ANALYST_CASE_SCHEMA>;
 /**
  * Recursively force `additionalProperties: false` on every JSON-schema object
  * node that declares `properties`, so Anthropic structured outputs treats the
- * schema as closed (extra keys rejected — the application contract §2, matching our `.strict()`
+ * schema as closed (extra keys rejected, matching our `.strict()`
  * Zod schemas).
  *
  * z.toJSONSchema already emits `additionalProperties: false` for `.strict()`
@@ -1885,7 +1905,7 @@ export function closeAdditionalProperties<T>(schema: T): T {
 
 /**
  * Anthropic's `output_config.format.schema` (structured outputs) supports only
- * a SUBSET of JSON Schema (the Anthropic API contract §3, verified live). Two
+ * a SUBSET of JSON Schema (verified live). Two
  * violations have already 400'd real requests before the model ever ran:
  *
  *  - array `minItems` other than 0 or 1 ("other array constraints" — i.e.
@@ -1915,7 +1935,7 @@ export function closeAdditionalProperties<T>(schema: T): T {
  * if absent), mirroring what Anthropic's own SDK helper does for this exact
  * situation ("The SDK auto-transforms unsupported constraints... strips them
  * from the wire schema, appends them to descriptions, and validates
- * client-side against the original" — the Anthropic API contract line ~156).
+ * client-side against the original").
  * This codebase hand-builds the request schema instead of using that helper
  * (`zodOutputFormat`/`client.messages.parse()`), so this function is the
  * substitute: without it, e.g. `probability: z.number().min(0).max(1)` would
@@ -1994,7 +2014,7 @@ export function relaxUnsupportedConstraints<T>(schema: T): T {
  * `.nullable()` field in this codebase compiles to a 2-branch `anyOf:
  * [T, {type:"null"}]`, and JUDGE_OUTPUT_SCHEMA has 21 of them once `reused:
  * "ref"` (toStructuredJsonSchema) collapsed the duplicate-shape inlining that
- * used to inflate the count to 115). the Anthropic API contract §3 anticipated
+ * used to inflate the count to 115). the Anthropic API contract anticipated
  * exactly this: "mark as many fields required as possible and avoid nullable
  * unions."
  *
@@ -2319,7 +2339,7 @@ export function toStructuredJsonSchema(
     io: "input",
     // Use internal $ref/$defs for repeated pieces (SourcedClaim, TracedNumber
     // appear dozens of times) rather than inlining every occurrence.
-    // the Anthropic API contract §3 explicitly lists internal $ref/$def/
+    // the Anthropic API contract explicitly lists internal $ref/$def/
     // definitions as SUPPORTED, and structured-output requests are also
     // subject to documented complexity limits (<=24 total optional
     // parameters, <=16 anyOf/type-array parameters across the schema) — for

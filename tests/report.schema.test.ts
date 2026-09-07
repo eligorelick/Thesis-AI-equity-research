@@ -1,5 +1,5 @@
 /**
- * Report schema + diff tests (the application contract §7, §1 rules).
+ * Report schema + diff tests.
  *
  * Covers, per the module brief:
  *  - a minimal valid report fixture parses cleanly;
@@ -32,6 +32,7 @@ import {
   ScenarioTargetsSchema,
   FairValueSchema,
   ProvenanceCoverageSchema,
+  NO_RATING_MESSAGE,
   noBuySellHold,
   reportToJsonSchema,
   judgeOutputToJsonSchema,
@@ -567,6 +568,21 @@ describe("buy/sell/hold rating refine", () => {
     expect(noBuySellHold("Inventory accumulated ahead of the launch.")).toBe(true);
     expect(noBuySellHold("Hedging reduced exposure to commodity prices.")).toBe(true);
 
+    // Allowed — an OPERATIONAL object after a first-person / recommend
+    // pattern, and product names. Each of these used to discard a billed
+    // attempt: the docstring lists "hold the line" and "hold margins" as
+    // allowed, and a fintech report cannot avoid "buy now, pay later".
+    expect(noBuySellHold("We believe management should hold the line on costs.")).toBe(true);
+    expect(noBuySellHold("We expect they should hold margins steady through FY26.")).toBe(true);
+    expect(noBuySellHold("The board recommended selling the consumer unit.")).toBe(true);
+    expect(noBuySellHold("Affirm operates a buy now, pay later platform.")).toBe(true);
+    expect(noBuySellHold("Buy now, pay later volumes rose 40%.")).toBe(true);
+    expect(noBuySellHold("Sell in to distributors was strong this quarter.")).toBe(true);
+    // … while the same patterns still catch a directive about the SECURITY.
+    expect(noBuySellHold("we would sell the stock on any strength")).toBe(false);
+    expect(noBuySellHold("They should buy the dip.")).toBe(false);
+    expect(noBuySellHold("we recommend holding the shares")).toBe(false);
+
     // Allowed — compounds / substrings (unchanged):
     expect(noBuySellHold("buybacks")).toBe(true);
     expect(noBuySellHold("sell-through")).toBe(true);
@@ -574,6 +590,32 @@ describe("buy/sell/hold rating refine", () => {
     expect(noBuySellHold("shareholder")).toBe(true);
     expect(noBuySellHold("holding company")).toBe(true);
     expect(noBuySellHold("household demand")).toBe(true);
+  });
+});
+
+describe("the rating gate's own diagnostic", () => {
+  /**
+   * The message is quoted back into pass-failure text that the runner files
+   * as a manifest reason; a message that tripped the gate sterilised every
+   * data-only report that disclosed a rating rejection.
+   */
+  it("does not itself match the rating patterns", () => {
+    expect(noBuySellHold(NO_RATING_MESSAGE)).toBe(true);
+    expect(noBuySellHold(`bull pass failed (schema): ${NO_RATING_MESSAGE}`)).toBe(true);
+  });
+
+  it("does not scan the machine citation identity or attempted-source ids", () => {
+    const report = makeReport();
+    const claim = report.verdict.executiveSummary?.[0] ?? report.business.whatTheySell[0]!;
+    claim.source = "web:https://example.com/is-nvidia-a-strong-buy-right-now/";
+    claim.sourceId = "web:https://example.com/is-nvidia-a-strong-buy-right-now/";
+    report.appendix.missingData.push({
+      field: "llm.bull",
+      reason: "fixture",
+      severity: "info",
+      attemptedSources: ["web:https://example.com/strong-buy-rating"],
+    });
+    expect(ReportSchema.safeParse(report).success).toBe(true);
   });
 });
 

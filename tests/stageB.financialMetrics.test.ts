@@ -714,6 +714,31 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
     expect(r.affo).toBeNull();
     expect(r.gaps.some((g) => g.field === "valuation.reit.ffo" && g.severity === "warn")).toBe(true);
   });
+
+  // Audit 2026-09-06: PaymentsToDevelopRealEstateAssets is development
+  // spending, not recurring capex. It was subtracted under the recurring label
+  // with the result marked exact, so a developer REIT's AFFO was understated
+  // by its whole pipeline and published as the NAREIT figure.
+  it("does not count development spending as recurring capex: a development-only filer gets the approximate floor", () => {
+    const r = computeNareitFfo({
+      companyFacts: okFacts({
+        NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
+        DepreciationAndAmortizationRealEstate: [{ ...REIT_FY, val: 900 }],
+        PaymentsToDevelopRealEstateAssets: [{ ...REIT_FY, val: 2_000 }],
+        StraightLineRent: [{ ...REIT_FY, val: 40 }],
+      }),
+      periodEnd: "2025-12-31",
+      netIncome: 400,
+      depreciationAndAmortization: 950,
+      capitalExpenditure: -2_150,
+    });
+
+    expect(r.ffo).toBe(1_300);
+    expect(r.affoApproximate).toBe(true);
+    expect(r.affoBasis).toContain("conservative floor");
+    expect(r.affo).toBe(1_300 - 2_150);
+    expect(r.affoBasis).not.toContain("PaymentsToDevelopRealEstateAssets");
+  });
 });
 
 describe("route-metric keys match the lead ids the schema says they match", () => {

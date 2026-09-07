@@ -123,6 +123,49 @@ describe("FMP plan limit cap", () => {
     expect(second.urls[0]).toContain("limit=10");
   });
 
+  it("keeps the gate after a within-cap first request: a later over-cap wave pays exactly one refusal (audit 2026-09-06, F223/F227)", async () => {
+    // The old probe recorded "no cap on this key" after ANY successful first
+    // request, so a wave of larger limits then paid one 402 per call.
+    const { fetch, urls } = cappedFetch(5);
+    const c = client(fetch);
+    const within = await c.incomeStatement("AAPL", "annual", 5);
+    expect(within.ok).toBe(true);
+    expect(urls).toHaveLength(1);
+
+    const wave = await Promise.all([
+      c.incomeStatement("AAPL", "quarter", 10),
+      c.cashFlow("AAPL", "annual", 10),
+      c.balanceSheet("AAPL", "annual", 10),
+    ]);
+    expect(wave.every((result) => result.ok)).toBe(true);
+    const refused = urls.filter((url) => Number(new URL(url).searchParams.get("limit")) > 5);
+    expect(refused).toHaveLength(1);
+    expect(urls).toHaveLength(1 + 1 + 3);
+  });
+
+  it("does not take a cache hit as proof of the key's cap", async () => {
+    // A probe answered from the durable cache never asked the vendor; the
+    // next over-cap wave still probes once instead of paying one refusal each.
+    const cached = (async () => ({
+      value: { body: statementRows(10), status: 200, fetchedAt: "2026-09-06T00:00:00.000Z" },
+      fetchedAt: "2026-09-06T00:00:00.000Z",
+    })) as unknown as CachedFetchFn;
+    const primed = cappedFetch(5);
+    const fromCache = await client(primed.fetch, "cache-key", cached).incomeStatement("AAPL", "annual", 10);
+    expect(fromCache.ok).toBe(true);
+    expect(primed.urls).toHaveLength(0);
+
+    const live = cappedFetch(5);
+    const c = client(live.fetch, "cache-key");
+    const wave = await Promise.all([
+      c.incomeStatement("AAPL", "quarter", 10),
+      c.cashFlow("AAPL", "annual", 10),
+    ]);
+    expect(wave.every((result) => result.ok)).toBe(true);
+    const refused = live.urls.filter((url) => Number(new URL(url).searchParams.get("limit")) > 5);
+    expect(refused).toHaveLength(1);
+  });
+
   it("leaves requests already within the cap untouched", async () => {
     const { fetch, urls } = cappedFetch(5);
     const result = await client(fetch).incomeStatement("AAPL", "annual", 5);

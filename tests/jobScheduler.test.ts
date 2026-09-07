@@ -2072,7 +2072,14 @@ describe("atomic paid settlement", () => {
     });
   });
 
-  it("does not backdate settlement authority across a blocking writer lock", async () => {
+  /**
+   * Settlement authority is captured AFTER `BEGIN IMMEDIATE` acquires the
+   * writer lock, never at call time. A lock wait that outlasts the paid TTL
+   * therefore settles an expired lease — and that settlement is still
+   * recorded (it is the only measurement of what the call cost, D-07), dated
+   * at the post-lock instant rather than backdated to the call.
+   */
+  it("captures settlement authority after a blocking writer lock and still records the late settlement", async () => {
     const { acquirePaidPassLease, claimNextQueuedJob, settlePaidPassLease } = await scheduler();
     const started = new Date();
     const limits = { ...LIMITS, jobLeaseTtlMs: 1_000, paidPassLeaseTtlMs: 100 };
@@ -2092,13 +2099,23 @@ describe("atomic paid settlement", () => {
     );
     if (!acquired.acquired) throw new Error("fixture lease was not acquired");
 
-    await expect(underTimedWriterLock(250, () => settlePaidPassLease(acquired.lease, {
+    const settled = await underTimedWriterLock(250, () => settlePaidPassLease(acquired.lease, {
       settlement: analystSettlement(0.4),
       payloadFingerprint: "1.3.0:lock-settle",
-    }, second.db))).rejects.toThrow(/expired paid-pass lease/i);
-    expect(second.db.select().from(jobPassArtifacts).all()).toEqual([]);
-    expect(second.db.select().from(costLog).all()).toEqual([]);
-    expect(second.db.select().from(jobLlmLeases).all()).toHaveLength(1);
+    }, second.db));
+    expect(settled).toMatchObject({ inserted: true, overReservation: false });
+    expect(second.db.select().from(jobPassArtifacts).all()).toEqual([
+      expect.objectContaining({ attemptId: "lock-settle" }),
+    ]);
+    const ledger = second.db.select().from(costLog).all();
+    expect(ledger).toEqual([
+      expect.objectContaining({ attemptId: "lock-settle", settlementKind: "actual", costUsd: 0.4 }),
+    ]);
+    // Dated by the writer that committed it, after the lock and past the TTL.
+    expect(Date.parse(ledger[0]!.createdAt)).toBeGreaterThanOrEqual(started.getTime() + 250);
+    expect(second.db.select().from(jobLlmLeases).all()).toEqual([]);
+    const parent = second.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()!;
+    expect(Date.parse(parent.updatedAt)).toBeGreaterThanOrEqual(started.getTime() + 250);
   });
 
   it("accepts actual cost exactly equal to the reserved micro-USD amount", async () => {
@@ -2461,7 +2478,17 @@ describe("atomic paid settlement", () => {
     expect(second.db.select().from(costLog).all()).toHaveLength(1);
   });
 
-  it("denies an expired exact lease before any immutable cost or artifact write", async () => {
+  /**
+   * An exact lease that has expired but not yet been swept is the same
+   * authority as the presumed row a sweep would have made of it: the
+   * reservation was counted while it lived, and the end state (measured row,
+   * no lease) is identical whichever transaction ran first. Refusing it here
+   * while accepting it after an unrelated prune made the outcome depend on
+   * sweep timing (D-07). What a stale caller still cannot do is backdate the
+   * snapshot: the mutation is stamped at the authority instant, not at the
+   * `settledAt` it supplies.
+   */
+  it("records a late settlement against an expired, unswept exact lease without backdating authority", async () => {
     const { acquirePaidPassLease, claimNextQueuedJob, settlePaidPassLease } = await scheduler();
     seedJob(first.db, "job-a", "AAPL");
     const claim = claimNextQueuedJob(
@@ -2474,14 +2501,28 @@ describe("atomic paid settlement", () => {
     if (!acquired.acquired) throw new Error("fixture lease was not acquired");
     const afterExpiry = new Date(NOW.getTime() + LIMITS.paidPassLeaseTtlMs + 1);
 
-    expect(() => settlePaidPassLease(acquired.lease, {
+    const settled = settlePaidPassLease(acquired.lease, {
       settlement: analystSettlement(0.4),
       payloadFingerprint: "1.3.0:expired",
-      // A stale caller cannot backdate artifact metadata to revive authority.
       settledAt: NOW.toISOString(),
-    }, second.db, afterExpiry)).toThrow(/expired|lease|authority|stale/i);
-    expect(second.db.select().from(jobPassArtifacts).all()).toEqual([]);
-    expect(second.db.select().from(costLog).all()).toEqual([]);
+    }, second.db, afterExpiry);
+    expect(settled).toMatchObject({ inserted: true, overReservation: false, currentGeneration: true });
+    expect(second.db.select().from(jobPassArtifacts).all()).toEqual([
+      expect.objectContaining({ attemptId: "attempt" }),
+    ]);
+    expect(second.db.select().from(costLog).all()).toEqual([
+      expect.objectContaining({
+        attemptId: "attempt",
+        presumedAttemptId: null,
+        settlementKind: "actual",
+        costUsd: 0.4,
+      }),
+    ]);
+    expect(second.db.select().from(jobLlmLeases).all()).toEqual([]);
+    expect(second.db.select().from(jobs).where(eq(jobs.id, claim.jobId)).get()).toMatchObject({
+      revision: claim.revision + 1,
+      updatedAt: afterExpiry.toISOString(),
+    });
   });
 
   it("atomically persists an unbillable launched failure but releases a prelaunch exit without an artifact", async () => {

@@ -23,6 +23,8 @@ import { ScorePill } from "@/components/ui";
 import {
   formatCostUsd,
   formatFinancialValue,
+  formatLargeNumber,
+  formatMoneyAmount,
   formatVerificationClaim,
   roundedDisplayedCostTotal,
 } from "@/report/format";
@@ -61,6 +63,39 @@ describe("shared report formatting", () => {
     [1.82, "x", "1.8×"],
   ])("formats %s %s as %s", (value, unit, expected) => {
     expect(formatFinancialValue(value as number, unit as string)).toBe(expected);
+  });
+
+  it.each([
+    [999_999.999, "1.00M"],
+    [999.995, "1.0K"],
+    [999_996_000_000, "1.00T"],
+    [999_999_999, "1.00B"],
+    [1_500, "1.5K"],
+    [-2_500_000, "-2.50M"],
+    [12.345, "12.35"],
+  ])("never lets a compact magnitude reach 1000 (%s → %s)", (value, expected) => {
+    expect(formatLargeNumber(value as number)).toBe(expected);
+  });
+
+  it.each([
+    [15_204_000_000, "shares", "15.20B shares"],
+    [3.2, "pp", "3.2 pp"],
+    [-0.75, "pp/yr", "-0.8 pp/yr"],
+    [55, "rsi", "55 rsi"],
+    [62, "rank", "62 rank"],
+    [0.65, "fraction", "65.0%"],
+    [1.87, "z", "1.87 z"],
+    [7, "quarters", "7 quarters"],
+    [4.5, "furlongs", "4.50 furlongs"],
+  ])("renders the pipeline's own units on their own terms (%s %s → %s)", (value, unit, expected) => {
+    expect(formatFinancialValue(value as number, unit as string)).toBe(expected);
+  });
+
+  it("prints a plain money amount in its actual currency", () => {
+    expect(formatMoneyAmount(1234.5, "USD", 0)).toBe("$1,235");
+    expect(formatMoneyAmount(1234.5, null, 0)).toBe("$1,235");
+    expect(formatMoneyAmount(1234.5, "TWD", 0)).toBe("1,235 TWD");
+    expect(formatMoneyAmount(-12.345, "chf", 2)).toBe("-12.35 CHF");
   });
 
   it("makes displayed step costs add exactly to the displayed total", () => {

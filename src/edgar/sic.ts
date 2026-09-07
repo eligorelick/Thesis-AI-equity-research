@@ -157,6 +157,14 @@ const SPECIFIC: Readonly<Record<number, readonly [string, string]>> = {
   4932: ["Utilities", "Utilities - Regulated Gas"],
   4941: ["Utilities", "Utilities - Regulated Water"],
   4991: ["Utilities", "Utilities - Renewable"],
+  // Major group 49 is "Electric, Gas and Sanitary Services": the 495x codes
+  // are refuse and hazardous-waste collection (Waste Management, Republic
+  // Services, Clean Harbors), which the market classifies as industrials, not
+  // regulated utilities — a utility route would price them off a rate base
+  // they do not have.
+  4953: ["Industrials", "Waste Management"],
+  4955: ["Industrials", "Waste Management"],
+  4959: ["Industrials", "Waste Management"],
   1040: ["Basic Materials", "Gold"],
   1000: ["Basic Materials", "Other Industrial Metals & Mining"],
   3312: ["Basic Materials", "Steel"],

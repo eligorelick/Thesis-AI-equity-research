@@ -1,5 +1,5 @@
 /**
- * Stage C job runner — orchestrates the full report pipeline (the application contract §5):
+ * Stage C job runner — orchestrates the full report pipeline :
  *
  *   fetch → validate → compute → bull → bear → synthesize → verify
  *
@@ -14,7 +14,7 @@
  * the four LLM steps "skipped" (reason "ANTHROPIC_API_KEY not configured"), and
  * persists a data-only Report stub (meta + appendix + empty graded sections
  * flagged) so the UI always has something to render. Missing data NEVER throws
- * (the application contract §3, non-negotiable rule #4); a failed LLM step marks that step
+ * (non-negotiable rule #4); a failed LLM step marks that step
  * "error" with detail and the runner still persists what it has.
  *
  * The Stage C passes (bull/bear/judge/verify + payload/report assembly) are
@@ -34,6 +34,7 @@ import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { getDb, type ThesisDb } from "@/db";
 import { costLog, jobPassArtifacts, jobs, reports, type JobRow } from "@/db/schema";
 import { getConfig } from "@/config/env";
+import { JOB_LEASE_RENEWAL_DIVISOR, MODEL_STAGE_DEADLINE_MS } from "@/pipeline/leaseTiming";
 import {
   maximumPassCostUsd,
   maximumRequestCostUsd,
@@ -101,7 +102,7 @@ import {
   PassSettlementHookError,
   costRowBelongsToAttempt,
   parseLegacyAnalystSnapshot,
-  readCurrentGenerationPassArtifacts,
+  readJobPassArtifactLineage,
   serializePassFailure,
   type DurablePass,
   type ComputedJobResumePlan,
@@ -193,6 +194,14 @@ export interface BullBearPassFailureDetails {
   /** Raw text of the rejected output, echoed back on the repair attempt. */
   bullRawText?: string;
   bearRawText?: string;
+  /**
+   * The failure kind the adapter classified the side with ("schema", "parse",
+   * "transport", …). When the adapter did not settle the side itself, the
+   * runner records this on the failure artifact so the discarded-attempt
+   * disclosure reads the same whichever settlement path a run took.
+   */
+  bullFailureKind?: string;
+  bearFailureKind?: string;
 }
 
 /**
@@ -213,6 +222,8 @@ export class BullBearPassFailure extends Error {
   readonly bearRetryable?: boolean;
   readonly bullRawText?: string;
   readonly bearRawText?: string;
+  readonly bullFailureKind?: string;
+  readonly bearFailureKind?: string;
 
   constructor(message: string, details: BullBearPassFailureDetails) {
     super(message);
@@ -229,6 +240,8 @@ export class BullBearPassFailure extends Error {
     this.bearRetryable = details.bearRetryable;
     this.bullRawText = details.bullRawText;
     this.bearRawText = details.bearRawText;
+    this.bullFailureKind = details.bullFailureKind;
+    this.bearFailureKind = details.bearFailureKind;
   }
 }
 
@@ -329,7 +342,7 @@ export interface PipelinePasses<TPayload = unknown> {
   /**
    * Assemble the deterministic context payload (Stage B metrics + extracts +
    * transcript + filings + ownership + macro + manifest). No timestamps/UUIDs,
-   * sorted keys (cache discipline — the cost model §2).
+   * sorted keys (cache discipline).
    */
   assembleContextPayload(
     bundle: DataBundle,
@@ -346,7 +359,7 @@ export interface PipelinePasses<TPayload = unknown> {
 
   /**
    * Bull pass first, then bear (bull's first streamed token warms the cache
-   * before bear fires — the cost model §2). Returns both analyst cases. The optional
+   * before bear fires). Returns both analyst cases. The optional
    * hooks let the runner stamp REAL per-pass start/finish times — the passes
    * overlap in the streaming path, so timing cannot be inferred from around
    * the combined call.
@@ -443,7 +456,7 @@ export interface AssembleReportInput {
   payload?: unknown;
 }
 
-/** Meta fields the runner owns (symbol/model/cost/asOfMap) — the application contract §5. */
+/** Meta fields the runner owns (symbol/model/cost/asOfMap) . */
 export interface ReportMetaInput {
   symbol: string;
   companyName: string;
@@ -479,7 +492,7 @@ export const LAUNCH_AUTHORITY_SKIP_REASON =
 export const LLM_STEPS: readonly PipelineStep[] = ["bull", "bear", "synthesize", "verify"] as const;
 
 /**
- * Max judge retries on a report-schema (Zod) validation failure (SPEC §2:
+ * Max judge retries on a report-schema (Zod) validation failure (the rule:
  * "on validation failure, retry with the error fed back (max 2 retries), then
  * fail loudly"). Defined locally so the runner stays decoupled from
  * src/pipeline/stageC/passes.ts at build time (module JSDoc) — it mirrors the
@@ -487,8 +500,23 @@ export const LLM_STEPS: readonly PipelineStep[] = ["bull", "bear", "synthesize",
  */
 export const MAX_JUDGE_RETRIES = 2 as const;
 
-/** Reason recorded on skipped LLM steps when model resolution fails (Fix §1). */
+/** Reason recorded on skipped LLM steps when model resolution fails . */
 export const MODEL_RESOLUTION_SKIP_PREFIX = "model resolution failed" as const;
+
+/**
+ * `analysis.llm` manifest reason of a data-only report whose analysis was
+ * launched and failed: the pass errors themselves are in the manifest.
+ */
+export const LLM_FAILURE_DATA_ONLY_REASON =
+  "LLM analysis could not complete — the failed pass errors are disclosed in the missing-data manifest; this is a data-only report." as const;
+
+/**
+ * `analysis.llm` manifest reason when Stage B threw before any model was
+ * called: the exception is disclosed as `pipeline.compute`, not as a pass
+ * error.
+ */
+export const COMPUTE_FAILURE_DATA_ONLY_REASON =
+  "Stage B metric computation failed before any model was called — the error is disclosed as pipeline.compute in the missing-data manifest; this is a data-only report." as const;
 
 /** Active jobs older than this are treated as abandoned and no longer block reruns. */
 export const ACTIVE_JOB_STALE_MS = 30 * 60 * 1000;
@@ -496,7 +524,7 @@ export const ACTIVE_JOB_STALE_MS = 30 * 60 * 1000;
 /** Conservative hard limits: bound hangs without truncating normal deep analysis. */
 export const DEFAULT_JOB_DEADLINE_MS = 90 * 60 * 1000;
 export const DEFAULT_FETCH_DEADLINE_MS = 10 * 60 * 1000;
-export const DEFAULT_MODEL_STAGE_DEADLINE_MS = 45 * 60 * 1000;
+export const DEFAULT_MODEL_STAGE_DEADLINE_MS = MODEL_STAGE_DEADLINE_MS;
 
 /** Job lifecycle statuses (owned by this module; jobs.status is free TEXT). */
 export type JobStatus = "queued" | "running" | "done" | "error" | "unsupported";
@@ -1140,29 +1168,44 @@ function createSettlementCheckpoint<T>(
     }
   };
 
+  // The identity leaves the map only once the durable write has COMMITTED. A
+  // write that throws (a writer-lock timeout past busy_timeout, say) leaves
+  // the entry in place, so renewal keeps the row alive and the provider's
+  // second settle — or a later one for the same attempt — can still record
+  // the measured figure. Dropping it first made that retry a silent no-op,
+  // after which the row expired into a presumed-maximum row that only the
+  // reconcile script could lower. An over-reservation write DOES commit
+  // (`inserted: true`) before it throws, so that one is removed and rethrown.
   const admission: RequestAdmission = {
     reserve: async ({ maximumUsd }) => reserveRequest(maximumUsd),
     settle: async (permit, settled) => {
       const requestLease = requestLeases.get(permit.id);
       if (requestLease === undefined) return;
+      try {
+        settleRequestCost(requestLease, {
+          model: settled.model,
+          inputTokens: settled.usage?.input_tokens ?? 0,
+          outputTokens: settled.usage?.output_tokens ?? 0,
+          cacheReadTokens: settled.usage?.cache_read_input_tokens ?? 0,
+          cacheWriteTokens: settled.usage?.cache_creation_input_tokens ?? 0,
+          webSearches: settled.webSearches,
+          costUsd: settled.costUsd,
+          fallbackUsed: settled.fallbackUsed,
+          ...(settled.presumed === true ? { presumed: true } : {}),
+        });
+      } catch (error) {
+        if (error instanceof PaidPassOverReservationError && error.result.inserted) {
+          requestLeases.delete(permit.id);
+        }
+        throw error;
+      }
       requestLeases.delete(permit.id);
-      settleRequestCost(requestLease, {
-        model: settled.model,
-        inputTokens: settled.usage?.input_tokens ?? 0,
-        outputTokens: settled.usage?.output_tokens ?? 0,
-        cacheReadTokens: settled.usage?.cache_read_input_tokens ?? 0,
-        cacheWriteTokens: settled.usage?.cache_creation_input_tokens ?? 0,
-        webSearches: settled.webSearches,
-        costUsd: settled.costUsd,
-        fallbackUsed: settled.fallbackUsed,
-        ...(settled.presumed === true ? { presumed: true } : {}),
-      });
     },
     release: async (permit) => {
       const requestLease = requestLeases.get(permit.id);
       if (requestLease === undefined) return;
-      requestLeases.delete(permit.id);
       releaseUnbilledPaidPassLease(requestLease);
+      requestLeases.delete(permit.id);
     },
   };
 
@@ -1517,8 +1560,10 @@ export function getReusableActiveJobForSymbol(
 }
 
 /**
- * True when a job for this symbol is currently queued or running (the POST
- * route rejects a duplicate rather than racing two pipelines for one ticker).
+ * True when a job for this symbol is currently queued or running. The retry
+ * route uses it to refuse queuing a resume while another job for the symbol
+ * is active (409); POST /api/report never rejects a duplicate — it attaches to
+ * the active job through getOrCreateJobForSymbol instead.
  */
 export function isSymbolJobActive(symbol: string): boolean {
   return getReusableActiveJobForSymbol(symbol) !== null;
@@ -2170,7 +2215,10 @@ export interface RunJobOptions<TPayload = unknown> {
    * synthesize/verify/assemble. fetch/validate/compute still re-run (cheap and
    * cache-served) to rebuild the judge payload. A payload-fingerprint mismatch
    * makes the prepared artifacts incompatible and aborts before paid work.
-   * When snapshots are missing/corrupt, the runner safely starts fresh.
+   * On a terminal (done/error) row, resume requires a resumable durable plan
+   * (`claimJobForResume`) and otherwise REJECTS with "is not resumable"; on a
+   * row that is already queued or claimed, a prepared plan that is empty or
+   * unusable makes the runner fall back to a fresh full run.
    */
   resume?: boolean;
   /** Marker so TPayload is inferable from the passes argument. */
@@ -2531,7 +2579,7 @@ export async function runJob<TPayload = unknown>(
     } catch (error) {
       jobController.abort(error);
     }
-  }, Math.max(1, Math.floor(state.schedulerLimits.jobLeaseTtlMs / 4)));
+  }, Math.max(1, Math.floor(state.schedulerLimits.jobLeaseTtlMs / JOB_LEASE_RENEWAL_DIVISOR)));
   heartbeat.unref?.();
 
   const now = opts.now ?? ((): Date => new Date());
@@ -2632,9 +2680,15 @@ export async function runJob<TPayload = unknown>(
     } catch (err) {
       // Compute is pure; a throw here is a programming error, but degrade
       // rather than crash the app: finish compute with error and continue to
-      // persist a data-only stub.
+      // persist a data-only stub. The report is the durable record (the step
+      // detail is transient UI), so the exception itself goes into the
+      // manifest as a critical `pipeline.compute` entry, and the data-only
+      // reason names it instead of pointing at pass errors that never ran.
       finishStep(state, "compute", "error", errMessage(err));
-      return persistDataOnly(state, bundle, validation, null, now, hasKey);
+      return persistDataOnly(state, bundle, validation, null, now, hasKey, {
+        reason: COMPUTE_FAILURE_DATA_ONLY_REASON,
+        gaps: [{ ...gapFor("compute", err), severity: "critical" }],
+      });
     }
     throwIfJobAborted(jobSignal);
     finishStep(
@@ -2676,7 +2730,9 @@ export async function runJob<TPayload = unknown>(
         startStep(state, step);
         finishStep(state, step, "skipped", LAUNCH_AUTHORITY_SKIP_REASON);
       }
-      return persistDataOnly(state, bundle, validation, computed, now, hasKey);
+      return persistDataOnly(state, bundle, validation, computed, now, hasKey, {
+        reason: `${LAUNCH_AUTHORITY_SKIP_REASON} — no model was called; this is a data-only report.`,
+      });
     }
 
     // -- resolve models -------------------------------------------------------
@@ -2684,7 +2740,7 @@ export async function runJob<TPayload = unknown>(
     // transient Anthropic transport/auth failure. That is NOT a reason to fail
     // the whole job — degrade like the no-key path: mark the four LLM steps
     // "skipped" with the resolution error and still persist a data-only report
-    // (Fix §1, the design rationale hardening backlog). Only genuinely unexpected
+    // Only genuinely unexpected
     // failures downstream still reach the outer catch and 'error'.
     const capturedSettings = getWritableSettingsAuthority();
     let analysisModel: string;
@@ -2717,6 +2773,9 @@ export async function runJob<TPayload = unknown>(
         // which value was refused and what is accepted instead.
         const rejection = explainAnalysisModel(capturedSettings.state.analysisModel);
         return persistDataOnly(state, bundle, validation, computed, now, hasKey, {
+          // The resolution error is the cause; the shared wording would have
+          // sent the reader to pass errors no pass ever produced.
+          reason: `${reason} — no model was called; this is a data-only report.`,
           execution: rejection === null
             ? undefined
             : LLM_STEPS.map((step) => buildExecutionMetadataEntry({
@@ -2753,8 +2812,8 @@ export async function runJob<TPayload = unknown>(
       );
     }
 
-    // -- synthesize (judge) + verify + assemble, with retry-on-Zod (SPEC §2) --
-    // SPEC §2: "on validation failure, retry with the error fed back (max 2
+    // -- synthesize (judge) + verify + assemble, with retry-on-Zod --
+    // The rule: "on validation failure, retry with the error fed back (max 2
     // retries), then fail loudly." The judge/verify/assemble unit is retried as
     // a whole: a schema-validation failure at the judge pass OR at report
     // assembly (the assembled Report can fail the fuller ReportSchema even when
@@ -2842,7 +2901,7 @@ export async function runJob<TPayload = unknown>(
       for (let attempt = 0; attempt <= maxJudgeRetries; attempt++) {
         // 1) Judge pass. A throw here is a synthesis failure (schema-invalid
         //    structured output in the real facade, or a mock rejection). It is
-        //    retryable per SPEC §2 — feed the error back by re-invoking the judge,
+        //    retryable — feed the error back by re-invoking the judge,
         //    together with the failed raw output so the model repairs its previous
         //    JSON instead of regenerating the whole document from scratch.
         let judge: PassResultLike<JudgeOutput>;
@@ -2989,6 +3048,11 @@ export async function runJob<TPayload = unknown>(
             judgeOutput: judge.data,
             evidence: { fetchedUrls },
           });
+          // A billable verify adapter reserves each of its provider requests
+          // through this admission, like the other three passes; without the
+          // registration its requests went out unadmitted against a lease
+          // sized for exactly one of them (D-10).
+          passAdmissions.set("verify", verifyCheckpoint.admission);
           await verifyCheckpoint.beforeLaunch();
           const v = await awaitJobStage(
             passes.runVerifyPass(
@@ -3075,7 +3139,7 @@ export async function runJob<TPayload = unknown>(
         }
 
         // 3) Assemble the final Report. A throw here is a report-schema (Zod)
-        //    validation failure — retryable per SPEC §2 (re-invoke the judge).
+        //    validation failure — retryable (re-invoke the judge).
         const meta = buildMeta(verificationRate, judge);
         const costBreakdown = buildCostBreakdown(state);
         let report: Report;
@@ -3094,7 +3158,15 @@ export async function runJob<TPayload = unknown>(
               payload, // WS7 (D-20): recovers the judge order/length protocol
             });
         } catch (err) {
-          lastValidationDetail = errMessage(err);
+          // A reused durable synthesize artifact has no analyst outputs to
+          // re-judge against: the one assembly attempt is all there is, and
+          // the terminal detail must say that rather than claim every retry
+          // was spent (it used to read "after 3 attempt(s)" for a single
+          // provider-free attempt).
+          const reusedArtifact = bull === null || bear === null;
+          lastValidationDetail = reusedArtifact
+            ? `durable synthesize artifact could not be assembled without rerunning upstream paid work: ${errMessage(err)}`
+            : errMessage(err);
           // The judge output parsed but failed report-schema validation — echo it
           // back (JSON) so the retry repairs rather than regenerates.
           try {
@@ -3102,8 +3174,8 @@ export async function runJob<TPayload = unknown>(
           } catch {
             lastFailedRawOutput = "";
           }
-          lastJudgeFailureRetryable = true;
-          const retrying = bull !== null && bear !== null && attempt < maxJudgeRetries;
+          lastJudgeFailureRetryable = !reusedArtifact;
+          const retrying = !reusedArtifact && attempt < maxJudgeRetries;
           const detail = `report assembly attempt ${attempt + 1}/${maxJudgeRetries + 1} failed${retrying ? "; retrying judge" : ""}: ${lastValidationDetail}`;
           updateRunningStepDetail(state, "synthesize", detail);
           updateRunningStepDetail(state, "verify", detail);
@@ -3157,7 +3229,7 @@ export async function runJob<TPayload = unknown>(
         meta,
         costBreakdown,
         verifyLog,
-        presumedSpendDisclosure(state.jobId, state.runGeneration),
+        presumedSpendDisclosure(state.jobId),
         discardedAttemptGaps(state),
       );
 
@@ -3494,6 +3566,7 @@ export async function runJob<TPayload = unknown>(
         billed: BilledPassAttempt | undefined,
         launched: boolean | undefined,
         retryable: boolean | undefined,
+        failureKind: string | undefined,
       ): Promise<void> => {
         if (checkpoint.wasCalled()) return;
         if (launched === false) return;
@@ -3506,11 +3579,16 @@ export async function runJob<TPayload = unknown>(
             new Error(sideError ?? errMessage(err)),
             telemetryFromAttempt(billed ?? null, analysisModel),
             // `retryable` on this path means exactly one thing: the output was
-            // RECEIVED and the schema rejected it (that is what makes a repair
-            // worth paying for). Recording the kind keeps the artifact's
-            // classification the same on both settlement paths, so a reader's
-            // disclosure does not depend on which one a run took.
-            { retryable: retryable === true, ...(retryable === true ? { kind: "schema" } : {}) },
+            // RECEIVED and rejected — by the schema, or because it was not
+            // JSON at all. The adapter names which (`kind` "schema" or
+            // "parse"); recording it keeps the artifact's classification the
+            // same on both settlement paths, so the discarded-attempt
+            // disclosure does not depend on which one a run took. An adapter
+            // that reports retryable without a kind is classified "schema".
+            {
+              retryable: retryable === true,
+              ...(retryable === true ? { kind: failureKind ?? "schema" } : {}),
+            },
           ),
         );
       };
@@ -3522,6 +3600,7 @@ export async function runJob<TPayload = unknown>(
           partial?.bullBilledAttempt,
           bullLaunched,
           partial?.bullRetryable,
+          partial?.bullFailureKind,
         ),
         settleMissingSide(
           bearCheckpoint,
@@ -3530,6 +3609,7 @@ export async function runJob<TPayload = unknown>(
           partial?.bearBilledAttempt,
           bearLaunched,
           partial?.bearRetryable,
+          partial?.bearFailureKind,
         ),
       ]);
       throwFirstSettlementRejection(fallbackSettlements);
@@ -3798,8 +3878,15 @@ function persistDataOnly(
   computed: ComputedMetrics | null,
   now: () => Date,
   hasKey: boolean,
-  /** Requested-versus-effective disclosure for a run that never reached a model. */
-  disclosure: { execution?: ExecutionMetadataEntry[] } = {},
+  /**
+   * What the data-only report says about WHY it is data-only: an
+   * `analysis.llm` reason specific to the degradation (default: the analysis
+   * ran and its pass errors are in the manifest), extra manifest entries the
+   * caller owes the reader (the Stage B exception, say), and the
+   * requested-versus-effective disclosure for a run that never reached a
+   * model.
+   */
+  disclosure: { reason?: string; gaps?: ManifestEntry[]; execution?: ExecutionMetadataEntry[] } = {},
 ): RunJobResult {
   // No job may be persisted terminal while a step still reads as live. The
   // callers mark the steps they know about, but `markSkipped` only moves a
@@ -3827,11 +3914,10 @@ function persistDataOnly(
     validation,
     computed,
     costBreakdown: buildCostBreakdown(state),
-    presumed: presumedSpendDisclosure(state.jobId, state.runGeneration),
+    presumed: presumedSpendDisclosure(state.jobId),
     execution: disclosure.execution,
-    reason: hasKey
-      ? "LLM analysis could not complete — the failed pass errors are disclosed in the missing-data manifest; this is a data-only report."
-      : NO_KEY_SKIP_REASON,
+    gaps: disclosure.gaps,
+    reason: hasKey ? (disclosure.reason ?? LLM_FAILURE_DATA_ONLY_REASON) : NO_KEY_SKIP_REASON,
   };
   const report = buildDataOnlyReport(dataOnlyInput);
   const validated = ReportSchema.safeParse(report);
@@ -4068,15 +4154,21 @@ function readerSafeFailureText(failure: { kind?: string }): string {
 }
 
 /**
- * The attempts whose output was rejected, from this generation's artifacts.
+ * The attempts whose output was rejected, from every generation's artifacts.
+ *
+ * The breakdown and total these annotate span the whole job ledger, so the
+ * artifacts have to span the same lineage: a bear rejected in generation 0
+ * and repaired by a generation-1 retry is billed in that retry's total, and
+ * the reader is owed the marking for it there.
  *
  * Never throws: a corrupt artifact/cost pair degrades to "nothing known to be
- * discarded", which is exactly the disclosure this had before. Losing the
- * marking is a smaller harm than failing to assemble the report over it.
+ * discarded" for that pass in that generation, which is exactly the disclosure
+ * this had before. Losing the marking is a smaller harm than failing to
+ * assemble the report over it.
  */
 function readDiscardedAttempts(jobId: string): DiscardedAttempt[] {
   try {
-    return readCurrentGenerationPassArtifacts(jobId).flatMap((artifact) => {
+    return readJobPassArtifactLineage(jobId).flatMap((artifact) => {
       if (artifact.envelope.outcome !== "failure") return [];
       return [{
         pass: artifact.pass,
@@ -4170,7 +4262,7 @@ interface PresumedSpendDisclosure {
 }
 
 /**
- * Presumed spend belonging to this run, as a disclosure (DECISIONS D-07).
+ * Presumed spend belonging to this job, as a disclosure (DECISIONS D-07).
  *
  * A reservation whose owning process died, and a stream that was accepted and
  * then went silent, are both counted at their reserved maximum until evidence
@@ -4178,14 +4270,16 @@ interface PresumedSpendDisclosure {
  * has to say so: without this, a user whose run crashed mid-pass sees a total
  * inflated by up to one request maximum with no sign that part of it is an
  * upper bound rather than a charge.
+ *
+ * Every generation of the job qualifies, because every generation is in the
+ * total: `meta.costUsd`, the breakdown and the per-step figures all sum the
+ * whole job ledger. A process that died holding a lease cannot write its own
+ * report, so its presumption is only ever reported by a LATER generation —
+ * which a current-generation filter excluded, leaving the resumed report's
+ * total silently inflated by the very row this disclosure exists for.
  */
-function presumedSpendDisclosure(
-  jobId: string,
-  runGeneration: number,
-): PresumedSpendDisclosure | null {
-  const rows = listPresumedCosts().filter(
-    (row) => row.jobId === jobId && row.runGeneration === runGeneration,
-  );
+function presumedSpendDisclosure(jobId: string): PresumedSpendDisclosure | null {
+  const rows = listPresumedCosts().filter((row) => row.jobId === jobId);
   if (rows.length === 0) return null;
   const totalUsd = round4(rows.reduce((total, row) => total + row.costUsd, 0));
   const passes = [...new Set(rows.map((row) => row.pass))].sort().join(", ");
@@ -4403,7 +4497,7 @@ function reconcileRecoveredVerifyReport(
     },
     costBreakdown,
     report.appendix.verificationLog,
-    presumedSpendDisclosure(state.jobId, state.runGeneration),
+    presumedSpendDisclosure(state.jobId),
     // Durable recovery reads the same artifacts, so a run whose pass was
     // repaired before the crash still discloses the attempt it threw away.
     discardedAttemptGaps(state),
@@ -4434,8 +4528,9 @@ function collectMissingData(
   bundle: DataBundle,
   validation: ValidationReport,
   computed: ComputedMetrics | null,
+  extra: readonly ManifestEntry[] = [],
 ): ManifestEntry[] {
-  const all: ManifestEntry[] = [...bundle.gaps, ...validation.gaps];
+  const all: ManifestEntry[] = [...bundle.gaps, ...validation.gaps, ...extra];
   if (computed !== null) all.push(...computed.gaps);
   // Dedup by field+reason, keep the highest severity first.
   const seen = new Set<string>();
@@ -4468,6 +4563,8 @@ interface DataOnlyInput {
   reason: string;
   /** Part of `costUsd` that is a presumed upper bound (DECISIONS D-07). */
   presumed?: PresumedSpendDisclosure | null;
+  /** Manifest entries the degraded path itself owes the reader (a Stage B exception, say). */
+  gaps?: ManifestEntry[];
   /**
    * Requested-versus-effective execution for a run that never reached a model,
    * carrying the `model-rejected` adjustment when the stored model id was
@@ -4490,21 +4587,24 @@ interface DataOnlyInput {
 export function buildDataOnlyReport(input: DataOnlyInput): Report {
   const { symbol, bundle, validation, computed } = input;
   const asOfMap = { ...bundle.asOf };
+  // The letter beside this claim is the deterministic score band when Stage B
+  // ran and a schema placeholder when it did not; "ungraded" (before the
+  // 2026-09-06 audit, F170) contradicted the band shown next to it.
   const flagClaim = {
-    text: `LLM analysis did not run — ${input.reason}. This section is data-only and ungraded.`,
+    text: `LLM analysis did not run — ${input.reason}. This section is data-only: no analyst grade exists, and any letter shown is the deterministic score band or a placeholder stated as such.`,
     label: "JUDGMENT" as const,
     source: "pipeline",
     asOf: null,
   };
   const grade = (): Report["verdict"]["gradeStrip"]["fundamentals"] => ({
     grade: "F",
-    oneLineWhy: "Ungraded — data-only report (LLM analysis did not run).",
+    oneLineWhy: "Not graded — Stage B did not run, so no score band exists; F is the schema's placeholder letter, not an assessment (LLM analysis did not run either).",
     reasoning: [flagClaim],
     confidence: "low",
     keyNumbers: [],
   });
 
-  const missingData = collectMissingData(bundle, validation, computed);
+  const missingData = collectMissingData(bundle, validation, computed, input.gaps ?? []);
   const attemptedAnalysisSources = [
     ...new Set(
       missingData

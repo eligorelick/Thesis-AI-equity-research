@@ -1,5 +1,5 @@
 /**
- * Server-only report history queries (the application contract §8 "Report history: all saved
+ * Server-only report history queries ("Report history: all saved
  * reports per ticker; diff view between any two dates").
  *
  * Reads the persisted `reports` rows (src/db/schema.ts) and, where the full

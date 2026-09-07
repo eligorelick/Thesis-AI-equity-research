@@ -2,7 +2,7 @@
 
 /**
  * RunsDisclosure — the per-ticker expandable run history in the sidebar
- * (the application contract §8: all saved reports per ticker). A quiet toggle bar shows the run
+ * (all saved reports per ticker). A quiet toggle bar shows the run
  * count; expanding reveals every saved run (newest-first), each linking to that
  * exact run's full report at /company/[symbol]/report/[id] — distinct from the
  * ticker link above it, which opens the company page (the latest report).

@@ -141,11 +141,30 @@ describe("routeCompany base routing", () => {
     expect(r.evidence.sic).toBe("6021 NATIONAL COMMERCIAL BANKS");
   });
 
-  it("SIC 6411 -> insurer; SIC 6798 -> reit (with mortgage-indeterminate note)", () => {
-    expect(route({ industry: null, sector: null, sic: "6411" }).base).toBe("insurer");
+  it("SIC 6411 (agents and brokers) -> general; SIC 6331 -> insurer; SIC 6798 -> reit (with mortgage-indeterminate note)", () => {
+    // 6411 is 'Insurance Agents, Brokers & Service' — the fee-based class the
+    // 'Insurance - Brokers' industry already sends to the general map.
+    const broker = route({ industry: null, sector: null, sic: "6411" });
+    expect(broker.base).toBe("general");
+    expect(broker.notes.some((n) => /6400–6499/.test(n))).toBe(true);
+    expect(route({ industry: null, sector: null, sic: "6331" }).base).toBe("insurer");
     const reit = route({ industry: null, sector: null, sic: "6798" });
     expect(reit.base).toBe("reit");
     expect(reit.notes.some((n) => n.includes("SIC alone"))).toBe(true);
+  });
+
+  it("routes only depository institutions to the bank map from the SIC band (audit 2026-09-06)", () => {
+    expect(route({ industry: null, sector: null, sic: "6035" }).base).toBe("bank");
+    // Major group 61 — non-depository credit — has no deposits; none of the bank map fits.
+    expect(route({ industry: null, sector: null, sic: "6141" }).base).toBe("general");
+    expect(route({ industry: null, sector: null, sic: "6162" }).base).toBe("general");
+  });
+
+  it("a known non-bank financial industry is a decided classification; the SIC band is not consulted behind it", () => {
+    const credit = route({ industry: "Credit Services", sector: "Financial Services", sic: "6021" });
+    expect(credit.base).toBe("general");
+    expect(credit.notes.some((n) => /matched no bank\/insurance\/REIT prefix/.test(n))).toBe(true);
+    expect(route({ industry: "Mortgage Finance", sector: "Financial Services", sic: "6162" }).base).toBe("general");
   });
 
   it("missing sector+industry+sic -> general with a route.base gap", () => {

@@ -212,16 +212,22 @@ describe("fmtBig", () => {
     expect(fmtBig(45.6e9)).toBe("45.60B");
     expect(fmtBig(789e6)).toBe("789.00M");
     expect(fmtBig(12_345)).toBe("12.3K");
-    expect(fmtBig(999.99)).toBe("999.99");
+    // The scale is chosen on the ROUNDED mantissa (audit 2026-09-06, F65):
+    // 999.99 rounds to 1.0K at one decimal, so it is printed in K rather than
+    // as a raw "999.99" beside a "1.0K" neighbour.
+    expect(fmtBig(999.99)).toBe("1.0K");
+    expect(fmtBig(949)).toBe("949.00");
     expect(fmtBig(0)).toBe("0.00");
   });
 
-  it("boundaries land on the larger unit exactly at the threshold", () => {
+  it("boundaries land on the larger unit exactly at the threshold, and a value that rounds up to it too", () => {
     expect(fmtBig(1e3)).toBe("1.0K");
     expect(fmtBig(1e6)).toBe("1.00M");
     expect(fmtBig(1e9)).toBe("1.00B");
     expect(fmtBig(1e12)).toBe("1.00T");
-    expect(fmtBig(999_999)).toBe("1000.0K"); // just under 1M stays in K (rounded)
+    // "1000.0K" was a rounding carry printed in the wrong unit (F65).
+    expect(fmtBig(999_999)).toBe("1.00M");
+    expect(fmtBig(994_999)).toBe("995.0K");
   });
 
   it("keeps the sign outside the scaled magnitude", () => {

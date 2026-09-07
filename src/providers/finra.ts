@@ -8,7 +8,7 @@
  * tighten at any time, so an `authToken` config hook is provided; when set it is
  * sent as `Authorization: Bearer <token>` (the documented FIP scheme).
  *
- * Conventions (the provider data contract §1.3, §2.14):
+ * Conventions:
  * - Latest cycle CANNOT be found by sorting (sortFields → HTTP 400 unless every
  *   partition key is pinned EQUAL). Use the /partitions endpoint instead.
  * - `daysToCoverQuantity` uses sentinel 999.99 when ADV ≈ 0 → normalized to

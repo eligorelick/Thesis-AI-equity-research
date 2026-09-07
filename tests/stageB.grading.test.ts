@@ -330,6 +330,33 @@ describe("grading — computeScores", () => {
     expect(f.score).not.toBeNull();
   });
 
+  it("weights the Piotroski signal by the share of the nine signals that were evaluable", () => {
+    const full = computeScores(makeInputs()).aspects.quality;
+    expect(full.dataCompleteness).toBe(1);
+    const twoOfTwo = computeScores(
+      makeInputs({ forensics: forensics({ piotroski: { ...forensics().piotroski!, score: 2, outOf: 2 } }) }),
+    ).aspects.quality;
+    // Two coin-flip signals carry 2/9 of the 0.22 weight; the shortfall shows
+    // in completeness rather than hiding behind a full weight.
+    expect(twoOfTwo.dataCompleteness).toBeCloseTo(1 - 0.22 * (1 - 2 / 9), 2);
+    const driver = twoOfTwo.drivers.find((d) => d.source === "computed.scores.quality.piotroskiF");
+    expect(driver?.value).toBe(1);
+    // The same fraction on the full battery moves the aspect more.
+    const nineOfNine = computeScores(
+      makeInputs({ forensics: forensics({ piotroski: { ...forensics().piotroski!, score: 9, outOf: 9 } }) }),
+    ).aspects.quality;
+    const others = computeScores(
+      makeInputs({ forensics: forensics({ piotroski: { ...forensics().piotroski!, score: null, outOf: 0 } }) }),
+    ).aspects.quality;
+    expect(Math.abs(nineOfNine.score! - others.score!)).toBeGreaterThan(Math.abs(twoOfTwo.score! - others.score!));
+  });
+
+  it("names the Altman driver by the scale it is banded on", () => {
+    const q = computeScores(makeInputs()).aspects.quality;
+    expect(q.drivers.some((d) => d.source === "computed.scores.quality.altmanZOriginalScale")).toBe(true);
+    expect(q.drivers.some((d) => d.source === "computed.scores.quality.altmanZ")).toBe(false);
+  });
+
   it("composite is the completeness-weighted mean — thin aspects carry proportionally less", () => {
     // Same thin-fundamentals fixture: fundamentals is scored on 35% of its
     // signal weight, so it enters the composite at 0.35× its route weight. The

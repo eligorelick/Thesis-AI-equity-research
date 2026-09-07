@@ -25,6 +25,12 @@ data/
 Thumbs.db
 
 # Tool/session artifacts
+# AGENTS.md and CLAUDE.md are written by `next dev` on every start (Next's
+# managed agent-guidance files, see node_modules/next/dist/server/lib/
+# generate-agent-files.js). Tracked markdown is limited to the documented
+# release set (tests/repository.release.test.ts), so they stay untracked.
+AGENTS.md
+CLAUDE.md
 .claude/
 .superpowers/
 .playwright-mcp/

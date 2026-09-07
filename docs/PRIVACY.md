@@ -7,8 +7,13 @@ receives it, where the data is kept, and how to delete it.
 ## What leaves the machine
 
 Nothing goes to Thesis or its authors. There is no telemetry, no analytics, no
-crash reporting, and no update check. The only outbound requests are the
-provider calls below, and each one goes only to the provider it names.
+crash reporting, and no update check. The only outbound requests the
+application makes are the provider calls below, and each one goes only to the
+provider it names. One thing outside the application: the Next.js CLI that
+`npm run dev` and `npm run build` invoke has its own anonymous usage
+telemetry (`telemetry.nextjs.org`). `.env.example` ships
+`NEXT_TELEMETRY_DISABLED=1`, which turns it off once copied to `.env`;
+`npx next telemetry disable` turns it off for every project on the machine.
 
 | Recipient | Sent on every request | Only when |
 | --- | --- | --- |

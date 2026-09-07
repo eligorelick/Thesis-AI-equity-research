@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -96,7 +97,41 @@ const EXPECTED_RISK_SOURCES = [
   "src/db/paths.ts",
   "src/db/schema.ts",
   "src/watchlist/watchlist.ts",
+  "src/pipeline/compute.ts",
+  "src/models/registry.ts",
+  "src/pipeline/leaseTiming.ts",
+  "src/pipeline/stageC/consistency.ts",
+  "src/pipeline/stageC/dataOnlyReport.ts",
+  "src/pipeline/stageC/judgeProtocol.ts",
 ] as const;
+
+/**
+ * Source files deliberately outside both coverage manifests, each with the
+ * reason. A file that is in neither list and not here fails the walk below,
+ * so a new module has to be placed on purpose (audit 2026-09-06, F200).
+ */
+const COVERAGE_EXEMPT_SOURCES: Record<string, string> = {
+  "src/app/company/[symbol]/format.ts": "display formatting for the company page; exercised by the page tests, not risk-bearing",
+  "src/components/charts/format.ts": "chart label formatting; covered by tests/charts.format.test.ts, a wrong label is visible, never persisted",
+  "src/components/charts/map.ts": "chart data mapping; covered by tests/charts.map.test.ts, a wrong point is visible, never persisted",
+  "src/components/charts/synthetic.ts": "the synthetic sample-report chart data; fixtures only",
+  "src/components/watchlist/addTickerInput.ts": "input normalisation for the add-ticker box; covered by tests/watchlist.addTicker.test.ts",
+  "src/types/core.ts": "type declarations only; no runtime code",
+};
+
+/** Every non-declaration TypeScript source under src/, repo-relative with forward slashes. */
+function walkSources(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...walkSources(full));
+    } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts")) {
+      out.push(path.relative(ROOT, full).split(path.sep).join("/"));
+    }
+  }
+  return out;
+}
 
 interface SharedConfigModule {
   RISK_SOURCE_MANIFEST: readonly string[];
@@ -211,6 +246,22 @@ describe("risk coverage contract", () => {
     );
     for (const source of EXPECTED_RISK_SOURCES) {
       expect(existsSync(path.join(ROOT, source)), source).toBe(true);
+    }
+  });
+
+  it("places every source file in the risk manifest, the core include, or the named exemption list", () => {
+    const core = (file: string): boolean =>
+      file.startsWith("src/pipeline/stageB/") || file === "src/report/schema.ts";
+    const sources = walkSources(path.join(ROOT, "src")).sort();
+    const unplaced = sources.filter(
+      (file) => !(EXPECTED_RISK_SOURCES as readonly string[]).includes(file) && !core(file) && !(file in COVERAGE_EXEMPT_SOURCES),
+    );
+    expect(unplaced, "add the file to RISK_SOURCE_MANIFEST or to COVERAGE_EXEMPT_SOURCES with a reason").toEqual([]);
+    // An exemption for a file that no longer exists is stale, and a file
+    // cannot be both exempt and audited.
+    for (const file of Object.keys(COVERAGE_EXEMPT_SOURCES)) {
+      expect(existsSync(path.join(ROOT, file)), file).toBe(true);
+      expect(EXPECTED_RISK_SOURCES as readonly string[]).not.toContain(file);
     }
   });
 

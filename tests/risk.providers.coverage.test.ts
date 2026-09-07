@@ -209,12 +209,17 @@ describe("Anthropic finite request contracts", () => {
   });
 
   it("unwraps the provider cause when a paused public resumption fails", async () => {
+    // Audit 2026-09-06 (F9 / D-09): a resumption is streamed like the request
+    // it continues, so the fake client exposes `stream`, not `create`; a
+    // `create` fake would leave the resumption calling undefined and the test
+    // would pass for the wrong reason.
     const failure = new Error("resume provider failed");
-    const create = vi.fn(async (_params: unknown) => {
+    const stream = vi.fn((_params: unknown, _opts?: unknown) => {
       void _params;
+      void _opts;
       throw failure;
     });
-    const client = { beta: { messages: { create } } } as unknown as Anthropic;
+    const client = { beta: { messages: { stream } } } as unknown as Anthropic;
     const baseMessage = anthropicMessage(analystCase());
     const paused = {
       ...baseMessage,
@@ -226,13 +231,15 @@ describe("Anthropic finite request contracts", () => {
     } as never;
 
     await expect(resumeIfPaused(client, params, paused as never)).rejects.toBe(failure);
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0]?.[0]).toMatchObject({
+    expect(stream).toHaveBeenCalledTimes(1);
+    expect(stream.mock.calls[0]?.[0]).toMatchObject({
       messages: [
         { role: "user", content: "original prompt" },
         { role: "assistant", content: paused.content },
       ],
     });
+    // The resumption carries the same request-level deadline as a first request.
+    expect(stream.mock.calls[0]?.[1]).toMatchObject({ timeout: expect.any(Number) });
   });
 });
 

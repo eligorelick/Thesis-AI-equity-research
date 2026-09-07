@@ -501,3 +501,25 @@ describe("degradationPlan — withheld financial models carry their reason", () 
     ).toBe(false);
   });
 });
+
+describe("evidence never overrides a declared non-financial classification (audit 2026-09-06)", () => {
+  it("files investment-property tags on a real-estate developer as a conflict and keeps the general route", () => {
+    // A taxable developer tags RealEstateInvestmentPropertyNet without being a
+    // REIT. Its vendor industry and SIC (major group 65) are non-financial —
+    // a classification, decided — so the tags are disclosed, not acted on.
+    const r = route({ sector: "Real Estate", industry: "Real Estate - Development", sic: "6552" }, okFacts(EQUITY_REIT_FACTS));
+    expect(r.base).toBe("general");
+    expect(r.gaps.some((g) => g.field === "route.evidence.conflict" && /non-financial/.test(g.reason))).toBe(true);
+    expect(r.notes.some((n) => /declared non-financial classification stands/.test(n))).toBe(true);
+  });
+
+  it("still lets the same evidence decide when nothing else has (no industry string)", () => {
+    const r = route({ sector: null, industry: null, sic: null }, okFacts(EQUITY_REIT_FACTS));
+    expect(r.base).toBe("reit");
+  });
+
+  it("still lets evidence decide beside a financial SIC with no industry string", () => {
+    const r = route({ sector: null, industry: null, sic: "6199" }, okFacts(BANK_FACTS));
+    expect(r.base).toBe("bank");
+  });
+});

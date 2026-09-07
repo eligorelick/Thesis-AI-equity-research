@@ -48,14 +48,14 @@ export const SCENARIO_TARGET_METHOD_VERSION = "SCENARIO_TARGETS_2026_07B" as con
 
 export interface ScenarioTargetsInputs {
   route: CompanyRouteResult;
-  /** The valuation result — only the general DCF route yields per-share targets. */
+  /**
+   * The valuation result — only the general DCF route yields per-share
+   * targets. The EV→equity→per-share bridge (net debt, diluted shares,
+   * minority interest, preferred) is read from `valuation.dcf.bridge`, the
+   * bridge the base per-share was computed with, never supplied separately.
+   */
   valuation: ValuationResult;
   waccPct: number | null;
-  netDebt: number | null;
-  dilutedShares: number | null;
-  /** Equity-bridge claims senior to common; 0 when absent (mirrors valueCompany). */
-  minorityInterest?: number | null;
-  preferred?: number | null;
   /** Annual income history (any order) — for the ±σ dispersion (shared with the fan). */
   incomeHistory: ProjectionIncomeRow[];
   /** Current price for upside %; null ⇒ upside unknown (never defaulted). */
@@ -86,7 +86,7 @@ export function computeScenarioTargets(inputs: ScenarioTargetsInputs): ScenarioT
   const { valuation, currency, asOf } = inputs;
 
   // Only the general FCFF-DCF route has a per-share intrinsic value to perturb.
-  // Banks/insurers/REITs/pre-revenue/dcf-suppressed → no target (SPEC §6).
+  // Banks/insurers/REITs/pre-revenue/dcf-suppressed → no target (docs/METHODOLOGY.md "Financial-company routes").
   if (valuation.kind !== "dcf") {
     return suppressed(
       [
@@ -197,12 +197,16 @@ export function computeScenarioTargets(inputs: ScenarioTargetsInputs): ScenarioT
     });
   }
 
+  // The bridge is the base DCF's OWN: valueCompany removes the operating-lease
+  // liability from net debt before bridging, and re-running the perturbed
+  // paths on the raw figure compute.ts held published a bull target below
+  // base for every lease-heavy issuer.
   const opts: DcfRunOptions = {
     waccPct: inputs.waccPct,
-    netDebt: inputs.netDebt,
-    dilutedShares: inputs.dilutedShares,
-    minorityInterest: inputs.minorityInterest ?? null,
-    preferred: inputs.preferred ?? null,
+    netDebt: baseDcf.bridge.netDebt,
+    dilutedShares: baseDcf.bridge.dilutedShares,
+    minorityInterest: baseDcf.bridge.minorityInterest,
+    preferred: baseDcf.bridge.preferred,
   };
 
   const tn = (name: ScenarioTarget["name"], value: number): TracedNumber => ({

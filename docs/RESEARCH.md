@@ -577,15 +577,249 @@ data, and a reader is entitled to know which.
 
 ---
 
+## 8. Candidate improvements, weighed against the evidence
+
+The audit of 2026-09-06 closed with a list of things that might make the
+analyzer better. This section asks, for each one, whether the published
+evidence says it would, what it would cost on this codebase, and what to do.
+Sources were checked on 2026-09-07; the same three labels as above apply, with
+two more: **What the code has** is the current state, and **Verdict** is the
+recommendation. Where a verdict depends on a fact that could not be verified
+offline it says so.
+
+### 8.1 Peer multiples (relative valuation)
+
+**Published.** Liu, Nissim and Thomas, *Equity Valuation Using Multiples*,
+Journal of Accounting Research 40, 2002: multiples built on **forward
+earnings** explain prices best (pricing errors within 15% of price for about
+half their sample), historical earnings next, cash flow and book value tied
+third, and **sales worst** — and the ranking holds in almost every industry,
+against the folk belief that each industry has its own best multiple. Alford,
+*The Effect of the Set of Comparable Firms on the Accuracy of the
+Price-Earnings Valuation Method*, JAR 30, 1992: peers chosen by **industry at
+the two- or three-digit SIC level** value as accurately as peers chosen on
+size, leverage or growth, and a four-digit match adds nothing further.
+Bhojraj and Lee, *Who Is My Peer?*, JAR 40, 2002: a "warranted multiple"
+regressed on growth, profitability and risk picks peers that predict one- to
+three-year-ahead EV/sales and P/B better than industry alone. Demirakos,
+Strong and Walker, *Does Valuation Model Choice Affect Target Price
+Accuracy?*, European Accounting Review 19, 2010: on 490 UK reports, P/E-based
+targets beat DCF-based targets on the share met and on absolute error, and
+DCF catches up only after controlling for how hard the company is to value.
+
+**What the code has.** The peer machinery (`PeerStats`: drop n/m, trim
+1.5×IQR, never show a median below four survivors) has never been fed: the
+pipeline supplies no peer multiples, and every report discloses that as a
+missing input. The FMP `stock-peers` member IS fetched and IS served on the
+entry-tier plan — the live run of 2026-09-07 returned eight names for Apple —
+but FMP's list is "same exchange, same sector, similar market cap", which put
+a $13B solar-tracker maker and a micro-cap beside Apple. `analyst-estimates`
+is also served on that plan, so a forward EPS exists for the issuer.
+
+**Cost.** Each peer's multiples need its quote and ratios (two FMP requests
+per peer, about sixteen on a run that makes forty), against a small daily
+quota; industry filtering needs each peer's SIC, which the EDGAR ticker map
+supplies for free. A fully keyless route (companyfacts per peer) is not
+viable per report. Bhojraj–Lee peer selection needs a cross-section this
+pipeline does not hold.
+
+**Verdict — beneficial, the largest single gap; do it first.** The evidence
+ranks the multiples the app should lead with: forward P/E (from the issuer's
+own estimates and, where peers carry estimates, theirs), then trailing P/E and
+EV/EBITDA, with EV/sales last and labelled as such. Filter FMP's peers to the
+issuer's two- or three-digit SIC before the IQR trim, keep the four-peer floor,
+and print the selection rule beside the median. Expect it to change readings:
+the Apple report priced the shares 52% above its DCF; a peer table would have
+said whether that premium is Apple's or the industry's.
+
+### 8.2 Backtesting the projection weights and the scenario dispersion
+
+**Published.** Bradshaw, Brown and Huang, *Do Sell-Side Analysts Exhibit
+Differential Target Price Forecasting Ability?*, Review of Accounting Studies
+18, 2013: only **38%** of twelve-month targets are met at the horizon (64% at
+some point during it), implied returns exceed realised ones by 15 points on
+average, and absolute errors average **45%**. Chan, Karceski and Lakonishok,
+*The Level and Persistence of Growth Rates*, Journal of Finance 58, 2003:
+long-term earnings growth shows **no persistence beyond chance**, sales growth
+only a little, and analyst long-term forecasts are optimistic with low
+predictive power. Bessembinder, *Do Stocks Outperform Treasury Bills?*, JFE
+129, 2018: four of seven listed stocks return less than one-month bills over
+their lives; the market's premium comes from a **right-skewed** minority, so
+the median outcome sits below the mean. Twenty years of interval forecasts
+from the ZEW survey show forecasters overprecise throughout, with no learning
+in aggregate.
+
+**What the code has.** Weights 25/50/25 stamped `UNBACKTESTED_SCENARIO_PRIOR`;
+bull and bear built from the issuer's own annual growth and margin dispersion
+at `DISPERSION_K = 1.0`, capped; the fan and the scenario targets share that σ.
+
+**Feasibility.** A point-in-time backtest is possible with no paid call: every
+companyfacts fact carries its `filed` date and the extractor already
+resolves periods on max(filed), so a Stage B report "as of" a past date can be
+rebuilt by dropping facts filed after it; prices come from the keyless chart
+history. One companyfacts fetch per issuer, cached, Stage B only.
+
+**Verdict — beneficial for calibration, not for point accuracy; do it before
+touching the weights by hand.** Measure three things over a few dozen issuers
+and ten year-ends: the share of realised one- and three-year prices inside the
+bull–bear band (a ±1σ band should hold roughly two thirds), the sign and size
+of the median error (Bessembinder predicts the base path is too high for most
+names and too low for the few), and whether the fan's σ ranks issuers by
+realised dispersion at all. The literature says point accuracy near 45% error
+is normal and will not improve; the value is replacing "unbacktested" with a
+measured coverage figure and a skew-aware weighting if the data demand one.
+The same harness can test the fade horizon (§8.7).
+
+### 8.3 Cross-sectional accrual ranks
+
+**Published.** Sloan's result is a decile result (§4.3). Green, Hand and
+Soliman, *Going, Going, Gone? The Apparent Demise of the Accruals Anomaly*,
+Management Science 57, 2011: hedge returns to the anomaly in US markets have
+decayed to zero, largely through hedge-fund capital exploiting it. The
+accounting fact — accruals persist less than cash flows — survives; the
+return signal does not.
+
+**What the code has.** Fixed bands (|ratio| 0.10 / 0.20), labelled heuristic
+wherever they print (§4.3).
+
+**Cost.** A contemporaneous cross-section needs a universe. The SEC's
+Financial Statement Data Sets could supply one offline, but that is a new
+data pipeline for one diagnostic.
+
+**Verdict — not now.** The bands are honest as labelled, and the evidence
+says the anomaly is not a return signal to sharpen. If anything, publish the
+issuer's own time-series percentile, which the pipeline can compute from data
+it already holds.
+
+### 8.4 Beta: Vasicek shrinkage now, bottom-up betas after §8.1
+
+**Published.** Vasicek, *A Note on Using Cross-Sectional Information in
+Bayesian Estimation of Security Betas*, Journal of Finance 28, 1973: shrink
+each estimate toward the prior mean in proportion to its own imprecision,
+`β̂ = (σ²_prior·β_OLS + SE²·β_prior) / (σ²_prior + SE²)`. Klemkosky and
+Martin, *The Adjustment of Beta Forecasts*, JF 30, 1975: Vasicek beats Blume
+slightly for single securities and the two are indistinguishable for
+portfolios of seven or more. Lally, *An Examination of Blume and Vasicek
+Betas*, Financial Review 33, 1998: the prior's dispersion must be that of
+**true** betas, not of estimated ones (subtract the mean squared standard
+error), partitioning by industry helps, and correcting asset betas rather
+than equity betas helps. Damodaran's bottom-up beta averages the regression
+betas of comparable firms so that the standard error falls with the square
+root of the number of firms (`pages.stern.nyu.edu/~adamodar`, *Estimating Risk
+Parameters*).
+
+**What the code has.** The keyless estimate is an OLS on 24–60 monthly
+returns that already reports its **standard error** and R², then the Blume
+2/3–1/3 shrink (§7.1) — the same fixed weights whether SE is 0.05 or 0.40.
+The provider beta carries no SE at all.
+
+**Verdict — beneficial, low cost for the Vasicek step; bottom-up after peers
+exist.** The regression's own SE is the missing input Vasicek needs; the
+prior mean can stay at 1 and the prior dispersion must be a documented
+constant of true-beta dispersion (Lally's correction), stated as a house
+rule until a cross-section pins it. Effect: a liquid large cap with a small
+SE keeps its raw beta, a thin history is shrunk hard — exactly where fixed
+Blume weights are wrong in both directions. Bottom-up betas need the peer set
+and each peer's leverage, so they follow §8.1. Keep printing raw, adjusted and
+the formula, as §7.1 requires.
+
+### 8.5 Insider trades on the keyless path (Form 4)
+
+**Published.** Lakonishok and Lee, *Are Insider Trades Informative?*, Review
+of Financial Studies 14, 2001: the information is in **purchases**, mostly in
+smaller firms; insider **sales** have no predictive ability. Cohen, Malloy
+and Pomorski, *Decoding Inside Information*, Journal of Finance 67, 2012:
+"routine" trades (the same insider trading in the same calendar month in
+each of the prior three years) carry nothing, while the remaining
+"opportunistic" trades earn about **82 basis points a month** of abnormal
+return.
+
+**What the code has.** FMP's insider endpoints are refused on the entry
+tier; the keyless report shows Finnhub's aggregate MSPR sentiment, which read
+−100 for Apple in most months because executives sell routinely under
+pre-arranged plans — precisely the flow the literature calls uninformative,
+presented as a persistent negative reading.
+
+**Data paths.** Two, both free: the issuer's EDGAR submissions list its Form 4
+filings, each an XML ownership document (one request per filing; Apple files
+well over a hundred a year, so a cap is needed); or the SEC **Insider
+Transactions Data Sets**, quarterly ZIP files of 7–17 MB covering every
+Form 3, 4 and 5 since 2006, one download per quarter for every issuer, with
+up to a quarter's lag (sec.gov, *Insider Transactions Data Sets*, checked
+2026-09-07).
+
+**Verdict — beneficial if built the way the evidence says; medium cost.**
+Classify purchases separately from sales; mark a trade routine when the same
+insider traded in the same month in the prior years the data cover; present
+open-market purchases as the signal and sales as context; demote or drop the
+aggregate sentiment reading for large caps, where it is noise. The quarterly
+data set is the cheaper first implementation and needs no per-filing parser.
+
+### 8.6 The keyless sweep rerun
+
+Not a research question. The 21-issuer sweep of 2026-09-02 is the only broad
+regression check on real filings, the audit changed the lease bases, the DCF
+bridge, the grid, routing and the forensics, and a rerun costs nothing but
+EDGAR and Yahoo requests. **Do it** before any of the above ships.
+
+### 8.7 Fade horizon and the growth anchor
+
+**Published.** Chan, Karceski and Lakonishok (2003, above): growth beyond one
+or two years is not persistent, so a valuation that carries a high near-term
+rate for long rests, in their words, on shaky foundations.
+
+**What the code has.** A ten-year linear fade from the anchor to the terminal
+rate, and an anchor that is the median of four methods, three of which read
+the same filed history (METHODOLOGY *Growth anchor*).
+
+**Verdict — keep, and let §8.2 test it.** The ten-year fade is the mainstream
+convention and the anchor is already biased toward the filed record over
+optimistic consensus, which the evidence supports. Fade length is one
+parameter the backtest can vary; changing it by hand first would be another
+unbacktested prior.
+
+### 8.8 The forensic scores on growth stocks
+
+**Published.** Piotroski (2000) built the F-score on high book-to-market
+firms; Mohanram, *Separating Winners from Losers among Low Book-to-Market
+Stocks*, Review of Accounting Studies 10, 2005, built the G-score (earnings
+and growth stability, R&D and capital intensity) for the low book-to-market
+half, where it earns abnormal returns and the F-score is weaker. Beneish,
+Lee and Nichols, *Earnings Manipulation and Expected Returns*, Financial
+Analysts Journal 69, 2013: the eight-variable M-score predicts
+cross-sectional returns out of sample, most strongly among apparently
+high-quality low-accrual stocks — support for keeping it as a red flag on
+exactly the names a reader trusts most.
+
+**Verdict — keep both as diagnostics; a G-score is optional.** The report
+already presents the F-score as a quality signal with its variant and
+denominator named rather than as a return forecast, which is the right frame
+for a growth name like Apple. Adding a G-score for low book-to-market issuers
+would be a modest, well-evidenced extension; it is not a gap.
+
+### 8.9 Ranked
+
+| Rank | Candidate | Evidence for | Cost | Do |
+| --- | --- | --- | --- | --- |
+| 1 | Keyless sweep rerun (§8.6) | regression check on real filings | requests only | now |
+| 2 | Peer multiples, forward-earnings first, SIC-filtered (§8.1) | Liu–Nissim–Thomas; Alford; Demirakos et al. | ~16 FMP calls per run; SIC map free | next |
+| 3 | Point-in-time backtest of weights, σ and fade (§8.2, §8.7) | Bradshaw et al.; Chan et al.; Bessembinder | Stage B only, no paid call | next |
+| 4 | Vasicek shrinkage with the regression's own SE (§8.4) | Vasicek; Klemkosky–Martin; Lally | small | after 3 |
+| 5 | Form 4 purchases vs sales, routine vs opportunistic (§8.5) | Lakonishok–Lee; Cohen–Malloy–Pomorski | medium (data set + classifier) | later |
+| 6 | Bottom-up betas from the peer set (§8.4) | Damodaran | needs 2 | later |
+| 7 | G-score for low book-to-market issuers (§8.8) | Mohanram | small | optional |
+| — | Cross-sectional accrual ranks (§8.3) | Green–Hand–Soliman argue against | new pipeline | no |
+
 ## What would improve this
 
-Honest gaps in the evidence base, listed so they are not mistaken for settled:
+Honest gaps in the evidence base, listed so they are not mistaken for settled;
+each is weighed against the published evidence, with a verdict, in §8:
 
 - The Beneish winsorization (§2.5) is a stand-in. Reproducing the paper's
   treatment would require its estimation sample.
 - The accrual bands (§4.3) are display conventions over a decile result. A
-  defensible improvement would rank an issuer against a contemporaneous
-  cross-section rather than against fixed cut-offs.
+  contemporaneous cross-section would be more faithful to Sloan, but §8.3
+  finds the return signal itself has decayed and does not recommend it.
 - The Altman variant-selection rule (§1.4) is this project's, and the
   manufacturer test that drives it is a classification over SIC codes rather
   than a judgement about the business.
@@ -593,11 +827,12 @@ Honest gaps in the evidence base, listed so they are not mistaken for settled:
   validated against an outcome sample, and the report says so rather than
   implying a hit rate none of them has earned.
 - The beta (§7.1) is a historical regression with a conventional shrinkage
-  applied. A forward-looking or peer-relative beta would be better justified for
-  an issuer whose business has changed inside the estimation window, and the
-  report currently discloses the standard error and R² rather than acting on
-  them.
+  applied. The report discloses the standard error and R² rather than acting
+  on them; §8.4 says how to act on them (Vasicek), and when a peer-relative
+  beta becomes possible.
 - The terminal-growth cap and the terminal-ROIC fade (§7.4) are conventions
   chosen for defensibility, not fitted to anything. They are the two inputs a
   reader should override first if they disagree, which is why both are labelled
-  in the report rather than buried here.
+  in the report rather than buried here. §8.2 describes the point-in-time
+  backtest that could fit the scenario weights and the fade, and §8.7 why the
+  fade should wait for it.

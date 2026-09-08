@@ -122,7 +122,9 @@ D-20, D-22), the remediation report and the pricing generator were corrected
 where they had drifted; 130+ code comments and twenty user-visible strings
 that cited section numbers of retired design documents now cite a living
 heading or none. Retired audit records and notes were removed; the 2026-09-06
-audit document is the record that supersedes them.
+audit document is the record that supersedes them. `docs/RESEARCH.md` §8
+weighs the candidate improvements the audit left open against the published
+evidence and ranks them.
 
 ## Unreleased — per-request admission restored, effort-aware idle guard
 

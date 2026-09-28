@@ -545,7 +545,10 @@ function toOhlcv(r: FmpRawRow): OhlcvRow {
 
 export interface TtmIncome {
   date: string;
+  /** The window's one currency, or null when nothing establishes it. */
   reportedCurrency: string | null;
+  /** True when an unlabelled quarter's currency came from same-period statements. */
+  currencyFromSameperiodStatements: boolean;
   revenue: number | null;
   operatingIncome: number | null;
   depreciationAndAmortization: number | null;
@@ -625,19 +628,50 @@ function sumField(rows: FmpIncomeStatementRow[], key: keyof FmpIncomeStatementRo
   return seen ? acc : null;
 }
 
+/** A statement row as currency evidence: its period end and its own label. */
+type CurrencyEvidenceRow = { date?: unknown; reportedCurrency?: unknown };
+
 /**
- * Why four quarters cannot be summed into one figure, or null when they can.
- * Every quarter must carry the SAME ISO currency, or none may carry one at
- * all (a provider that labels nothing leaves the sum's currency unknown, not
- * mixed). A USD quarter beside a JPY quarter, or beside a quarter with no or
- * an invalid code, has no single currency to add in.
+ * The one currency four quarters are in, established row by row. A quarter's
+ * own label decides it; a quarter with none is established by the SAME
+ * PERIOD's rows of the other quarterly statements (one filing presents all
+ * its statements in one reporting currency) when those name exactly one code.
+ * The annual statement is never evidence for a quarter.
+ *
+ * `violation` is set when the quarters establish different currencies, or some
+ * establish one and others none: there is no single currency to add in. When
+ * none is established at all, `code` is null and there is no violation — the
+ * sum is one provider's unlabelled figures, usable where no currency matters.
  */
-function quarterCurrencyViolation(rows: readonly { date?: unknown; reportedCurrency?: unknown }[]): string | null {
-  const codes = rows.map((row) => normalizeReportedCurrency(row.reportedCurrency));
-  if (codes.every((code) => code === codes[0])) return null;
-  return rows
-    .map((row, i) => `${isoDay(row.date) ?? String(row.date ?? "?")} ${codes[i] ?? "unknown"}`)
-    .join(", ");
+function resolveQuarterCurrency(
+  rows: readonly CurrencyEvidenceRow[],
+  siblings: readonly CurrencyEvidenceRow[],
+): { code: string | null; fromSiblings: boolean; violation: string | null } {
+  let fromSiblings = false;
+  const codes = rows.map((row) => {
+    const own = normalizeReportedCurrency(row.reportedCurrency);
+    if (own !== null) return own;
+    const day = isoDay(row.date);
+    const evidence = new Set(
+      siblings
+        .filter((sibling) => day !== null && isoDay(sibling.date) === day)
+        .map((sibling) => normalizeReportedCurrency(sibling.reportedCurrency))
+        .filter((code): code is string => code !== null),
+    );
+    if (evidence.size !== 1) return null;
+    fromSiblings = true;
+    return [...evidence][0]!;
+  });
+  if (codes.every((code) => code === codes[0])) {
+    return { code: codes[0] ?? null, fromSiblings: codes[0] !== null && fromSiblings, violation: null };
+  }
+  return {
+    code: null,
+    fromSiblings: false,
+    violation: rows
+      .map((row, i) => `${isoDay(row.date) ?? String(row.date ?? "?")} ${codes[i] ?? "unknown"}`)
+      .join(", "),
+  };
 }
 
 /** Non-null quarter count for a field (completeness gate for critical sums). */
@@ -671,14 +705,17 @@ function countField(rows: FmpIncomeStatementRow[], key: keyof FmpIncomeStatement
 export function ttmIncome(
   quarterly: FmpIncomeStatementRow[],
   gaps?: ManifestEntry[],
+  /** Same-period balance-sheet / cash-flow quarters: currency evidence for unlabelled quarters. */
+  siblings: readonly CurrencyEvidenceRow[] = [],
 ): TtmIncome | null {
   const normalized = normalizeStatementQuarters(quarterly, "income", gaps);
-  return ttmIncomeFromNormalized(normalized, gaps);
+  return ttmIncomeFromNormalized(normalized, gaps, siblings);
 }
 
 function ttmIncomeFromNormalized(
   normalized: NormalizedQuarterSet<FmpIncomeStatementRow>,
   gaps?: ManifestEntry[],
+  siblings: readonly CurrencyEvidenceRow[] = [],
 ): TtmIncome | null {
   const rejected = rejectedAffectsCurrentWindow(normalized);
   if (rejected) {
@@ -707,11 +744,11 @@ function ttmIncomeFromNormalized(
     return null;
   }
 
-  const currencyViolation = quarterCurrencyViolation(q);
-  if (currencyViolation !== null) {
+  const windowCurrency = resolveQuarterCurrency(q, siblings);
+  if (windowCurrency.violation !== null) {
     gaps?.push({
       field: "compute.ttmIncome",
-      reason: `latest 4 quarterly rows are not in one reporting currency (${currencyViolation}) — a sum across currencies is no figure at all, so the TTM basis is suppressed; latest annual statement used instead`,
+      reason: `latest 4 quarterly rows are not in one reporting currency (${windowCurrency.violation}) — a sum across currencies is no figure at all, so the TTM basis is suppressed; latest annual statement used instead`,
       severity: "warn",
       attemptedSources: ["fmp:/stable/income-statement?period=quarter"],
     });
@@ -768,7 +805,8 @@ function ttmIncomeFromNormalized(
   return {
     date: String(q[0].date ?? ""),
     // One code for all four quarters (the gate above), or null for none.
-    reportedCurrency: normalizeReportedCurrency(q[0].reportedCurrency),
+    reportedCurrency: windowCurrency.code,
+    currencyFromSameperiodStatements: windowCurrency.fromSiblings,
     revenue: sumField(q, "revenue"),
     operatingIncome: gateComplete("operatingIncome"),
     depreciationAndAmortization: gateComplete("depreciationAndAmortization"),
@@ -797,6 +835,8 @@ export function effectiveTaxRateFromTtm(ttm: TtmIncome | null): number | null {
 
 interface TtmCashFlow {
   date: string;
+  /** The window's one currency, or null when nothing establishes it. */
+  reportedCurrency: string | null;
   operatingCashFlow: number | null;
   capitalExpenditure: number | null;
   depreciationAndAmortization: number | null;
@@ -805,14 +845,17 @@ interface TtmCashFlow {
 export function ttmCashFlow(
   quarterly: FmpCashFlowRow[],
   gaps?: ManifestEntry[],
+  /** Same-period income / balance-sheet quarters: currency evidence for unlabelled quarters. */
+  siblings: readonly CurrencyEvidenceRow[] = [],
 ): TtmCashFlow | null {
   const normalized = normalizeStatementQuarters(quarterly, "cashFlow", gaps);
-  return ttmCashFlowFromNormalized(normalized, gaps);
+  return ttmCashFlowFromNormalized(normalized, gaps, siblings);
 }
 
 function ttmCashFlowFromNormalized(
   normalized: NormalizedQuarterSet<FmpCashFlowRow>,
   gaps?: ManifestEntry[],
+  siblings: readonly CurrencyEvidenceRow[] = [],
 ): TtmCashFlow | null {
   const rejected = rejectedAffectsCurrentWindow(normalized);
   if (rejected) {
@@ -838,11 +881,11 @@ function ttmCashFlowFromNormalized(
     return null;
   }
   // Currency gate — identical to ttmIncome.
-  const currencyViolation = quarterCurrencyViolation(q);
-  if (currencyViolation !== null) {
+  const windowCurrency = resolveQuarterCurrency(q, siblings);
+  if (windowCurrency.violation !== null) {
     gaps?.push({
       field: "compute.ttmCashFlow",
-      reason: `latest 4 quarterly rows are not in one reporting currency (${currencyViolation}) — a sum across currencies is no figure at all, so the TTM basis is suppressed; latest annual statement used instead`,
+      reason: `latest 4 quarterly rows are not in one reporting currency (${windowCurrency.violation}) — a sum across currencies is no figure at all, so the TTM basis is suppressed; latest annual statement used instead`,
       severity: "warn",
       attemptedSources: ["fmp:/stable/cash-flow-statement?period=quarter"],
     });
@@ -874,10 +917,99 @@ function ttmCashFlowFromNormalized(
   };
   return {
     date: String(q[0].date ?? ""),
+    reportedCurrency: windowCurrency.code,
     operatingCashFlow: gateComplete("operatingCashFlow"),
     capitalExpenditure: gateComplete("capitalExpenditure"),
     depreciationAndAmortization: gateComplete("depreciationAndAmortization"),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Statement currencies
+// ---------------------------------------------------------------------------
+
+/**
+ * Which currency each kind of figure is in, from evidence only.
+ *
+ *  - `trading`: the listing currency the quote and price history are in.
+ *  - `annual`: the latest annual income statement's own label.
+ *  - `model`: the currency every currency-dependent Stage B calculation ran
+ *    in — the DCF, the excess-return model, the price multiples, and every
+ *    per-share value derived from them. That is the TTM window's currency
+ *    when the window anchors them, else the annual statement's; null when
+ *    neither is established. It is never borrowed from the listing.
+ *
+ * The TTM windows feed currency-dependent calculations only when their own
+ * currency is established and agrees with the annual statement's; otherwise
+ * they stay available for currency-free uses (routing signs, WACC coverage
+ * and tax ratios) and the dependent calculations use the annual statement.
+ */
+export interface StatementCurrencies {
+  trading: string | null;
+  annual: string | null;
+  model: string | null;
+  ttmIncomeUsable: boolean;
+  ttmCashFlowUsable: boolean;
+}
+
+function resolveStatementCurrencies(
+  profileCurrency: unknown,
+  latestAnnualIncome: FmpIncomeStatementRow | undefined,
+  ttmInc: TtmIncome | null,
+  ttmCf: TtmCashFlow | null,
+  gaps?: ManifestEntry[],
+): StatementCurrencies {
+  const trading = normalizeReportedCurrency(profileCurrency);
+  const annual = normalizeReportedCurrency(latestAnnualIncome?.reportedCurrency);
+  const annualText = annual ?? "unlabelled";
+  const usable = (code: string | null): boolean => code !== null && (annual === null || code === annual);
+  const ttmIncomeUsable = ttmInc !== null && usable(ttmInc.reportedCurrency);
+  const model = ttmIncomeUsable ? ttmInc!.reportedCurrency : annual;
+  const ttmCashFlowUsable = ttmCf !== null && ttmCf.reportedCurrency !== null && ttmCf.reportedCurrency === model;
+
+  const withheld = (window: "income" | "cash-flow", code: string | null): string =>
+    (code === null
+      ? `the latest 4 quarterly ${window} rows' reporting currency could not be established: no row carries a ` +
+        "currency label and no same-period balance-sheet, income or cash-flow row supplies one, and the annual " +
+        `statement's currency (${annualText}) is not evidence for the quarters`
+      : `the latest 4 quarterly ${window} rows are in ${code} but the latest annual statement is in ${annualText}`) +
+    " — the TTM figures are kept for currency-free uses (routing signs, coverage and tax ratios), while the DCF " +
+    "anchor and the price multiples use the latest annual statement instead";
+  if (ttmInc !== null && !ttmIncomeUsable) {
+    gaps?.push({
+      field: "compute.ttmIncome.currency",
+      reason: withheld("income", ttmInc.reportedCurrency),
+      severity: "warn",
+      attemptedSources: ["fmp:/stable/income-statement?period=quarter"],
+    });
+  }
+  if (ttmCf !== null && !ttmCashFlowUsable) {
+    gaps?.push({
+      field: "compute.ttmCashFlow.currency",
+      reason: withheld("cash-flow", ttmCf.reportedCurrency),
+      severity: "warn",
+      attemptedSources: ["fmp:/stable/cash-flow-statement?period=quarter"],
+    });
+  }
+  return { trading, annual, model, ttmIncomeUsable, ttmCashFlowUsable };
+}
+
+/**
+ * The same resolution runStageB makes, from the bundle alone — for a surface
+ * (the company page) that labels Stage B's figures and must use the currency
+ * the model actually ran in. Pure, and discloses nothing: runStageB owns the
+ * gaps.
+ */
+export function statementCurrencies(bundle: DataBundle): StatementCurrencies {
+  const income = normalizeStatementQuarters(rowsOf(bundle.statements.incomeQuarterly), "income");
+  const balance = normalizeStatementQuarters(rowsOf(bundle.statements.balanceQuarterly), "balance");
+  const cashflow = normalizeStatementQuarters(rowsOf(bundle.statements.cashflowQuarterly), "cashFlow");
+  return resolveStatementCurrencies(
+    firstRow(bundle.profile)?.currency,
+    rowsOf(bundle.statements.incomeAnnual)[0],
+    ttmIncomeFromNormalized(income, undefined, [...balance.rows, ...cashflow.rows]),
+    ttmCashFlowFromNormalized(cashflow, undefined, [...income.rows, ...balance.rows]),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1104,7 +1236,10 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
         reportedCurrency: normalizeReportedCurrency(inc0.reportedCurrency),
       }
     : null;
-  const ttmInc = ttmIncomeFromNormalized(incomeQuarterSet, ttmGaps);
+  const ttmInc = ttmIncomeFromNormalized(incomeQuarterSet, ttmGaps, [
+    ...balanceQuarterSet.rows,
+    ...cashflowQuarterSet.rows,
+  ]);
   const routingIncomeTtm: RoutingIncomeRow | null = ttmInc
     ? {
         date: ttmInc.date,
@@ -1116,7 +1251,11 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   const routingCashflowAnnual: RoutingCashflowRow | null = cf0
     ? { date: isoDay(cf0.date), operatingCashFlow: num(cf0.operatingCashFlow) }
     : null;
-  const ttmCf = ttmCashFlowFromNormalized(cashflowQuarterSet, ttmGaps);
+  const ttmCf = ttmCashFlowFromNormalized(cashflowQuarterSet, ttmGaps, [
+    ...incomeQuarterSet.rows,
+    ...balanceQuarterSet.rows,
+  ]);
+  const currencies = resolveStatementCurrencies(profile?.currency, inc0, ttmInc, ttmCf, ttmGaps);
   const routingCashflowTtm: RoutingCashflowRow | null = ttmCf
     ? { date: ttmCf.date, operatingCashFlow: ttmCf.operatingCashFlow }
     : null;
@@ -1185,6 +1324,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     ttmInc,
     route,
     evIncludeLeases,
+    currencies.model,
   );
 
   // --- Capital ---------------------------------------------------------------
@@ -1295,8 +1435,12 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     incomeQuarterly,
     balanceQuarterly,
     cashflowQuarterly,
-    ttmInc,
-    ttmCf,
+    // Currency-dependent calculations take a TTM window only when its own
+    // currency is established (resolveStatementCurrencies); otherwise they use
+    // the annual statement, and the disclosure says so.
+    ttmInc: currencies.ttmIncomeUsable ? ttmInc : null,
+    ttmCf: currencies.ttmCashFlowUsable ? ttmCf : null,
+    modelCurrency: currencies.model,
     growth,
     evIncludeLeases,
     // WS6 wiring.
@@ -1433,8 +1577,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   // vocabulary, so canonicalizeTracedUnit rejected it and the fair value,
   // projections and scenario targets were silently DROPPED from the registry —
   // a worse outcome than the USD default this replaced.
-  const projectionCurrency =
-    str(profile?.currency) ?? str(ttmInc?.reportedCurrency ?? incomeAnnual[0]?.reportedCurrency);
+  const projectionCurrency = currencies.model;
   const projections = computeProjections({
     route,
     valuation,
@@ -1655,6 +1798,8 @@ function computeReturns(
   route: CompanyRouteResult,
   /** One lease basis for the EV bridge, invested capital and the WACC's debt leg (read once in runStageB). */
   includeOperatingLeases: boolean,
+  /** The statements' established currency (StatementCurrencies.model) for the ADR guard. */
+  modelCurrency: string | null,
 ): ReturnsBlock {
   const notes: string[] = [];
   const gaps: ManifestEntry[] = [];
@@ -1800,7 +1945,7 @@ function computeReturns(
     totalAssets: bal0 ? num(bal0.totalAssets) : null,
     // ADR guard: market cap is quoted in the trading currency while totalDebt
     // is a reporting-currency balance, so the E/D weights must not mix them.
-    reportedCurrency: str(ttmInc?.reportedCurrency ?? incomeAnnual[0]?.reportedCurrency),
+    reportedCurrency: modelCurrency,
     quoteCurrency: str(profile?.currency),
     asOf: {
       riskFreeRate: rf.asOf ?? undefined,
@@ -1876,6 +2021,8 @@ interface ValuationCtx {
   cashflowQuarterly: FmpCashFlowRow[];
   ttmInc: TtmIncome | null;
   ttmCf: TtmCashFlow | null;
+  /** StatementCurrencies.model: the currency the valuation's statements are in. */
+  modelCurrency: string | null;
   growth: GrowthResult;
   /** WS6 (D-19): FCF/SBC treatment for the DCF assumption block. */
   capital: CapitalResult;
@@ -2037,7 +2184,7 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
           }),
           // ADR guard (audit H3): same currency pair the multiples framework
           // already flags — valueCompany suppresses the DCF on mismatch.
-          reportedCurrency: str(inc0?.reportedCurrency),
+          reportedCurrency: ctx.modelCurrency,
           quoteCurrency: str(profile?.currency),
         }
       : null;
@@ -2145,7 +2292,7 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
 
   const multiples: MultiplesFrameworkInputs = {
     quote: multiplesQuote,
-    reportedCurrency: str(inc0?.reportedCurrency),
+    reportedCurrency: ctx.modelCurrency,
     incomeTtm: multiplesIncomeTtm,
     cashFlowTtm: multiplesCashFlowTtm,
     balance: multiplesBalance,

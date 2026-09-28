@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { runStageB } from "@/pipeline/compute";
 import { buildDataBundle } from "@/pipeline/dataBundle";
 import { UnsupportedInstrumentError } from "@/pipeline/stageB/instrumentSupport";
+import { ERP_FALLBACK } from "@/pipeline/stageB/returns";
 import {
   createEdgarClient,
   type EdgarTransport,
@@ -476,5 +477,83 @@ describe("buildDataBundle without an FMP key", () => {
     // A keyed plan makes the substitution unexpected: `expected` is never true.
     expect(g?.expected).not.toBe(true);
     expect(g?.reason).toMatch(/HTTP 402/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Synthetic market inputs must stay with the fictional issuers
+// ---------------------------------------------------------------------------
+
+describe("market-wide inputs for a real ticker without an FMP key", () => {
+  // The two FMP endpoints that carry no symbol (treasury rates, the market risk
+  // premium) have only a `default.json` fixture, and both files say
+  // "SYNTHETIC TEST DATA". Those invented values exist for DEMO/DBNK; a real
+  // registrant's WACC must come from an observed series or the dated fallback
+  // the methodology names, never from the fixture.
+  const DGS10 = { date: "2026-08-31", value: 4.55 };
+
+  async function keylessAaplBundle(): Promise<Awaited<ReturnType<typeof buildDataBundle>>> {
+    return buildDataBundle("AAPL", {
+      now: () => NOW,
+      fmp: createFmpClient({ apiKey: "", fixturesDir: "fixtures/fmp" }),
+      edgar: createEdgarClient({ transport: edgarTransport() }),
+      yahoo: fakeYahoo(),
+      ...noNetworkConfigs(),
+      fredFetch: (id) =>
+        Promise.resolve(
+          id === "DGS10"
+            ? {
+                ok: true as const,
+                value: {
+                  data: [{ date: "2026-08-28", value: 4.5 }, DGS10],
+                  asOf: DGS10.date,
+                  source: "fred" as const,
+                  endpoint: "series/observations?series_id=DGS10",
+                  fetchedAt: NOW.toISOString(),
+                },
+              }
+            : { ok: false as const, gap: { field: `macro.${id}`, reason: "not in this test", severity: "info" as const } },
+        ),
+    });
+  }
+
+  it("serves no bundle member from an FMP fixture file", async () => {
+    const bundle = await keylessAaplBundle();
+    expect(bundle.treasury.ok).toBe(false);
+    expect(bundle.marketRiskPremium.ok).toBe(false);
+    const fixtureServed = Object.entries(bundle.sourceManifest)
+      .filter(([, entry]) => entry.endpoint.includes("[FIXTURE]"))
+      .map(([field]) => field);
+    expect(fixtureServed).toEqual([]);
+  });
+
+  it("prices the WACC on observed FRED DGS10 and the dated ERP fallback, not the synthetic fixture", async () => {
+    const metrics = runStageB(await keylessAaplBundle());
+    const wacc = metrics.returns.wacc;
+    expect(wacc.riskFreeSeriesId).toBe("fred:DGS10");
+    expect(wacc.riskFreePct).toBe(DGS10.value);
+    expect(wacc.erpSource).toBe("damodaran-fallback");
+    expect(wacc.erpPct).toBe(ERP_FALLBACK.pct);
+    expect(wacc.erpAsOf).toBe(ERP_FALLBACK.asOf);
+  });
+
+  it("still gives the reserved fictional issuer its synthetic market inputs", async () => {
+    // Positive control: DEMO is fixture data end to end, so its WACC keeps the
+    // fixture curve (year10 = 4) and premium (US total = 5).
+    const bundle = await buildDataBundle("DEMO", {
+      now: () => NOW,
+      eodYears: 0,
+      fmp: createFmpClient({ apiKey: "", fixturesDir: "fixtures/fmp" }),
+      edgar: createEdgarClient({ transport: edgarTransport() }),
+      yahoo: fakeYahoo(),
+      ...noNetworkConfigs(),
+    });
+    expect(bundle.treasury.ok && bundle.treasury.value.endpoint).toContain("[FIXTURE]");
+    expect(bundle.marketRiskPremium.ok && bundle.marketRiskPremium.value.endpoint).toContain("[FIXTURE]");
+    const wacc = runStageB(bundle).returns.wacc;
+    expect(wacc.riskFreeSeriesId).toBe("fmp:treasury-rates.year10");
+    expect(wacc.riskFreePct).toBe(4);
+    expect(wacc.erpSource).toBe("vendor");
+    expect(wacc.erpPct).toBe(5);
   });
 });

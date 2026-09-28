@@ -1178,6 +1178,13 @@ export class FmpClient {
   private readonly now: () => Date;
   private readonly timeoutMs: number;
   private readonly signal: AbortSignal | undefined;
+  /**
+   * Set only on the client `fixturesOnly()` builds for a reserved-symbol run.
+   * The `<method>/default.json` fixtures are synthetic values invented for the
+   * fictional issuers; this flag is what lets a request that names no symbol
+   * (treasury rates, the market risk premium) fall back to them.
+   */
+  private reservedFixtureScope = false;
 
   constructor(config: FmpClientConfig = {}) {
     this.config = config;
@@ -1233,10 +1240,14 @@ export class FmpClient {
    * (treasury rates, the market risk premium) and a reserved symbol must reach
    * the vendor through none of them. Injected transports and clocks are kept,
    * so a test counting calls still sees this client's traffic — of which there
-   * is none.
+   * is none. The returned client is also the only one that may serve the
+   * synthetic `default.json` fixtures to those symbol-less requests.
    */
   fixturesOnly(): FmpClient {
-    return this.fixtureMode ? this : new FmpClient({ ...this.config, apiKey: "" });
+    if (this.reservedFixtureScope) return this;
+    const client = new FmpClient({ ...this.config, apiKey: "" });
+    client.reservedFixtureScope = true;
+    return client;
   }
 
   private async fromLive<TRow extends FmpRawRow>(spec: CallSpec): Promise<FetchResult<FmpPayload<TRow>>> {
@@ -1476,7 +1487,15 @@ export class FmpClient {
   private async fromFixture<TRow extends FmpRawRow>(spec: CallSpec): Promise<FetchResult<FmpPayload<TRow>>> {
     const qs = fmpQueryString(spec.params);
     const endpointPath = qs ? `/stable/${spec.endpoint}?${qs}` : `/stable/${spec.endpoint}`;
-    const candidates = [...(spec.fixtureKeys ?? []).map((k) => sanitizeFixtureKey(k)), "default"].filter(
+    // A keyless run for a real ticker also lands here. The `default` fixture is
+    // synthetic data for DEMO/DBNK, so only a reserved-symbol run may fall back
+    // to it; anyone else gets the gap and the caller's own fallback (FRED DGS10,
+    // the dated ERP) instead of an invented number labelled as FMP's.
+    const allowDefault = this.reservedFixtureScope || FmpClient.isReservedRequest(spec);
+    const candidates = [
+      ...(spec.fixtureKeys ?? []).map((k) => sanitizeFixtureKey(k)),
+      ...(allowDefault ? ["default"] : []),
+    ].filter(
       (k, i, all) => k.length > 0 && all.indexOf(k) === i,
     );
 

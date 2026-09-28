@@ -355,13 +355,25 @@ describe("fixture mode (no API key)", () => {
     }
   });
 
-  it("falls back to <method>/default.json for symbol-less endpoints", async () => {
-    const result = await fixtureClient().marketRiskPremium();
+  it("falls back to <method>/default.json for symbol-less endpoints only on a reserved-symbol client", async () => {
+    const result = await fixtureClient().fixturesOnly().marketRiskPremium();
     expect(result.ok).toBe(true);
     if (result.ok) {
       const us = result.value.data.rows.find((r) => r.country === "United States");
       expect(us?.totalEquityRiskPremium).toBe(5);
       expect(JSON.stringify(us)).toContain("SYNTHETIC TEST DATA");
+    }
+  });
+
+  it("never serves the synthetic default fixture to a plain keyless client", async () => {
+    // No key is also how a real ticker runs keyless; the default files are
+    // invented values for DEMO/DBNK, so this client must see the gap.
+    for (const result of [await fixtureClient().marketRiskPremium(), await fixtureClient().treasuryRates()]) {
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.gap.reason).toBe("no API key + no fixture");
+        expect(result.gap.attemptedSources?.join(" ")).not.toContain("default.json");
+      }
     }
   });
 

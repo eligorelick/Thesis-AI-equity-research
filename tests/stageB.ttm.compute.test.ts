@@ -181,28 +181,9 @@ describe("ttmIncome — reported currency consensus", () => {
     expect(ttm!.reportedCurrency).toBe("USD");
   });
 
-  it.each([
-    {
-      label: "mixed USD/JPY",
-      currencies: ["USD", "JPY", "USD", "JPY"],
-    },
-    {
-      label: "missing value",
-      currencies: ["USD", null, "USD", "USD"],
-    },
-    {
-      label: "invalid code",
-      currencies: ["USD", "US$", "USD", "USD"],
-    },
-  ])("keeps reported currency null for $label without suppressing the numeric TTM row", ({ currencies }) => {
-    const ttm = ttmIncome(
-      fourQ(currencies.map((reportedCurrency) => ({ reportedCurrency }))),
-    );
-
-    expect(ttm).not.toBeNull();
-    expect(ttm!.revenue).toBe(400);
-    expect(ttm!.reportedCurrency).toBeNull();
-  });
+  // A window whose quarters disagree on currency (mixed codes, a missing or an
+  // invalid one) is no longer summed at all: see "TTM window whose quarters
+  // are not in one currency" below.
 });
 
 describe("ttmIncome/ttmCashFlow — quarter contiguity gate (audit M1)", () => {
@@ -643,7 +624,9 @@ function wiringBundle(opts: WiringOpts = {}): DataBundle {
 }
 
 describe("runStageB wiring — reported currency routing gate", () => {
-  it("keeps mixed USD/JPY TTM reported currency unknown, discloses one route gap, and makes no threshold decision", () => {
+  it("never routes on a mixed USD/JPY TTM window: the window is suppressed and the proven-USD annual revenue decides", () => {
+    // Four quarters of 1 would read as pre-revenue if they were summed; the
+    // window is not one currency, so no TTM exists and FY2025 (1,000 USD) routes.
     const computed = runStageB(
       wiringBundle({
         quarterlyRevenue: 1,
@@ -652,12 +635,10 @@ describe("runStageB wiring — reported currency routing gate", () => {
     );
 
     expect(computed.route.overlays).not.toContain("pre-revenue");
-    const routeCurrencyGaps = computed.route.gaps.filter(
-      (g) => g.field === "route.overlays.preRevenue.currency",
-    );
-    expect(routeCurrencyGaps).toHaveLength(1);
-    expect(routeCurrencyGaps[0].reason).toMatch(/ttm revenue.*unknown or invalid.*proven USD/i);
-    expect(computed.gaps.filter((g) => g.field === "route.overlays.preRevenue.currency")).toHaveLength(1);
+    expect(computed.route.asOf.incomeTtm).toBeNull();
+    expect(computed.route.asOf.incomeAnnual).toBe("2025-12-31");
+    expect(computed.gaps.filter((g) => g.field === "compute.ttmIncome")).toHaveLength(1);
+    expect(computed.route.gaps.some((g) => g.field === "route.overlays.preRevenue.currency")).toBe(false);
   });
 
   it("routes agreeing normalized USD TTM reported currency through the strict raw threshold", () => {
@@ -1408,5 +1389,54 @@ describe("routeMetricsBlock — the report-ready route metrics, and nothing on o
 
   it("returns null on the general route, so an ordinary report gains no empty block", () => {
     expect(routeMetricsBlock(runStageB(wiringBundle()))).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * One currency per trailing window (audit ttm-7)
+ * ------------------------------------------------------------------------ */
+
+describe("TTM window whose quarters are not in one currency", () => {
+  // Adding a USD quarter to a JPY quarter yields a number in no currency at
+  // all, whatever label is put on it afterwards. A window whose quarters do
+  // not all carry the same ISO code cannot be summed; every consumer falls
+  // back to the audited annual statement, as for any other unsafe window.
+  it.each([
+    { label: "USD and JPY quarters", currencies: ["USD", "JPY", "USD", "JPY"] },
+    { label: "one quarter with no currency", currencies: ["USD", null, "USD", "USD"] },
+    { label: "one quarter with an invalid code", currencies: ["USD", "US$", "USD", "USD"] },
+  ])("ttmIncome refuses to sum $label and discloses why", ({ currencies }) => {
+    const gaps: ManifestEntry[] = [];
+    expect(ttmIncome(fourQ(currencies.map((reportedCurrency) => ({ reportedCurrency }))), gaps)).toBeNull();
+    const gap = gaps.find((g) => g.field === "compute.ttmIncome");
+    expect(gap?.severity).toBe("warn");
+    expect(gap?.reason).toMatch(/currenc/i);
+  });
+
+  it("ttmCashFlow refuses a mixed-currency window too", () => {
+    const gaps: ManifestEntry[] = [];
+    const rows = fourCf(["TWD", "USD", "TWD", "TWD"].map((reportedCurrency) => ({ reportedCurrency })));
+    expect(ttmCashFlow(rows, gaps)).toBeNull();
+    expect(gaps.find((g) => g.field === "compute.ttmCashFlow")?.reason).toMatch(/currenc/i);
+  });
+
+  it("control: four quarters in one currency, or with no currency at all, still sum", () => {
+    expect(ttmIncome(fourQ(["JPY", "jpy", " JPY", "JPY"].map((reportedCurrency) => ({ reportedCurrency }))))?.revenue).toBe(400);
+    const unlabelled = ttmIncome(fourQ([0, 1, 2, 3].map(() => ({ reportedCurrency: null }))));
+    expect(unlabelled?.revenue).toBe(400);
+    expect(unlabelled?.reportedCurrency).toBeNull();
+    expect(ttmCashFlow(fourCf())?.operatingCashFlow).toBe(400);
+  });
+
+  it("runStageB anchors the DCF and multiples on the annual statement instead of a cross-currency sum", () => {
+    // Four quarters of 400 would give a "TTM" revenue of 1,600; FY2025 is 1,000.
+    const computed = runStageB(
+      wiringBundle({ quarterlyRevenue: 400, quarterlyReportedCurrencies: ["USD", "JPY", "USD", "JPY"] }),
+    );
+    expect(computed.route.asOf.incomeTtm).toBeNull();
+    expect(computed.gaps.some((g) => g.field === "compute.ttmIncome" && /JPY/.test(g.reason) && /USD/.test(g.reason))).toBe(true);
+    if (computed.valuation.kind !== "dcf") throw new Error("expected the general DCF route");
+    expect(computed.valuation.assumptions?.startRevenue.value).toBe(1000 * M);
+    expect(computed.valuation.assumptions?.startRevenue.basis).toMatch(/^latest annual FY 2025-12-31 revenue/);
   });
 });

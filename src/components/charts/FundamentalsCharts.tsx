@@ -30,7 +30,7 @@ import {
 } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 
-import { compactCurrency, compactMoneyIn, currencyAxisTickIn, fiscalYear, pct, signedPct } from "./format";
+import { compactMoneyIn, compactNumber, currencyAxisTickIn, fiscalYear, pct, signedPct } from "./format";
 
 // ---------------------------------------------------------------------------
 // Theme
@@ -378,7 +378,7 @@ export function ShareCountChart({ rows }: { rows: readonly ShareCountRow[] }) {
   }
   const tipFormat = (key: string, v: number | null): TipRow | null => {
     if (v === null || key !== "dilutedShares") return null;
-    return { label: "diluted shares", value: compactCurrency(v, 1).replace("$", ""), color: THEME.fgMuted };
+    return { label: "diluted shares", value: compactNumber(v, 1), color: THEME.fgMuted };
   };
   return (
     <div>
@@ -392,7 +392,7 @@ export function ShareCountChart({ rows }: { rows: readonly ShareCountRow[] }) {
             <XAxis {...xAxisProps()} />
             <YAxis
               tick={{ fill: THEME.fgFaint, fontSize: AXIS_FONT, fontFamily: MONO }}
-              tickFormatter={(v: number) => compactCurrency(v, 1).replace("$", "")}
+              tickFormatter={(v: number) => compactNumber(v, 1)}
               axisLine={{ stroke: THEME.border }}
               tickLine={{ stroke: THEME.border }}
               width={44}

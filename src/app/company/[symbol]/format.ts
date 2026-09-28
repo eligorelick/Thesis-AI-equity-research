@@ -4,8 +4,8 @@
  */
 
 import {
-  formatCurrency,
   formatLargeNumber,
+  formatMoneyAmount,
   formatMultiple,
   formatNumber,
   formatPct,
@@ -37,8 +37,14 @@ export function fmtBig(v: number | null | undefined): string {
   return formatLargeNumber(v);
 }
 
-export function fmtMoney(v: number | null | undefined, digits = 2): string {
-  return formatCurrency(v, digits);
+/**
+ * Money in its ESTABLISHED currency: the trading currency for the quote and
+ * price history, the model's currency for per-share values. Null prints
+ * "(currency unknown)"; there is no dollar default.
+ */
+export function fmtMoney(v: number | null | undefined, currency: string | null, digits = 2): string {
+  if (v == null || !Number.isFinite(v)) return "n/a";
+  return formatMoneyAmount(v, currency, digits);
 }
 
 export function fmtX(v: number | null | undefined, digits = 1): string {

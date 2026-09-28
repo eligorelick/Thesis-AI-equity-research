@@ -54,6 +54,7 @@ import {
   formatCostUsd,
   formatFinancialValue,
   formatMoneyAmount,
+  establishedCurrency,
   peerColumnKeys,
   roundedDisplayedCostTotal,
 } from "@/report/format";
@@ -595,7 +596,7 @@ function renderRouteMetrics(rm: RouteMetrics): string {
   // every backslash and turned the stand-in marker into literal underscores.
   const rows = rm.metrics.map((m) => [
     m.label + (m.proxy ? " (stand-in)" : ""),
-    m.value === null ? "withheld" : formatFinancialValue(m.value, m.unit),
+    m.value === null ? "withheld" : formatFinancialValue(m.value, m.unit, m.currency ?? null),
     m.withheldReason ?? m.basis,
   ]);
   return [
@@ -664,7 +665,7 @@ function renderValuation(
         const ps = lookup.get(`${w}|${g}`);
         // The grid is in the currency of the per-share value beside it: a
         // TWD/share DCF over a "$" grid was a 30× disagreement to the reader.
-        return ps === undefined || ps === null ? DASH : formatMoneyAmount(ps, dcfPs?.currency, 0);
+        return ps === undefined || ps === null ? DASH : formatMoneyAmount(ps, dcfPs ? establishedCurrency(dcfPs.unit, dcfPs.currency) : null, 0);
       }),
     ]);
     lines.push(

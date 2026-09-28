@@ -38,11 +38,10 @@ export interface SensitivityHeatmapProps {
   /** Per-share decimals (default 0 — dense). */
   digits?: number;
   /**
-   * Currency of the per-share values (that of `valuation.dcf.perShare`).
-   * Absent renders "$" (the legacy-report path, never a default); null is a
-   * currency recorded as unknown and renders the bare amount.
+   * ESTABLISHED currency of the per-share values (the model's): null renders
+   * the bare amount. Required, so no caller can fall back to a dollar sign.
    */
-  currency?: string | null;
+  currency: string | null;
 }
 
 // ---------------------------------------------------------------------------

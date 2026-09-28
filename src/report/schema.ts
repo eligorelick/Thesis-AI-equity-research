@@ -1678,6 +1678,12 @@ export const RouteMetricSchema = z
     label: z.string(),
     value: z.number().nullable(),
     unit: z.enum(["%", "x", "currency", "currency/share"]),
+    /**
+     * ISO-4217 currency of a "currency" / "currency/share" metric, from the
+     * statement or XBRL fact it was read from. Absent on reports written before
+     * the field existed, which therefore read as currency unknown.
+     */
+    currency: z.string().regex(/^[A-Z]{3}$/).nullable().optional(),
     /** Formula and the inputs that produced it (or would have). */
     basis: z.string(),
     /** Source path per input, e.g. "edgar:companyfacts us-gaap/NoninterestExpense". */

@@ -31,7 +31,7 @@ import { createCompanyLoadCoordinator } from "@/pipeline/companyLoad";
 import type { DataBundle } from "@/pipeline/types";
 import { validateBundle, type ValidationReport } from "@/pipeline/stageA/validate";
 import { renderManifestSummary } from "@/pipeline/stageA/manifest";
-import { runStageB, sourcedOf, type ComputedMetrics } from "@/pipeline/compute";
+import { runStageB, sourcedOf, statementCurrencies, type ComputedMetrics } from "@/pipeline/compute";
 import type { AltmanZone } from "@/pipeline/stageB/forensics";
 import {
   classifyInstrumentSupport,
@@ -199,7 +199,7 @@ function QuoteHeader({ bundle, computed }: { bundle: DataBundle; computed: Compu
       </div>
 
       <div className="flex flex-wrap items-stretch divide-x divide-edge">
-        <StatCell label="price" value={price === null ? "n/a" : fmtMoney(price)} tone="neutral" />
+        <StatCell label="price" value={price === null ? "n/a" : fmtMoney(price, statementCurrencies(bundle).trading)} tone="neutral" />
         <StatCell
           label="change"
           value={change === null ? "n/a" : fmtSignedPct(change)}
@@ -499,8 +499,11 @@ function TechnicalsPanel({
   computed,
   priceProps,
   rsSeries,
+  tradingCurrency,
 }: {
   computed: ComputedMetrics;
+  /** The listing currency the price history is in. */
+  tradingCurrency: string | null;
   priceProps: ReturnType<typeof priceChartPropsFromBundle>;
   rsSeries: ReturnType<typeof relativeStrengthSeriesFromBundle>;
 }) {
@@ -535,7 +538,7 @@ function TechnicalsPanel({
         <span className="mono text-[11px] text-muted">{read.relativeStrength}</span>
       </div>
       <div className="flex flex-wrap items-stretch divide-x divide-edge border border-edge">
-        <StatCell label="last close" value={fmtMoney(t.lastClose)} />
+        <StatCell label="last close" value={fmtMoney(t.lastClose, tradingCurrency)} />
         <StatCell label="sma50 / 200" value={`${fmtNum(t.smaCross.sma50, 1)} / ${fmtNum(t.smaCross.sma200, 1)}`} tone={t.smaCross.state === "golden" ? "pos" : t.smaCross.state === "death" ? "neg" : "muted"} />
         <StatCell label="rsi(14)" value={fmtNum(t.rsi14, 1)} tone={t.rsi14 !== null && t.rsi14 >= 70 ? "warn" : t.rsi14 !== null && t.rsi14 <= 30 ? "warn" : "neutral"} />
         <StatCell label="macd" value={fmtNum(t.macd.histogram, 2)} delta={<span className="text-faint">{t.macd.state}</span>} tone={t.macd.state === "bullish" ? "pos" : t.macd.state === "bearish" ? "neg" : "muted"} />
@@ -563,12 +566,14 @@ function ValuationPanel({ computed, bundle }: { computed: ComputedMetrics; bundl
   const v = computed.valuation;
   const quote = bundle.quote.ok ? bundle.quote.value.data.rows[0] : undefined;
   const price = typeof quote?.price === "number" ? quote.price : null;
+  // Per-share values are in the currency the model ran in — the statements'.
+  const modelCurrency = statementCurrencies(bundle).model;
 
   return (
     <Panel title={`valuation · ${v.route} (${v.kind})`}>
-      {v.kind === "dcf" ? <DcfBlock v={v} price={price} /> : null}
-      {v.kind === "excess-return" ? <ExcessReturnBlock v={v} price={price} /> : null}
-      {v.kind === "reit" ? <ReitBlock v={v} /> : null}
+      {v.kind === "dcf" ? <DcfBlock v={v} price={price} currency={modelCurrency} /> : null}
+      {v.kind === "excess-return" ? <ExcessReturnBlock v={v} price={price} currency={modelCurrency} /> : null}
+      {v.kind === "reit" ? <ReitBlock v={v} currency={modelCurrency} /> : null}
       {v.kind === "pre-revenue" ? (
         <div className="text-[11px] text-muted">
           Pre-revenue company — no intrinsic-value model in v1. See runway below.
@@ -591,9 +596,11 @@ function ValuationPanel({ computed, bundle }: { computed: ComputedMetrics; bundl
 function DcfBlock({
   v,
   price,
+  currency,
 }: {
   v: Extract<ComputedMetrics["valuation"], { kind: "dcf" }>;
   price: number | null;
+  currency: string | null;
 }) {
   const perShare = v.dcf?.perShare ?? null;
   const up = upsidePct(perShare, price);
@@ -602,7 +609,7 @@ function DcfBlock({
   return (
     <div>
       <div className="flex flex-wrap items-stretch divide-x divide-edge border border-edge">
-        <StatCell label="dcf / share" value={fmtMoney(perShare)} tone="accent" />
+        <StatCell label="dcf / share" value={fmtMoney(perShare, currency)} tone="accent" />
         <StatCell label="vs price" value={up === null ? "n/a" : fmtSignedPct(up)} tone={up === null ? "muted" : up >= 0 ? "pos" : "neg"} />
         <StatCell label="terminal %" value={v.dcf ? fmtPct(v.dcf.gTermUsedPct) : "n/a"} tone="muted" />
         <StatCell label="terminal share" value={v.dcf && v.dcf.terminalShare !== null ? fmtPct(v.dcf.terminalShare * 100) : "n/a"} tone="muted" />
@@ -618,7 +625,7 @@ function DcfBlock({
       ) : null}
 
       {v.assumptions ? <AssumptionTable a={v.assumptions} /> : null}
-      {v.sensitivity ? <SensitivityGridTable grid={v.sensitivity} /> : null}
+      {v.sensitivity ? <SensitivityGridTable grid={v.sensitivity} currency={currency} /> : null}
     </div>
   );
 }
@@ -645,7 +652,13 @@ function AssumptionTable({ a }: { a: NonNullable<Extract<ComputedMetrics["valuat
   );
 }
 
-function SensitivityGridTable({ grid }: { grid: NonNullable<Extract<ComputedMetrics["valuation"], { kind: "dcf" }>["sensitivity"]> }) {
+function SensitivityGridTable({
+  grid,
+  currency,
+}: {
+  grid: NonNullable<Extract<ComputedMetrics["valuation"], { kind: "dcf" }>["sensitivity"]>;
+  currency: string | null;
+}) {
   // Flatten the (WACC × g) matrix into the shared SensitivityHeatmap's cell list,
   // so the company page, report view, and sample route all render one heatmap.
   const cells: SensitivityCell[] = [];
@@ -661,7 +674,7 @@ function SensitivityGridTable({ grid }: { grid: NonNullable<Extract<ComputedMetr
       <div className="mb-1 text-[10px] uppercase tracking-[0.1em] text-faint">
         sensitivity · per share (rows = WACC %, cols = terminal g %)
       </div>
-      <SensitivityHeatmap cells={cells} baseWacc={baseWacc} baseG={baseG} />
+      <SensitivityHeatmap cells={cells} baseWacc={baseWacc} baseG={baseG} currency={currency} />
     </div>
   );
 }
@@ -669,15 +682,17 @@ function SensitivityGridTable({ grid }: { grid: NonNullable<Extract<ComputedMetr
 function ExcessReturnBlock({
   v,
   price,
+  currency,
 }: {
   v: Extract<ComputedMetrics["valuation"], { kind: "excess-return" }>;
   price: number | null;
+  currency: string | null;
 }) {
   const er = v.excessReturn;
   const up = upsidePct(er.perShare, price);
   return (
     <div className="flex flex-wrap items-stretch divide-x divide-edge border border-edge">
-      <StatCell label="value / share" value={fmtMoney(er.perShare)} tone="accent" />
+      <StatCell label="value / share" value={fmtMoney(er.perShare, currency)} tone="accent" />
       <StatCell label="vs price" value={up === null ? "n/a" : fmtSignedPct(up)} tone={up === null ? "muted" : up >= 0 ? "pos" : "neg"} />
       <StatCell label="implied P/BV" value={fmtX(er.impliedPToBv)} tone="muted" />
       <StatCell
@@ -689,13 +704,19 @@ function ExcessReturnBlock({
   );
 }
 
-function ReitBlock({ v }: { v: Extract<ComputedMetrics["valuation"], { kind: "reit" }> }) {
+function ReitBlock({
+  v,
+  currency,
+}: {
+  v: Extract<ComputedMetrics["valuation"], { kind: "reit" }>;
+  currency: string | null;
+}) {
   const r = v.reit;
   return (
     <div className="flex flex-wrap items-stretch divide-x divide-edge border border-edge">
       <StatCell label="P / FFO" value={fmtX(r.pToFfo)} tone="accent" />
       <StatCell label="P / AFFO" value={fmtX(r.pToAffo)} tone="accent" />
-      <StatCell label="FFO / share" value={fmtMoney(r.ffoPerShare)} tone="muted" />
+      <StatCell label="FFO / share" value={fmtMoney(r.ffoPerShare, currency)} tone="muted" />
       <StatCell label="implied cap rate" value={fmtPct(r.impliedCapRatePct)} tone="muted" />
     </div>
   );
@@ -954,7 +975,12 @@ export async function CompanyBody({ symbol }: { symbol: string }) {
         <FundamentalsPanel computed={computed} bundle={bundle} chartData={fundData} />
         <ReturnsPanel computed={computed} />
         <ForensicsPanel computed={computed} />
-        <TechnicalsPanel computed={computed} priceProps={priceProps} rsSeries={rsSeries} />
+        <TechnicalsPanel
+          computed={computed}
+          priceProps={priceProps}
+          rsSeries={rsSeries}
+          tradingCurrency={statementCurrencies(bundle).trading}
+        />
       </div>
 
       <ValuationPanel computed={computed} bundle={bundle} />

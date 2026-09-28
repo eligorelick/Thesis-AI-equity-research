@@ -402,6 +402,11 @@ describe("insurer route metrics", () => {
     expect(development.value).toBe(-1_200);
     expect(development.basis).toContain("favourable release");
   });
+
+  it("states reserve development in its XBRL fact's own unit", () => {
+    const development = find(computeFinancialMetrics("insurer", insurerInputs()).metrics, "reserveDevelopment");
+    expect(development.currency).toBe("USD");
+  });
 });
 
 describe("mortgage-REIT route metrics", () => {
@@ -422,6 +427,20 @@ describe("mortgage-REIT route metrics", () => {
       ...over,
     };
   }
+
+  it("states book value per share in the balance sheet's own currency, and unknown when it has none", () => {
+    const labelled = computeFinancialMetrics(
+      "reit-mortgage",
+      mreitInputs({
+        balance: [
+          { date: "2025-12-31", reportedCurrency: "JPY", totalAssets: 80_000, totalStockholdersEquity: 10_000, preferredStock: 1_000 },
+          { date: "2024-12-31", reportedCurrency: "JPY", totalAssets: 76_000, totalStockholdersEquity: 9_500 },
+        ],
+      }),
+    );
+    expect(find(labelled.metrics, "bookValuePerShare").currency).toBe("JPY");
+    expect(find(computeFinancialMetrics("reit-mortgage", mreitInputs()).metrics, "bookValuePerShare").currency).toBeNull();
+  });
 
   it("computes book value per share, leverage and the repo-funded spread over their own denominators", () => {
     const r = computeFinancialMetrics("reit-mortgage", mreitInputs());

@@ -39,6 +39,12 @@ export function formatNumber(value: number | null | undefined, digits = 2): stri
   });
 }
 
+/**
+ * A GENUINELY US-dollar amount (the Anthropic API cost, a USD-denominated
+ * threshold). Never for a company figure: those go through
+ * {@link formatMoneyAmount} / {@link formatFinancialValue} with the currency
+ * their evidence establishes.
+ */
 export function formatCurrency(value: number | null | undefined, digits = 2): string {
   if (value == null || !Number.isFinite(value)) return "n/a";
   return `$${formatNumber(value, digits)}`;
@@ -87,32 +93,59 @@ export function formatMultiple(value: number | null | undefined, digits = 1): st
  * guessed at a symbol, because symbols are ambiguous across currencies ($ alone
  * is used by a dozen of them).
  *
- * An ABSENT currency keeps the dollar sign: `TracedNumber.currency` is
- * documented as optional ONLY for legacy reports, which predate the field, so
- * that is the legacy path. A currency the pipeline recorded as unknown (null)
- * or as something that is not an ISO code is never printed as dollars.
+ * The currency must be ESTABLISHED ({@link establishedCurrency}); anything
+ * else prints "(currency unknown)". There is no legacy-dollar default: no
+ * report spec version was a USD-only contract, and the pipeline has served
+ * non-US filers throughout, so a figure that does not say its currency is not
+ * known to be in dollars.
  */
-function formatMoney(value: number, currency: string | null | undefined, large: boolean): string {
+function formatMoney(value: number, currency: string | null, large: boolean): string {
   return withCurrency(large ? formatLargeNumber(value) : formatNumber(value, 2), currency);
 }
 
-function withCurrency(magnitude: string, currency: string | null | undefined): string {
-  if (currency === undefined) return `$${magnitude}`;
+function withCurrency(magnitude: string, currency: string | null): string {
   const code = (currency ?? "").trim().toUpperCase();
   if (code === "USD") return `$${magnitude}`;
-  if (!/^[A-Z]{3}$/.test(code)) return `${magnitude} (currency unknown)`;
+  if (!ISO_CODE.test(code)) return `${magnitude} (currency unknown)`;
   return `${magnitude} ${code}`;
+}
+
+const ISO_CODE = /^[A-Z]{3}$/;
+
+/**
+ * The ISO code a unit string names itself ("USD", "TWD/share"), else null.
+ * Case-sensitive on purpose: the lowercase canonical names ("usd", "usd/share",
+ * "usd_large") and "currency" are historical spellings of "some currency",
+ * not of US dollars (see {@link formatMoney}). Same rule as the provenance
+ * layer's canonicalizeTracedUnit.
+ */
+export function unitCurrency(unit: string): string | null {
+  return /^([A-Z]{3})(?:\/share)?$/.exec(unit.trim())?.[1] ?? null;
+}
+
+/**
+ * A figure's ESTABLISHED currency: its own ISO `currency` field, else the ISO
+ * code its unit names. Null when neither establishes one, or when the two
+ * disagree (a figure cannot be in two currencies). Stored values are read, not
+ * rewritten; an absent field is simply no evidence.
+ */
+export function establishedCurrency(unit: string, currency: string | null | undefined): string | null {
+  const code = typeof currency === "string" ? currency.trim().toUpperCase() : "";
+  const field = ISO_CODE.test(code) ? code : null;
+  const fromUnit = unitCurrency(unit);
+  if (field !== null && fromUnit !== null && field !== fromUnit) return null;
+  return field ?? fromUnit;
 }
 
 /**
  * A plain money amount at a chosen precision, in its ACTUAL currency — the
  * same rule as {@link formatMoney}, for figures rendered outside a
  * TracedNumber (the DCF sensitivity grid, whose cells are bare numbers in the
- * currency of `valuation.dcf.perShare`).
+ * currency of `valuation.dcf.perShare`). Pass the ESTABLISHED currency.
  */
 export function formatMoneyAmount(
   value: number,
-  currency: string | null | undefined,
+  currency: string | null,
   digits = 2,
 ): string {
   return withCurrency(formatNumber(value, digits), currency);
@@ -158,8 +191,8 @@ export function formatFinancialValue(
   switch (canonical) {
     case "percent": return formatPct(value);
     case "multiple": return formatMultiple(value);
-    case "usd": return formatMoney(value, currency, Math.abs(value) >= 1e6);
-    case "usd-per-share": return formatMoney(value, currency, false);
+    case "usd": return formatMoney(value, establishedCurrency(unit, currency), Math.abs(value) >= 1e6);
+    case "usd-per-share": return formatMoney(value, establishedCurrency(unit, currency), false);
     case "large-count": return formatLargeNumber(value);
     case "basis-points": return `${formatNumber(value, 0)} bps`;
     case "years": return `${formatNumber(value, 1)}y`;

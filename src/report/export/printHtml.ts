@@ -81,6 +81,7 @@ import {
   formatCostUsd,
   formatFinancialValue,
   formatMoneyAmount,
+  establishedCurrency,
   peerColumnKeys,
   formatPct,
   roundedDisplayedCostTotal,
@@ -544,7 +545,7 @@ function routeMetricsBlock(rm: RouteMetrics): string {
       ["Metric", "Value", "Basis / reason withheld"],
       rm.metrics.map((m) => [
         esc(m.label) + (m.proxy ? ' <span class="faint">(stand-in)</span>' : ""),
-        m.value === null ? "withheld" : esc(formatFinancialValue(m.value, m.unit)),
+        m.value === null ? "withheld" : esc(formatFinancialValue(m.value, m.unit, m.currency ?? null)),
         esc(m.withheldReason ?? m.basis),
       ]),
     ),
@@ -600,7 +601,7 @@ function sectionValuation(
       ...gterms.map((g) => {
         const ps = lookup.get(`${w}|${g}`);
         // In the currency of the per-share value beside it (see markdown.ts).
-        return ps === undefined || ps === null ? DASH : esc(formatMoneyAmount(ps, dcfPs?.currency, 0));
+        return ps === undefined || ps === null ? DASH : esc(formatMoneyAmount(ps, dcfPs ? establishedCurrency(dcfPs.unit, dcfPs.currency) : null, 0));
       }),
     ]);
     parts.push(

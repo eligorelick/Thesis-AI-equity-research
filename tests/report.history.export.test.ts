@@ -467,13 +467,14 @@ describe("reportToMarkdown", () => {
   });
 
   it("renders traced figures, not raw JSON — e.g. DCF per share as currency", () => {
-    // Fixture DCF per share is 48 with unit "usd".
-    expect(md).toContain("$48.00");
+    // Fixture DCF per share is 48 with unit "usd" and no currency field: the
+    // stored figure never says which currency, so none is claimed.
+    expect(md).toContain("48.00 (currency unknown)");
     // A percentage-unit figure renders with a % suffix, not a bare object.
     expect(md).toContain("60.0%");
     // Large monetary values render through the compact scale.
-    expect(md).toContain("$7.50B");
-    expect(md).toContain("$5.00B");
+    expect(md).toContain("7.50B (currency unknown)");
+    expect(md).toContain("5.00B (currency unknown)");
   });
 
   it("renders every FACT/ESTIMATE/JUDGMENT claim label", () => {

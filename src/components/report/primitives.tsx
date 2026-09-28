@@ -29,7 +29,7 @@ import type {
   TracedNumber,
 } from "@/report/schema";
 import {
-  formatCurrency,
+  formatNumber,
   formatTracedValue,
 } from "@/report/format";
 import { ClaimText } from "./ClaimText";
@@ -454,13 +454,14 @@ export function ShareBar({
 /**
  * A single sensitivity-grid cell. Background interpolates green (high) → amber
  * (mid) → red (low) by the value's position in [min,max]. `null` renders a
- * faint dash. `format` maps the value to display text (defaults to $ rounded).
+ * faint dash. `format` maps the value to display text (defaults to the bare
+ * rounded amount — pass a currency-aware formatter to label it).
  */
 export function HeatmapCell({
   value,
   min,
   max,
-  format = (v) => formatCurrency(v, 0),
+  format = (v) => formatNumber(v, 0),
   highlight = false,
 }: {
   value: number | null;

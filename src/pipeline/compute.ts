@@ -1001,12 +1001,15 @@ function resolveStatementCurrencies(
  * gaps.
  */
 export function statementCurrencies(bundle: DataBundle): StatementCurrencies {
-  const income = normalizeStatementQuarters(rowsOf(bundle.statements.incomeQuarterly), "income");
-  const balance = normalizeStatementQuarters(rowsOf(bundle.statements.balanceQuarterly), "balance");
-  const cashflow = normalizeStatementQuarters(rowsOf(bundle.statements.cashflowQuarterly), "cashFlow");
+  // A degraded bundle may lack a member; missing rows are simply no evidence.
+  const rows = <TRow extends FmpRawRow>(f: FmpFetch<TRow> | undefined): TRow[] => (f === undefined ? [] : rowsOf(f));
+  const statements: Partial<DataBundle["statements"]> = bundle.statements ?? {};
+  const income = normalizeStatementQuarters(rows(statements.incomeQuarterly), "income");
+  const balance = normalizeStatementQuarters(rows(statements.balanceQuarterly), "balance");
+  const cashflow = normalizeStatementQuarters(rows(statements.cashflowQuarterly), "cashFlow");
   return resolveStatementCurrencies(
-    firstRow(bundle.profile)?.currency,
-    rowsOf(bundle.statements.incomeAnnual)[0],
+    bundle.profile === undefined ? undefined : firstRow(bundle.profile)?.currency,
+    rows(statements.incomeAnnual)[0],
     ttmIncomeFromNormalized(income, undefined, [...balance.rows, ...cashflow.rows]),
     ttmCashFlowFromNormalized(cashflow, undefined, [...income.rows, ...balance.rows]),
   );
@@ -1466,6 +1469,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     companyFacts: bundle.edgar?.companyFacts ?? null,
     balance: balanceAnnual.map((r) => ({
       date: String(r.date ?? ""),
+      reportedCurrency: str(r.reportedCurrency),
       totalAssets: num(r.totalAssets),
       totalStockholdersEquity: num(r.totalStockholdersEquity),
       totalEquity: num(r.totalEquity),

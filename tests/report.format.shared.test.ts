@@ -57,7 +57,8 @@ function clone<T>(value: T): T {
 describe("shared report formatting", () => {
   it.each([
     [60_958_000_000, "USD", "$60.96B"],
-    [3_450_000_000, "currency", "$3.45B"],
+    // "currency" names no currency: no dollar sign without evidence.
+    [3_450_000_000, "currency", "3.45B (currency unknown)"],
     [274.125, "USD/share", "$274.13"],
     [18.234, "%", "18.2%"],
     [1.82, "x", "1.8×"],
@@ -93,9 +94,7 @@ describe("shared report formatting", () => {
 
   it("prints a plain money amount in its actual currency", () => {
     expect(formatMoneyAmount(1234.5, "USD", 0)).toBe("$1,235");
-    // Absent: a legacy report that predates the currency field.
-    expect(formatMoneyAmount(1234.5, undefined, 0)).toBe("$1,235");
-    // Recorded as unknown: never dollars.
+    // Not established: never dollars.
     expect(formatMoneyAmount(1234.5, null, 0)).toBe("1,235 (currency unknown)");
     expect(formatMoneyAmount(1234.5, "TWD", 0)).toBe("1,235 TWD");
     expect(formatMoneyAmount(-12.345, "chf", 2)).toBe("-12.35 CHF");

@@ -247,15 +247,27 @@ describe("report format helpers", () => {
       formatTracedValue({
         value: 198.4,
         unit: "usd",
+        currency: "USD",
         source: "x",
         asOf: null,
         verified: true,
       }),
     ).toBe("$198.40");
+    // The lowercase canonical unit names no currency; without a field it is unknown.
+    expect(
+      formatTracedValue({
+        value: 198.4,
+        unit: "usd",
+        source: "x",
+        asOf: null,
+        verified: true,
+      }),
+    ).toBe("198.40 (currency unknown)");
     expect(
       formatTracedValue({
         value: 3.5e12,
         unit: "usd_large",
+        currency: "USD",
         source: "x",
         asOf: null,
         verified: true,

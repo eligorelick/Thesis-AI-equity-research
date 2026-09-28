@@ -35,10 +35,12 @@ describe("monetary formatting respects the reported currency", () => {
     expect(out).toContain("TWD");
   });
 
-  it("keeps the dollar sign when the report predates the currency field (legacy reports)", () => {
-    // A stored report written before TracedNumber.currency existed parses with
-    // the field ABSENT; that is the documented legacy path.
-    expect(formatTracedValue(traced())).toBe("$1,234.50");
+  it("does not assume dollars for a stored figure that never stated its currency", () => {
+    // A report written before TracedNumber.currency existed parses with the
+    // field ABSENT. The lowercase unit "usd" is a historical name for "some
+    // currency", so nothing establishes USD; an explicit "USD" unit does.
+    expect(formatTracedValue(traced())).toBe("1,234.50 (currency unknown)");
+    expect(formatTracedValue(traced({ unit: "USD" }))).toBe("$1,234.50");
   });
 
   it("never renders a currency the pipeline recorded as unknown (null) as dollars", () => {
@@ -74,8 +76,9 @@ describe("monetary formatting respects the reported currency", () => {
     expect(formatTracedValue(traced({ value: 2.5, unit: "x", currency: "TWD" }))).toBe("2.5×");
   });
 
-  it("formatFinancialValue defaults to dollars when no currency is passed", () => {
-    expect(formatFinancialValue(1234.5, "usd")).toBe("$1,234.50");
+  it("formatFinancialValue takes the currency from the field or an explicit ISO unit only", () => {
+    expect(formatFinancialValue(1234.5, "usd")).toBe("1,234.50 (currency unknown)");
+    expect(formatFinancialValue(1234.5, "USD")).toBe("$1,234.50");
     expect(formatFinancialValue(1234.5, "usd", "JPY")).toContain("JPY");
   });
 });

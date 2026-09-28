@@ -35,7 +35,7 @@ export function compactNumber(v: number | null | undefined, digits = 1): string 
   return `${sign}${abs.toFixed(abs >= 100 ? 0 : digits)}`;
 }
 
-/** Compact currency: prefixes a `$`. */
+/** Compact US-dollar amount: prefixes a `$`. Only for a figure established as USD. */
 export function compactCurrency(v: number | null | undefined, digits = 1): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return EM_DASH;
   const sign = v < 0 ? "-" : "";
@@ -103,7 +103,7 @@ export function price(v: number | null | undefined, digits = 2): string {
   });
 }
 
-/** Money with `$`: "$123.45". */
+/** US-dollar money: "$123.45". Only for a figure established as USD. */
 export function money(v: number | null | undefined, digits = 2): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return EM_DASH;
   const sign = v < 0 ? "-" : "";
@@ -111,19 +111,17 @@ export function money(v: number | null | undefined, digits = 2): string {
 }
 
 /**
- * Money in its ACTUAL currency: "$" for USD or an ABSENT currency (a legacy
- * report that predates the field), the ISO code after the magnitude for any
- * other code, and the bare magnitude when the currency is recorded as unknown
- * (null) — the same rule as src/report/format.ts formatMoney, so a
- * TWD-per-share grid never wears a "$".
+ * Money in its ESTABLISHED currency: "$" for USD, the ISO code after the
+ * magnitude for any other code, and the bare magnitude when no currency is
+ * established — the same rule as src/report/format.ts formatMoney, so a
+ * TWD-per-share grid never wears a "$" and an unknown one never claims it.
  */
 export function moneyIn(
   v: number | null | undefined,
-  currency: string | null | undefined,
+  currency: string | null,
   digits = 2,
 ): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return EM_DASH;
-  if (currency === undefined) return money(v, digits);
   const code = (currency ?? "").trim().toUpperCase();
   if (code === "USD") return money(v, digits);
   const sign = v < 0 ? "-" : "";

@@ -53,6 +53,8 @@ export interface RouteMetric {
   label: string;
   value: number | null;
   unit: RouteMetricUnit;
+  /** ISO currency of a money metric, from the fact or statement it was read from; null when unknown. */
+  currency?: string | null;
   /** Formula and the inputs that produced it (or would have). */
   basis: string;
   /** Source paths for every input, e.g. "edgar:companyfacts us-gaap/Deposits". */
@@ -81,6 +83,8 @@ export interface FinancialMetricsResult {
 /** Balance-sheet slice (FMP field names; the same rows Stage B already builds). */
 export interface FinancialMetricsBalanceRow {
   date: string;
+  /** The statement row's own reportedCurrency. */
+  reportedCurrency?: string | null;
   totalAssets?: number | null;
   totalStockholdersEquity?: number | null;
   totalEquity?: number | null;
@@ -277,6 +281,8 @@ function tagPath(tag: string): string {
 
 interface TagHit {
   value: number;
+  /** The XBRL fact's unit (an ISO code for monetary facts). */
+  unit: string;
   tag: string;
   end: string;
   sourcePath: string;
@@ -293,7 +299,13 @@ function resolveTag(
   const r = getConcept(facts, chain, { period });
   if (!r.ok) return null;
   const v = r.value.data;
-  return { value: v.value, tag: v.tag, end: v.period.end, sourcePath: tagPath(v.tag) };
+  return { value: v.value, unit: v.unit, tag: v.tag, end: v.period.end, sourcePath: tagPath(v.tag) };
+}
+
+/** An ISO-4217 code, or null: the currency a money metric is stated in. */
+function isoCode(value: unknown): string | null {
+  const code = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return /^[A-Z]{3}$/.test(code) ? code : null;
 }
 
 /** Sum every tag in `tags` that resolves; null when none does. */
@@ -808,6 +820,7 @@ function insurerMetrics(
           key: "reserveDevelopment",
           label: "prior-year reserve development",
           unit: "currency",
+          currency: isoCode(development.unit),
           value: development.value,
           basis:
             `incurred claims attributable to PRIOR accident years ${development.value} (${development.tag}). ` +
@@ -874,6 +887,7 @@ function mortgageReitMetrics(
           key: "bookValuePerShare",
           label: "book value per share",
           unit: "currency/share",
+          currency: isoCode(bal0?.reportedCurrency),
           value: (equity - preferred) / shares,
           basis:
             `(total stockholders' equity ${equity} − preferred ${preferred}) / ${sharesLabel} ` +

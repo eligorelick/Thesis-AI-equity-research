@@ -59,6 +59,7 @@ import type {
 import { citationOutcomeLabel } from "@/report/schema";
 import {
   formatCostUsd,
+  establishedCurrency,
   formatFinancialValue,
   roundedDisplayedCostTotal,
 } from "@/report/format";
@@ -852,7 +853,7 @@ function SensitivityGrid({ dcf }: { dcf: Valuation["dcf"] }) {
       cells={cells}
       baseWacc={baseWacc}
       baseG={baseG}
-      currency={dcf.perShare?.currency}
+      currency={dcf.perShare ? establishedCurrency(dcf.perShare.unit, dcf.perShare.currency) : null}
     />
   );
 }
@@ -958,7 +959,7 @@ function RouteMetricsTable({ rows }: { rows: readonly RouteMetricRow[] }) {
         m.value === null ? (
           <span className="mono text-faint">withheld</span>
         ) : (
-          <span className="mono">{formatFinancialValue(m.value, m.unit)}</span>
+          <span className="mono">{formatFinancialValue(m.value, m.unit, m.currency ?? null)}</span>
         ),
     },
     {

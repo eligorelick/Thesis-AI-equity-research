@@ -244,18 +244,23 @@ describe("fmtBig", () => {
 });
 
 describe("fmtMoney", () => {
-  it("prefixes $ with grouping", () => {
-    expect(fmtMoney(1234.5)).toBe("$1,234.50");
-    expect(fmtMoney(0.125, 3)).toBe("$0.125");
+  it("prefixes $ with grouping for USD", () => {
+    expect(fmtMoney(1234.5, "USD")).toBe("$1,234.50");
+    expect(fmtMoney(0.125, "USD", 3)).toBe("$0.125");
+  });
+
+  it("names any other established currency, and claims none that is not", () => {
+    expect(fmtMoney(1234.5, "JPY")).toBe("1,234.50 JPY");
+    expect(fmtMoney(1234.5, null)).toBe("1,234.50 (currency unknown)");
   });
 
   it("negative values render as $-… (sign INSIDE the currency prefix — current behavior)", () => {
-    expect(fmtMoney(-5)).toBe("$-5.00");
+    expect(fmtMoney(-5, "USD")).toBe("$-5.00");
   });
 
   it("sentinels -> n/a", () => {
-    expect(fmtMoney(null)).toBe("n/a");
-    expect(fmtMoney(Number.NaN)).toBe("n/a");
+    expect(fmtMoney(null, "USD")).toBe("n/a");
+    expect(fmtMoney(Number.NaN, "USD")).toBe("n/a");
   });
 });
 

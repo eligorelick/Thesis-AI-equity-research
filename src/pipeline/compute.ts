@@ -625,6 +625,21 @@ function sumField(rows: FmpIncomeStatementRow[], key: keyof FmpIncomeStatementRo
   return seen ? acc : null;
 }
 
+/**
+ * Why four quarters cannot be summed into one figure, or null when they can.
+ * Every quarter must carry the SAME ISO currency, or none may carry one at
+ * all (a provider that labels nothing leaves the sum's currency unknown, not
+ * mixed). A USD quarter beside a JPY quarter, or beside a quarter with no or
+ * an invalid code, has no single currency to add in.
+ */
+function quarterCurrencyViolation(rows: readonly { date?: unknown; reportedCurrency?: unknown }[]): string | null {
+  const codes = rows.map((row) => normalizeReportedCurrency(row.reportedCurrency));
+  if (codes.every((code) => code === codes[0])) return null;
+  return rows
+    .map((row, i) => `${isoDay(row.date) ?? String(row.date ?? "?")} ${codes[i] ?? "unknown"}`)
+    .join(", ");
+}
+
 /** Non-null quarter count for a field (completeness gate for critical sums). */
 function countField(rows: FmpIncomeStatementRow[], key: keyof FmpIncomeStatementRow): number {
   let n = 0;
@@ -692,6 +707,17 @@ function ttmIncomeFromNormalized(
     return null;
   }
 
+  const currencyViolation = quarterCurrencyViolation(q);
+  if (currencyViolation !== null) {
+    gaps?.push({
+      field: "compute.ttmIncome",
+      reason: `latest 4 quarterly rows are not in one reporting currency (${currencyViolation}) — a sum across currencies is no figure at all, so the TTM basis is suppressed; latest annual statement used instead`,
+      severity: "warn",
+      attemptedSources: ["fmp:/stable/income-statement?period=quarter"],
+    });
+    return null;
+  }
+
   const revenueCount = countField(q, "revenue");
   if (revenueCount < 4) {
     gaps?.push({
@@ -739,16 +765,10 @@ function ttmIncomeFromNormalized(
     return null;
   };
 
-  const firstReportedCurrency = normalizeReportedCurrency(q[0].reportedCurrency);
-  const reportedCurrency =
-    firstReportedCurrency !== null &&
-    q.every((row) => normalizeReportedCurrency(row.reportedCurrency) === firstReportedCurrency)
-      ? firstReportedCurrency
-      : null;
-
   return {
     date: String(q[0].date ?? ""),
-    reportedCurrency,
+    // One code for all four quarters (the gate above), or null for none.
+    reportedCurrency: normalizeReportedCurrency(q[0].reportedCurrency),
     revenue: sumField(q, "revenue"),
     operatingIncome: gateComplete("operatingIncome"),
     depreciationAndAmortization: gateComplete("depreciationAndAmortization"),
@@ -813,6 +833,17 @@ function ttmCashFlowFromNormalized(
       field: "compute.ttmCashFlow",
       reason: `latest 4 quarterly rows do not form a contiguous trailing twelve months (${violation}) — TTM basis suppressed; latest annual statement used instead`,
       severity: "info",
+      attemptedSources: ["fmp:/stable/cash-flow-statement?period=quarter"],
+    });
+    return null;
+  }
+  // Currency gate — identical to ttmIncome.
+  const currencyViolation = quarterCurrencyViolation(q);
+  if (currencyViolation !== null) {
+    gaps?.push({
+      field: "compute.ttmCashFlow",
+      reason: `latest 4 quarterly rows are not in one reporting currency (${currencyViolation}) — a sum across currencies is no figure at all, so the TTM basis is suppressed; latest annual statement used instead`,
+      severity: "warn",
       attemptedSources: ["fmp:/stable/cash-flow-statement?period=quarter"],
     });
     return null;

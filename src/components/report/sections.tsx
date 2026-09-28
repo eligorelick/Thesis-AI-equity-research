@@ -852,7 +852,7 @@ function SensitivityGrid({ dcf }: { dcf: Valuation["dcf"] }) {
       cells={cells}
       baseWacc={baseWacc}
       baseG={baseG}
-      currency={dcf.perShare?.currency ?? null}
+      currency={dcf.perShare?.currency}
     />
   );
 }

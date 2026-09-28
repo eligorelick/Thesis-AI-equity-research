@@ -87,14 +87,20 @@ export function formatMultiple(value: number | null | undefined, digits = 1): st
  * guessed at a symbol, because symbols are ambiguous across currencies ($ alone
  * is used by a dozen of them).
  *
- * A null/absent currency keeps the dollar sign: `TracedNumber.currency` is
- * documented as optional ONLY for legacy reports, so this is the legacy path,
- * not a silent default for current data.
+ * An ABSENT currency keeps the dollar sign: `TracedNumber.currency` is
+ * documented as optional ONLY for legacy reports, which predate the field, so
+ * that is the legacy path. A currency the pipeline recorded as unknown (null)
+ * or as something that is not an ISO code is never printed as dollars.
  */
 function formatMoney(value: number, currency: string | null | undefined, large: boolean): string {
-  const magnitude = large ? formatLargeNumber(value) : formatNumber(value, 2);
+  return withCurrency(large ? formatLargeNumber(value) : formatNumber(value, 2), currency);
+}
+
+function withCurrency(magnitude: string, currency: string | null | undefined): string {
+  if (currency === undefined) return `$${magnitude}`;
   const code = (currency ?? "").trim().toUpperCase();
-  if (code === "" || code === "USD") return `$${magnitude}`;
+  if (code === "USD") return `$${magnitude}`;
+  if (!/^[A-Z]{3}$/.test(code)) return `${magnitude} (currency unknown)`;
   return `${magnitude} ${code}`;
 }
 
@@ -109,10 +115,7 @@ export function formatMoneyAmount(
   currency: string | null | undefined,
   digits = 2,
 ): string {
-  const magnitude = formatNumber(value, digits);
-  const code = (currency ?? "").trim().toUpperCase();
-  if (code === "" || code === "USD") return `$${magnitude}`;
-  return `${magnitude} ${code}`;
+  return withCurrency(formatNumber(value, digits), currency);
 }
 
 /**

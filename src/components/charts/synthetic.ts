@@ -206,5 +206,6 @@ export function syntheticFundamentals(endFiscalYear = 2025, years = 8): Fundamen
     shareCount.push({ period, dilutedShares: Math.round(shares * 1e9) });
   }
 
-  return { revenue, margins, fcf, shareCount };
+  // The sample report beside these charts states its money in USD units.
+  return { revenue, margins, fcf, shareCount, currency: "USD" };
 }

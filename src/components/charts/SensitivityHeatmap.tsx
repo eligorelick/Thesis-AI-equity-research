@@ -38,8 +38,9 @@ export interface SensitivityHeatmapProps {
   /** Per-share decimals (default 0 — dense). */
   digits?: number;
   /**
-   * Currency of the per-share values (that of `valuation.dcf.perShare`);
-   * null/absent renders "$" (the legacy-report path, never a default).
+   * Currency of the per-share values (that of `valuation.dcf.perShare`).
+   * Absent renders "$" (the legacy-report path, never a default); null is a
+   * currency recorded as unknown and renders the bare amount.
    */
   currency?: string | null;
 }
@@ -89,7 +90,7 @@ export function SensitivityHeatmap({
   baseWacc = null,
   baseG = null,
   digits = 0,
-  currency = null,
+  currency,
 }: SensitivityHeatmapProps) {
   const rows = waccAxis && waccAxis.length > 0 ? [...waccAxis] : deriveAxis(cells, "waccPct");
   const cols = gAxis && gAxis.length > 0 ? [...gAxis] : deriveAxis(cells, "gTermPct");

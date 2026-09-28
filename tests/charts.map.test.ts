@@ -562,7 +562,30 @@ describe("fundamentalsChartDataFromBundle", () => {
       statements: { incomeAnnual: GAP, cashflowAnnual: GAP },
     } as unknown as DataBundle;
     const data = fundamentalsChartDataFromBundle(bundle, computedWithMargins([], [], []));
-    expect(data).toEqual({ revenue: [], margins: [], fcf: [], shareCount: [] });
+    expect(data).toEqual({ revenue: [], margins: [], fcf: [], shareCount: [], currency: null });
+  });
+
+  it("carries the statements' reporting currency, and unknown when the rows do not establish one", () => {
+    const withCurrencies = (income: (string | null)[], cash: (string | null)[]) =>
+      fundamentalsChartDataFromBundle(
+        {
+          statements: {
+            incomeAnnual: okFetch<FmpIncomeStatementRow>(
+              income.map((reportedCurrency, i) => ({ date: `${2024 - i}-12-31`, revenue: 3.81e12, reportedCurrency })),
+            ),
+            cashflowAnnual: okFetch<FmpCashFlowRow>(
+              cash.map((reportedCurrency, i) => ({ date: `${2024 - i}-12-31`, freeCashFlow: 1e12, reportedCurrency })),
+            ),
+          },
+        } as unknown as DataBundle,
+        computedWithMargins([], [], []),
+      ).currency;
+    expect(withCurrencies(["TWD", "twd"], ["TWD", "TWD"])).toBe("TWD");
+    expect(withCurrencies(["USD", "USD"], ["USD", "USD"])).toBe("USD");
+    // No row says, a row does not say, or the rows disagree: unknown, not USD.
+    expect(withCurrencies([null, null], [null, null])).toBeNull();
+    expect(withCurrencies(["TWD", null], ["TWD", "TWD"])).toBeNull();
+    expect(withCurrencies(["TWD", "TWD"], ["USD", "USD"])).toBeNull();
   });
 });
 

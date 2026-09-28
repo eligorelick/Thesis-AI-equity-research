@@ -600,7 +600,7 @@ function sectionValuation(
       ...gterms.map((g) => {
         const ps = lookup.get(`${w}|${g}`);
         // In the currency of the per-share value beside it (see markdown.ts).
-        return ps === undefined || ps === null ? DASH : esc(formatMoneyAmount(ps, dcfPs?.currency ?? null, 0));
+        return ps === undefined || ps === null ? DASH : esc(formatMoneyAmount(ps, dcfPs?.currency, 0));
       }),
     ]);
     parts.push(

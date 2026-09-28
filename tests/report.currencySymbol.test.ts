@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatFinancialValue, formatTracedValue } from "@/report/format";
+import { formatFinancialValue, formatMoneyAmount, formatTracedValue } from "@/report/format";
 import type { TracedNumber } from "@/report/schema";
 
 /**
@@ -35,8 +35,23 @@ describe("monetary formatting respects the reported currency", () => {
     expect(out).toContain("TWD");
   });
 
-  it("keeps the dollar sign when no currency was recorded (legacy reports)", () => {
-    expect(formatTracedValue(traced({ currency: null }))).toBe("$1,234.50");
+  it("keeps the dollar sign when the report predates the currency field (legacy reports)", () => {
+    // A stored report written before TracedNumber.currency existed parses with
+    // the field ABSENT; that is the documented legacy path.
+    expect(formatTracedValue(traced())).toBe("$1,234.50");
+  });
+
+  it("never renders a currency the pipeline recorded as unknown (null) as dollars", () => {
+    for (const out of [
+      formatTracedValue(traced({ currency: null })),
+      formatTracedValue(traced({ value: 13_500_000_000, currency: null })),
+      formatTracedValue(traced({ value: 42.5, unit: "usd/share", currency: null })),
+      formatMoneyAmount(42.5, null),
+    ]) {
+      expect(out).not.toContain("$");
+      expect(out).toContain("currency unknown");
+    }
+    expect(formatTracedValue(traced({ value: 13_500_000_000, currency: null }))).toContain("13.50B");
   });
 
   it("carries the currency through the large-magnitude path", () => {

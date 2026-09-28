@@ -44,6 +44,32 @@ export function compactCurrency(v: number | null | undefined, digits = 1): strin
 }
 
 /**
+ * Compact money in the statements' ACTUAL currency: "$45.6B" for USD, the ISO
+ * code after the magnitude otherwise ("3.8T TWD"), and the bare magnitude when
+ * the currency is unknown — a chart must not claim dollars it does not know.
+ */
+export function compactMoneyIn(
+  v: number | null | undefined,
+  currency: string | null,
+  digits = 1,
+): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return EM_DASH;
+  const code = (currency ?? "").trim().toUpperCase();
+  if (code === "USD") return compactCurrency(v, digits);
+  const body = compactNumber(v, digits);
+  return /^[A-Z]{3}$/.test(code) ? `${body} ${code}` : body;
+}
+
+/**
+ * Value-axis tick in the chart's currency. Only USD keeps its symbol; any
+ * other (or unknown) currency is named once in the chart title, so the narrow
+ * axis gutter carries magnitudes alone.
+ */
+export function currencyAxisTickIn(v: number | null | undefined, currency: string | null): string {
+  return (currency ?? "").trim().toUpperCase() === "USD" ? currencyAxisTick(v) : compactNumber(v, 1);
+}
+
+/**
  * Currency tick for a value axis.
  *
  * Axis ticks land on values like 1.5e9 as often as on round ones, and rounding
@@ -85,9 +111,11 @@ export function money(v: number | null | undefined, digits = 2): string {
 }
 
 /**
- * Money in its ACTUAL currency: "$" only for USD or an unknown (legacy)
- * currency, otherwise the ISO code follows the magnitude — the same rule as
- * src/report/format.ts formatMoney, so a TWD-per-share grid never wears a "$".
+ * Money in its ACTUAL currency: "$" for USD or an ABSENT currency (a legacy
+ * report that predates the field), the ISO code after the magnitude for any
+ * other code, and the bare magnitude when the currency is recorded as unknown
+ * (null) — the same rule as src/report/format.ts formatMoney, so a
+ * TWD-per-share grid never wears a "$".
  */
 export function moneyIn(
   v: number | null | undefined,
@@ -95,10 +123,12 @@ export function moneyIn(
   digits = 2,
 ): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return EM_DASH;
+  if (currency === undefined) return money(v, digits);
   const code = (currency ?? "").trim().toUpperCase();
-  if (code === "" || code === "USD") return money(v, digits);
+  if (code === "USD") return money(v, digits);
   const sign = v < 0 ? "-" : "";
-  return `${sign}${price(Math.abs(v), digits)} ${code}`;
+  const body = `${sign}${price(Math.abs(v), digits)}`;
+  return /^[A-Z]{3}$/.test(code) ? `${body} ${code}` : body;
 }
 
 /** Multiple: "12.3×"; "n/m" when null (matches page convention). */

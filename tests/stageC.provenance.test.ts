@@ -193,26 +193,55 @@ describe("canonical traced units", () => {
 });
 
 describe("period agreement", () => {
+  // The third column is the issuer's own fiscal label for the registered row
+  // (the statement row's fiscalYear/period), or null when none is known.
   it.each([
-    ["FY2025", "2025-12-31"],
-    ["total debt FY2025", "2025-12-31"],
-    ["Q2 2026", "2026-06-30"],
-    ["cash+STI Q2 2026", "2026-06-30"],
-    ["fy25", "2025-12-31"],
-    ["2025-12-31", "2025-12-31"],
-    ["revenue FY2027E", "FY2027E"],
-  ])("reads %s as the registered period %s", (supplied, registered) => {
-    expect(periodsAgree(supplied, registered)).toBe(true);
+    ["2025-12-31", "2025-12-31", null],
+    ["total debt 2025-12-31", "2025-12-31", null],
+    ["revenue FY2027E", "FY2027E", null],
+    ["fy27", "FY2027E", null],
+    ["FY2025", "2025-12-31", "FY2025"],
+    ["total debt FY2025", "2025-12-31", "FY2025"],
+    ["fy25", "2025-12-31", "FY2025"],
+    ["2025", "2025-12-31", "FY2025"],
+    ["Q2 2026", "2026-06-30", "Q2 FY2026"],
+    ["cash+STI Q2 2026", "2026-06-30", "Q2 FY2026"],
+    // Apple's Q1 FY2026 ended 2025-12-27: its own label says so.
+    ["Q1 FY2026", "2025-12-27", "Q1 FY2026"],
+    ["first quarter of fiscal 2026", "2025-12-27", "Q1 FY2026"],
+    // A 52/53-week year that runs into January still closes calendar Q4.
+    ["Q4 2025", "2026-01-03", "Q4 FY2025"],
+    ["Q4 FY2025", "2025-03-31", "Q4 FY2025"],
+  ])("reads %s as the registered period %s (issuer label %s)", (supplied, registered, issuer) => {
+    expect(periodsAgree(supplied, registered, issuer)).toBe(true);
   });
 
   it.each([
-    ["FY2024", "2025-12-31"],
-    ["FY2024 vs FY2025", "2025-12-31"],
-    ["FY1999", "FY2027"],
-    ["Q1 FY2026", "2025-12-27"],
-    ["trailing twelve months", "2025-12-31"],
-  ])("rejects %s against the registered period %s", (supplied, registered) => {
-    expect(periodsAgree(supplied, registered)).toBe(false);
+    ["FY2024", "2025-12-31", "FY2025"],
+    ["FY2024 vs FY2025", "2025-12-31", "FY2025"],
+    ["2025-12-31 vs 2024-12-31", "2025-12-31", "FY2025"],
+    ["FY1999", "FY2027", null],
+    ["trailing twelve months", "2025-12-31", "FY2025"],
+    // Same year, different period: another date, a quarter against a year,
+    // the wrong quarter.
+    ["2025-03-31", "2025-12-31", "FY2025"],
+    ["Q1 2025", "2025-12-31", "FY2025"],
+    ["Q3 2025", "2025-12-31", "Q4 FY2025"],
+    ["H1 2025", "2025-06-30", "Q2 FY2025"],
+    ["Q4 FY2025", "2025-03-31", "FY2025"],
+    // No issuer calendar: a fiscal spelling cannot be matched to a date.
+    ["FY2025", "2025-12-31", null],
+    ["Q2 2026", "2026-06-30", null],
+    ["Q1 FY2026", "2025-12-27", null],
+    ["Q4 2025", "2025-03-31", null],
+    // A spelling that could be a calendar period must close where the record
+    // ends: a September-year issuer's Q1 FY2025 (ended 2024-12-28) is not
+    // calendar Q1 2025, and its FY2025 is not calendar 2025.
+    ["Q1 2025", "2024-12-28", "Q1 FY2025"],
+    ["2025", "2025-09-27", "FY2025"],
+    ["Q4 2025", "2025-03-31", "Q4 FY2025"],
+  ])("rejects %s against the registered period %s (issuer label %s)", (supplied, registered, issuer) => {
+    expect(periodsAgree(supplied, registered, issuer)).toBe(false);
   });
 
   it("treats an omitted period, or a record without one, as agreement", () => {

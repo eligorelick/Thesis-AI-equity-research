@@ -38,6 +38,12 @@ export interface NumericProvenanceRecord {
   unit: CanonicalUnit;
   currency: string | null;
   period: string | null;
+  /**
+   * The issuer's own fiscal label for `period` ("FY2025", "Q1 FY2026"), taken
+   * from the source statement row's `fiscalYear`/`period`. Absent when the row
+   * carried none; without it no fiscal spelling can be read as this period.
+   */
+  fiscalPeriod?: string;
   asOf: string;
   origin: string;
   formulaVersion: string | null;
@@ -235,37 +241,138 @@ export function validateCitationRegistry(
 }
 
 /**
+ * One period named in a period string. `fiscal` is a fiscal year, or a quarter
+ * of one; `explicit` is false when the spelling could equally be a calendar
+ * period ("Q1 2025", a bare "2025") and true when it says fiscal ("FY2025",
+ * "Q1 FY2026", "fiscal 2025").
+ */
+type PeriodIdentity =
+  | { kind: "date"; iso: string }
+  | { kind: "fiscal"; year: number; quarter: number | null; explicit: boolean }
+  | { kind: "other"; text: string };
+
+const QUARTER_WORDS: Readonly<Record<string, number>> = { first: 1, second: 2, third: 3, fourth: 4 };
+
+function fullYear(digits: string): number {
+  return digits.length === 2 ? 2000 + Number(digits) : Number(digits);
+}
+
+/**
+ * Every period a string names, label words ignored. Matched spans are blanked
+ * as they are read so "Q1 FY2026" is one quarter, not a quarter and a year.
+ */
+function periodIdentities(text: string): PeriodIdentity[] {
+  let rest = text.trim().toLowerCase();
+  const found: PeriodIdentity[] = [];
+  const take = (pattern: RegExp, read: (match: RegExpMatchArray) => PeriodIdentity): void => {
+    rest = rest.replace(pattern, (...args: unknown[]) => {
+      found.push(read(args as unknown as RegExpMatchArray));
+      return " ";
+    });
+  };
+  take(/(?<![0-9])(\d{4}-\d{2}-\d{2})(?![0-9])/g, (m) => ({ kind: "date", iso: m[1] }));
+  // A quarter: "q1 2025", "q1 fy2026", "fiscal q1 2026", "q1 fy'26",
+  // "first quarter of fiscal 2026". A two-digit year needs an FY marker or an
+  // apostrophe, so "q1 15% growth" is never read as a period.
+  take(
+    /(?<![a-z0-9])(fiscal\s+)?(?:q([1-4])|(first|second|third|fourth)\s+quarter)\s*(?:of\s+)?(?:(fiscal\s+(?:year\s+)?|fy\s?)?['’]?((?:19|20)\d{2})|(fiscal\s+(?:year\s+)?|fy\s?)['’]?(\d{2})|['’](\d{2}))(?![0-9])/g,
+    (m) => ({
+      kind: "fiscal",
+      year: fullYear(m[5] ?? m[7] ?? m[8]),
+      quarter: m[2] !== undefined ? Number(m[2]) : QUARTER_WORDS[m[3]],
+      explicit: m[1] !== undefined || m[4] !== undefined || m[6] !== undefined,
+    }),
+  );
+  take(/(?<![a-z0-9])(?:fiscal\s+(?:year\s+)?|fy\s?)['’]?((?:19|20)\d{2}|\d{2})(?![0-9])e?/g, (m) => ({
+    kind: "fiscal",
+    year: fullYear(m[1]),
+    quarter: null,
+    explicit: true,
+  }));
+  // Anything else that bounds a period is a period of its own, and never the
+  // registered one: trailing/half-year/year-to-date windows.
+  take(
+    /(?<![a-z0-9])(ttm|ltm|trailing\s+twelve\s+months|last\s+twelve\s+months|ytd|year[\s-]to[\s-]date|[hq][1-4]|[1-4][hq]|(?:six|nine)\s+months|[69]m)(?![a-z0-9])/g,
+    (m) => ({ kind: "other", text: m[1] }),
+  );
+  take(/(?<![0-9])((?:19|20)\d{2})(?![0-9])/g, (m) => ({
+    kind: "fiscal",
+    year: Number(m[1]),
+    quarter: null,
+    explicit: false,
+  }));
+  return found;
+}
+
+function sameIdentity(a: PeriodIdentity, b: PeriodIdentity): boolean {
+  if (a.kind === "date" && b.kind === "date") return a.iso === b.iso;
+  if (a.kind === "fiscal" && b.kind === "fiscal") return a.year === b.year && a.quarter === b.quarter;
+  if (a.kind === "other" && b.kind === "other") return a.text === b.text;
+  return false;
+}
+
+/**
+ * Whether the calendar reading of `period` ("Q1 2025" as January-March 2025, a
+ * bare "2025" as the calendar year) closes where the registered period ends.
+ * A 52/53-week calendar ends near, not on, the month end, so the end date is
+ * read a week earlier: 2026-01-03 still closes December 2025.
+ */
+function closesCalendarPeriod(endIso: string, period: { year: number; quarter: number | null }): boolean {
+  const end = Date.parse(`${endIso}T00:00:00Z`);
+  if (!Number.isFinite(end)) return false;
+  const shifted = new Date(end - 7 * 86_400_000);
+  return (
+    shifted.getUTCFullYear() === period.year &&
+    shifted.getUTCMonth() + 1 === (period.quarter === null ? 12 : period.quarter * 3)
+  );
+}
+
+/**
  * Whether a model-supplied `period` names the period the registry recorded.
  * Registry ids are unique, so the id already pins the exact record and the
- * period is a cross-check on the model's reading, not a lookup key — and the
- * prompt never renders a citable period tag. A statement cell registers its
- * ISO period end (2025-12-31) while a model writes the fiscal spelling it
- * read off the column ("FY2025", "Q2 2026", or a label such as "total debt
- * FY2025"). Equality, containment, or the same set of calendar years all
- * count as agreement; "FY2024" against a 2025-12-31 record does not, so a
- * misread period still fails. A live haiku run (2026-09-02) failed every
- * balance-sheet citation as period-mismatch on spelling alone while id,
- * value, unit, currency and as-of matched. Fiscal years ending outside
- * December keep the calendar-year rule: Apple's Q1 FY2026 (ends 2025-12-27)
- * written as "Q1 FY2026" does not agree, which is why the shared rules ask
- * for the ISO period end as rendered.
+ * period is a cross-check on the model's reading, not a lookup key — but an
+ * agreement here rewrites the model's period to the record's and lets the
+ * number verify, so it has to mean the SAME period, not merely the same year.
+ *
+ * A statement cell registers its ISO period end (2025-12-31) and, from the
+ * source row, the issuer's own fiscal label (`fiscalPeriod`, "FY2025" or
+ * "Q1 FY2026"). The supplied string must name exactly one period, label
+ * words aside ("total debt FY2025"), and that period must be:
+ *  - the registered ISO date itself, when it names a date; or
+ *  - the issuer's fiscal label, when it names a fiscal year or quarter. A
+ *    spelling that could equally be a calendar period ("Q1 2025", "2025")
+ *    must also close where the record ends, so a September-year issuer's
+ *    Q1 FY2025 (ended 2024-12-28) is not "Q1 2025"; or
+ *  - the same fiscal year/quarter as a registered fiscal label ("fy27"
+ *    against "FY2027E").
+ * Without the issuer's label no fiscal spelling can be matched to an ISO
+ * date: "Q4 2025" is the quarter ended 2025-03-31 on a March fiscal year and
+ * the one ended 2025-12-31 on a calendar year, and nothing else here says
+ * which. Such a citation stays period-mismatch — the prompt asks for the ISO
+ * period end as rendered.
  */
-export function periodsAgree(supplied: string | null | undefined, registered: string | null): boolean {
+export function periodsAgree(
+  supplied: string | null | undefined,
+  registered: string | null,
+  issuerFiscalPeriod: string | null = null,
+): boolean {
   if (supplied == null || registered === null) return true;
-  const a = supplied.trim().toLowerCase();
-  const b = registered.trim().toLowerCase();
-  if (a === b || a.includes(b)) return true;
-  const yearsOf = (text: string): Set<string> => {
-    const years = new Set<string>();
-    // Digit boundaries, not word boundaries: "fy2025" has no word boundary
-    // before its year.
-    for (const match of text.matchAll(/(?<![0-9])((?:19|20)\d{2})(?![0-9])/g)) years.add(match[1]);
-    for (const match of text.matchAll(/\bfy\s?'?(\d{2})(?![0-9])/g)) years.add(`20${match[1]}`);
-    return years;
-  };
-  const ya = yearsOf(a);
-  const yb = yearsOf(b);
-  return ya.size > 0 && ya.size === yb.size && [...ya].every((year) => yb.has(year));
+  if (supplied.trim().toLowerCase() === registered.trim().toLowerCase()) return true;
+  const named = periodIdentities(supplied);
+  if (named.length === 0) return false;
+  const [first] = named;
+  if (!named.every((identity) => sameIdentity(identity, first))) return false;
+
+  const recorded = periodIdentities(registered);
+  if (recorded.length !== 1) return false;
+  const [record] = recorded;
+  if (record.kind !== "date") return sameIdentity(first, record);
+
+  if (first.kind === "date") return first.iso === record.iso;
+  if (first.kind !== "fiscal" || issuerFiscalPeriod === null) return false;
+  const issuer = periodIdentities(issuerFiscalPeriod);
+  if (issuer.length !== 1 || !sameIdentity(first, issuer[0])) return false;
+  return first.explicit || closesCalendarPeriod(record.iso, first);
 }
 
 /** Match every numeric dimension against the exact named registry record. */

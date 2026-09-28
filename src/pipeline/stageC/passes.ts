@@ -2176,15 +2176,15 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
         // decoration so the stored figure carries the registry's period, not
         // an invented one. A registered period is still compared exactly.
         if (record.period === null && number.period != null) number.period = null;
-        // A fiscal spelling of the registered period ("FY2025", "Q2 2026",
-        // "total debt FY2025" against 2025-12-31) is the same period read off
-        // the statement column; adopt the registry's spelling and say so in
-        // the log. A period naming another year still mismatches.
+        // A spelling of the registered period ("total debt 2025-12-31", or
+        // "FY2025" when the issuer's own label for the row is FY2025) is the
+        // same period; adopt the registry's spelling and say so in the log.
+        // Another period of the same year still mismatches (periodsAgree).
         if (
           record.period !== null &&
           number.period != null &&
           number.period !== record.period &&
-          periodsAgree(number.period, record.period)
+          periodsAgree(number.period, record.period, record.fiscalPeriod ?? null)
         ) {
           periodNote = `period "${number.period}" read as ${record.period}`;
           number.period = record.period;

@@ -212,6 +212,8 @@ describe("period agreement", () => {
     // A 52/53-week year that runs into January still closes calendar Q4.
     ["Q4 2025", "2026-01-03", "Q4 FY2025"],
     ["Q4 FY2025", "2025-03-31", "Q4 FY2025"],
+    // Two spellings of the same period, each agreeing with the record.
+    ["2025-12-31 (FY2025)", "2025-12-31", "FY2025"],
   ])("reads %s as the registered period %s (issuer label %s)", (supplied, registered, issuer) => {
     expect(periodsAgree(supplied, registered, issuer)).toBe(true);
   });
@@ -220,6 +222,9 @@ describe("period agreement", () => {
     ["FY2024", "2025-12-31", "FY2025"],
     ["FY2024 vs FY2025", "2025-12-31", "FY2025"],
     ["2025-12-31 vs 2024-12-31", "2025-12-31", "FY2025"],
+    ["2025-12-31 (FY2024)", "2025-12-31", "FY2025"],
+    // The date agrees, but nothing establishes the fiscal label beside it.
+    ["2025-12-31 (FY2025)", "2025-12-31", null],
     ["FY1999", "FY2027", null],
     ["trailing twelve months", "2025-12-31", "FY2025"],
     // Same year, different period: another date, a quarter against a year,

@@ -336,8 +336,8 @@ function closesCalendarPeriod(endIso: string, period: { year: number; quarter: n
  *
  * A statement cell registers its ISO period end (2025-12-31) and, from the
  * source row, the issuer's own fiscal label (`fiscalPeriod`, "FY2025" or
- * "Q1 FY2026"). The supplied string must name exactly one period, label
- * words aside ("total debt FY2025"), and that period must be:
+ * "Q1 FY2026"). The supplied string must name at least one period, label
+ * words aside ("total debt FY2025"), and EVERY period it names must be:
  *  - the registered ISO date itself, when it names a date; or
  *  - the issuer's fiscal label, when it names a fiscal year or quarter. A
  *    spelling that could equally be a calendar period ("Q1 2025", "2025")
@@ -359,20 +359,18 @@ export function periodsAgree(
   if (supplied == null || registered === null) return true;
   if (supplied.trim().toLowerCase() === registered.trim().toLowerCase()) return true;
   const named = periodIdentities(supplied);
-  if (named.length === 0) return false;
-  const [first] = named;
-  if (!named.every((identity) => sameIdentity(identity, first))) return false;
-
   const recorded = periodIdentities(registered);
-  if (recorded.length !== 1) return false;
+  if (named.length === 0 || recorded.length !== 1) return false;
   const [record] = recorded;
-  if (record.kind !== "date") return sameIdentity(first, record);
+  const issuer = issuerFiscalPeriod === null ? [] : periodIdentities(issuerFiscalPeriod);
 
-  if (first.kind === "date") return first.iso === record.iso;
-  if (first.kind !== "fiscal" || issuerFiscalPeriod === null) return false;
-  const issuer = periodIdentities(issuerFiscalPeriod);
-  if (issuer.length !== 1 || !sameIdentity(first, issuer[0])) return false;
-  return first.explicit || closesCalendarPeriod(record.iso, first);
+  const agrees = (identity: PeriodIdentity): boolean => {
+    if (record.kind !== "date") return sameIdentity(identity, record);
+    if (identity.kind === "date") return identity.iso === record.iso;
+    if (identity.kind !== "fiscal" || issuer.length !== 1 || !sameIdentity(identity, issuer[0])) return false;
+    return identity.explicit || closesCalendarPeriod(record.iso, identity);
+  };
+  return named.every(agrees);
 }
 
 /** Match every numeric dimension against the exact named registry record. */

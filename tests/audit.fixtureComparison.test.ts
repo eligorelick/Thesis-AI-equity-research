@@ -24,8 +24,11 @@
  * pipeline output. Rolled forward a second time on 2026-09-01 when the lock
  * regained the `@emnapi/*` entries that npm on Windows had pruned (the reason
  * every CI `npm ci` failed); no package version changed and the projection
- * again matched the baseline byte for byte. Roll the pin forward again only
- * with the same evidence.
+ * again matched the baseline byte for byte. Rolled forward a third time on
+ * 2026-09-28 for the security bump out of published advisory ranges (next and
+ * eslint-config-next 16.3.6, sharp 0.35.5, js-yaml 4.3.2, vitest 4.1.11);
+ * the projection was re-run against the new tree under Node 24 before the pin
+ * moved. Roll the pin forward again only with the same evidence.
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -175,7 +178,7 @@ describe("Task 32 provider-free historical fixture comparison", () => {
       generator: {
         helperSha256: "48af864a1d2a5bb165eb2832871bc2651f34a5951959450d2074512e4a7a26d7",
         basePackageLockBlob: "66f7242846b6d20cfe99e21400d2dada27bbfbfd",
-        comparisonPackageLockBlob: "58d0f8390e3ee80281eec42f1dce8133f8d7daf2",
+        comparisonPackageLockBlob: "4f66e44a3bdec6cb34c8bc6ee92c8cb7542b9f4b",
         generationNode: "v24.11.1",
         generationNpm: "11.6.2",
         command:

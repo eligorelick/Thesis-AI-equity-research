@@ -13,11 +13,11 @@ import { describe, expect, it } from "vitest";
 const ROOT = path.resolve(__dirname, "..");
 const CHECKER = path.join(ROOT, "scripts", "check-dependency-shape.mjs");
 const EXPECTED = {
-  next: ["16.3.0"],
-  "eslint-config-next": ["16.3.0"],
+  next: ["16.3.6"],
+  "eslint-config-next": ["16.3.6"],
   postcss: ["8.5.26"],
-  sharp: ["0.35.3"],
-  "js-yaml": ["4.3.1"],
+  sharp: ["0.35.5"],
+  "js-yaml": ["4.3.2"],
   "brace-expansion": ["1.1.18", "5.0.9"],
 } as const;
 
@@ -52,15 +52,15 @@ function syntheticInstalledTree(): unknown {
   return {
     dependencies: {
       next: {
-        version: "16.3.0",
-        dependencies: { sharp: { version: "0.35.3" } },
+        version: "16.3.6",
+        dependencies: { sharp: { version: "0.35.5" } },
       },
-      "eslint-config-next": { version: "16.3.0" },
+      "eslint-config-next": { version: "16.3.6" },
       postcss: { version: "8.5.26" },
       loaderA: {
         version: "1.0.0",
         dependencies: {
-          "js-yaml": { version: "4.3.1" },
+          "js-yaml": { version: "4.3.2" },
           "brace-expansion": { version: "1.1.18" },
         },
       },
@@ -96,7 +96,7 @@ describe("dependency shape gate", () => {
     wrong.packages["node_modules/next"]!.version = "16.3.1";
     expect(() =>
       checker.validateExactVersions(checker.collectLockVersions(wrong)),
-    ).toThrow(/lock.*next.*16\.3\.1.*16\.3\.0/i);
+    ).toThrow(/lock.*next.*16\.3\.1.*16\.3\.6/i);
 
     const missing = clone();
     delete missing.packages[
@@ -149,7 +149,7 @@ describe("dependency shape gate", () => {
         checker.APPROVED_VERSIONS,
         "installed tree",
       ),
-    ).toThrow(/installed tree.*eslint-config-next.*16\.3\.0/i);
+    ).toThrow(/installed tree.*eslint-config-next.*16\.3\.6/i);
 
     const extra = syntheticInstalledTree() as {
       dependencies: Record<string, unknown>;
@@ -164,7 +164,7 @@ describe("dependency shape gate", () => {
         checker.APPROVED_VERSIONS,
         "installed tree",
       ),
-    ).toThrow(/installed tree.*sharp.*0\.35\.4.*0\.35\.3/i);
+    ).toThrow(/installed tree.*sharp.*0\.35\.4.*0\.35\.5/i);
   });
 
   it("rejects malformed and problemed npm trees before version comparison", async () => {
@@ -260,7 +260,7 @@ describe("dependency shape gate", () => {
         env: { ...process.env },
       });
       expect(result.status).not.toBe(0);
-      expect(`${result.stdout}\n${result.stderr}`).toMatch(/next.*0\.0\.0.*16\.3\.0/i);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(/next.*0\.0\.0.*16\.3\.6/i);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

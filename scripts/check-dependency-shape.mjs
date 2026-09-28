@@ -5,11 +5,11 @@ import path from "node:path";
 import { isEntryPoint } from "./lib/entrypoint.mjs";
 
 export const APPROVED_VERSIONS = {
-  next: ["16.3.0"],
-  "eslint-config-next": ["16.3.0"],
+  next: ["16.3.6"],
+  "eslint-config-next": ["16.3.6"],
   postcss: ["8.5.26"],
-  sharp: ["0.35.3"],
-  "js-yaml": ["4.3.1"],
+  sharp: ["0.35.5"],
+  "js-yaml": ["4.3.2"],
   "brace-expansion": ["1.1.18", "5.0.9"],
 };
 

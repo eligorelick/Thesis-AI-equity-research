@@ -131,6 +131,12 @@ export interface StatementLineExtract {
 
 export interface StatementCell {
   period: string;
+  /**
+   * The issuer's own label for the column ("FY2025", "Q1 FY2026"), from the
+   * row's `fiscalYear`/`period`. Not rendered; the verifier reads a fiscal
+   * spelling of `period` against it.
+   */
+  fiscalPeriod?: string;
   value: number | null;
   currency: string | null;
   asOf: string;
@@ -679,6 +685,16 @@ const CASHFLOW_LINE_ITEMS: { key: keyof FmpCashFlowRow; label: string; unit: str
   { key: "commonStockRepurchased", label: "buybacks (negative)", unit: "currency" },
 ];
 
+/** "FY2025" or "Q1 FY2026" from a statement row's own fiscal fields; null when either is missing or malformed. */
+function issuerFiscalLabel(row: FmpRawRow): string | null {
+  const year = typeof row.fiscalYear === "number" ? String(row.fiscalYear) : row.fiscalYear;
+  if (typeof year !== "string" || !/^(?:19|20)\d{2}$/.test(year.trim())) return null;
+  const period = typeof row.period === "string" ? row.period.trim().toUpperCase() : null;
+  if (period === "FY") return `FY${year.trim()}`;
+  if (period !== null && /^Q[1-4]$/.test(period)) return `${period} FY${year.trim()}`;
+  return null;
+}
+
 function extractStatement<TRow extends FmpRawRow>(
   title: string,
   rows: TRow[],
@@ -690,12 +706,14 @@ function extractStatement<TRow extends FmpRawRow>(
   const kept = rows.slice(0, periods);
   if (kept.length === 0) return null;
   const periodLabels = kept.map((r) => isoDay(r.date) ?? "unknown");
+  const fiscalLabels = kept.map((r) => issuerFiscalLabel(r));
   const lines: StatementLineExtract[] = lineItems.map((li) => ({
     lineItem: li.label,
     unit: li.unit,
     source,
     byPeriod: kept.map((r, i) => ({
       period: periodLabels[i],
+      ...(fiscalLabels[i] === null ? {} : { fiscalPeriod: fiscalLabels[i] }),
       value: numOrNull(r[li.key]),
       currency: isoCurrency(r.reportedCurrency),
       asOf,
@@ -1251,6 +1269,7 @@ function attachProvenanceRegistry(
           unit,
           currency: monetary ? canonical.currency : null,
           period: cell.period,
+          ...(cell.fiscalPeriod === undefined ? {} : { fiscalPeriod: cell.fiscalPeriod }),
           asOf: cell.asOf,
           origin: line.source,
           formulaVersion: null,

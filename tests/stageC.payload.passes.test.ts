@@ -549,10 +549,16 @@ describe("payload determinism + provenance", () => {
       // instead of the raw 2/3 and 1/3 floats the label had interpolated since
       // the constants moved to betaEstimate.ts; financeHash moves with the
       // WACC method label.
+      // Changed 2026-09-28 (period identity): each statement-cell registry
+      // record now carries the source row's own fiscal label (`fiscalPeriod`,
+      // "FY2025" / "Q1 FY2026") so the verifier can read a fiscal spelling as
+      // that period only when the issuer's calendar says so. The label is not
+      // rendered, so fingerprint, promptBytes and the ids are unchanged; only
+      // provenanceHash moves.
       fingerprint: "1.3.0:86a86660",
       promptBytes: 90_736,
       provenanceCount: 308,
-      provenanceHash: "098ebead",
+      provenanceHash: "738b0c57",
       provenanceIdsHash: "fb88be40",
       citationCount: 11,
       citationHash: "7ebe5276",
@@ -1376,6 +1382,57 @@ describe("verify-pass tracing", () => {
     expect(log[0]).toMatchObject({ outcome: "verified", note: `exact provenance record matched (period "total debt FY${year}" read as ${cell.period})` });
     expect(log[1]).toMatchObject({ outcome: "unverified", reason: "period-mismatch" });
     expect(collectTracedNumbers(verifiedReport).map((number) => number.period)).toEqual([cell.period, `FY${Number(year) - 1}`]);
+  });
+
+  it("does not read another period of the same year as the registered period", async () => {
+    // The fixture is a September fiscal calendar: the quarter ended 2025-12-28
+    // is the issuer's Q1 FY2026 and the year ended 2025-09-27 is FY2025. Each
+    // citation below names a different period that merely shares a year with
+    // the record, so none may be rewritten to the record's period and verified.
+    const { payload } = buildInputs();
+    const deps = makeDeps(new MockRunPass());
+    const registry = payload.provenanceRegistry!;
+    const quarter = registry.find((entry) => entry.id === "payload.statements.income-statement-quarterly.2025-12-28.revenue")!;
+    const annual = registry.find((entry) => entry.id === "payload.statements.income-statement-annual.2025-09-27.revenue")!;
+    expect(quarter?.period).toBe("2025-12-28");
+    expect(annual?.period).toBe("2025-09-27");
+    const cite = (record: typeof quarter, period: string) => ({
+      value: record.value, unit: record.unit, currency: record.currency, period, source: record.id, asOf: record.asOf, verified: null,
+    });
+    const wrong = [
+      cite(quarter, "2025-06-28"), // another quarter end in 2025
+      cite(quarter, "Q1 2025"), // the issuer's Q1 FY2025 ended 2024-12-28
+      cite(quarter, "Q3 2025"),
+      cite(annual, "2025-06-28"), // a quarter end inside FY2025, not the year end
+      cite(annual, "Q3 2025"), // a quarter is not the fiscal year
+    ];
+    const { verificationRate, log, verifiedReport } = await runVerifyPass(deps, payload, { numbers: wrong } as unknown as JudgeOutput, { fetchedUrls: [] });
+    expect(verificationRate).toBe(0);
+    expect(log.map((entry) => entry.reason)).toEqual(Array(wrong.length).fill("period-mismatch"));
+    // The model's own period is kept on the stored number, not replaced.
+    expect(collectTracedNumbers(verifiedReport).map((number) => number.period)).toEqual(wrong.map((number) => number.period));
+  });
+
+  it("reads a fiscal spelling as the registered period only when the issuer's own label says so", async () => {
+    const { payload } = buildInputs();
+    const deps = makeDeps(new MockRunPass());
+    const registry = payload.provenanceRegistry!;
+    const quarter = registry.find((entry) => entry.id === "payload.statements.income-statement-quarterly.2025-12-28.revenue")!;
+    const annual = registry.find((entry) => entry.id === "payload.statements.income-statement-annual.2025-09-27.revenue")!;
+    const cite = (record: typeof quarter, period: string) => ({
+      value: record.value, unit: record.unit, currency: record.currency, period, source: record.id, asOf: record.asOf, verified: null,
+    });
+    const right = [
+      cite(quarter, "2025-12-28"),
+      cite(quarter, "Q1 FY2026"), // the row's own fiscalYear 2026 / period Q1
+      cite(annual, "FY2025"), // the row's own fiscalYear 2025 / period FY
+      cite(annual, "revenue fy25"),
+    ];
+    const { verificationRate, verifiedReport } = await runVerifyPass(deps, payload, { numbers: right } as unknown as JudgeOutput, { fetchedUrls: [] });
+    expect(verificationRate).toBe(1);
+    expect(collectTracedNumbers(verifiedReport).map((number) => number.period)).toEqual([
+      "2025-12-28", "2025-12-28", "2025-09-27", "2025-09-27",
+    ]);
   });
 
   it("resolves a monetary citation with the generic 'currency' unit and no ISO code, but rejects a wrong currency", async () => {

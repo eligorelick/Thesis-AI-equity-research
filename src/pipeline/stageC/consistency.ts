@@ -13,11 +13,13 @@
  *    change rather than a level. Only words whose sign is fixed by the word
  *    itself count; see {@link DIRECTION_WORDS}.
  *  - PERIOD: a period phrase that names a year ("in FY2024", "in Q3 2024") must
- *    name the year the cited record's period carries, under the SAME
- *    fiscal-spelling tolerance the citation check already uses
- *    ({@link periodsAgree}). The check compares YEARS: a bare quarter is not
- *    checked (no fiscal calendar), and "Q3 2025" against a 2025-12-31 record
- *    agrees — the quarter itself is never adjudicated.
+ *    name the year the cited record's period carries ({@link phraseNamesRecordYear}).
+ *    The check compares YEARS only: a bare quarter is not checked (no fiscal
+ *    calendar), and "Q3 2025" against a 2025-12-31 record agrees — the quarter
+ *    itself is never adjudicated. That is deliberately looser than the
+ *    citation check (`periodsAgree`), which decides whether a number VERIFIES;
+ *    this one only writes a log entry, and prose names bare years ("in 2025")
+ *    that no fiscal calendar in the payload can adjudicate.
  *  - UNIT: the unit token attached to the cited figure ("%", "bps", "billion")
  *    must belong to the family the record's registry unit can express.
  *  - NAMED INDIVIDUAL: a claim that names a person may cite filings, transcripts,
@@ -46,7 +48,6 @@ import type {
 } from "@/report/schema";
 import {
   canonicalizeFetchedUrl,
-  periodsAgree,
   type CanonicalUnit,
   type CitationProvenanceRecord,
   type NumericProvenanceRecord,
@@ -485,7 +486,7 @@ export function isDeltaRecord(record: NumericProvenanceRecord): boolean {
 // sentence named a period it never named. The phrase starts at the Q, so the
 // "skip a phrase starting inside a value span" guard below could not help. The
 // forms that lose their quarter this way — "Q3 '25", "Q1 25" — could never have
-// PASSED anyway: periodsAgree only reads a two-digit year behind an FY prefix,
+// PASSED anyway: phraseNamesRecordYear only reads a two-digit year behind an FY prefix,
 // so they failed every record. "Q3 FY25" keeps its check through the FY pattern
 // on the next line.
 const PERIOD_PATTERNS: readonly RegExp[] = [
@@ -494,6 +495,29 @@ const PERIOD_PATTERNS: readonly RegExp[] = [
   /\b(?:first|second|third|fourth)\s+quarter\s+(?:of\s+)?(?:FY\s?)?(?:19|20)\d{2}\b/gi,
   /\b(?:19|20)\d{2}\b/g,
 ];
+
+/**
+ * Whether a prose period phrase names the year(s) of a record's period. Year
+ * sets only: "FY2025", "Q3 2025" and "2025" all agree with 2025-12-31, and
+ * "FY2024" does not. A two-digit year counts only behind an FY prefix.
+ */
+export function phraseNamesRecordYear(phrase: string, registered: string | null): boolean {
+  if (registered === null) return true;
+  const a = phrase.trim().toLowerCase();
+  const b = registered.trim().toLowerCase();
+  if (a === b || a.includes(b)) return true;
+  const yearsOf = (text: string): Set<string> => {
+    const years = new Set<string>();
+    // Digit boundaries, not word boundaries: "fy2025" has no word boundary
+    // before its year.
+    for (const match of text.matchAll(/(?<![0-9])((?:19|20)\d{2})(?![0-9])/g)) years.add(match[1]);
+    for (const match of text.matchAll(/\bfy\s?'?(\d{2})(?![0-9])/g)) years.add(`20${match[1]}`);
+    return years;
+  };
+  const ya = yearsOf(a);
+  const yb = yearsOf(b);
+  return ya.size > 0 && ya.size === yb.size && [...ya].every((year) => yb.has(year));
+}
 
 /**
  * Period phrases that NAME A YEAR. A bare "Q3" is skipped on purpose: without
@@ -737,7 +761,7 @@ export function runConsistencyChecks(input: ConsistencyInput): ConsistencyResult
     if (record.period !== null) {
       const phrases = findPeriodPhrases(sentence, numbers, located);
       if (phrases.length > 0) {
-        if (phrases.some((phrase) => periodsAgree(phrase, record.period))) {
+        if (phrases.some((phrase) => phraseNamesRecordYear(phrase, record.period))) {
           period.pass();
         } else {
           period.fail();

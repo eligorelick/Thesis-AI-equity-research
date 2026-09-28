@@ -664,7 +664,7 @@ function renderValuation(
         const ps = lookup.get(`${w}|${g}`);
         // The grid is in the currency of the per-share value beside it: a
         // TWD/share DCF over a "$" grid was a 30× disagreement to the reader.
-        return ps === undefined || ps === null ? DASH : formatMoneyAmount(ps, dcfPs?.currency ?? null, 0);
+        return ps === undefined || ps === null ? DASH : formatMoneyAmount(ps, dcfPs?.currency, 0);
       }),
     ]);
     lines.push(

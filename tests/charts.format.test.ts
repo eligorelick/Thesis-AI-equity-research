@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 import {
   EM_DASH,
   compactCurrency,
+  compactMoneyIn,
   compactNumber,
+  currencyAxisTickIn,
   fiscalYear,
   heatmapColor,
   heatmapRange,
@@ -285,5 +287,29 @@ describe("heatmapRange", () => {
   it("no finite cells → null", () => {
     expect(heatmapRange([null, Number.NaN])).toBeNull();
     expect(heatmapRange([])).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * compactMoneyIn / currencyAxisTickIn — the fundamentals charts' labels
+ * ------------------------------------------------------------------------ */
+
+describe("chart money labels in the statements' own currency", () => {
+  it("keeps the dollar sign for USD", () => {
+    expect(compactMoneyIn(45_600_000_000, "USD")).toBe("$45.6B");
+    expect(currencyAxisTickIn(1_500_000_000, "USD")).toBe("$1.5B");
+  });
+
+  it("names a non-USD code instead of printing a dollar sign", () => {
+    expect(compactMoneyIn(3_810_000_000_000, "TWD")).toBe("3.8T TWD");
+    expect(compactMoneyIn(-1_200_000_000, "twd")).toBe("-1.2B TWD");
+    // Axis ticks stay short; the chart title names the currency.
+    expect(currencyAxisTickIn(1_500_000_000, "TWD")).toBe("1.5B");
+  });
+
+  it("claims no currency when it is unknown", () => {
+    expect(compactMoneyIn(3_810_000_000_000, null)).toBe("3.8T");
+    expect(currencyAxisTickIn(1_500_000_000, null)).toBe("1.5B");
+    expect(compactMoneyIn(null, "TWD")).toBe(EM_DASH);
   });
 });

@@ -30,7 +30,7 @@ import {
 } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 
-import { compactCurrency, currencyAxisTick, fiscalYear, pct, signedPct } from "./format";
+import { compactCurrency, compactMoneyIn, currencyAxisTickIn, fiscalYear, pct, signedPct } from "./format";
 
 // ---------------------------------------------------------------------------
 // Theme
@@ -173,6 +173,17 @@ function EmptyChart({ height = CHART_HEIGHT }: { height?: number }) {
   );
 }
 
+/**
+ * The currency a money chart's bars are in, for its title: nothing for USD
+ * (its ticks carry the "$"), the ISO code otherwise, and "currency unknown"
+ * when the statements did not establish one.
+ */
+function currencyTitle(currency: string | null): string {
+  const code = (currency ?? "").trim().toUpperCase();
+  if (code === "USD") return "";
+  return /^[A-Z]{3}$/.test(code) ? ` (${code})` : " (currency unknown)";
+}
+
 function hasAny<T>(rows: readonly T[], keys: (keyof T)[]): boolean {
   return rows.some((r) =>
     keys.some((k) => {
@@ -186,16 +197,16 @@ function hasAny<T>(rows: readonly T[], keys: (keyof T)[]): boolean {
 // RevenueTrendChart
 // ---------------------------------------------------------------------------
 
-export function RevenueTrendChart({ rows }: { rows: readonly RevenueRow[] }) {
+export function RevenueTrendChart({ rows, currency }: { rows: readonly RevenueRow[]; currency: string | null }) {
   const tipFormat = (key: string, v: number | null): TipRow | null => {
     if (v === null) return null;
-    if (key === "revenue") return { label: "revenue", value: compactCurrency(v), color: THEME.accent };
+    if (key === "revenue") return { label: "revenue", value: compactMoneyIn(v, currency), color: THEME.accent };
     if (key === "yoyGrowthPct") return { label: "yoy growth", value: signedPct(v), color: THEME.pos };
     return null;
   };
   return (
     <div>
-      <ChartTitle>revenue &amp; yoy growth</ChartTitle>
+      <ChartTitle>revenue{currencyTitle(currency)} &amp; yoy growth</ChartTitle>
       {rows.length === 0 || !hasAny(rows, ["revenue"]) ? (
         <EmptyChart />
       ) : (
@@ -206,7 +217,7 @@ export function RevenueTrendChart({ rows }: { rows: readonly RevenueRow[] }) {
             <YAxis
               yAxisId="rev"
               tick={{ fill: THEME.fgFaint, fontSize: AXIS_FONT, fontFamily: MONO }}
-              tickFormatter={(v: number) => currencyAxisTick(v)}
+              tickFormatter={(v: number) => currencyAxisTickIn(v, currency)}
               axisLine={{ stroke: THEME.border }}
               tickLine={{ stroke: THEME.border }}
               width={48}
@@ -289,16 +300,16 @@ export function MarginTrendChart({ rows }: { rows: readonly MarginRow[] }) {
 // FcfChart
 // ---------------------------------------------------------------------------
 
-export function FcfChart({ rows }: { rows: readonly FcfRow[] }) {
+export function FcfChart({ rows, currency }: { rows: readonly FcfRow[]; currency: string | null }) {
   const tipFormat = (key: string, v: number | null): TipRow | null => {
     if (v === null) return null;
-    if (key === "fcf") return { label: "fcf", value: compactCurrency(v), color: THEME.accent };
+    if (key === "fcf") return { label: "fcf", value: compactMoneyIn(v, currency), color: THEME.accent };
     if (key === "conversionPct") return { label: "conversion", value: pct(v), color: THEME.warn };
     return null;
   };
   return (
     <div>
-      <ChartTitle>free cash flow &amp; conversion</ChartTitle>
+      <ChartTitle>free cash flow{currencyTitle(currency)} &amp; conversion</ChartTitle>
       {rows.length === 0 || !hasAny(rows, ["fcf"]) ? (
         <EmptyChart />
       ) : (
@@ -309,7 +320,7 @@ export function FcfChart({ rows }: { rows: readonly FcfRow[] }) {
             <YAxis
               yAxisId="fcf"
               tick={{ fill: THEME.fgFaint, fontSize: AXIS_FONT, fontFamily: MONO }}
-              tickFormatter={(v: number) => currencyAxisTick(v)}
+              tickFormatter={(v: number) => currencyAxisTickIn(v, currency)}
               axisLine={{ stroke: THEME.border }}
               tickLine={{ stroke: THEME.border }}
               width={48}
@@ -420,14 +431,16 @@ export interface FundamentalsChartData {
   margins: readonly MarginRow[];
   fcf: readonly FcfRow[];
   shareCount: readonly ShareCountRow[];
+  /** The statements' one reporting currency; null when they do not establish one. */
+  currency: string | null;
 }
 
 export function FundamentalsChartGrid({ data }: { data: FundamentalsChartData }) {
   return (
     <div className="grid gap-3 md:grid-cols-2">
-      <RevenueTrendChart rows={data.revenue} />
+      <RevenueTrendChart rows={data.revenue} currency={data.currency} />
       <MarginTrendChart rows={data.margins} />
-      <FcfChart rows={data.fcf} />
+      <FcfChart rows={data.fcf} currency={data.currency} />
       <ShareCountChart rows={data.shareCount} />
     </div>
   );

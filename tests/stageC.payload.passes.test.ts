@@ -17,6 +17,7 @@ import type { DataBundle } from "@/pipeline/types";
 import type { DataSource, ManifestEntry } from "@/types/core";
 import type { AnalystCase, JudgeOutput, Report, ScenarioTargets, FairValue } from "@/report/schema";
 import { FRED_ATTRIBUTION_TEXT, ReportSchema } from "@/report/schema";
+import { formatTracedValue } from "@/report/format";
 import { pipelinePasses } from "@/pipeline/stageC/index";
 
 import {
@@ -1454,6 +1455,33 @@ describe("verify-pass tracing", () => {
     const { verificationRate, log } = await runVerifyPass(deps, payload, root as unknown as JudgeOutput, { fetchedUrls: [] });
     expect(verificationRate).toBe(0.5); // omitted-currency verifies; wrong-currency does not
     expect(log.find((entry) => entry.reason === "currency-mismatch")).toBeTruthy();
+  });
+
+  it("stores the cited record's currency on a verified number that omitted it, and marks an unresolved one unknown", async () => {
+    // A non-USD issuer: statement cells render with the generic "currency"
+    // unit and no ISO code, so a faithful citation omits the code. Matching
+    // adopts the record's currency; the STORED number must carry it too, or
+    // the report prints the TWD figure as dollars.
+    const { payload } = buildInputs();
+    const deps = makeDeps(new MockRunPass());
+    const cell = payload.provenanceRegistry!.find(
+      (entry) => entry.currency !== null && /statements/.test(entry.id),
+    )!;
+    cell.currency = "TWD";
+    const root = {
+      numbers: [
+        { value: cell.value, unit: "currency", source: cell.id, asOf: cell.asOf, verified: null },
+        // Same citation, wrong value: unverified, and nothing establishes its currency.
+        { value: cell.value * 3, unit: "currency", source: cell.id, asOf: cell.asOf, verified: null },
+      ],
+    };
+    const { verifiedReport } = await runVerifyPass(deps, payload, root as unknown as JudgeOutput, { fetchedUrls: [] });
+    const [traced, untraced] = collectTracedNumbers(verifiedReport);
+    expect(traced).toMatchObject({ verified: true, currency: "TWD" });
+    expect(formatTracedValue(traced!)).toContain("TWD");
+    expect(formatTracedValue(traced!)).not.toContain("$");
+    expect(untraced).toMatchObject({ verified: false, currency: null });
+    expect(formatTracedValue(untraced!)).not.toContain("$");
   });
 
   it("registers the insider-trade + key-executive note tags shown to the model as citable", async () => {

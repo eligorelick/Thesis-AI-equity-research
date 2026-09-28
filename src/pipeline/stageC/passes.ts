@@ -2154,6 +2154,15 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
         sourceId !== null && citationRegistry.some((entry) => entry.id === sourceId)
           ? "text-source"
           : "unknown-source";
+      // Nothing establishes an omitted currency here: record it as unknown.
+      const unitOnly = canonicalizeTracedUnit(number.unit, number.currency);
+      if (
+        unitOnly !== null &&
+        (unitOnly.unit === "currency" || unitOnly.unit === "currency-per-share") &&
+        unitOnly.currency === null
+      ) {
+        number.currency = null;
+      }
     } else {
       const normalized = canonicalizeTracedUnit(number.unit, number.currency);
       if (normalized === null) {
@@ -2204,6 +2213,14 @@ export async function runVerifyPass<T extends object = JudgeOutput>(
         );
         ok = match.ok;
         reason = match.ok ? "unknown-source" : match.reason;
+        // The match above read an omitted currency as the record's; the
+        // STORED number has to say so too, or a TWD figure renders as
+        // dollars. A monetary number nothing resolved is recorded as unknown
+        // (null) — never left for the formatter to read as a legacy USD one.
+        const monetary = normalized.unit === "currency" || normalized.unit === "currency-per-share";
+        if (monetary && normalized.currency === null) {
+          number.currency = ok ? record.currency : null;
+        }
       }
     }
     number.verified = ok;

@@ -93,7 +93,10 @@ describe("shared report formatting", () => {
 
   it("prints a plain money amount in its actual currency", () => {
     expect(formatMoneyAmount(1234.5, "USD", 0)).toBe("$1,235");
-    expect(formatMoneyAmount(1234.5, null, 0)).toBe("$1,235");
+    // Absent: a legacy report that predates the currency field.
+    expect(formatMoneyAmount(1234.5, undefined, 0)).toBe("$1,235");
+    // Recorded as unknown: never dollars.
+    expect(formatMoneyAmount(1234.5, null, 0)).toBe("1,235 (currency unknown)");
     expect(formatMoneyAmount(1234.5, "TWD", 0)).toBe("1,235 TWD");
     expect(formatMoneyAmount(-12.345, "chf", 2)).toBe("-12.35 CHF");
   });

@@ -250,6 +250,19 @@ export function shareCountRowsFromStatements(
   }));
 }
 
+/**
+ * The one ISO currency every charted statement row reports in, or null when a
+ * row carries none or the rows disagree — the money charts then say so rather
+ * than printing dollars.
+ */
+function statementsCurrency(rows: readonly { reportedCurrency?: unknown }[]): string | null {
+  const codes = new Set(
+    rows.map((r) => (typeof r.reportedCurrency === "string" ? r.reportedCurrency.trim().toUpperCase() : "")),
+  );
+  const [code] = codes;
+  return codes.size === 1 && code !== undefined && /^[A-Z]{3}$/.test(code) ? code : null;
+}
+
 /** All four fundamentals chart datasets from the bundle + computed metrics. */
 export function fundamentalsChartDataFromBundle(
   bundle: DataBundle,
@@ -262,6 +275,7 @@ export function fundamentalsChartDataFromBundle(
     margins: marginRowsFromComputed(computed, incomeAnnual),
     fcf: fcfRowsFromStatements(cashflowAnnual, incomeAnnual),
     shareCount: shareCountRowsFromStatements(incomeAnnual),
+    currency: statementsCurrency([...incomeAnnual, ...cashflowAnnual]),
   };
 }
 

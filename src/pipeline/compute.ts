@@ -10,6 +10,7 @@
  * (non-negotiable rule #4).
  */
 
+import { comparePriceCurrency } from "@/pipeline/stageB/priceCurrency";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
 import type { DataBundle, FmpFetch } from "@/pipeline/types";
 import type {
@@ -1519,7 +1520,21 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   }
 
   // --- Scores + projections (deterministic; feature 1.1.0) ------------------
-  const currentPrice = num(quote?.price);
+  // Every upside (the grade's DCF signal, the fair value, the scenario targets)
+  // sets a model value against the quote. Without one known currency on both
+  // sides there is no such figure, so the price is withheld from all of them;
+  // the per-share values themselves do not use it and stand.
+  const quoteComparison = comparePriceCurrency(currencies.model, currencies.trading);
+  const currentPrice = quoteComparison.comparable ? num(quote?.price) : null;
+  if (!quoteComparison.comparable) {
+    ttmGaps.push({
+      field: "valuation.priceComparison.currency",
+      reason:
+        `${quoteComparison.reason} — no upside versus the quote price, reverse valuation, price multiple or grade signal ` +
+        "built on one is computed; per-share values that do not use the price stand in the model's currency",
+      severity: "warn",
+    });
+  }
   const asOfDay = bundle.builtAt.slice(0, 10);
   const scores = computeScores({
     route,

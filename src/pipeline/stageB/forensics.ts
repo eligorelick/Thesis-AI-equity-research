@@ -20,6 +20,7 @@
  * - Annual statements only. Rows are expected newest-first (FMP default order).
  */
 
+import { comparePriceCurrency } from "@/pipeline/stageB/priceCurrency";
 import type { CompanyRoute, ManifestEntry } from "@/types/core";
 
 // ---------------------------------------------------------------------------
@@ -433,21 +434,22 @@ export function computeAltman(inputs: AltmanInputs, variant: AltmanVariant): Alt
     // (e.g. a US-listed ADR whose books are in TWD), the two operands are in
     // different currencies and X4 is off by the FX rate. We have no FX rate to
     // convert, so suppress X4/Z rather than emit a wrong bankruptcy verdict
-    // (mirrors the multiples path's currencyMismatch flag). Fail-safe: only when
-    // BOTH currencies are known and differ.
-    const currencyMismatch =
-      typeof inputs.quoteCurrency === "string" &&
-      typeof inputs.reportedCurrency === "string" &&
-      inputs.quoteCurrency.toUpperCase() !== inputs.reportedCurrency.toUpperCase();
-    if (currencyMismatch) {
+    // (the multiples path withholds on the same rule). An UNKNOWN currency on
+    // either side leaves the ratio unproven, so it is withheld too.
+    const x4Currency = comparePriceCurrency(inputs.reportedCurrency, inputs.quoteCurrency);
+    if (!x4Currency.comparable) {
       equityNumerator = null;
       notes.push(
-        `ADR/currency mismatch: statements in ${inputs.reportedCurrency}, market cap in ${inputs.quoteCurrency} — original-variant X4 (market value of equity) would mix currencies; suppressed pending FX conversion.`,
+        x4Currency.mismatch
+          ? `ADR/currency mismatch: statements in ${inputs.reportedCurrency}, market cap in ${inputs.quoteCurrency} — original-variant X4 (market value of equity) would mix currencies; suppressed pending FX conversion.`
+          : `Currency not established (${x4Currency.reason}) — original-variant X4 (market value of equity over liabilities) cannot be formed; suppressed.`,
       );
       gaps.push(
         gapEntry(
           "forensics.altman.currency",
-          `reportedCurrency ${inputs.reportedCurrency} != quote currency ${inputs.quoteCurrency} (ADR case) — market-equity X4 needs FX conversion (pending); original-variant Z suppressed`,
+          x4Currency.mismatch
+            ? `reportedCurrency ${inputs.reportedCurrency} != quote currency ${inputs.quoteCurrency} (ADR case) — market-equity X4 needs FX conversion (pending); original-variant Z suppressed`
+            : `${x4Currency.reason} — market-equity X4 cannot be set against the liabilities; original-variant Z suppressed`,
           "warn",
         ),
       );

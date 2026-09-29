@@ -28,6 +28,9 @@ const base: WaccInputs = {
   ebitTtm: 130_000,
   analysisDate: "2026-09-01",
   totalAssets: 365_000,
+  // Market-value weights need the market cap and debt in one known currency.
+  reportedCurrency: "USD",
+  quoteCurrency: "USD",
 };
 
 const prior = {

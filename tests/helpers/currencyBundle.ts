@@ -25,6 +25,12 @@ export interface CurrencyBundleOptions {
   quarterlyRevenue?: number;
   /** Route a bank (excess-return model) instead of a general company. */
   bank?: boolean;
+  /** Route an industrial equity REIT (P/FFO, implied cap rate) instead of a general company. */
+  reit?: boolean;
+  /** Total debt on every balance row (millions). 0 makes the WACC the cost of equity. */
+  debt?: number;
+  /** SEC SIC code (3571 routes Altman to the original, market-equity variant). */
+  sic?: string;
   symbol?: string;
 }
 
@@ -69,35 +75,37 @@ export function currencyBundle(opts: CurrencyBundleOptions = {}): DataBundle {
   const quarters = opts.quarterCurrencies ?? [annual, annual, annual, annual];
   const siblings = opts.siblingQuarterCurrencies ?? [null, null, null, null];
   const qRev = opts.quarterlyRevenue ?? 300;
-  const symbol = opts.symbol ?? (opts.bank ? "BNK" : "GEN");
+  const symbol = opts.symbol ?? (opts.bank ? "BNK" : opts.reit ? "RET" : "GEN");
+  const debt = opts.debt ?? 300;
+  const interest = debt === 0 ? 0 : 1;
 
   const incomeAnnual = [
-    { date: "2025-12-31", fiscalYear: "2025", period: "FY", revenue: 1000, grossProfit: 400, operatingIncome: 200, ebit: 200, netIncome: 150, epsDiluted: 1.5, weightedAverageShsOutDil: 100 * M, interestExpense: 15, incomeBeforeTax: 190, incomeTaxExpense: 40, depreciationAndAmortization: 50 },
-    { date: "2024-12-31", fiscalYear: "2024", period: "FY", revenue: 900, grossProfit: 360, operatingIncome: 180, ebit: 180, netIncome: 140, epsDiluted: 1.4, weightedAverageShsOutDil: 101 * M, interestExpense: 15, incomeBeforeTax: 175, incomeTaxExpense: 35, depreciationAndAmortization: 45 },
-    { date: "2023-12-31", fiscalYear: "2023", period: "FY", revenue: 800, grossProfit: 320, operatingIncome: 160, ebit: 160, netIncome: 130, epsDiluted: 1.27, weightedAverageShsOutDil: 102 * M, interestExpense: 14, incomeBeforeTax: 158, incomeTaxExpense: 28, depreciationAndAmortization: 40 },
-    { date: "2022-12-31", fiscalYear: "2022", period: "FY", revenue: 700, grossProfit: 280, operatingIncome: 140, ebit: 140, netIncome: 110, epsDiluted: 1.06, weightedAverageShsOutDil: 103 * M, interestExpense: 13, incomeBeforeTax: 135, incomeTaxExpense: 25, depreciationAndAmortization: 35 },
+    { date: "2025-12-31", fiscalYear: "2025", period: "FY", revenue: 1000, grossProfit: 400, operatingIncome: 200, ebit: 200, netIncome: 150, epsDiluted: 1.5, weightedAverageShsOutDil: 100 * M, interestExpense: 15 * interest, incomeBeforeTax: 190, incomeTaxExpense: 40, depreciationAndAmortization: 50 },
+    { date: "2024-12-31", fiscalYear: "2024", period: "FY", revenue: 900, grossProfit: 360, operatingIncome: 180, ebit: 180, netIncome: 140, epsDiluted: 1.4, weightedAverageShsOutDil: 101 * M, interestExpense: 15 * interest, incomeBeforeTax: 175, incomeTaxExpense: 35, depreciationAndAmortization: 45 },
+    { date: "2023-12-31", fiscalYear: "2023", period: "FY", revenue: 800, grossProfit: 320, operatingIncome: 160, ebit: 160, netIncome: 130, epsDiluted: 1.27, weightedAverageShsOutDil: 102 * M, interestExpense: 14 * interest, incomeBeforeTax: 158, incomeTaxExpense: 28, depreciationAndAmortization: 40 },
+    { date: "2022-12-31", fiscalYear: "2022", period: "FY", revenue: 700, grossProfit: 280, operatingIncome: 140, ebit: 140, netIncome: 110, epsDiluted: 1.06, weightedAverageShsOutDil: 103 * M, interestExpense: 13 * interest, incomeBeforeTax: 135, incomeTaxExpense: 25, depreciationAndAmortization: 35 },
   ].map((r) => labelled(r, annual));
 
   const latest = TTM_DATES.map((date, i) =>
     labelled(
-      { date, revenue: qRev, operatingIncome: 60, ebit: 60, netIncome: 45, epsDiluted: 0.45, weightedAverageShsOutDil: 100 * M, interestExpense: 4, incomeBeforeTax: 57, incomeTaxExpense: 12, depreciationAndAmortization: 12.5 },
+      { date, revenue: qRev, operatingIncome: 60, ebit: 60, netIncome: 45, epsDiluted: 0.45, weightedAverageShsOutDil: 100 * M, interestExpense: 4 * interest, incomeBeforeTax: 57, incomeTaxExpense: 12, depreciationAndAmortization: 12.5 },
       quarters[i],
     ),
   );
   const older = ["2025-03-31", "2024-12-31", "2024-09-30", "2024-06-30"].map((date) =>
     labelled(
-      { date, revenue: 240, operatingIncome: 48, ebit: 48, netIncome: 36, epsDiluted: 0.36, weightedAverageShsOutDil: 100 * M, interestExpense: 4, incomeBeforeTax: 45.5, incomeTaxExpense: 9.5, depreciationAndAmortization: 12 },
+      { date, revenue: 240, operatingIncome: 48, ebit: 48, netIncome: 36, epsDiluted: 0.36, weightedAverageShsOutDil: 100 * M, interestExpense: 4 * interest, incomeBeforeTax: 45.5, incomeTaxExpense: 9.5, depreciationAndAmortization: 12 },
       annual,
     ),
   );
 
   const balanceAnnual = [
-    { date: "2025-12-31", totalAssets: 2000, totalLiabilities: 1500, totalStockholdersEquity: 500, totalEquity: 500, totalDebt: 300, netDebt: 240, cashAndCashEquivalents: 60, cashAndShortTermInvestments: 100, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0 },
-    { date: "2024-12-31", totalAssets: 1900, totalLiabilities: 1450, totalStockholdersEquity: 450, totalEquity: 450, totalDebt: 290, netDebt: 230, cashAndCashEquivalents: 60, cashAndShortTermInvestments: 95, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0 },
+    { date: "2025-12-31", totalAssets: 2000, totalLiabilities: 1500, totalStockholdersEquity: 500, totalEquity: 500, totalDebt: debt, netDebt: debt - 60, cashAndCashEquivalents: 60, cashAndShortTermInvestments: 100, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0 },
+    { date: "2024-12-31", totalAssets: 1900, totalLiabilities: 1450, totalStockholdersEquity: 450, totalEquity: 450, totalDebt: debt, netDebt: debt - 60, cashAndCashEquivalents: 60, cashAndShortTermInvestments: 95, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0 },
   ].map((r) => labelled(r, annual));
   const balanceQuarterly = TTM_DATES.map((date, i) =>
     labelled(
-      { date, totalAssets: 2050, totalLiabilities: 1530, totalStockholdersEquity: 520, totalEquity: 520, totalDebt: 280, netDebt: 210, cashAndCashEquivalents: 70, cashAndShortTermInvestments: 120, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0 },
+      { date, totalAssets: 2050, totalLiabilities: 1530, totalStockholdersEquity: 520, totalEquity: 520, totalDebt: debt, netDebt: debt - 70, cashAndCashEquivalents: 70, cashAndShortTermInvestments: 120, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0 },
       siblings[i],
     ),
   );
@@ -119,9 +127,9 @@ export function currencyBundle(opts: CurrencyBundleOptions = {}): DataBundle {
     builtAt: BUILT_AT,
     profile: ok(
       [{
-        companyName: opts.bank ? "Test Bancorp" : "Test General Co",
-        sector: opts.bank ? "Financial Services" : "Technology",
-        industry: opts.bank ? "Banks - Diversified" : "Consumer Electronics",
+        companyName: opts.bank ? "Test Bancorp" : opts.reit ? "Test Properties" : "Test General Co",
+        sector: opts.bank ? "Financial Services" : opts.reit ? "Real Estate" : "Technology",
+        industry: opts.bank ? "Banks - Diversified" : opts.reit ? "REIT - Industrial" : "Consumer Electronics",
         price: 100, marketCap: 10_000 * M, beta: 1.0,
         ...(profileCurrency === null ? {} : { currency: profileCurrency }),
         country: "US", ipoDate: "2000-01-01", isAdr: false, isEtf: false, isFund: false,
@@ -153,6 +161,6 @@ export function currencyBundle(opts: CurrencyBundleOptions = {}): DataBundle {
     marketRiskPremium: ok([{ totalEquityRiskPremium: 4.5 }], "2026-07-01", "market-risk-premium"),
     asOf: {},
     gaps: [],
-    edgar: { sic: null },
+    edgar: { sic: opts.sic ?? null },
   } as unknown as DataBundle;
 }

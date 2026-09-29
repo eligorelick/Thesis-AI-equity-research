@@ -550,9 +550,12 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
       "Repurchased 90B USD of stock across the analysed years at an average price proxy 12.5% above the current price.",
     );
     expect(serialized).toContain("Average price proxy: repurchase dollars over the change in diluted shares.");
-    // No quote: the fair value is stated per share in the statements' currency
-    // (the per-share unit fell back to it), with no comparison to a price.
-    expect(serialized).toMatch(/model: [\d.,]+ USD per share\./);
+    // No quote, and the fair value's own currency is unknown (null): it is
+    // stated as unknown, with no comparison to a price. (Until 2026-09-29 the
+    // unit fell back to the statements' currency; an explicitly unknown
+    // currency now stays unknown.)
+    expect(serialized).toMatch(/model: [\d.,]+ \(currency unknown\) per share\./);
+    expect(serialized).not.toMatch(/model: [\d.,]+ USD per share/);
     expect(serialized).not.toContain("against a");
     expect(serialized).not.toContain("versus the quote");
   });

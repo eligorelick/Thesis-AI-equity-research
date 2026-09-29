@@ -556,11 +556,20 @@ describe("payload determinism + provenance", () => {
       // that period only when the issuer's calendar says so. The label is not
       // rendered, so fingerprint, promptBytes and the ids are unchanged; only
       // provenanceHash moves.
-      fingerprint: "1.3.0:86a86660",
-      promptBytes: 90_736,
-      provenanceCount: 308,
-      provenanceHash: "738b0c57",
-      provenanceIdsHash: "fb88be40",
+      // Changed 2026-09-29 (currency integrity): no payload-wide currency
+      // default. Every money figure in a section now renders its own currency
+      // or "(currency unknown)" (+182 prompt bytes), and registers only when
+      // its own evidence establishes one. 11 records leave the registry: the
+      // two latest-FCF figures (this fixture's cash-flow rows carry no
+      // reportedCurrency; the income statement's label is not theirs), the
+      // two peers' market caps, the one executive-compensation row and the six
+      // segment rows (none carries a currency, and the listing's is not
+      // evidence for them).
+      fingerprint: "1.3.0:05ecb885",
+      promptBytes: 90_918,
+      provenanceCount: 297,
+      provenanceHash: "1cecfd95",
+      provenanceIdsHash: "921cb9c3",
       citationCount: 11,
       citationHash: "7ebe5276",
       computedFigureLabelHash: "26cc3d2a",

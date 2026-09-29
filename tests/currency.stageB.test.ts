@@ -2,11 +2,11 @@
  * Currency integrity in Stage B.
  *
  *  - A trailing window whose quarters carry no currency label may still be
- *    ESTABLISHED from trustworthy evidence: the same-period balance-sheet and
- *    cash-flow rows of the same filing set. Never from the annual statement
- *    alone. Without that evidence the TTM figures stay available for
- *    currency-free uses (routing signs, ratios) but no currency-dependent
- *    calculation (the DCF anchor, price multiples) may use them.
+ *    ESTABLISHED from trustworthy evidence: the balance-sheet and cash-flow
+ *    rows of the SAME FILING (a shared SEC acceptance timestamp). Never from
+ *    the annual statement, nor from rows that merely share a date. Without
+ *    that evidence the window is no sum at all and every consumer uses the
+ *    annual statement (see tests/currency.quarterEvidence.test.ts).
  *  - A calculated per-share value is stated in the currency the model actually
  *    ran in — the statements' — never the listing currency by default.
  */
@@ -36,9 +36,9 @@ describe("TTM window currency evidence", () => {
     expect(computed.gaps.some((g) => g.field === "compute.ttmIncome.currency")).toBe(false);
   });
 
-  it("establishes an unlabelled window from the same-period balance-sheet and cash-flow rows", () => {
+  it("establishes an unlabelled window from the same filing's balance-sheet and cash-flow rows", () => {
     const computed = runStageB(
-      currencyBundle({ quarterCurrencies: UNLABELLED, siblingQuarterCurrencies: ["USD", "USD", "USD", "USD"] }),
+      currencyBundle({ quarterCurrencies: UNLABELLED, siblingQuarterCurrencies: ["USD", "USD", "USD", "USD"], filingLinks: "shared" }),
     );
     expect(dcfOf(computed).assumptions?.startRevenue.basis).toMatch(/^TTM revenue/);
     // The pre-revenue threshold is in USD, so its decision needs a proven currency.
@@ -54,8 +54,9 @@ describe("TTM window currency evidence", () => {
     expect(gap?.reason).toMatch(/annual/);
     expect(dcfOf(computed).assumptions?.startRevenue.value).toBe(1000 * M);
     expect(dcfOf(computed).assumptions?.startRevenue.basis).toMatch(/^latest annual FY 2025-12-31 revenue/);
-    // Currency-free use survives: routing still reads the trailing window.
-    expect(computed.route.asOf.incomeTtm).toBe("2026-03-31");
+    // Not a sum at all: routing reads the annual statement too. (Until
+    // 2026-09-29 routing still read the unestablished window.)
+    expect(computed.route.asOf.incomeTtm).toBeNull();
     // The model ran on the annual USD statements.
     expect(perShareUnit(computed)).toBe("USD/share");
   });

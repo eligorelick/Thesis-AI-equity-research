@@ -546,10 +546,13 @@ function toOhlcv(r: FmpRawRow): OhlcvRow {
 
 export interface TtmIncome {
   date: string;
-  /** The window's one currency, or null when nothing establishes it. */
+  /**
+   * The window's one currency. ttmIncome returns no window at all when its
+   * currency is not established, so a window it returns always carries one.
+   */
   reportedCurrency: string | null;
-  /** True when an unlabelled quarter's currency came from same-period statements. */
-  currencyFromSameperiodStatements: boolean;
+  /** True when an unlabelled quarter's currency came from another statement of the same filing. */
+  currencyFromSameFilingStatements: boolean;
   revenue: number | null;
   operatingIncome: number | null;
   depreciationAndAmortization: number | null;
@@ -629,50 +632,158 @@ function sumField(rows: FmpIncomeStatementRow[], key: keyof FmpIncomeStatementRo
   return seen ? acc : null;
 }
 
-/** A statement row as currency evidence: its period end and its own label. */
-type CurrencyEvidenceRow = { date?: unknown; reportedCurrency?: unknown };
+/** A statement row as currency evidence: its period end, its own label and its filing identity. */
+type CurrencyEvidenceRow = { date?: unknown; reportedCurrency?: unknown; acceptedDate?: unknown; cik?: unknown };
+
+function filingField(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+}
 
 /**
- * The one currency four quarters are in, established row by row. A quarter's
- * own label decides it; a quarter with none is established by the SAME
- * PERIOD's rows of the other quarterly statements (one filing presents all
- * its statements in one reporting currency) when those name exactly one code.
- * The annual statement is never evidence for a quarter.
- *
- * `violation` is set when the quarters establish different currencies, or some
- * establish one and others none: there is no single currency to add in. When
- * none is established at all, `code` is null and there is no violation — the
- * sum is one provider's unlabelled figures, usable where no currency matters.
+ * Whether two statement rows are provably parts of ONE filing: the same period
+ * end AND the same SEC acceptance timestamp (and the same CIK when both state
+ * one). A shared period-end date alone proves nothing — an amended filing, a
+ * restatement or another provider feed can close on the same day in another
+ * presentation currency.
  */
+function sameFiling(a: CurrencyEvidenceRow, b: CurrencyEvidenceRow): boolean {
+  const day = isoDay(a.date);
+  if (day === null || isoDay(b.date) !== day) return false;
+  const accepted = filingField(a.acceptedDate);
+  if (accepted === null || accepted !== filingField(b.acceptedDate)) return false;
+  const cik = (row: CurrencyEvidenceRow) => filingField(row.cik)?.replace(/^0+/, "") ?? null;
+  return cik(a) === null || cik(b) === null || cik(a) === cik(b);
+}
+
+/** What the evidence says about one quarter's currency. */
+type QuarterCurrency =
+  | { state: "known"; code: string; fromSameFiling: boolean }
+  | { state: "unknown"; unlinkedLabels: boolean }
+  | { state: "conflict"; codes: string[] };
+
+function quarterCurrency(row: CurrencyEvidenceRow, siblings: readonly CurrencyEvidenceRow[]): QuarterCurrency {
+  const own = normalizeReportedCurrency(row.reportedCurrency);
+  const linked = siblings.filter((sibling) => sameFiling(row, sibling));
+  const codes = new Set<string>(own === null ? [] : [own]);
+  for (const sibling of linked) {
+    const code = normalizeReportedCurrency(sibling.reportedCurrency);
+    if (code !== null) codes.add(code);
+  }
+  // A filing presents its statements in one currency: two codes within it are
+  // conflicting evidence, never "no evidence".
+  if (codes.size > 1) return { state: "conflict", codes: [...codes].sort() };
+  if (codes.size === 1) return { state: "known", code: [...codes][0]!, fromSameFiling: own === null };
+  const day = isoDay(row.date);
+  return {
+    state: "unknown",
+    unlinkedLabels: siblings.some(
+      (sibling) => day !== null && isoDay(sibling.date) === day && normalizeReportedCurrency(sibling.reportedCurrency) !== null,
+    ),
+  };
+}
+
+/**
+ * The one currency four quarters are in, established row by row, keeping the
+ * three kinds of evidence apart:
+ *
+ *  - `known`: every quarter is established in the same code — by its own
+ *    label, or by the other statements of THE SAME FILING (sameFiling) when
+ *    it has none. The annual statement is never evidence for a quarter.
+ *  - `conflict`: some quarter's evidence names two currencies.
+ *  - `mixed`: the quarters are each established, in different currencies.
+ *  - `unknown`: at least one quarter has no evidence at all.
+ *
+ * Only a `known` window is a sum; any other state withholds it from every use.
+ */
+type WindowCurrency =
+  | { state: "known"; code: string; fromSameFiling: boolean }
+  | { state: "unknown" | "conflict" | "mixed"; detail: string };
+
 function resolveQuarterCurrency(
   rows: readonly CurrencyEvidenceRow[],
   siblings: readonly CurrencyEvidenceRow[],
-): { code: string | null; fromSiblings: boolean; violation: string | null } {
-  let fromSiblings = false;
-  const codes = rows.map((row) => {
-    const own = normalizeReportedCurrency(row.reportedCurrency);
-    if (own !== null) return own;
-    const day = isoDay(row.date);
-    const evidence = new Set(
-      siblings
-        .filter((sibling) => day !== null && isoDay(sibling.date) === day)
-        .map((sibling) => normalizeReportedCurrency(sibling.reportedCurrency))
-        .filter((code): code is string => code !== null),
-    );
-    if (evidence.size !== 1) return null;
-    fromSiblings = true;
-    return [...evidence][0]!;
-  });
-  if (codes.every((code) => code === codes[0])) {
-    return { code: codes[0] ?? null, fromSiblings: codes[0] !== null && fromSiblings, violation: null };
+): WindowCurrency {
+  const quarters = rows.map((row) => ({ day: isoDay(row.date) ?? String(row.date ?? "?"), evidence: quarterCurrency(row, siblings) }));
+  const describe = ({ day, evidence }: (typeof quarters)[number]): string =>
+    `${day} ${
+      evidence.state === "known" ? evidence.code : evidence.state === "conflict" ? `conflict (${evidence.codes.join(" vs ")})` : "unknown"
+    }`;
+  const conflicts = quarters.filter((q) => q.evidence.state === "conflict");
+  if (conflicts.length > 0) return { state: "conflict", detail: conflicts.map(describe).join(", ") };
+  const known = quarters.flatMap((q) => (q.evidence.state === "known" ? [q.evidence] : []));
+  const codes = new Set(known.map((k) => k.code));
+  if (codes.size > 1) return { state: "mixed", detail: quarters.map(describe).join(", ") };
+  if (known.length === quarters.length && known.length > 0) {
+    return { state: "known", code: known[0]!.code, fromSameFiling: known.some((k) => k.fromSameFiling) };
   }
+  const unlinked = quarters.some((q) => q.evidence.state === "unknown" && q.evidence.unlinkedLabels);
   return {
-    code: null,
-    fromSiblings: false,
-    violation: rows
-      .map((row, i) => `${isoDay(row.date) ?? String(row.date ?? "?")} ${codes[i] ?? "unknown"}`)
-      .join(", "),
+    state: "unknown",
+    detail:
+      (known.length === 0 ? "no quarter carries a currency label" : `only some quarters are established (${quarters.map(describe).join(", ")})`) +
+      (unlinked
+        ? ", and the same-period rows that do carry one are not linked to the same filing (no shared SEC acceptance timestamp), so their label is not the quarter's"
+        : ", and no other statement of the same filing supplies one"),
   };
+}
+
+/**
+ * The one currency a set of statement rows is established in — each row by its
+ * own label or its own filing's other statements — or null when any row is
+ * unknown or in conflict, or two rows differ.
+ */
+function establishedRowsCurrency(
+  rows: readonly CurrencyEvidenceRow[],
+  siblings: readonly CurrencyEvidenceRow[],
+): string | null {
+  const codes = new Set<string | null>(
+    rows.map((row) => {
+      const evidence = quarterCurrency(row, siblings);
+      return evidence.state === "known" ? evidence.code : null;
+    }),
+  );
+  return rows.length > 0 && codes.size === 1 && !codes.has(null) ? ([...codes][0] ?? null) : null;
+}
+
+/** Withhold a window whose currency is not established; null when it is. */
+function windowCurrencyGap(
+  window: "income" | "cash-flow",
+  currency: WindowCurrency,
+  endpoint: string,
+): ManifestEntry | null {
+  const field = window === "income" ? "compute.ttmIncome" : "compute.ttmCashFlow";
+  const fallback = "the TTM basis is suppressed; latest annual statement used instead";
+  switch (currency.state) {
+    case "known":
+      return null;
+    case "mixed":
+      return {
+        field,
+        reason: `latest 4 quarterly rows are not in one reporting currency (${currency.detail}) — a sum across currencies is no figure at all, so ${fallback}`,
+        severity: "warn",
+        attemptedSources: [endpoint],
+      };
+    case "conflict":
+      return {
+        field,
+        reason:
+          `latest 4 quarterly ${window} rows' currency evidence is in conflict (${currency.detail}): statements of one ` +
+          `filing name different currencies, so no quarter's currency is established — ${fallback}`,
+        severity: "warn",
+        attemptedSources: [endpoint],
+      };
+    case "unknown":
+      return {
+        field: `${field}.currency`,
+        reason:
+          `the latest 4 quarterly ${window} rows' reporting currency could not be established: ${currency.detail}; the ` +
+          "annual statement's currency is not evidence for the quarters. A sum of quarters not shown to share one " +
+          "currency is not a figure, so it is withheld from every use — the DCF anchor, the price multiples, and the " +
+          `ratios and signs built on its sums (interest coverage, cost of debt, tax rate, routing) — and ${fallback}`,
+        severity: "warn",
+        attemptedSources: [endpoint],
+      };
+  }
 }
 
 /** Non-null quarter count for a field (completeness gate for critical sums). */
@@ -746,13 +857,9 @@ function ttmIncomeFromNormalized(
   }
 
   const windowCurrency = resolveQuarterCurrency(q, siblings);
-  if (windowCurrency.violation !== null) {
-    gaps?.push({
-      field: "compute.ttmIncome",
-      reason: `latest 4 quarterly rows are not in one reporting currency (${windowCurrency.violation}) — a sum across currencies is no figure at all, so the TTM basis is suppressed; latest annual statement used instead`,
-      severity: "warn",
-      attemptedSources: ["fmp:/stable/income-statement?period=quarter"],
-    });
+  const currencyGap = windowCurrencyGap("income", windowCurrency, "fmp:/stable/income-statement?period=quarter");
+  if (currencyGap !== null || windowCurrency.state !== "known") {
+    if (currencyGap !== null) gaps?.push(currencyGap);
     return null;
   }
 
@@ -805,9 +912,9 @@ function ttmIncomeFromNormalized(
 
   return {
     date: String(q[0].date ?? ""),
-    // One code for all four quarters (the gate above), or null for none.
+    // One established code for all four quarters (the gate above).
     reportedCurrency: windowCurrency.code,
-    currencyFromSameperiodStatements: windowCurrency.fromSiblings,
+    currencyFromSameFilingStatements: windowCurrency.fromSameFiling,
     revenue: sumField(q, "revenue"),
     operatingIncome: gateComplete("operatingIncome"),
     depreciationAndAmortization: gateComplete("depreciationAndAmortization"),
@@ -883,13 +990,9 @@ function ttmCashFlowFromNormalized(
   }
   // Currency gate — identical to ttmIncome.
   const windowCurrency = resolveQuarterCurrency(q, siblings);
-  if (windowCurrency.violation !== null) {
-    gaps?.push({
-      field: "compute.ttmCashFlow",
-      reason: `latest 4 quarterly rows are not in one reporting currency (${windowCurrency.violation}) — a sum across currencies is no figure at all, so the TTM basis is suppressed; latest annual statement used instead`,
-      severity: "warn",
-      attemptedSources: ["fmp:/stable/cash-flow-statement?period=quarter"],
-    });
+  const currencyGap = windowCurrencyGap("cash-flow", windowCurrency, "fmp:/stable/cash-flow-statement?period=quarter");
+  if (currencyGap !== null || windowCurrency.state !== "known") {
+    if (currencyGap !== null) gaps?.push(currencyGap);
     return null;
   }
   const sum = (key: keyof FmpCashFlowRow): number | null => {
@@ -968,14 +1071,13 @@ function resolveStatementCurrencies(
   const model = ttmIncomeUsable ? ttmInc!.reportedCurrency : annual;
   const ttmCashFlowUsable = ttmCf !== null && ttmCf.reportedCurrency !== null && ttmCf.reportedCurrency === model;
 
+  // A window reaching here is established in one currency (ttmIncome and
+  // ttmCashFlow return none otherwise); it may still differ from the model's.
   const withheld = (window: "income" | "cash-flow", code: string | null): string =>
-    (code === null
-      ? `the latest 4 quarterly ${window} rows' reporting currency could not be established: no row carries a ` +
-        "currency label and no same-period balance-sheet, income or cash-flow row supplies one, and the annual " +
-        `statement's currency (${annualText}) is not evidence for the quarters`
-      : `the latest 4 quarterly ${window} rows are in ${code} but the latest annual statement is in ${annualText}`) +
-    " — the TTM figures are kept for currency-free uses (routing signs, coverage and tax ratios), while the DCF " +
-    "anchor and the price multiples use the latest annual statement instead";
+    `the latest 4 quarterly ${window} rows are in ${code ?? "an unestablished currency"} but the ` +
+    `${window === "income" ? "latest annual statement is" : "model runs"} in ${window === "income" ? annualText : (model ?? "an unestablished currency")}` +
+    " — the window's sums are used only within the window itself (routing signs, its own coverage and tax ratios), " +
+    "while the DCF anchor, the price multiples and anything set against another statement use the latest annual statement instead";
   if (ttmInc !== null && !ttmIncomeUsable) {
     gaps?.push({
       field: "compute.ttmIncome.currency",
@@ -1142,10 +1244,14 @@ function totalDebtSnapshot(
   balancesQuarterly: FmpBalanceSheetRow[],
   interestBasis: "ttm" | "annual",
   includeOperatingLeases: boolean,
+  /** Other statements' rows: filing-linked currency evidence for an unlabelled balance row. */
+  currencyEvidence: readonly CurrencyEvidenceRow[] = [],
 ): {
   average: number | null;
   negativeObservation: number | null;
   basis: string;
+  /** The one currency the balances averaged are established in; null when not established. */
+  currency: string | null;
 } {
   const quarterEnd = balancesQuarterly[0];
   const quarterEndMs = quarterEnd ? Date.parse(String(quarterEnd.date ?? "")) : Number.NaN;
@@ -1183,13 +1289,17 @@ function totalDebtSnapshot(
         ? "book totalDebt with the operating-lease liability kept in (THESIS_EV_INCLUDE_LEASES=1)"
         : "book totalDebt (no operating-lease liability disclosed separately, so lease liabilities remain inside it)";
   const basis = `${leaseText}, average of ${which}`;
+  const used = [a.value !== null ? pair[0] : undefined, b.value !== null ? pair[1] : undefined].filter(
+    (row): row is FmpBalanceSheetRow => row !== undefined,
+  );
+  const currency = establishedRowsCurrency(used, currencyEvidence);
   const negativeObservation = [a.value, b.value].find((value) => value !== null && value < 0) ?? null;
-  if (negativeObservation !== null) return { average: null, negativeObservation, basis };
-  if (a.value === null && b.value === null) return { average: null, negativeObservation: null, basis };
+  if (negativeObservation !== null) return { average: null, negativeObservation, basis, currency };
+  if (a.value === null && b.value === null) return { average: null, negativeObservation: null, basis, currency };
   if (a.value !== null && b.value !== null) {
-    return { average: (a.value + b.value) / 2, negativeObservation: null, basis };
+    return { average: (a.value + b.value) / 2, negativeObservation: null, basis, currency };
   }
-  return { average: a.value ?? b.value, negativeObservation: null, basis };
+  return { average: a.value ?? b.value, negativeObservation: null, basis, currency };
 }
 
 export function runStageB(bundle: DataBundle): ComputedMetrics {
@@ -1516,6 +1626,13 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
           weightedAverageShsOutDil: num(r.weightedAverageShsOutDil),
         })),
       );
+      runway = gateRunwayCurrency(runway, b0, cashflowQuarterly, [
+        ...incomeQuarterly,
+        ...balanceQuarterly,
+        ...cashflowQuarterly,
+        ...rowsOf(bundle.statements.incomeAnnual),
+        ...rowsOf(bundle.statements.cashflowAnnual),
+      ]);
     }
   }
 
@@ -1863,8 +1980,29 @@ function computeReturns(
   const annualDate = isoDay(incomeAnnual[0]?.date) ?? "?";
   const interestExpenseAnnual = num(incomeAnnual[0]?.interestExpense);
   const ebitAnnual = num(incomeAnnual[0]?.operatingIncome) ?? num(incomeAnnual[0]?.ebit);
-  const interestExpenseTtm = ttmInc?.interestExpense ?? null;
-  const ebitTtm = ttmInc?.ebit ?? ttmInc?.operatingIncome ?? null;
+  // The TTM interest is divided by the debt balances at the window's ends; a
+  // ratio of two sums is a figure only when both are in one currency. When the
+  // balances are not established in the window's currency, the TTM pair is not
+  // used for the coverage or the cost of debt and the annual basis is.
+  const statementEvidence: CurrencyEvidenceRow[] = [
+    ...rowsOf(bundle.statements.incomeQuarterly),
+    ...rowsOf(bundle.statements.cashflowQuarterly),
+    ...rowsOf(bundle.statements.incomeAnnual),
+    ...rowsOf(bundle.statements.cashflowAnnual),
+  ];
+  const ttmDebtCurrency = ttmInc
+    ? totalDebtSnapshot(balanceAnnual, balanceQuarterly, "ttm", includeOperatingLeases, statementEvidence).currency
+    : null;
+  const ttmDebtComparable = ttmInc !== null && ttmInc.reportedCurrency !== null && ttmDebtCurrency === ttmInc.reportedCurrency;
+  if (ttmInc && !ttmDebtComparable && (ttmInc.interestExpense !== null || ttmInc.ebit !== null || ttmInc.operatingIncome !== null)) {
+    notes.push(
+      `WACC interest expense and EBIT: the TTM window is in ${ttmInc.reportedCurrency ?? "an unestablished currency"} but the debt ` +
+        `balances it would be measured against are ${ttmDebtCurrency === null ? "not established in one currency" : `in ${ttmDebtCurrency}`} — ` +
+        "the TTM pair is not set against them; the latest annual statement is used instead",
+    );
+  }
+  const interestExpenseTtm = ttmDebtComparable ? (ttmInc?.interestExpense ?? null) : null;
+  const ebitTtm = ttmDebtComparable ? (ttmInc?.ebit ?? ttmInc?.operatingIncome ?? null) : null;
   let interestExpenseForWacc: number | null;
   let ebitForWacc: number | null;
   let coverageBasis: string;
@@ -1879,7 +2017,7 @@ function computeReturns(
     ebitForWacc = ebitAnnual;
     coverageBasis = `FY ${annualDate} annual statement`;
     interestBasis = "annual";
-    if (ttmInc) {
+    if (ttmInc && ttmDebtComparable) {
       notes.push(
         `WACC interest expense and EBIT: the TTM pair is incomplete (${
           interestExpenseTtm === null ? "interest expense" : "EBIT"
@@ -1901,17 +2039,17 @@ function computeReturns(
       notes.push(
         `WACC coverage ratio pairs ${interestLabel} interest expense with ${ebitLabel} EBIT — a mixed basis, named in the synthetic-rating note, because no single-basis pair was available`,
       );
-    } else if (ttmInc && interestExpenseTtm === null && interestExpenseAnnual !== null) {
+    } else if (ttmInc && ttmDebtComparable && interestExpenseTtm === null && interestExpenseAnnual !== null) {
       notes.push(
         `WACC interest expense: TTM field unavailable (suppressed or unreported) — latest annual FY (${annualDate}) figure used instead`,
       );
-    } else if (ttmInc && ebitTtm === null && ebitAnnual !== null) {
+    } else if (ttmInc && ttmDebtComparable && ebitTtm === null && ebitAnnual !== null) {
       notes.push(
         `WACC EBIT (interest-coverage input): TTM fields unavailable (suppressed or unreported) — latest annual FY (${annualDate}) operating income used instead`,
       );
     }
   }
-  const debtSnapshot = totalDebtSnapshot(balanceAnnual, balanceQuarterly, interestBasis, includeOperatingLeases);
+  const debtSnapshot = totalDebtSnapshot(balanceAnnual, balanceQuarterly, interestBasis, includeOperatingLeases, statementEvidence);
 
   const wacc = computeWacc({
     beta: num(profile?.beta),
@@ -2558,6 +2696,64 @@ export function pickBalanceAnchor<TRow extends { date?: unknown } & Partial<Reco
     };
   }
   return { row: newer, basis: basisOf(newer), fallback: null };
+}
+
+/**
+ * The runway divides liquidity by an AVERAGE of quarterly burn: a sum across
+ * quarters, set against a balance. The average is a figure only when its
+ * quarters are established in one currency, and the ratio only when the
+ * liquidity row is in that currency too. No FX is applied: an unestablished
+ * burn is withheld with the ratio; a burn and a liquidity in different (or
+ * unestablished) currencies keep their own values and lose only the ratio.
+ */
+function gateRunwayCurrency(
+  runway: RunwayResult,
+  liquidityRow: CurrencyEvidenceRow,
+  cashflowQuarterly: readonly FmpCashFlowRow[],
+  evidence: readonly CurrencyEvidenceRow[],
+): RunwayResult {
+  const burnRows = runway.burnWindowDates.flatMap((date) => cashflowQuarterly.filter((r) => isoDay(r.date) === isoDay(date)));
+  const burnCurrency =
+    burnRows.length === runway.burnWindowDates.length ? establishedRowsCurrency(burnRows, evidence) : null;
+  const liquidityCurrency = establishedRowsCurrency([liquidityRow], evidence);
+  if (runway.avgQuarterlyBurn === null && runway.runwayQuarters === null) return runway;
+  const withheld = { runwayQuarters: null, estimatedExhaustionDate: null };
+  if (burnCurrency === null && runway.burnWindowDates.length > 0) {
+    return {
+      ...runway,
+      ...withheld,
+      avgQuarterlyBurn: null,
+      gaps: [
+        ...runway.gaps,
+        {
+          field: "runway.currency",
+          reason:
+            `the burn quarters (${runway.burnWindowDates.join(", ")}) are not established in one currency — an average ` +
+            "across them is no figure, so the average burn, the runway and the exhaustion date are withheld",
+          severity: "warn",
+          attemptedSources: ["fmp:/stable/cash-flow-statement?period=quarter"],
+        },
+      ],
+    };
+  }
+  if (runway.runwayQuarters !== null && liquidityCurrency !== burnCurrency) {
+    return {
+      ...runway,
+      ...withheld,
+      gaps: [
+        ...runway.gaps,
+        {
+          field: "runway.currency",
+          reason:
+            `liquidity is ${liquidityCurrency === null ? "not established in a currency" : `in ${liquidityCurrency}`} but the ` +
+            `burn is in ${burnCurrency} — no FX conversion is attempted, so the runway and the exhaustion date are withheld`,
+          severity: "warn",
+          attemptedSources: ["fmp:/stable/balance-sheet-statement", "fmp:/stable/cash-flow-statement?period=quarter"],
+        },
+      ],
+    };
+  }
+  return runway;
 }
 
 export function newestBalanceRow<TRow extends { date?: unknown }>(

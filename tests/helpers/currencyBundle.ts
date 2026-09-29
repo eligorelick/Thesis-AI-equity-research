@@ -21,6 +21,17 @@ export interface CurrencyBundleOptions {
   quarterCurrencies?: readonly (string | null)[];
   /** reportedCurrency on the same-period balance-sheet and cash-flow quarters. */
   siblingQuarterCurrencies?: readonly (string | null)[];
+  /** Override for the balance-sheet quarters alone (else siblingQuarterCurrencies). */
+  balanceQuarterCurrencies?: readonly (string | null)[];
+  /** Override for the cash-flow quarters alone (else siblingQuarterCurrencies). */
+  cashflowQuarterCurrencies?: readonly (string | null)[];
+  /**
+   * Filing identity on the four latest quarters of every statement. "shared":
+   * each quarter's income, balance-sheet and cash-flow rows carry the same
+   * SEC acceptance timestamp and CIK (one 10-Q). "none" (default): no row
+   * carries any, so rows share only a period-end date.
+   */
+  filingLinks?: "shared" | "none";
   /** Revenue per latest quarter (millions). 300 → TTM 1,200 against FY2025's 1,000. */
   quarterlyRevenue?: number;
   /** Route a bank (excess-return model) instead of a general company. */
@@ -29,6 +40,12 @@ export interface CurrencyBundleOptions {
   reit?: boolean;
   /** Total debt on every balance row (millions). 0 makes the WACC the cost of equity. */
   debt?: number;
+  /**
+   * Cash-burning: every operating cash flow is negative (quarters -55, capex
+   * -10, so a 65 quarterly burn; FY2025 -220), which routes the unprofitable
+   * overlay and runs the runway model on 120 of quarter-end liquidity.
+   */
+  burning?: boolean;
   /** SEC SIC code (3571 routes Altman to the original, market-equity variant). */
   sic?: string;
   symbol?: string;
@@ -43,7 +60,7 @@ function ok<T>(rows: T[], asOf: string, endpoint: string) {
 
 const GAP = { ok: false as const, gap: { field: "fixture", reason: "fixture gap", severity: "info" as const } };
 
-const NO_SCALE = new Set(["epsDiluted", "date", "reportedCurrency", "fiscalYear", "period"]);
+const NO_SCALE = new Set(["epsDiluted", "date", "reportedCurrency", "fiscalYear", "period", "cik", "acceptedDate"]);
 
 function scaled(rows: Record<string, unknown>[]): Record<string, unknown>[] {
   return rows.map((r) =>
@@ -74,6 +91,15 @@ export function currencyBundle(opts: CurrencyBundleOptions = {}): DataBundle {
   const annual = opts.annualCurrency === undefined ? "USD" : opts.annualCurrency;
   const quarters = opts.quarterCurrencies ?? [annual, annual, annual, annual];
   const siblings = opts.siblingQuarterCurrencies ?? [null, null, null, null];
+  const balanceCodes = opts.balanceQuarterCurrencies ?? siblings;
+  const cashflowCodes = opts.cashflowQuarterCurrencies ?? siblings;
+  /** The i-th latest quarter's filing identity, when linked. */
+  const filing = (i: number): Record<string, string> =>
+    opts.filingLinks === "shared" ? {
+          cik: "0000000042",
+          // Filed ~a month after the quarter closed.
+          acceptedDate: `${new Date(Date.parse(TTM_DATES[i]!) + 32 * 86_400_000).toISOString().slice(0, 10)} 16:05:00`,
+        } : {};
   const qRev = opts.quarterlyRevenue ?? 300;
   const symbol = opts.symbol ?? (opts.bank ? "BNK" : opts.reit ? "RET" : "GEN");
   const debt = opts.debt ?? 300;
@@ -88,7 +114,7 @@ export function currencyBundle(opts: CurrencyBundleOptions = {}): DataBundle {
 
   const latest = TTM_DATES.map((date, i) =>
     labelled(
-      { date, revenue: qRev, operatingIncome: 60, ebit: 60, netIncome: 45, epsDiluted: 0.45, weightedAverageShsOutDil: 100 * M, interestExpense: 4 * interest, incomeBeforeTax: 57, incomeTaxExpense: 12, depreciationAndAmortization: 12.5 },
+      { date, revenue: qRev, operatingIncome: 60, ebit: 60, netIncome: 45, epsDiluted: 0.45, weightedAverageShsOutDil: 100 * M, interestExpense: 4 * interest, incomeBeforeTax: 57, incomeTaxExpense: 12, depreciationAndAmortization: 12.5, ...filing(i) },
       quarters[i],
     ),
   );
@@ -105,19 +131,19 @@ export function currencyBundle(opts: CurrencyBundleOptions = {}): DataBundle {
   ].map((r) => labelled(r, annual));
   const balanceQuarterly = TTM_DATES.map((date, i) =>
     labelled(
-      { date, totalAssets: 2050, totalLiabilities: 1530, totalStockholdersEquity: 520, totalEquity: 520, totalDebt: debt, netDebt: debt - 70, cashAndCashEquivalents: 70, cashAndShortTermInvestments: 120, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0 },
-      siblings[i],
+      { date, totalAssets: 2050, totalLiabilities: 1530, totalStockholdersEquity: 520, totalEquity: 520, totalDebt: debt, netDebt: debt - 70, cashAndCashEquivalents: 70, cashAndShortTermInvestments: 120, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0, ...filing(i) },
+      balanceCodes[i],
     ),
   );
   const cashflowAnnual = [
-    { date: "2025-12-31", operatingCashFlow: 220, capitalExpenditure: -40, freeCashFlow: 180, netIncome: 150, depreciationAndAmortization: 50, stockBasedCompensation: 10, commonStockRepurchased: -20, commonDividendsPaid: -30, commonStockIssuance: 10, netCashProvidedByOperatingActivities: 220, netCashProvidedByInvestingActivities: -40 },
+    { date: "2025-12-31", operatingCashFlow: opts.burning ? -220 : 220, capitalExpenditure: -40, freeCashFlow: 180, netIncome: 150, depreciationAndAmortization: 50, stockBasedCompensation: 10, commonStockRepurchased: -20, commonDividendsPaid: -30, commonStockIssuance: 10, netCashProvidedByOperatingActivities: 220, netCashProvidedByInvestingActivities: -40 },
     { date: "2024-12-31", operatingCashFlow: 205, capitalExpenditure: -38, freeCashFlow: 167, netIncome: 140, depreciationAndAmortization: 45, stockBasedCompensation: 9, commonStockRepurchased: -30, commonDividendsPaid: -28, commonStockIssuance: 2, netCashProvidedByOperatingActivities: 205, netCashProvidedByInvestingActivities: -38 },
     { date: "2023-12-31", operatingCashFlow: 190, capitalExpenditure: -35, freeCashFlow: 155, netIncome: 130, depreciationAndAmortization: 40, stockBasedCompensation: 8, commonStockRepurchased: -13, commonDividendsPaid: -26, commonStockIssuance: 0, netCashProvidedByOperatingActivities: 190, netCashProvidedByInvestingActivities: -35 },
   ].map((r) => labelled(r, annual));
   const cashflowQuarterly = TTM_DATES.map((date, i) =>
     labelled(
-      { date, operatingCashFlow: 55, capitalExpenditure: -10, freeCashFlow: 45, netIncome: 45, depreciationAndAmortization: 12.5 },
-      siblings[i],
+      { date, operatingCashFlow: opts.burning ? -55 : 55, capitalExpenditure: -10, freeCashFlow: 45, netIncome: 45, depreciationAndAmortization: 12.5, ...filing(i) },
+      cashflowCodes[i],
     ),
   );
 

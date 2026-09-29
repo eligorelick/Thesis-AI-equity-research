@@ -498,7 +498,10 @@ describe("EDGAR durable-cache semantic admission", () => {
   });
 
   it.each([
-    ["fresh", 0],
+    // One second old is still fresh against the 60 s TTL. A zero-age row could
+    // share its fetchedAt millisecond with the self-heal write, and the
+    // rewrite check below then failed (CI run 36492909289, 2026-09-28).
+    ["fresh", 1],
     ["stale within the allowed ceiling", 120],
   ])("never returns a pre-upgrade %s poisoned durable filing and self-heals", async (_label, ageSeconds) => {
     const url = `https://www.sec.gov/Archives/edgar/data/320193/pre-upgrade-${ageSeconds}.htm`;

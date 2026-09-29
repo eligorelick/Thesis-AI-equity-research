@@ -565,10 +565,19 @@ describe("payload determinism + provenance", () => {
       // two peers' market caps, the one executive-compensation row and the six
       // segment rows (none carries a currency, and the listing's is not
       // evidence for them).
-      fingerprint: "1.3.0:05ecb885",
-      promptBytes: 90_918,
+      // Changed 2026-09-29 again (quarter currency evidence): this fixture
+      // labels only its income rows. Its cash-flow quarters therefore form no
+      // TTM sum (a window not shown to share one currency is not summed; the
+      // income rows share a date but no filing identity), so P/FCF reads the
+      // annual FCF; and the TTM interest is no longer divided by debt balances
+      // of unestablished currency, so the cost of debt (3.736% → 3.775%), the
+      // WACC and the DCF per share (104.249 → 104.234) take the annual basis.
+      // Both are disclosed (+725 prompt bytes of gap and note), so
+      // fingerprint, promptBytes, provenanceHash and financeHash move.
+      fingerprint: "1.3.0:241f62b5",
+      promptBytes: 91_643,
       provenanceCount: 297,
-      provenanceHash: "1cecfd95",
+      provenanceHash: "f26da518",
       provenanceIdsHash: "921cb9c3",
       citationCount: 11,
       citationHash: "7ebe5276",
@@ -580,7 +589,7 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "f9ea3f0e",
+      financeHash: "158b6492",
     });
   });
 

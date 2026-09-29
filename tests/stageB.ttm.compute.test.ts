@@ -60,6 +60,8 @@ function cf(over: Partial<Record<string, number | string | null>> = {}): FmpCash
     operatingCashFlow: 100,
     capitalExpenditure: -20,
     depreciationAndAmortization: 5,
+    // Every FMP statement row carries its currency; a window's sum needs one.
+    reportedCurrency: "USD",
     ...over,
   } as FmpCashFlowRow;
 }
@@ -503,6 +505,11 @@ interface WiringOpts {
   zeroInterestExpense?: boolean;
 }
 
+/** Stamp `code` on rows that carry no reportedCurrency of their own. */
+function labelledAs(rows: Record<string, unknown>[], code: string): Record<string, unknown>[] {
+  return rows.map((row) => ("reportedCurrency" in row ? row : { ...row, reportedCurrency: code }));
+}
+
 function wiringBundle(opts: WiringOpts = {}): DataBundle {
   const rc = opts.reportedCurrency ?? "USD";
   const qRevenue = opts.quarterlyRevenue ?? 250;
@@ -594,10 +601,13 @@ function wiringBundle(opts: WiringOpts = {}): DataBundle {
     statements: {
       incomeAnnual: fmpP(scaleRows(incomeAnnual), "2025-12-31", "income-statement"),
       incomeQuarterly: fmpP(scaleRows(incomeQuarterly), "2026-03-31", "income-statement"),
-      balanceAnnual: fmpP(scaleRows(balanceAnnual), "2025-12-31", "balance-sheet"),
-      balanceQuarterly: fmpP(scaleRows(balanceQuarterly), "2026-03-31", "balance-sheet"),
-      cashflowAnnual: fmpP(scaleRows(cashflowAnnual), "2025-12-31", "cash-flow"),
-      cashflowQuarterly: fmpP(scaleRows(cashflowQuarterly), "2026-03-31", "cash-flow"),
+      // Balance-sheet and cash-flow rows carry the statements' currency as
+      // FMP's do (a row's own label is kept): the TTM interest is set against
+      // these debt balances only when they are in the window's currency.
+      balanceAnnual: fmpP(scaleRows(labelledAs(balanceAnnual, rc)), "2025-12-31", "balance-sheet"),
+      balanceQuarterly: fmpP(scaleRows(labelledAs(balanceQuarterly, rc)), "2026-03-31", "balance-sheet"),
+      cashflowAnnual: fmpP(scaleRows(labelledAs(cashflowAnnual, rc)), "2025-12-31", "cash-flow"),
+      cashflowQuarterly: fmpP(scaleRows(labelledAs(cashflowQuarterly, rc)), "2026-03-31", "cash-flow"),
       periods: { annualRequested: 10, quarterlyRequested: 8 },
     },
     keyMetrics: gapF,
@@ -1408,7 +1418,9 @@ describe("TTM window whose quarters are not in one currency", () => {
   ])("ttmIncome refuses to sum $label and discloses why", ({ currencies }) => {
     const gaps: ManifestEntry[] = [];
     expect(ttmIncome(fourQ(currencies.map((reportedCurrency) => ({ reportedCurrency }))), gaps)).toBeNull();
-    const gap = gaps.find((g) => g.field === "compute.ttmIncome");
+    // A quarter with no (valid) code leaves the window's currency unknown
+    // (compute.ttmIncome.currency); two codes make it mixed (compute.ttmIncome).
+    const gap = gaps.find((g) => g.field.startsWith("compute.ttmIncome"));
     expect(gap?.severity).toBe("warn");
     expect(gap?.reason).toMatch(/currenc/i);
   });
@@ -1420,12 +1432,17 @@ describe("TTM window whose quarters are not in one currency", () => {
     expect(gaps.find((g) => g.field === "compute.ttmCashFlow")?.reason).toMatch(/currenc/i);
   });
 
-  it("control: four quarters in one currency, or with no currency at all, still sum", () => {
+  it("control: four quarters in one currency still sum", () => {
     expect(ttmIncome(fourQ(["JPY", "jpy", " JPY", "JPY"].map((reportedCurrency) => ({ reportedCurrency }))))?.revenue).toBe(400);
-    const unlabelled = ttmIncome(fourQ([0, 1, 2, 3].map(() => ({ reportedCurrency: null }))));
-    expect(unlabelled?.revenue).toBe(400);
-    expect(unlabelled?.reportedCurrency).toBeNull();
     expect(ttmCashFlow(fourCf())?.operatingCashFlow).toBe(400);
+  });
+
+  it("does not sum four quarters that carry no currency at all", () => {
+    // Until 2026-09-29 an unlabelled window was summed for "currency-free"
+    // uses; a sum of quarters not shown to share one currency is no figure.
+    const gaps: ManifestEntry[] = [];
+    expect(ttmIncome(fourQ([0, 1, 2, 3].map(() => ({ reportedCurrency: null }))), gaps)).toBeNull();
+    expect(gaps.find((g) => g.field === "compute.ttmIncome.currency")?.reason).toMatch(/could not be established/);
   });
 
   it("runStageB anchors the DCF and multiples on the annual statement instead of a cross-currency sum", () => {

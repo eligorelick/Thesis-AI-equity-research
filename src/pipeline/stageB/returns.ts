@@ -25,6 +25,7 @@
 import type { ManifestEntry } from "@/types/core";
 import { BLUME_MARKET_WEIGHT, BLUME_RAW_WEIGHT } from "@/pipeline/stageB/betaEstimate";
 import { isFiniteNumber } from "@/pipeline/stageB/growth";
+import { comparePriceCurrency } from "@/pipeline/stageB/priceCurrency";
 import { resolveNetDebt } from "@/pipeline/stageB/netDebt";
 import { normalizeQuarterRows } from "@/pipeline/stageB/quarterWindows";
 
@@ -751,6 +752,7 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
 
   // --- Weights + final WACC -------------------------------------------------------
   const mcap = isFiniteNumber(inputs.marketCap) && inputs.marketCap > 0 ? inputs.marketCap : null;
+  const weightCurrency = comparePriceCurrency(inputs.reportedCurrency, inputs.quoteCurrency);
   let weightEquity: number | null;
   let weightDebt: number | null;
   if (!hasDebt) {
@@ -780,26 +782,29 @@ export function computeWacc(inputs: WaccInputs): WaccResult {
       weightEquity: null,
       weightDebt: null,
     };
-  } else if (
-    typeof inputs.reportedCurrency === "string" &&
-    typeof inputs.quoteCurrency === "string" &&
-    inputs.reportedCurrency.toUpperCase() !== inputs.quoteCurrency.toUpperCase()
-  ) {
-    // ADR case. `mcap` is in the trading currency and `debtAvg` in the
-    // reporting currency, so E/(E+D) is off by the FX rate — and with it the
-    // WACC, the DCF discount rate, and the ROIC-vs-WACC spread. Suppress rather
-    // than publish a mixed-currency weighting; no FX conversion is attempted.
-    // Only reachable when debt exists: a debt-free issuer never touches mcap.
+  } else if (!weightCurrency.comparable) {
+    // `mcap` is in the trading currency and `debtAvg` in the reporting
+    // currency. Different currencies put E/(E+D) off by the FX rate — and with
+    // it the WACC, the DCF discount rate and the ROIC-vs-WACC spread — and an
+    // unknown one leaves the weighting unproven. Suppress rather than publish
+    // it; no FX conversion is attempted. Only reachable when debt exists: a
+    // debt-free issuer never touches mcap.
     notes.push(
-      `ADR/currency mismatch: statements in ${inputs.reportedCurrency}, market cap in ${inputs.quoteCurrency} — ` +
-        "E/D weights would divide a quote-currency market cap by a reporting-currency debt balance; WACC suppressed " +
-        "(cost of equity and cost of debt are currency-free and remain reported).",
+      weightCurrency.mismatch
+        ? `ADR/currency mismatch: statements in ${inputs.reportedCurrency}, market cap in ${inputs.quoteCurrency} — ` +
+            "E/D weights would divide a quote-currency market cap by a reporting-currency debt balance; WACC suppressed " +
+            "(cost of equity and cost of debt are currency-free and remain reported)."
+        : `Currency not established (${weightCurrency.reason}) — E/D weights would divide the market cap by a debt ` +
+            "balance that may be in another currency; WACC suppressed (cost of equity and cost of debt remain reported).",
     );
     gaps.push({
       field: "returns.wacc.weights.currency",
       reason:
-        `reportedCurrency ${inputs.reportedCurrency} != quote currency ${inputs.quoteCurrency} (ADR case) — ` +
-        "market-value equity weight needs FX conversion (pending); WACC suppressed rather than mixing currencies" +
+        (weightCurrency.mismatch
+          ? `reportedCurrency ${inputs.reportedCurrency} != quote currency ${inputs.quoteCurrency} (ADR case) — ` +
+            "market-value equity weight needs FX conversion (pending); WACC suppressed rather than mixing currencies"
+          : `${weightCurrency.reason} — the market-value equity weight cannot be set against the debt balance; ` +
+            "WACC suppressed rather than weighting currencies that may differ") +
         (financialRoute ? financialSuffix : ""),
       severity: waccGapSeverity,
     });

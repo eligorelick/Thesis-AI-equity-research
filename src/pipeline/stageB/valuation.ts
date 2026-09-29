@@ -17,6 +17,7 @@
  * Methodology source: the valuation methodology (Damodaran-standard).
  */
 
+import { comparePriceCurrency } from "@/pipeline/stageB/priceCurrency";
 import type { CompanyRoute, ManifestEntry, SectorRoute } from "@/types/core";
 import { deriveFcf } from "@/pipeline/stageB/financialValues";
 import { latestOnOrBeforeWithin } from "@/pipeline/stageB/asOfSelection";
@@ -2126,26 +2127,28 @@ export function multiplesFramework(
   const inc = inputs.incomeTtm;
   const cf = inputs.cashFlowTtm;
   const bal = inputs.balance;
-  const mcap = posOrNull(inputs.quote.marketCap);
-  const price = posOrNull(inputs.quote.price);
-
-  const currencyMismatch =
-    typeof inputs.quote.currency === "string" &&
-    typeof inputs.reportedCurrency === "string" &&
-    inputs.quote.currency.toUpperCase() !== inputs.reportedCurrency.toUpperCase();
-  if (currencyMismatch) {
+  // Every multiple here sets the quote (price, market cap, EV) against the
+  // statements. Unless both are in one known currency none of them is a
+  // figure, and neither is its rank in an own history built the same way:
+  // the price inputs are withheld, so every multiple reads n/m. Peer stats
+  // describe other issuers and stay.
+  const priceCurrency = comparePriceCurrency(inputs.reportedCurrency, inputs.quote.currency);
+  const mcap = priceCurrency.comparable ? posOrNull(inputs.quote.marketCap) : null;
+  const price = priceCurrency.comparable ? posOrNull(inputs.quote.price) : null;
+  if (!priceCurrency.comparable) {
     notes.push(
-      `ADR/currency mismatch: statements in ${inputs.reportedCurrency}, quote in ${inputs.quote.currency} — computed multiples mix currencies (indicative only); vendor pre-baked history NOT trusted`,
+      `price multiples withheld: ${priceCurrency.reason} — a multiple would set the quote against statements that are not proven to share its currency; own-history bands withheld on the same rule`,
     );
     gaps.push(
       gapEntry(
         "valuation.multiples.currency",
-        `reportedCurrency ${inputs.reportedCurrency} != quote currency ${inputs.quote.currency} (ADR case) — FX conversion pending, multiples flagged`,
+        priceCurrency.mismatch
+          ? `reportedCurrency ${inputs.reportedCurrency} != quote currency ${inputs.quote.currency} (ADR case) — FX conversion pending, price multiples withheld`
+          : `${priceCurrency.reason} — price multiples withheld`,
         "warn",
       ),
     );
-  }
-  if (mcap === null) {
+  } else if (mcap === null) {
     gaps.push(gapEntry("valuation.multiples.marketCap", "market cap missing — most multiples not computable", "warn"));
   }
 
@@ -2335,7 +2338,7 @@ export function multiplesFramework(
   const derivedBasis =
     "per-quarter TTM multiples derived from four normalized contiguous fiscal quarters of raw statements + the latest enterprise value and market capitalization on or before each TTM period end (maximum age 45 calendar days; future observations are ineligible)";
   const vendorBasis = "vendor pre-baked ratio history (FMP key-metrics/ratios quarterly) — derivation from raw statements not possible for this multiple";
-  const vendor = !currencyMismatch ? vendorHistory(inputs.keyMetricsHistory) : {};
+  const vendor = priceCurrency.comparable ? vendorHistory(inputs.keyMetricsHistory) : {};
   // WS6 review (BLOCKER 2): the vendor's pre-baked EV ratios are built on the
   // vendor's own lease-INCLUSIVE enterprise value. Ranking a lease-adjusted
   // current multiple inside that distribution compares two definitions, so when
@@ -2397,8 +2400,8 @@ export function multiplesFramework(
     notes.push("own-history bands built from vendor pre-baked multiples (raw derivation unavailable)");
   }
   if (!historyKeys.some((key) => (history[key]?.length ?? 0) >= MIN_HISTORY_OBS_FOR_BAND)) {
-    if (currencyMismatch && (inputs.keyMetricsHistory?.length ?? 0) > 0) {
-      notes.push("vendor pre-baked multiple history skipped: currency mismatch (ADR) makes it untrustworthy");
+    if (!priceCurrency.comparable && (inputs.keyMetricsHistory?.length ?? 0) > 0) {
+      notes.push(`vendor pre-baked multiple history skipped: ${priceCurrency.reason}`);
     }
     gaps.push(gapEntry("valuation.multiples.ownHistory", `insufficient history (need ≥${MIN_HISTORY_OBS_FOR_BAND} quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)`, "info"));
   }
@@ -2456,7 +2459,9 @@ export function multiplesFramework(
       key,
       current: cur,
       basis: basisByKey[key],
-      ownHistory: bandFor(history[key], cur, historyBasisByKey[key] ?? "no usable multiple history"),
+      ownHistory: priceCurrency.comparable
+        ? bandFor(history[key], cur, historyBasisByKey[key] ?? "no usable multiple history")
+        : null,
       peers: peerStats((inputs.peers ?? []).map((p) => p.multiples[key]), notes, key),
     };
   });
@@ -3324,6 +3329,9 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
   }
 
   const multiples = multiplesFramework(route.base, inputs.multiples);
+  // The one rule every comparison with the quote obeys (priceCurrency.ts):
+  // statements and quote in ONE KNOWN currency, or no comparison at all.
+  const quoteComparison = comparePriceCurrency(inputs.multiples.reportedCurrency, inputs.multiples.quote.currency);
   // Hoist the multiples model's own gaps (peers, ownHistory, priceToFfo) into
   // the valuation manifest, mirroring the excess-return and REIT hoists below.
   // Without this the peers gap added earlier never reached the missing-data
@@ -3412,6 +3420,27 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
       gaps.push(...er.gaps);
       return { kind: "excess-return", route: route.base, excessReturn: guarded, multiples, notes, gaps };
     }
+    if (!quoteComparison.comparable) {
+      // Currency unknown on one side: the per-share value (book value and ROE,
+      // all statements) stands in its own currency, but the reverse solve sets
+      // the equity value against the market cap and is withheld.
+      gaps.push(
+        gapEntry(
+          "valuation.excessReturn.reverseSolve.currency",
+          `${quoteComparison.reason} — the market-implied ROE sets the market cap against book value, so it is withheld`,
+          "warn",
+        ),
+      );
+      gaps.push(...er.gaps);
+      const withheld: ExcessReturnResult = {
+        ...er,
+        reverseSolve: {
+          impliedCurrentRoePct: null,
+          notes: [...er.reverseSolve.notes, `reverse solve withheld: ${quoteComparison.reason}`],
+        },
+      };
+      return { kind: "excess-return", route: route.base, excessReturn: withheld, multiples, notes, gaps };
+    }
     // Hoist model-level gaps (CoE/bookValue/payout/ROE suppression, …) so
     // they reach the merged manifest, mirroring the general branch's
     // gaps.push(...built.gaps) — otherwise a suppressed model is invisible in
@@ -3434,8 +3463,20 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
         "info",
       ),
     );
+    // P/FFO, P/AFFO and the implied cap rate set the quote against the
+    // statements; FFO per share does not. Without one known currency the price
+    // is withheld from the block, so only the price-free figures remain.
+    if (inputs.reit && !quoteComparison.comparable) {
+      gaps.push(
+        gapEntry(
+          "valuation.reit.currency",
+          `${quoteComparison.reason} — P/FFO, P/AFFO and the implied cap rate withheld; FFO and AFFO per share stand`,
+          "warn",
+        ),
+      );
+    }
     const reit = inputs.reit
-      ? reitValuation(inputs.reit)
+      ? reitValuation(quoteComparison.comparable ? inputs.reit : { ...inputs.reit, sharePrice: null })
       : reitValuation({ ffoApprox: null, affoApprox: null, sharePrice: null, shares: null, netDebt: null });
     if (!inputs.reit) {
       gaps.push(gapEntry("valuation.reit", "REIT inputs not provided by caller", "critical"));
@@ -3559,12 +3600,25 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
       };
       dcf = runDcf(assumptions, runOpts);
       sensitivity = sensitivityGrid(assumptions, runOpts);
-      reverse = reverseDcf(inputs.currentPrice, assumptions, runOpts);
+      // The reverse DCF solves for the growth the market cap implies, so it
+      // needs the quote and the model in one known currency; the DCF and its
+      // grid are price-free and stand either way.
+      if (quoteComparison.comparable) {
+        reverse = reverseDcf(inputs.currentPrice, assumptions, runOpts);
+      } else {
+        gaps.push(
+          gapEntry(
+            "valuation.reverseDcf.currency",
+            `${quoteComparison.reason} — the reverse DCF sets the market price against the model, so it is withheld; the DCF per share stands in the model's currency`,
+            "warn",
+          ),
+        );
+      }
       // Hoist the DCF and reverse-DCF model gaps too. The earlier hoist covered
       // only the multiples channel, so a suppressed equity bridge or an
       // unsolvable reverse DCF stayed invisible in the manifest — the same
       // defect, on the model that carries the headline number.
-      gaps.push(...dcf.gaps, ...reverse.gaps);
+      gaps.push(...dcf.gaps, ...(reverse?.gaps ?? []));
     }
   }
   return { kind: "dcf", route: route.base, assumptions, dcf, sensitivity, reverseDcf: reverse, multiples, notes, gaps };

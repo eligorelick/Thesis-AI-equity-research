@@ -32,6 +32,7 @@ import type { DataBundle } from "@/pipeline/types";
 import { validateBundle, type ValidationReport } from "@/pipeline/stageA/validate";
 import { renderManifestSummary } from "@/pipeline/stageA/manifest";
 import { runStageB, sourcedOf, statementCurrencies, type ComputedMetrics } from "@/pipeline/compute";
+import { comparePriceCurrency } from "@/pipeline/stageB/priceCurrency";
 import type { AltmanZone } from "@/pipeline/stageB/forensics";
 import {
   classifyInstrumentSupport,
@@ -565,9 +566,14 @@ function TechnicalsPanel({
 function ValuationPanel({ computed, bundle }: { computed: ComputedMetrics; bundle: DataBundle }) {
   const v = computed.valuation;
   const quote = bundle.quote.ok ? bundle.quote.value.data.rows[0] : undefined;
-  const price = typeof quote?.price === "number" ? quote.price : null;
   // Per-share values are in the currency the model ran in — the statements'.
-  const modelCurrency = statementCurrencies(bundle).model;
+  // They are set against the quote only when both are in one known currency.
+  const currencies = statementCurrencies(bundle);
+  const modelCurrency = currencies.model;
+  const price =
+    typeof quote?.price === "number" && comparePriceCurrency(modelCurrency, currencies.trading).comparable
+      ? quote.price
+      : null;
 
   return (
     <Panel title={`valuation · ${v.route} (${v.kind})`}>

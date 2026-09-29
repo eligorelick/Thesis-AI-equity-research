@@ -13,6 +13,7 @@
  * Full precision returned; round only at display time.
  */
 
+import { comparePriceCurrency } from "@/pipeline/stageB/priceCurrency";
 import type { ManifestEntry } from "@/types/core";
 import { deriveFcf } from "@/pipeline/stageB/financialValues";
 import {
@@ -849,12 +850,12 @@ export function computeCapital(
   let totalRepurchased = 0;
   let weightedDollars = 0;
   let weightedShares = 0;
-  const reported = typeof options.reportedCurrency === "string" ? options.reportedCurrency.toUpperCase() : null;
-  const quoted = typeof options.quoteCurrency === "string" ? options.quoteCurrency.toUpperCase() : null;
-  const currencyMismatch = reported !== null && quoted !== null && reported !== quoted;
-  const priceProxySuppressed = currencyMismatch || options.isAdr === true;
-  const priceProxySuppressedReason = currencyMismatch
-    ? `repurchases are in ${options.reportedCurrency} while the market cap and quote are in ${options.quoteCurrency} — a per-share price proxy would mix the two currencies`
+  const proxyCurrency = comparePriceCurrency(options.reportedCurrency, options.quoteCurrency);
+  const priceProxySuppressed = !proxyCurrency.comparable || options.isAdr === true;
+  const priceProxySuppressedReason = !proxyCurrency.comparable
+    ? proxyCurrency.mismatch
+      ? `repurchases are in ${options.reportedCurrency} while the market cap and quote are in ${options.quoteCurrency} — a per-share price proxy would mix the two currencies`
+      : `${proxyCurrency.reason} — repurchases cannot be set against the market cap and quote`
     : "the instrument is an ADR — the market cap over ordinary shares prices an ordinary share while the quote prices an ADS, and no ADS ratio is applied";
   {
     const mcaps = sortNewestFirst(

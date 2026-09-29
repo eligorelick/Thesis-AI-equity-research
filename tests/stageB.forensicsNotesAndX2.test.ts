@@ -46,14 +46,14 @@ const INCOME = {
 
 describe("Altman X2 fails closed when retained earnings are absent", () => {
   it("scores normally when retainedEarnings is present", () => {
-    const r = computeAltman({ balance: { ...BALANCE }, income: { ...INCOME }, marketCap: 2000 }, "original");
+    const r = computeAltman({ balance: { ...BALANCE }, income: { ...INCOME }, marketCap: 2000, reportedCurrency: "USD", quoteCurrency: "USD" }, "original");
 
     expect(r.score).not.toBeNull();
   });
 
   it("suppresses the Z-score instead of substituting 0 for a missing X2", () => {
     const r = computeAltman(
-      { balance: { ...BALANCE, retainedEarnings: null }, income: { ...INCOME }, marketCap: 2000 },
+      { balance: { ...BALANCE, retainedEarnings: null }, income: { ...INCOME }, marketCap: 2000, reportedCurrency: "USD", quoteCurrency: "USD" },
       "original",
     );
 
@@ -68,11 +68,11 @@ describe("Altman X2 fails closed when retained earnings are absent", () => {
   it("does not let a missing X2 flatter an accumulated-deficit company", () => {
     // True X2 here is strongly negative; substituting 0 would raise the score.
     const withDeficit = computeAltman(
-      { balance: { ...BALANCE, retainedEarnings: -800 }, income: { ...INCOME }, marketCap: 2000 },
+      { balance: { ...BALANCE, retainedEarnings: -800 }, income: { ...INCOME }, marketCap: 2000, reportedCurrency: "USD", quoteCurrency: "USD" },
       "original",
     );
     const absent = computeAltman(
-      { balance: { ...BALANCE, retainedEarnings: null }, income: { ...INCOME }, marketCap: 2000 },
+      { balance: { ...BALANCE, retainedEarnings: null }, income: { ...INCOME }, marketCap: 2000, reportedCurrency: "USD", quoteCurrency: "USD" },
       "original",
     );
 

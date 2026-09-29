@@ -275,6 +275,9 @@ describe("SPREADS_2026_01 — Damodaran Jan-2026 table (verbatim)", () => {
 // returns.ts — computeWacc
 // ===========================================================================
 
+/** Repurchases and the market cap in one known currency (priceCurrency.ts). */
+const USD_QUOTE = { reportedCurrency: "USD", quoteCurrency: "USD" } as const;
+
 const waccBase: WaccInputs = {
   beta: 1.0,
   riskFreePct: 4.0,
@@ -285,6 +288,10 @@ const waccBase: WaccInputs = {
   effectiveTaxRate: 0.21,
   ebitTtm: 50,
   analysisDate: "2026-07-19",
+  // The market-value weights set the market cap against the debt balance, so
+  // both must be in one known currency (priceCurrency.ts).
+  reportedCurrency: "USD",
+  quoteCurrency: "USD",
 };
 
 describe("computeWacc — happy path and research anchor", () => {
@@ -835,7 +842,7 @@ const capMcapHistory: MarketCapPoint[] = [
 ];
 
 describe("computeCapital — core ratios", () => {
-  const res = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20 });
+  const res = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20 }, USD_QUOTE);
 
   it("net debt / EBITDA uses own EBITDA (opInc + cash-flow D&A)", () => {
     // House net debt = 600 - (100 cash + 50 STI) = 450; EBITDA = 250.
@@ -895,7 +902,7 @@ describe("computeCapital — core ratios", () => {
   // a charge and subtracted where it should add.
   it("adds a negative (net forfeiture credit) SBC back to FCF instead of charging it", () => {
     const cf = capCashflow.map((r, i) => (i === 0 ? { ...r, stockBasedCompensation: -10 } : r));
-    const res2 = computeCapital(capIncome, cf, capBalance, capMcapHistory, { price: 20 });
+    const res2 = computeCapital(capIncome, cf, capBalance, capMcapHistory, { price: 20 }, USD_QUOTE);
     expect(res2.fcf.latestFcfBeforeSbc).toBe(80);
     expect(res2.fcf.latestSbc).toBe(-10);
     expect(res2.fcf.latestFcf).toBe(90);
@@ -904,7 +911,7 @@ describe("computeCapital — core ratios", () => {
 
   it("leaves FCF unadjusted, and says so, when SBC is not disclosed", () => {
     const cf = capCashflow.map((r) => ({ ...r, stockBasedCompensation: null }));
-    const res2 = computeCapital(capIncome, cf, capBalance, capMcapHistory, { price: 20 });
+    const res2 = computeCapital(capIncome, cf, capBalance, capMcapHistory, { price: 20 }, USD_QUOTE);
     expect(res2.fcf.latestFcf).toBe(80);
     expect(res2.fcf.latestFcfBeforeSbc).toBe(80);
     expect(res2.fcf.latestSbc).toBeNull();
@@ -918,7 +925,7 @@ describe("computeCapital — core ratios", () => {
     const inc = capIncome.map((r, i) =>
       i === 0 ? { ...r, weightedAverageShsOut: 95, weightedAverageShsOutDil: 100 } : r,
     );
-    const res2 = computeCapital(inc, capCashflow, capBalance, capMcapHistory, { price: 20 });
+    const res2 = computeCapital(inc, capCashflow, capBalance, capMcapHistory, { price: 20 }, USD_QUOTE);
     expect(res2.dilution.basicShares).toBe(95);
     expect(res2.dilution.dilutedShares).toBe(100);
     expect(res2.dilution.overhangPct).toBeCloseTo((5 / 95) * 100, 12);
@@ -979,7 +986,7 @@ describe("computeCapital — core ratios", () => {
         weightedAverageShsOutDil: 125,
       },
     ];
-    const r = computeCapital(income, capCashflow.slice(0, 1), capBalance, capMcapHistory, { price: 20 });
+    const r = computeCapital(income, capCashflow.slice(0, 1), capBalance, capMcapHistory, { price: 20 }, USD_QUOTE);
     const y = r.buybackPriceAnalysis.years[0];
     // avg mcap 1000 / BASIC 100 = 10 (correct); diluted 125 would give 8 (understated).
     expect(y.avgPriceProxy).toBeCloseTo(10, 12);
@@ -998,7 +1005,7 @@ describe("computeCapital — core ratios", () => {
 describe("computeCapital — zero-as-null and denominator guards", () => {
   it("interest expense 0 → coverage null + disclosed gap (FMP zero-for-undisclosed)", () => {
     const income = [{ ...capIncome[0], interestExpense: 0 }];
-    const res = computeCapital(income, capCashflow, capBalance, [], { price: null });
+    const res = computeCapital(income, capCashflow, capBalance, [], { price: null }, USD_QUOTE);
     expect(res.interestCoverage.value).toBeNull();
     expect(res.interestCoverage.note).toContain("zero-for-undisclosed");
     expect(res.gaps.some((g) => g.field === "capital.interestCoverage")).toBe(true);
@@ -1007,21 +1014,21 @@ describe("computeCapital — zero-as-null and denominator guards", () => {
   it("FCF conversion null when net income ≤ 0", () => {
     const cf = [{ ...capCashflow[0], netIncome: -50 }];
     const inc = [{ ...capIncome[0], netIncome: -50 }];
-    const res = computeCapital(inc, cf, capBalance, [], { price: null });
+    const res = computeCapital(inc, cf, capBalance, [], { price: null }, USD_QUOTE);
     expect(res.fcf.latestConversion).toBeNull();
     expect(res.fcf.series[res.fcf.series.length - 1].note).toContain("not meaningful");
   });
 
   it("SBC % of FCF null when FCF ≤ 0", () => {
     const cf = [{ ...capCashflow[0], freeCashFlow: -10 }];
-    const res = computeCapital(capIncome, cf, capBalance, [], { price: null });
+    const res = computeCapital(capIncome, cf, capBalance, [], { price: null }, USD_QUOTE);
     expect(res.sbc.pctOfFcf).toBeNull();
     expect(res.sbc.note).toContain("not meaningful");
   });
 
   it("net debt/EBITDA null when EBITDA ≤ 0", () => {
     const inc = [{ ...capIncome[0], operatingIncome: -100 }];
-    const res = computeCapital(inc, capCashflow, capBalance, [], { price: null });
+    const res = computeCapital(inc, capCashflow, capBalance, [], { price: null }, USD_QUOTE);
     expect(res.netDebtToEbitda.value).toBeNull();
     expect(res.netDebtToEbitda.note).toContain("not meaningful");
   });
@@ -1029,14 +1036,14 @@ describe("computeCapital — zero-as-null and denominator guards", () => {
   it("falls back to the vendor ebitda field when cash-flow D&A is missing (noted)", () => {
     const inc = [{ ...capIncome[0], ebitda: 250 }];
     const cf = [{ ...capCashflow[0], depreciationAndAmortization: null }];
-    const res = computeCapital(inc, cf, capBalance, [], { price: null });
+    const res = computeCapital(inc, cf, capBalance, [], { price: null }, USD_QUOTE);
     expect(res.netDebtToEbitda.ebitda).toBe(250);
     expect(res.netDebtToEbitda.note).toContain("vendor ebitda");
   });
 
   it("suppresses net debt when short-term investments are unknown", () => {
     const bal = [{ date: "2025-12-31", totalDebt: 600, cashAndCashEquivalents: 100 }];
-    const res = computeCapital(capIncome, capCashflow, bal, [], { price: null });
+    const res = computeCapital(capIncome, capCashflow, bal, [], { price: null }, USD_QUOTE);
     expect(res.netDebtToEbitda.netDebt).toBeNull();
     expect(res.netDebtToEbitda.note).toMatch(/short-term investments|combined cash/i);
   });
@@ -1048,7 +1055,7 @@ describe("computeCapital — zero-as-null and denominator guards", () => {
       cashAndCashEquivalents: 100,
       shortTermInvestments: 0,
     }];
-    const res = computeCapital(capIncome, capCashflow, bal, [], { price: null });
+    const res = computeCapital(capIncome, capCashflow, bal, [], { price: null }, USD_QUOTE);
     expect(res.netDebtToEbitda.netDebt).toBe(500);
     expect(res.netDebtToEbitda.resolution.cashBasis).toBe("component-sum");
   });
@@ -1072,7 +1079,7 @@ describe("computeCapital — capex trajectory slope", () => {
       depreciationAndAmortization: 10,
       netIncome: 10,
     }));
-    const res = computeCapital(inc, cf, [], [], { price: null });
+    const res = computeCapital(inc, cf, [], [], { price: null }, USD_QUOTE);
     const expected = [10, 11, 12, 13, 14];
     res.capexIntensity.series.forEach((p, i) =>
       expect(p.capexToRevenuePct).toBeCloseTo(expected[i], 10),
@@ -1087,7 +1094,7 @@ describe("computeCapital — capex trajectory slope", () => {
       date: `${y}-12-31`,
       capitalExpenditure: -(10 + i * 10),
     }));
-    const res = computeCapital(inc, cf, [], [], { price: null });
+    const res = computeCapital(inc, cf, [], [], { price: null }, USD_QUOTE);
     expect(res.capexIntensity.slopePctPtsPerYear).toBeCloseTo(3.5708, 3);
     expect(res.notes.join(" ")).toMatch(/irregular fiscal spacing|elapsed fiscal years/i);
   });
@@ -1112,7 +1119,7 @@ describe("computeCapital — diluted share-count trend", () => {
       [],
       [],
       [],
-      { price: null },
+      { price: null, ...USD_QUOTE },
     );
     expect(res.shareCount.trendPct).toBeCloseTo(-10, 10);
     expect(res.shareCount.direction).toBe("buyback");
@@ -1127,7 +1134,7 @@ describe("computeCapital — diluted share-count trend", () => {
       [],
       [],
       [],
-      { price: null },
+      { price: null, ...USD_QUOTE },
     );
     expect(res.shareCount.trendPct).toBeCloseTo(10, 10);
     expect(res.shareCount.direction).toBe("dilution");
@@ -1139,14 +1146,14 @@ describe("computeCapital — diluted share-count trend", () => {
       [],
       [],
       [],
-      { price: null },
+      { price: null, ...USD_QUOTE },
     );
     expect(res.shareCount.trendPct).toBeCloseTo(0.5, 10);
     expect(res.shareCount.direction).toBe("flat");
   });
 
   it("annotates a shorter-than-requested window", () => {
-    const res = computeCapital(incomeWithShares([1000, 950, 900]), [], [], [], { price: null });
+    const res = computeCapital(incomeWithShares([1000, 950, 900]), [], [], [], { price: null }, USD_QUOTE);
     expect(res.shareCount.actualYears).toBe(2);
     expect(res.shareCount.note).toContain("only 2y");
   });
@@ -1154,7 +1161,7 @@ describe("computeCapital — diluted share-count trend", () => {
 
 describe("computeCapital — missing inputs never throw", () => {
   it("returns gaps for empty inputs", () => {
-    const res = computeCapital([], [], [], [], { price: null });
+    const res = computeCapital([], [], [], [], { price: null }, USD_QUOTE);
     expect(res.asOf).toBeNull();
     expect(res.gaps.some((g) => g.field === "capital.incomeStatement" && g.severity === "critical")).toBe(true);
     expect(res.gaps.some((g) => g.field === "capital.cashFlow" && g.severity === "critical")).toBe(true);
@@ -1165,7 +1172,7 @@ describe("computeCapital — missing inputs never throw", () => {
   });
 
   it("buyback analysis degrades when market-cap history is missing", () => {
-    const res = computeCapital(capIncome, capCashflow, capBalance, [], { price: 20 });
+    const res = computeCapital(capIncome, capCashflow, capBalance, [], { price: 20 }, USD_QUOTE);
     expect(res.buybackPriceAnalysis.totalRepurchased).toBe(100);
     expect(res.buybackPriceAnalysis.avgPricePaidProxy).toBeNull();
     expect(res.buybackPriceAnalysis.years[0].note).toContain("no market-cap history");
@@ -1502,7 +1509,7 @@ describe("audit 2026-09-06 — computeCapital", () => {
       filed({ ...capCashflow[1]!, commonStockRepurchased: -80 }, "2025-06-01"), // FY2024 restated
     ];
     const incRows = capIncome.map((r, i) => filed(r, i === 0 ? "2026-02-01" : "2025-06-01"));
-    const res = computeCapital(incRows, cfRows, capBalance, capMcapHistory, { price: 20 });
+    const res = computeCapital(incRows, cfRows, capBalance, capMcapHistory, { price: 20 }, USD_QUOTE);
     expect(res.buybackPriceAnalysis.totalRepurchased).toBe(180);
     expect(res.fcf.series.map((r) => r.date)).toEqual(["2024-12-31", "2025-12-31"]);
     expect(res.capexIntensity.series.map((r) => r.date)).toEqual(["2024-12-31", "2025-12-31"]);
@@ -1511,7 +1518,7 @@ describe("audit 2026-09-06 — computeCapital", () => {
 
   it("joins cash-flow rows to income rows within ±5 days instead of by exact string", () => {
     const drifted = capCashflow.map((r) => ({ ...r, date: r.date === "2025-12-31" ? "2025-12-30" : r.date }));
-    const res = computeCapital(capIncome, drifted, capBalance, capMcapHistory, { price: 20 });
+    const res = computeCapital(capIncome, drifted, capBalance, capMcapHistory, { price: 20 }, USD_QUOTE);
     const latest = res.capexIntensity.series[res.capexIntensity.series.length - 1]!;
     expect(latest.capexToRevenuePct).toBeCloseTo(15, 9); // 30 / 200
     expect(res.sbc.pctOfRevenue).toBeCloseTo(5, 9); // 10 / 200
@@ -1522,7 +1529,7 @@ describe("audit 2026-09-06 — computeCapital", () => {
 
   it("names a cash-flow year with no income counterpart once", () => {
     const orphan = capCashflow.map((r) => ({ ...r, date: r.date === "2025-12-31" ? "2025-11-30" : r.date }));
-    const res = computeCapital(capIncome, orphan, capBalance, capMcapHistory, { price: 20 });
+    const res = computeCapital(capIncome, orphan, capBalance, capMcapHistory, { price: 20 }, USD_QUOTE);
     const joins = res.gaps.filter((g) => g.field === "capital.statementJoin");
     expect(joins).toHaveLength(1);
     expect(joins[0]!.reason).toMatch(/2025-11-30/);
@@ -1531,13 +1538,13 @@ describe("audit 2026-09-06 — computeCapital", () => {
   it("treats a zero cash-flow D&A as undisclosed for EBITDA and consults the vendor field", () => {
     const zeroDa = capCashflow.map((r, i) => (i === 0 ? { ...r, depreciationAndAmortization: 0 } : r));
     const inc = capIncome.map((r, i) => (i === 0 ? { ...r, ebitda: 250 } : r));
-    const res = computeCapital(inc, zeroDa, capBalance, capMcapHistory, { price: 20 });
+    const res = computeCapital(inc, zeroDa, capBalance, capMcapHistory, { price: 20 }, USD_QUOTE);
     expect(res.netDebtToEbitda.ebitda).toBe(250);
     expect(res.netDebtToEbitda.note).toMatch(/vendor ebitda field used \(cash-flow D&A 0 treated as undisclosed\)/);
   });
 
   it("suppresses the buyback price proxy for an ADR or a currency mismatch, and says why", () => {
-    const adr = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20 }, {
+    const adr = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20, ...USD_QUOTE }, {
       reportedCurrency: "USD",
       quoteCurrency: "USD",
       isAdr: true,
@@ -1548,7 +1555,7 @@ describe("audit 2026-09-06 — computeCapital", () => {
     expect(adr.buybackPriceAnalysis.years[0]!.note).toMatch(/price proxy suppressed: the instrument is an ADR/);
     expect(adr.gaps.some((g) => g.field === "capital.buybackPriceAnalysis" && /ADS/.test(g.reason))).toBe(true);
 
-    const fx = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20 }, {
+    const fx = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20, ...USD_QUOTE }, {
       reportedCurrency: "TWD",
       quoteCurrency: "USD",
     });
@@ -1556,7 +1563,7 @@ describe("audit 2026-09-06 — computeCapital", () => {
     expect(fx.notes.join(" ")).toMatch(/repurchases are in TWD while the market cap and quote are in USD/);
 
     // Same currency, ordinary listing: the proxy is published as before.
-    const plain = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20 }, {
+    const plain = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20, ...USD_QUOTE }, {
       reportedCurrency: "USD",
       quoteCurrency: "usd",
       isAdr: false,

@@ -64,6 +64,9 @@ const aaplAltmanInputs: AltmanInputs = {
   income: { date: "2025-09-27", ebit: 141.597, revenue: 435.617 },
   marketCap: 4022.5,
   marketCapAsOf: "2026-02-16",
+  // Apple reports and trades in USD: X4 sets its market cap against its liabilities.
+  reportedCurrency: "USD",
+  quoteCurrency: "USD",
 };
 
 // ---------------------------------------------------------------------------

@@ -39,10 +39,15 @@ describe("WACC weights guard the ADR currency mismatch", () => {
     expect(r.waccPct).not.toBeNull();
   });
 
-  it("computes weights normally when currency is simply unknown", () => {
-    const r = computeWacc({ ...WACC_BASE });
-
-    expect(r.weightEquity).not.toBeNull();
+  it("withholds the weights when either currency is unknown: the weighting is unproven, not assumed", () => {
+    for (const currencies of [{}, { reportedCurrency: null, quoteCurrency: "USD" }, { reportedCurrency: "USD", quoteCurrency: null }]) {
+      const r = computeWacc({ ...WACC_BASE, ...currencies });
+      expect(r.weightEquity).toBeNull();
+      expect(r.waccPct).toBeNull();
+      expect(r.gaps.find((g) => g.field === "returns.wacc.weights.currency")?.reason).toMatch(/unknown/);
+      // Cost of equity is currency-free and stays available.
+      expect(r.costOfEquityPct).not.toBeNull();
+    }
   });
 
   it("suppresses the weights and WACC when reporting and quote currency differ", () => {

@@ -976,14 +976,16 @@ describe("multiplesFramework", () => {
     expect(pe?.current).toBeNull();
   });
 
-  it("flags the ADR currency-mismatch case and gaps it", () => {
+  it("withholds every price multiple in the ADR currency-mismatch case, and gaps it", () => {
     const r = multiplesFramework("general", {
       ...baseInputs,
       reportedCurrency: "TWD",
       quote: { ...baseInputs.quote, currency: "USD" },
     });
-    expect(r.notes.some((n) => /ADR|currency mismatch/i.test(n))).toBe(true);
-    expect(r.gaps.some((g) => g.field === "valuation.multiples.currency")).toBe(true);
+    expect(r.notes.some((n) => /price multiples withheld: statements in TWD, quote in USD/.test(n))).toBe(true);
+    expect(r.gaps.find((g) => g.field === "valuation.multiples.currency")?.reason).toMatch(/ADR case/);
+    // No multiple sets a USD quote against TWD statements, not even "indicatively".
+    expect(r.multiples.every((m) => m.current === null && m.ownHistory === null)).toBe(true);
   });
 
   it("bank sectorAppropriate list EXCLUDES EV multiples (P/TBV, P/E, P/B only)", () => {

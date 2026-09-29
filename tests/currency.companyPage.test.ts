@@ -95,7 +95,9 @@ describe("company page money cells", () => {
 
   it("prices the quote in its trading currency and the model in the statements' currency", async () => {
     // Statements carry no currency: the quote is still USD, the model's output is not.
-    const p = await panels({ profileCurrency: "USD", annualCurrency: null, quarterCurrencies: [null, null, null, null] });
+    // Debt-free: with a currency unknown the WACC may not weight the market cap,
+    // so a levered issuer would have no DCF to label at all.
+    const p = await panels({ debt: 0, profileCurrency: "USD", annualCurrency: null, quarterCurrencies: [null, null, null, null] });
     expect(cell(p.QuoteHeader!, "price")).toBe("$100.00");
     expect(cell(p.ValuationPanel!, "dcf / share")).toMatch(/\(currency unknown\)$/);
     const grid = heatmapAmounts(p.ValuationPanel!);
@@ -104,11 +106,21 @@ describe("company page money cells", () => {
   });
 
   it("says currency unknown when neither the listing nor the statements establish one", async () => {
-    const p = await panels({ profileCurrency: null, annualCurrency: null, quarterCurrencies: [null, null, null, null] });
+    const p = await panels({ debt: 0, profileCurrency: null, annualCurrency: null, quarterCurrencies: [null, null, null, null] });
     expect(cell(p.QuoteHeader!, "price")).toBe("100.00 (currency unknown)");
     expect(cell(p.TechnicalsPanel!, "last close")).toMatch(/\(currency unknown\)$/);
     expect(cell(p.ValuationPanel!, "dcf / share")).toMatch(/\(currency unknown\)$/);
     for (const html of Object.values(p)) expect(html).not.toContain("$");
+  });
+
+  it("compares the DCF with the price only when both are in one known currency", async () => {
+    const usd = await panels({ debt: 0 });
+    expect(cell(usd.ValuationPanel!, "vs price")).toMatch(/^[+-]\d+\.\d%$/);
+    const unknownModel = await panels({ debt: 0, annualCurrency: null, quarterCurrencies: [null, null, null, null] });
+    expect(cell(unknownModel.ValuationPanel!, "dcf / share")).toMatch(/\(currency unknown\)$/);
+    expect(cell(unknownModel.ValuationPanel!, "vs price")).toBe("n/a");
+    const unknownQuote = await panels({ debt: 0, profileCurrency: null });
+    expect(cell(unknownQuote.ValuationPanel!, "vs price")).toBe("n/a");
   });
 
   it("states a bank's excess-return value per share in its statements' currency", async () => {

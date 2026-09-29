@@ -69,8 +69,9 @@ describe("TTM window currency evidence", () => {
 
 describe("model currency of calculated per-share values", () => {
   it("does not borrow the listing currency when the statements carry none", () => {
+    // Debt-free, so the WACC needs no market-value weight and the DCF runs.
     const computed = runStageB(
-      currencyBundle({ profileCurrency: "USD", annualCurrency: null, quarterCurrencies: UNLABELLED }),
+      currencyBundle({ debt: 0, profileCurrency: "USD", annualCurrency: null, quarterCurrencies: UNLABELLED }),
     );
     expect(perShareUnit(computed)).toBe("per share (currency unknown)");
     for (const series of computed.projections.series) {
@@ -84,7 +85,7 @@ describe("model currency of calculated per-share values", () => {
   });
 
   it("states the statements' currency when the listing currency is unknown", () => {
-    const computed = runStageB(currencyBundle({ profileCurrency: null, annualCurrency: "EUR" }));
+    const computed = runStageB(currencyBundle({ debt: 0, profileCurrency: null, annualCurrency: "EUR" }));
     expect(perShareUnit(computed)).toBe("EUR/share");
   });
 });

@@ -29,7 +29,7 @@
 import type { ManifestEntry } from "@/types/core";
 import type { DataBundle } from "@/pipeline/types";
 import { CORE_SERIES, fredFigureUnit, type FredUnits } from "@/providers/fred";
-import type { ComputedMetrics } from "@/pipeline/compute";
+import { statementCurrencies, type ComputedMetrics } from "@/pipeline/compute";
 import type { ValidationReport } from "@/pipeline/stageA/validate";
 import type { DegradationPlan } from "@/pipeline/stageB/sectorRouting";
 import type { TracedNumber } from "@/report/schema";
@@ -311,7 +311,12 @@ export function formatFigure(f: PayloadFigure): string {
         ? String(round(f.value))
         : f.value;
   const unit = f.unit && f.value !== null ? ` ${f.unit}` : "";
-  return `${f.label}: ${val}${unit} ${provenanceTag(f.provenanceId ?? f.source, f.asOf)}`;
+  // A money figure states its currency, or that it is unknown — the model is
+  // never left to assume one (the listing's, or dollars).
+  const canonical = f.value === null ? null : canonicalizeTracedUnit(f.unit, null);
+  const monetary = canonical?.unit === "currency" || canonical?.unit === "currency-per-share";
+  const currency = monetary && canonical?.currency === null ? ` (${f.currency ?? "currency unknown"})` : "";
+  return `${f.label}: ${val}${unit}${currency} ${provenanceTag(f.provenanceId ?? f.source, f.asOf)}`;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -337,35 +342,79 @@ function firstRow<TRow extends FmpRawRow>(f: {
  * Section builders — each returns a deterministically ordered PayloadSection.
  * ------------------------------------------------------------------------ */
 
-function quoteSection(bundle: DataBundle): PayloadSection {
+/** The quote is in the listing's trading currency. */
+function quoteSection(bundle: DataBundle, currency: string | null): PayloadSection {
   const q = firstRow(bundle.quote);
   const asOf = bundle.quote.ok ? bundle.quote.value.asOf : null;
   const figures: PayloadFigureInput[] = [
-    { label: "price", value: numOrNull(q?.price), unit: "currency/share", source: "fmp:quote", asOf },
-    { label: "marketCap", value: numOrNull(q?.marketCap), unit: "currency", source: "fmp:quote", asOf },
-    { label: "dayLow", value: numOrNull(q?.dayLow), unit: "currency/share", source: "fmp:quote", asOf },
-    { label: "dayHigh", value: numOrNull(q?.dayHigh), unit: "currency/share", source: "fmp:quote", asOf },
-    { label: "yearLow", value: numOrNull(q?.yearLow), unit: "currency/share", source: "fmp:quote", asOf },
-    { label: "yearHigh", value: numOrNull(q?.yearHigh), unit: "currency/share", source: "fmp:quote", asOf },
+    { label: "price", value: numOrNull(q?.price), unit: "currency/share", currency, source: "fmp:quote", asOf },
+    { label: "marketCap", value: numOrNull(q?.marketCap), unit: "currency", currency, source: "fmp:quote", asOf },
+    { label: "dayLow", value: numOrNull(q?.dayLow), unit: "currency/share", currency, source: "fmp:quote", asOf },
+    { label: "dayHigh", value: numOrNull(q?.dayHigh), unit: "currency/share", currency, source: "fmp:quote", asOf },
+    { label: "yearLow", value: numOrNull(q?.yearLow), unit: "currency/share", currency, source: "fmp:quote", asOf },
+    { label: "yearHigh", value: numOrNull(q?.yearHigh), unit: "currency/share", currency, source: "fmp:quote", asOf },
     { label: "volume", value: numOrNull(q?.volume), unit: "shares", source: "fmp:quote", asOf },
   ];
   return payloadSection({ title: "Quote", figures, notes: [] });
 }
 
-/** Stage B computed-metrics sections — the analytical spine of the payload. */
 /**
- * @param reportingCurrency Statements' reportedCurrency. The provenance
- * registry's single default is the profile TRADING currency, which is right for
- * price-derived figures (last close, SMA, 52-week range, quote) but WRONG for
- * anything derived from the statements. For an ADR the two differ, so a DCF
- * per-share computed in the reporting currency was stamped as the trading one —
- * contradicting the statement cells registered from the same numbers. Figures
- * below tag their own currency where they know it; `registerFigure` honours
- * `figure.currency ?? default`.
+ * The currency each group of computed money figures is established in, each
+ * from its own evidence. There is no default: a registry-wide fallback to the
+ * profile's TRADING currency once stamped statement-derived values (a DCF per
+ * share, an FCF, projections) as the listing's currency even when the
+ * statements carried none, or carried another (an ADR). A figure whose group
+ * has no established currency stays unknown and is not registered.
  */
+interface ComputedCurrencies {
+  /** Price-derived figures (technicals): the listing's trading currency. */
+  trading: string | null;
+  /** Values the Stage B model computed (DCF / excess-return per share, BV0). */
+  model: string | null;
+  /** The latest annual FCF: the cash-flow row it was computed from. */
+  fcf: string | null;
+  /** Runway burn: the burn-window quarters' one shared label. */
+  runwayBurn: string | null;
+  /** Runway liquidity: the balance row it was read from. */
+  runwayLiquidity: string | null;
+}
+
+/** The one ISO code every row carries, or null when any row lacks it or two differ. */
+function sharedRowCurrency(rows: readonly FmpRawRow[]): string | null {
+  const codes = new Set(rows.map((r) => isoCurrency(r.reportedCurrency)));
+  if (rows.length === 0 || codes.size !== 1 || codes.has(null)) return null;
+  return [...codes][0] ?? null;
+}
+
+function rowsOn(rows: readonly FmpRawRow[], date: string | null): FmpRawRow[] {
+  return date === null ? [] : rows.filter((r) => isoDay(r.date) === date);
+}
+
+function computedCurrencies(bundle: DataBundle, computed: ComputedMetrics): ComputedCurrencies {
+  const currencies = statementCurrencies(bundle);
+  const fcfSeries = computed.capital.fcf.series;
+  const fcfDate = isoDay(fcfSeries[fcfSeries.length - 1]?.date);
+  const rw = computed.runway;
+  const cashflowQuarterly = rowsOf(bundle.statements.cashflowQuarterly);
+  const burnRows = (rw?.burnWindowDates ?? []).flatMap((d) => rowsOn(cashflowQuarterly, isoDay(d)));
+  return {
+    trading: currencies.trading,
+    model: currencies.model,
+    // Several rows sharing the date (a restatement) must agree.
+    fcf: sharedRowCurrency(rowsOn(rowsOf(bundle.statements.cashflowAnnual), fcfDate)),
+    runwayBurn:
+      rw !== null && burnRows.length === rw.burnWindowDates.length ? sharedRowCurrency(burnRows) : null,
+    runwayLiquidity: sharedRowCurrency([
+      ...rowsOn(rowsOf(bundle.statements.balanceQuarterly), rw?.liquidAssetsAsOf ?? null),
+      ...rowsOn(rowsOf(bundle.statements.balanceAnnual), rw?.liquidAssetsAsOf ?? null),
+    ]),
+  };
+}
+
+/** Stage B computed-metrics sections — the analytical spine of the payload. */
 function computedSections(
   computed: ComputedMetrics,
-  reportingCurrency: string | null,
+  currencies: ComputedCurrencies,
 ): PayloadSection[] {
   const sections: PayloadSection[] = [];
   const g = computed.growth;
@@ -445,8 +494,8 @@ function computedSections(
     // WS6 review (SHOULD-FIX 4): every free-cash-flow figure names its
     // definition. The house default subtracts SBC; the vendor convention does
     // not, and P/FCF and the graded conversion are both built on that one.
-    { label: "latest FCF (after SBC, house default)", value: cap.fcf.latestFcf, unit: "currency", currency: reportingCurrency, source: "computed.capital.fcf", asOf: cap.asOf },
-    { label: "latest FCF (before SBC, vendor convention)", value: cap.fcf.latestFcfBeforeSbc, unit: "currency", currency: reportingCurrency, source: "computed.capital.fcf.beforeSbc", asOf: cap.asOf },
+    { label: "latest FCF (after SBC, house default)", value: cap.fcf.latestFcf, unit: "currency", currency: currencies.fcf, source: "computed.capital.fcf", asOf: cap.asOf },
+    { label: "latest FCF (before SBC, vendor convention)", value: cap.fcf.latestFcfBeforeSbc, unit: "currency", currency: currencies.fcf, source: "computed.capital.fcf.beforeSbc", asOf: cap.asOf },
     { label: "FCF conversion (latest, after SBC)", value: cap.fcf.latestConversion, unit: "x", source: "computed.capital.fcf.conversion", asOf: cap.asOf },
     { label: "FCF conversion (latest, before SBC — the graded ratio)", value: cap.fcf.latestConversionBeforeSbc, unit: "x", source: "computed.capital.fcf.conversionBeforeSbc", asOf: cap.asOf },
     { label: "capex/revenue (latest)", value: cap.capexIntensity.latestPct, unit: "%", source: "computed.capital.capexIntensity", asOf: cap.asOf },
@@ -487,13 +536,13 @@ function computedSections(
   // --- Technicals ----------------------------------------------------------
   const t = computed.technicals;
   const techFigures: PayloadFigureInput[] = [
-    { label: "last close", value: t.lastClose, unit: "currency/share", source: "computed.technicals", asOf: t.asOf },
-    { label: "SMA50", value: t.smaCross.sma50, unit: "currency/share", source: "computed.technicals.smaCross", asOf: t.asOf },
-    { label: "SMA200", value: t.smaCross.sma200, unit: "currency/share", source: "computed.technicals.smaCross", asOf: t.asOf },
+    { label: "last close", value: t.lastClose, unit: "currency/share", currency: currencies.trading, source: "computed.technicals", asOf: t.asOf },
+    { label: "SMA50", value: t.smaCross.sma50, unit: "currency/share", currency: currencies.trading, source: "computed.technicals.smaCross", asOf: t.asOf },
+    { label: "SMA200", value: t.smaCross.sma200, unit: "currency/share", currency: currencies.trading, source: "computed.technicals.smaCross", asOf: t.asOf },
     { label: "RSI-14", value: t.rsi14, unit: "", source: "computed.technicals.rsi14", asOf: t.asOf },
     { label: "MACD histogram", value: t.macd.histogram, unit: "", source: "computed.technicals.macd", asOf: t.asOf },
-    { label: "52w high", value: t.range52w.high52w, unit: "currency/share", source: "computed.technicals.range52w", asOf: t.asOf },
-    { label: "52w low", value: t.range52w.low52w, unit: "currency/share", source: "computed.technicals.range52w", asOf: t.asOf },
+    { label: "52w high", value: t.range52w.high52w, unit: "currency/share", currency: currencies.trading, source: "computed.technicals.range52w", asOf: t.asOf },
+    { label: "52w low", value: t.range52w.low52w, unit: "currency/share", currency: currencies.trading, source: "computed.technicals.range52w", asOf: t.asOf },
     { label: "% from 52w high", value: t.range52w.pctFromHigh, unit: "%", source: "computed.technicals.range52w", asOf: t.asOf },
     { label: "trend read", value: t.read.trend, unit: "", source: "computed.technicals.read", asOf: t.asOf },
     { label: "momentum read", value: t.read.momentum, unit: "", source: "computed.technicals.read", asOf: t.asOf },
@@ -505,7 +554,7 @@ function computedSections(
   const valFigures: PayloadFigureInput[] = [{ label: "valuation model", value: val.kind, unit: "", source: "computed.valuation.kind", asOf: null }];
   if (val.kind === "dcf") {
     valFigures.push(
-      { label: "DCF per share", value: val.dcf?.perShare ?? null, unit: "currency/share", currency: reportingCurrency, source: "computed.valuation.dcf", asOf: null },
+      { label: "DCF per share", value: val.dcf?.perShare ?? null, unit: "currency/share", currency: currencies.model, source: "computed.valuation.dcf", asOf: null },
       { label: "DCF terminal value share", value: val.dcf?.terminalShare ?? null, unit: "fraction", source: "computed.valuation.dcf.terminalShare", asOf: null },
       { label: "reverse-DCF implied revenue growth", value: val.reverseDcf?.impliedRevenueGrowthPct ?? null, unit: "%", source: "computed.valuation.reverseDcf", asOf: null },
       { label: "reverse-DCF implied terminal margin", value: val.reverseDcf?.impliedTerminalMarginPct ?? null, unit: "%", source: "computed.valuation.reverseDcf", asOf: null },
@@ -516,10 +565,10 @@ function computedSections(
     // one number from a model whose horizon, discount rate and opening book
     // value were only inferable from prose.
     valFigures.push(
-      { label: "excess-return per share", value: val.excessReturn.perShare ?? null, unit: "currency/share", currency: reportingCurrency, source: "computed.valuation.excessReturn", asOf: null },
+      { label: "excess-return per share", value: val.excessReturn.perShare ?? null, unit: "currency/share", currency: currencies.model, source: "computed.valuation.excessReturn", asOf: null },
       { label: "excess-return horizon (years)", value: val.excessReturn.horizonYears.value, unit: "", source: "computed.valuation.excessReturn.horizonYears", asOf: null },
       { label: "cost of equity (the model's only discount rate)", value: val.excessReturn.costOfEquityPct.value, unit: "%", source: "computed.valuation.excessReturn.costOfEquityPct", asOf: null },
-      { label: "opening book equity (BV0)", value: val.excessReturn.openingBookValue.value, unit: "currency", currency: reportingCurrency, source: "computed.valuation.excessReturn.openingBookValue", asOf: val.excessReturn.asOf },
+      { label: "opening book equity (BV0)", value: val.excessReturn.openingBookValue.value, unit: "currency", currency: currencies.model, source: "computed.valuation.excessReturn.openingBookValue", asOf: val.excessReturn.asOf },
       { label: "P/TBV", value: val.excessReturn.priceToTangibleBookVsRote.pTbv, unit: "x", source: "computed.valuation.excessReturn.priceToTangibleBookVsRote", asOf: val.excessReturn.asOf },
       { label: "ROTE (the return P/TBV is read against)", value: val.excessReturn.priceToTangibleBookVsRote.rotePct, unit: "%", source: "computed.valuation.excessReturn.priceToTangibleBookVsRote", asOf: val.excessReturn.asOf },
       { label: "justified P/TBV (stable-growth cross-check)", value: val.excessReturn.priceToTangibleBookVsRote.justifiedPTbv, unit: "x", source: "computed.valuation.excessReturn.priceToTangibleBookVsRote", asOf: val.excessReturn.asOf },
@@ -625,8 +674,8 @@ function computedSections(
     sections.push(payloadSection({
       title: "Runway (computed — pre-revenue/unprofitable overlay)",
       figures: [
-        { label: "avg quarterly burn", value: rw.avgQuarterlyBurn, unit: "currency", currency: reportingCurrency, source: "computed.runway", asOf: rw.liquidAssetsAsOf },
-        { label: "liquid assets", value: rw.liquidAssets, unit: "currency", currency: reportingCurrency, source: "computed.runway.liquidAssets", asOf: rw.liquidAssetsAsOf },
+        { label: "avg quarterly burn", value: rw.avgQuarterlyBurn, unit: "currency", currency: currencies.runwayBurn, source: "computed.runway", asOf: rw.liquidAssetsAsOf },
+        { label: "liquid assets", value: rw.liquidAssets, unit: "currency", currency: currencies.runwayLiquidity, source: "computed.runway.liquidAssets", asOf: rw.liquidAssetsAsOf },
         { label: "runway (quarters)", value: rw.runwayQuarters, unit: "quarters", source: "computed.runway", asOf: rw.liquidAssetsAsOf },
         { label: "estimated exhaustion date", value: rw.estimatedExhaustionDate, unit: "", source: "computed.runway", asOf: rw.liquidAssetsAsOf },
       ],
@@ -744,7 +793,14 @@ function statementExtracts(bundle: DataBundle): StatementExtractBlock[] {
  * List-shaped sections (estimates, peers, insiders, holders, executives, …)
  * ------------------------------------------------------------------------ */
 
-function estimatesSection(bundle: DataBundle): PayloadSection {
+/**
+ * Analyst estimates and price targets carry no currency of their own, and the
+ * provider does not document whether it states them in the listing or the
+ * reporting currency. Either convention gives the same code only when the
+ * listing and the statements agree; otherwise (an ADR, or either currency
+ * unknown) the figures stay unknown rather than take the listing's by default.
+ */
+function estimatesSection(bundle: DataBundle, currency: string | null): PayloadSection {
   const figures: PayloadFigureInput[] = [];
   const notes: string[] = [];
   const estAsOf = bundle.analystEstimates.ok ? bundle.analystEstimates.value.asOf : null;
@@ -754,17 +810,17 @@ function estimatesSection(bundle: DataBundle): PayloadSection {
     const period = isFullIsoDate(candidatePeriod) ? candidatePeriod : null;
     const periodLabel = period ?? "unknown";
     figures.push(
-      { label: `est revenue ${periodLabel}`, value: numOrNull(e.revenueAvg), unit: "currency", period, source: "fmp:analyst-estimates", asOf: estAsOf },
-      { label: `est EPS ${periodLabel}`, value: numOrNull(e.epsAvg), unit: "currency/share", period, source: "fmp:analyst-estimates", asOf: estAsOf },
+      { label: `est revenue ${periodLabel}`, value: numOrNull(e.revenueAvg), unit: "currency", currency, period, source: "fmp:analyst-estimates", asOf: estAsOf },
+      { label: `est EPS ${periodLabel}`, value: numOrNull(e.epsAvg), unit: "currency/share", currency, period, source: "fmp:analyst-estimates", asOf: estAsOf },
     );
   }
   const ptc = firstRow(bundle.priceTargetConsensus);
   const ptcAsOf = bundle.priceTargetConsensus.ok ? bundle.priceTargetConsensus.value.asOf : null;
   if (ptc) {
     figures.push(
-      { label: "price target consensus", value: numOrNull(ptc.targetConsensus), unit: "currency/share", source: "fmp:price-target-consensus", asOf: ptcAsOf },
-      { label: "price target high", value: numOrNull(ptc.targetHigh), unit: "currency/share", source: "fmp:price-target-consensus", asOf: ptcAsOf },
-      { label: "price target low", value: numOrNull(ptc.targetLow), unit: "currency/share", source: "fmp:price-target-consensus", asOf: ptcAsOf },
+      { label: "price target consensus", value: numOrNull(ptc.targetConsensus), unit: "currency/share", currency, source: "fmp:price-target-consensus", asOf: ptcAsOf },
+      { label: "price target high", value: numOrNull(ptc.targetHigh), unit: "currency/share", currency, source: "fmp:price-target-consensus", asOf: ptcAsOf },
+      { label: "price target low", value: numOrNull(ptc.targetLow), unit: "currency/share", currency, source: "fmp:price-target-consensus", asOf: ptcAsOf },
     );
   }
   const grades = firstRow(bundle.gradesConsensus);
@@ -905,6 +961,8 @@ function segmentsSection(bundle: DataBundle): PayloadSection {
   ): void => {
     const latest = firstRow(res);
     const asOf = isoDay(latest?.date);
+    // The segmentation row's own label; nothing else states its currency.
+    const currency = isoCurrency(latest?.reportedCurrency);
     const data = latest?.data;
     if (data && typeof data === "object") {
       // Deterministic ordering: sort segment keys alphabetically.
@@ -913,6 +971,7 @@ function segmentsSection(bundle: DataBundle): PayloadSection {
           label: `${kind}: ${key}`,
           value: numOrNull(data[key]),
           unit: "currency",
+          currency,
           source: `fmp:revenue-${kind}-segmentation`,
           asOf,
         });
@@ -1123,7 +1182,6 @@ function isFullIsoDate(value: string | null): value is string {
 function attachProvenanceRegistry(
   payload: PayloadWithoutRegistry,
   computed: ComputedMetrics,
-  currency: string | null,
   computationAsOf: string | null,
 ): ContextPayload {
   const registry: NumericProvenanceRecord[] = [];
@@ -1165,11 +1223,14 @@ function attachProvenanceRegistry(
       }
       return;
     }
-    const canonical = canonicalizeTracedUnit(figure.unit, figure.currency ?? currency);
+    // The figure's own currency (or an ISO code in its unit) — never a
+    // payload-wide default. A money figure nothing establishes stays unknown
+    // and is not registered, so no citation of it can verify in any currency.
+    const canonical = canonicalizeTracedUnit(figure.unit, figure.currency);
     if (canonical === null) return;
     const { unit } = canonical;
     const monetary = unit === "currency" || unit === "currency-per-share";
-    const resolvedCurrency = monetary ? (canonical.currency ?? currency) : null;
+    const resolvedCurrency = monetary ? canonical.currency : null;
     if (monetary && resolvedCurrency === null) return;
     const asOf = isFullIsoDate(figure.asOf)
       ? figure.asOf
@@ -1408,6 +1469,9 @@ export function assembleContextPayload(
   validation: ValidationReport,
 ): ContextPayload {
   const profile = firstRow(bundle.profile);
+  // Trading (listing), annual and model currencies, resolved exactly as Stage B
+  // resolved them. Each figure below takes only the one its evidence supports.
+  const currencies = statementCurrencies(bundle);
 
   // Validation flags = failed/skipped checks + the flags array (data-quality
   // signals the model should weigh). Deterministically ordered.
@@ -1442,10 +1506,13 @@ export function assembleContextPayload(
       sector: computed.route.evidence.sector,
       industry: computed.route.evidence.industry,
     },
-    quote: quoteSection(bundle),
-    computed: computedSections(computed, isoCurrency(firstRow(bundle.statements.incomeAnnual)?.reportedCurrency)),
+    quote: quoteSection(bundle, currencies.trading),
+    computed: computedSections(computed, computedCurrencies(bundle, computed)),
     statements: statementExtracts(bundle),
-    estimates: estimatesSection(bundle),
+    estimates: estimatesSection(
+      bundle,
+      currencies.trading !== null && currencies.trading === currencies.annual ? currencies.trading : null,
+    ),
     peers: peersSection(bundle),
     insiders: insidersSection(bundle),
     institutional: institutionalSection(bundle),
@@ -1461,8 +1528,7 @@ export function assembleContextPayload(
     // asOf map: bundle's own dot-path -> as-of, with stable key ordering.
     asOfMap: sortRecord(bundle.asOf),
   };
-  const currency = isoCurrency(profile?.currency);
-  return attachProvenanceRegistry(payload, computed, currency, isoDay(bundle.builtAt));
+  return attachProvenanceRegistry(payload, computed, isoDay(bundle.builtAt));
 }
 
 /**

@@ -644,14 +644,15 @@ function macroSection(bundle: DataBundle, stub: Report["macro"]): Report["macro"
 function segmentRows(
   result: DataBundle["segmentation"]["product"],
   source: string,
-  fallbackCurrency: string | null,
 ): Report["business"]["segments"]["product"] {
   if (!result.ok) return [];
   const latest = result.value.data.rows[0];
   const data = latest?.data;
   if (data === undefined || data === null || typeof data !== "object") return [];
   const asOf = isoDay(latest?.date);
-  const currency = isoCurrency(latest?.reportedCurrency) ?? fallbackCurrency;
+  // The segmentation row's own label: nothing links it to the statements, so
+  // their currency is not borrowed.
+  const currency = isoCurrency(latest?.reportedCurrency);
   const entries = Object.entries(data as Record<string, unknown>)
     .filter((entry): entry is [string, number] => isNum(entry[1]))
     .sort((a, b) => b[1] - a[1]);
@@ -676,12 +677,12 @@ function segmentRows(
   return rows;
 }
 
-function businessSection(stub: Report["business"], bundle: DataBundle, currency: string | null): Report["business"] {
+function businessSection(stub: Report["business"], bundle: DataBundle): Report["business"] {
   return {
     ...stub,
     segments: {
-      product: segmentRows(bundle.segmentation.product, "fmp:revenue-product-segmentation", currency),
-      geographic: segmentRows(bundle.segmentation.geographic, "fmp:revenue-geographic-segmentation", currency),
+      product: segmentRows(bundle.segmentation.product, "fmp:revenue-product-segmentation"),
+      geographic: segmentRows(bundle.segmentation.geographic, "fmp:revenue-geographic-segmentation"),
     },
   };
 }
@@ -715,10 +716,11 @@ function synthesis(
   const fv = computed.fairValue;
   const quote = quotePrice(bundle);
   if (fv.status === "available" && fv.perShare !== null) {
-    const fvCurrency = fv.perShare.currency ?? currency;
+    // The model's own currency; unknown is said, not filled from elsewhere.
+    const fvCurrency = fv.perShare.currency ?? "(currency unknown)";
     const upside = isNum(fv.upsidePct) ? ` (${fmtSignedPp(fv.upsidePct).replace("pp", "%")} versus the quote)` : "";
     parts.push(
-      `Deterministic ${fv.method ?? "fair-value"} model: ${fmtNum(fv.perShare.value, 2)}${fvCurrency ? ` ${fvCurrency}` : ""} per share${quote ? ` against a ${fmtNum(quote.price, 2)} quote` : ""}${upside}.`,
+      `Deterministic ${fv.method ?? "fair-value"} model: ${fmtNum(fv.perShare.value, 2)} ${fvCurrency} per share${quote ? ` against a ${fmtNum(quote.price, 2)} quote` : ""}${upside}.`,
     );
   }
   const v = computed.valuation;
@@ -810,7 +812,9 @@ export function enrichDataOnlyReport(stub: Report, args: EnrichDataOnlyReportArg
   const { bundle, computed } = args;
   const routeMetrics = routeMetricsBlock(computed);
   const currency = statementCurrency(bundle);
-  const priceCurrency = tradingCurrency(bundle) ?? currency;
+  // Prices are in the listing's trading currency; the statements' currency
+  // says nothing about it, so an unknown listing currency stays unknown.
+  const priceCurrency = tradingCurrency(bundle);
   const asOf = computed.builtAt.slice(0, 10);
   const flagClaim =
     stub.fundamentals.commentary[0] ??
@@ -843,7 +847,7 @@ export function enrichDataOnlyReport(stub: Report, args: EnrichDataOnlyReportArg
         balanceSheet: balanceSheetGrade,
       },
     },
-    business: businessSection(stub.business, bundle, currency),
+    business: businessSection(stub.business, bundle),
     fundamentals: {
       ...stub.fundamentals,
       graded: fundamentalsGrade,

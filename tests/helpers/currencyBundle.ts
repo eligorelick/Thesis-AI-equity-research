@@ -15,6 +15,13 @@ export const TTM_DATES = ["2026-03-31", "2025-12-31", "2025-09-30", "2025-06-30"
 export interface CurrencyBundleOptions {
   /** Listing/trading currency on the profile (the quote's currency). */
   profileCurrency?: string | null;
+  /**
+   * Per-year overrides for the annual rows (index 0 = FY2025, newest). Each
+   * defaults to `annualCurrency`; `null` means the row carries no label.
+   */
+  incomeAnnualCurrencies?: readonly (string | null)[];
+  balanceAnnualCurrencies?: readonly (string | null)[];
+  cashflowAnnualCurrencies?: readonly (string | null)[];
   /** reportedCurrency on every annual statement row. */
   annualCurrency?: string | null;
   /** reportedCurrency on the four latest income quarters (index 0 = newest). */
@@ -102,6 +109,8 @@ export function currencyBundle(opts: CurrencyBundleOptions = {}): DataBundle {
         } : {};
   const qRev = opts.quarterlyRevenue ?? 300;
   const symbol = opts.symbol ?? (opts.bank ? "BNK" : opts.reit ? "RET" : "GEN");
+  const perYear = (codes: readonly (string | null)[] | undefined, i: number): string | null =>
+    codes !== undefined && i < codes.length ? codes[i]! : annual;
   const debt = opts.debt ?? 300;
   const interest = debt === 0 ? 0 : 1;
 
@@ -110,7 +119,7 @@ export function currencyBundle(opts: CurrencyBundleOptions = {}): DataBundle {
     { date: "2024-12-31", fiscalYear: "2024", period: "FY", revenue: 900, grossProfit: 360, operatingIncome: 180, ebit: 180, netIncome: 140, epsDiluted: 1.4, weightedAverageShsOutDil: 101 * M, interestExpense: 15 * interest, incomeBeforeTax: 175, incomeTaxExpense: 35, depreciationAndAmortization: 45 },
     { date: "2023-12-31", fiscalYear: "2023", period: "FY", revenue: 800, grossProfit: 320, operatingIncome: 160, ebit: 160, netIncome: 130, epsDiluted: 1.27, weightedAverageShsOutDil: 102 * M, interestExpense: 14 * interest, incomeBeforeTax: 158, incomeTaxExpense: 28, depreciationAndAmortization: 40 },
     { date: "2022-12-31", fiscalYear: "2022", period: "FY", revenue: 700, grossProfit: 280, operatingIncome: 140, ebit: 140, netIncome: 110, epsDiluted: 1.06, weightedAverageShsOutDil: 103 * M, interestExpense: 13 * interest, incomeBeforeTax: 135, incomeTaxExpense: 25, depreciationAndAmortization: 35 },
-  ].map((r) => labelled(r, annual));
+  ].map((r, i) => labelled(r, perYear(opts.incomeAnnualCurrencies, i)));
 
   const latest = TTM_DATES.map((date, i) =>
     labelled(
@@ -128,7 +137,7 @@ export function currencyBundle(opts: CurrencyBundleOptions = {}): DataBundle {
   const balanceAnnual = [
     { date: "2025-12-31", totalAssets: 2000, totalLiabilities: 1500, totalStockholdersEquity: 500, totalEquity: 500, totalDebt: debt, netDebt: debt - 60, cashAndCashEquivalents: 60, cashAndShortTermInvestments: 100, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0 },
     { date: "2024-12-31", totalAssets: 1900, totalLiabilities: 1450, totalStockholdersEquity: 450, totalEquity: 450, totalDebt: debt, netDebt: debt - 60, cashAndCashEquivalents: 60, cashAndShortTermInvestments: 95, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0 },
-  ].map((r) => labelled(r, annual));
+  ].map((r, i) => labelled(r, perYear(opts.balanceAnnualCurrencies, i)));
   const balanceQuarterly = TTM_DATES.map((date, i) =>
     labelled(
       { date, totalAssets: 2050, totalLiabilities: 1530, totalStockholdersEquity: 520, totalEquity: 520, totalDebt: debt, netDebt: debt - 70, cashAndCashEquivalents: 70, cashAndShortTermInvestments: 120, goodwill: 40, intangibleAssets: 10, minorityInterest: 0, preferredStock: 0, ...filing(i) },
@@ -139,7 +148,7 @@ export function currencyBundle(opts: CurrencyBundleOptions = {}): DataBundle {
     { date: "2025-12-31", operatingCashFlow: opts.burning ? -220 : 220, capitalExpenditure: -40, freeCashFlow: 180, netIncome: 150, depreciationAndAmortization: 50, stockBasedCompensation: 10, commonStockRepurchased: -20, commonDividendsPaid: -30, commonStockIssuance: 10, netCashProvidedByOperatingActivities: 220, netCashProvidedByInvestingActivities: -40 },
     { date: "2024-12-31", operatingCashFlow: 205, capitalExpenditure: -38, freeCashFlow: 167, netIncome: 140, depreciationAndAmortization: 45, stockBasedCompensation: 9, commonStockRepurchased: -30, commonDividendsPaid: -28, commonStockIssuance: 2, netCashProvidedByOperatingActivities: 205, netCashProvidedByInvestingActivities: -38 },
     { date: "2023-12-31", operatingCashFlow: 190, capitalExpenditure: -35, freeCashFlow: 155, netIncome: 130, depreciationAndAmortization: 40, stockBasedCompensation: 8, commonStockRepurchased: -13, commonDividendsPaid: -26, commonStockIssuance: 0, netCashProvidedByOperatingActivities: 190, netCashProvidedByInvestingActivities: -35 },
-  ].map((r) => labelled(r, annual));
+  ].map((r, i) => labelled(r, perYear(opts.cashflowAnnualCurrencies, i)));
   const cashflowQuarterly = TTM_DATES.map((date, i) =>
     labelled(
       { date, operatingCashFlow: opts.burning ? -55 : 55, capitalExpenditure: -10, freeCashFlow: 45, netIncome: 45, depreciationAndAmortization: 12.5, ...filing(i) },

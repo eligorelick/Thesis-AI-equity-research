@@ -96,6 +96,20 @@ function fmpPayload<T>(rows: T[], asOf: string, endpoint: string) {
 }
 
 /**
+ * FMP stamps EVERY statement row with its reportedCurrency; this fixture's
+ * balance-sheet and cash-flow rows were written without one. Calculations
+ * that combine statements need each row's currency established (2026-09-30),
+ * so the rows carry Apple's USD as the provider's would. A row's own label is
+ * kept.
+ */
+function reportedIn<T>(payload: T, code = "USD"): T {
+  const p = payload as unknown as { ok: boolean; value?: { data: { rows: Record<string, unknown>[] } } };
+  if (!p.ok || p.value === undefined) return payload;
+  const rows = p.value.data.rows.map((row) => ("reportedCurrency" in row ? row : { ...row, reportedCurrency: code }));
+  return { ...p, value: { ...p.value, data: { ...p.value.data, rows } } } as unknown as T;
+}
+
+/**
  * A realistic AAPL-shaped bundle with real annual/quarterly statement rows so
  * Stage B computes actual numbers we can trace. Everything not needed is a gap;
  * runStageB / validateBundle degrade gracefully.
@@ -230,10 +244,10 @@ function fixtureBundle(symbol = "AAPL"): DataBundle {
     statements: {
       incomeAnnual,
       incomeQuarterly,
-      balanceAnnual,
-      balanceQuarterly,
-      cashflowAnnual,
-      cashflowQuarterly,
+      balanceAnnual: reportedIn(balanceAnnual),
+      balanceQuarterly: reportedIn(balanceQuarterly),
+      cashflowAnnual: reportedIn(cashflowAnnual),
+      cashflowQuarterly: reportedIn(cashflowQuarterly),
       periods: { annualRequested: 10, quarterlyRequested: 8 },
     },
     keyMetrics: gap,
@@ -574,11 +588,18 @@ describe("payload determinism + provenance", () => {
       // WACC and the DCF per share (104.249 → 104.234) take the annual basis.
       // Both are disclosed (+725 prompt bytes of gap and note), so
       // fingerprint, promptBytes, provenanceHash and financeHash move.
-      fingerprint: "1.3.0:241f62b5",
-      promptBytes: 91_643,
-      provenanceCount: 297,
-      provenanceHash: "f26da518",
-      provenanceIdsHash: "921cb9c3",
+      // Changed 2026-09-30 (annual currency compatibility): rows are combined
+      // across statements or years only when each is established in the
+      // model currency, so the fixture now labels its balance-sheet and
+      // cash-flow rows USD as FMP's do (reportedIn). Those cells register
+      // (+75 records), the TTM cash flow and the TTM cost-of-debt basis come
+      // back, and financeHash returns to its pre-currency-work f9ea3f0e: on
+      // correctly labelled data the finance figures are unchanged.
+      fingerprint: "1.3.0:4b1710be",
+      promptBytes: 93_925,
+      provenanceCount: 372,
+      provenanceHash: "6bd9f98f",
+      provenanceIdsHash: "187951ea",
       citationCount: 11,
       citationHash: "7ebe5276",
       computedFigureLabelHash: "26cc3d2a",
@@ -589,7 +610,7 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "158b6492",
+      financeHash: "f9ea3f0e",
     });
   });
 

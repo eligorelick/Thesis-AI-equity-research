@@ -30,6 +30,7 @@ import type { ManifestEntry } from "@/types/core";
 import type { DataBundle } from "@/pipeline/types";
 import { CORE_SERIES, fredFigureUnit, type FredUnits } from "@/providers/fred";
 import { statementCurrencies, type ComputedMetrics } from "@/pipeline/compute";
+import { estimateCurrency } from "@/pipeline/estimateCurrency";
 import type { ValidationReport } from "@/pipeline/stageA/validate";
 import type { DegradationPlan } from "@/pipeline/stageB/sectorRouting";
 import type { TracedNumber } from "@/report/schema";
@@ -794,18 +795,19 @@ function statementExtracts(bundle: DataBundle): StatementExtractBlock[] {
  * ------------------------------------------------------------------------ */
 
 /**
- * Analyst estimates and price targets carry no currency of their own, and the
- * provider does not document whether it states them in the listing or the
- * reporting currency. Either convention gives the same code only when the
- * listing and the statements agree; otherwise (an ADR, or either currency
- * unknown) the figures stay unknown rather than take the listing's by default.
+ * Analyst estimates and price targets are money in the currency their OWN row
+ * states (estimateCurrency), or a documented provider convention — FMP
+ * documents none. A listing currency that matches the statements' is not
+ * evidence. Anything else stays unknown: rendered as such to the model and
+ * never registered, so no citation of it verifies in any currency.
  */
-function estimatesSection(bundle: DataBundle, currency: string | null): PayloadSection {
+function estimatesSection(bundle: DataBundle): PayloadSection {
   const figures: PayloadFigureInput[] = [];
   const notes: string[] = [];
   const estAsOf = bundle.analystEstimates.ok ? bundle.analystEstimates.value.asOf : null;
   const est = rowsOf(bundle.analystEstimates).slice(0, PAYLOAD_BUDGETS.listRows);
   for (const e of est) {
+    const currency = estimateCurrency(e);
     const candidatePeriod = isoDay(e.date);
     const period = isFullIsoDate(candidatePeriod) ? candidatePeriod : null;
     const periodLabel = period ?? "unknown";
@@ -817,6 +819,7 @@ function estimatesSection(bundle: DataBundle, currency: string | null): PayloadS
   const ptc = firstRow(bundle.priceTargetConsensus);
   const ptcAsOf = bundle.priceTargetConsensus.ok ? bundle.priceTargetConsensus.value.asOf : null;
   if (ptc) {
+    const currency = estimateCurrency(ptc);
     figures.push(
       { label: "price target consensus", value: numOrNull(ptc.targetConsensus), unit: "currency/share", currency, source: "fmp:price-target-consensus", asOf: ptcAsOf },
       { label: "price target high", value: numOrNull(ptc.targetHigh), unit: "currency/share", currency, source: "fmp:price-target-consensus", asOf: ptcAsOf },
@@ -1509,10 +1512,7 @@ export function assembleContextPayload(
     quote: quoteSection(bundle, currencies.trading),
     computed: computedSections(computed, computedCurrencies(bundle, computed)),
     statements: statementExtracts(bundle),
-    estimates: estimatesSection(
-      bundle,
-      currencies.trading !== null && currencies.trading === currencies.annual ? currencies.trading : null,
-    ),
+    estimates: estimatesSection(bundle),
     peers: peersSection(bundle),
     insiders: insidersSection(bundle),
     institutional: institutionalSection(bundle),

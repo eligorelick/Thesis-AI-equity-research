@@ -84,16 +84,21 @@ describe("payload registration: each figure's own currency evidence", () => {
     });
     // FY2025: OCF 220 + capex -40 - SBC 10.
     expect(computed.capital.fcf.latestFcf).toBe(170 * M);
-    expect(record(payload, "est revenue 2026-12-31")).toMatchObject({ value: 1300 * M, currency: "USD" });
-    expect(record(payload, "est EPS 2026-12-31")).toMatchObject({ value: 1.9, currency: "USD" });
-    expect(record(payload, "price target consensus")).toMatchObject({ value: 120, currency: "USD" });
+    // Estimates and targets carry no currency of their own: a listing that
+    // matches the statements is not evidence (product decision 2026-09-30;
+    // until then they were registered in the shared currency). See
+    // tests/currency.analystEstimates.test.ts for rows that state their own.
+    expect(figure(payload, "est revenue 2026-12-31")).toMatchObject({ value: 1300 * M, currency: null });
+    expect(record(payload, "est revenue 2026-12-31")).toBeUndefined();
+    expect(record(payload, "est EPS 2026-12-31")).toBeUndefined();
+    expect(record(payload, "price target consensus")).toBeUndefined();
   });
 
   it("control: a JPY listing reporting in JPY registers JPY and nothing in USD", () => {
     const { computed, payload } = assemble(JPY);
     expect(record(payload, "price")?.currency).toBe("JPY");
     expect(record(payload, "DCF per share")).toMatchObject({ value: dcfPerShare(computed), currency: "JPY" });
-    expect(record(payload, "est revenue 2026-12-31")?.currency).toBe("JPY");
+    expect(record(payload, "est revenue 2026-12-31")).toBeUndefined();
     expect(payload.provenanceRegistry!.filter((r) => r.currency === "USD")).toEqual([]);
   });
 
@@ -189,7 +194,7 @@ describe("verification and rendering of an unknown-currency figure", () => {
   it("the prompt states each money figure's currency, and says unknown rather than implying one", () => {
     const usdPrompt = serializePayloadForPrompt(assemble(USD).payload);
     expect(usdPrompt).toMatch(/- DCF per share: [\d.]+ currency\/share \(USD\) \[/);
-    expect(usdPrompt).toMatch(/- est revenue 2026-12-31: \d+ currency \(USD\) \[/);
+    expect(usdPrompt).toMatch(/- est revenue 2026-12-31: \d+ currency \(currency unknown\) \[/);
 
     const prompt = serializePayloadForPrompt(assemble(UNKNOWN_STATEMENTS).payload);
     expect(prompt).toMatch(/- price: 100 currency\/share \(USD\) \[/);

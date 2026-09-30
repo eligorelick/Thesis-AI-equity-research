@@ -11,6 +11,7 @@
  */
 
 import { comparePriceCurrency } from "@/pipeline/stageB/priceCurrency";
+import { estimateCurrency } from "@/pipeline/estimateCurrency";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
 import type { DataBundle, FmpFetch } from "@/pipeline/types";
 import type {
@@ -2398,8 +2399,30 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
   const netDebtDerived = netDebtInfo.value;
 
   // --- DCF inputs (general route) -------------------------------------------
-  const analystEstimates: AnalystEstimateRow[] | null = bundle.analystEstimates.ok
-    ? rowsOf(bundle.analystEstimates)
+  // The analyst-consensus growth case divides FY1 estimated revenue by the
+  // statements' revenue, and FY2 by FY1: estimates enter only when their OWN
+  // currency (estimateCurrency — never a matching listing currency) is the
+  // model's. Otherwise the case is unavailable and the anchor uses the rest.
+  const estimateRows = rowsOf(bundle.analystEstimates);
+  const estimateCodes = [...new Set(estimateRows.map((r) => estimateCurrency(r)))];
+  const estimatesInModelCurrency =
+    ctx.modelCurrency !== null && estimateCodes.length === 1 && estimateCodes[0] === ctx.modelCurrency;
+  const estimateGaps: ManifestEntry[] = [];
+  if (estimateRows.length > 0 && !estimatesInModelCurrency) {
+    estimateGaps.push({
+      field: "valuation.analystEstimates.currency",
+      reason:
+        (estimateCodes.includes(null)
+          ? "analyst estimates carry no currency of their own and the provider documents no convention for them"
+          : `analyst estimates are in ${estimateCodes.join("/")}`) +
+        ` while the model runs in ${ctx.modelCurrency ?? "an unestablished currency"} — a matching listing currency is not ` +
+        "evidence, so the analyst-consensus growth case is not used (no FX conversion is attempted)",
+      severity: "info",
+      attemptedSources: ["fmp:/stable/analyst-estimates"],
+    });
+  }
+  const analystEstimates: AnalystEstimateRow[] | null = bundle.analystEstimates.ok && estimatesInModelCurrency
+    ? estimateRows
         .map((r) => ({ date: String(r.date ?? ""), revenueAvg: num(r.revenueAvg) }))
         .filter((r) => r.date.length > 0)
     : null;
@@ -2710,6 +2733,7 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
 
   void ratiosTtm; // reserved for future ratio cross-checks
   const result = valueCompany(route, bundleInputs);
+  result.gaps.push(...estimateGaps);
   // WS5: the FFO computation's own notes and gaps (which tags resolved, which
   // stand-in was used) reach the report on the route that consumes them.
   if (route.base === "reit") {

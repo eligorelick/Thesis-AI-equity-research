@@ -103,6 +103,7 @@ const EXPECTED_RISK_SOURCES = [
   "src/pipeline/stageC/consistency.ts",
   "src/pipeline/stageC/dataOnlyReport.ts",
   "src/pipeline/stageC/judgeProtocol.ts",
+  "src/pipeline/estimateCurrency.ts",
 ] as const;
 
 /**

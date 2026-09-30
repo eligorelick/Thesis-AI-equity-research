@@ -602,7 +602,9 @@ describe("payload determinism + provenance", () => {
       // prompt lines say "(currency unknown)", and the DCF growth anchor no
       // longer takes the analyst-consensus case — the DCF, projection and
       // scenario values (financeHash) move with it.
-      fingerprint: "1.3.0:7fb16ae3",
+      // Changed 2026-09-30 (PAYLOAD_VERSION 1.3.0 → 1.4.0): the version is in
+      // the fingerprint and the prompt header; nothing else moved.
+      fingerprint: "1.4.0:76ee360e",
       promptBytes: 94_365,
       provenanceCount: 365,
       provenanceHash: "323c9887",
@@ -740,7 +742,7 @@ describe("payload determinism + provenance", () => {
     const second = buildInputs().payload;
     const ids = first.provenanceRegistry!.map((entry) => entry.id);
 
-    expect(first.payloadVersion).toBe("1.3.0");
+    expect(first.payloadVersion).toBe("1.4.0");
     expect(first.provenanceRegistry).toEqual(second.provenanceRegistry);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toContain("payload.quote.price");
@@ -1859,7 +1861,7 @@ describe("assembleReport", () => {
     expect(report.meta.disclaimer).toBe(
       "Informational only — not investment advice. This report contains A-F letter grades and scenario price targets; both are model outputs derived from the data and assumptions disclosed here, and neither is a recommendation to buy, sell, or hold any security.",
     );
-    expect(report.meta.specVersion).toBe("1.2.0");
+    expect(report.meta.specVersion).toBe("1.3.0");
     // verifyModel is no longer stamped (deterministic verification, no model);
     // the schema keeps it OPTIONAL so legacy persisted reports still parse.
     expect(report.meta.verifyModel).toBeUndefined();

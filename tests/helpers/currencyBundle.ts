@@ -199,3 +199,57 @@ export function currencyBundle(opts: CurrencyBundleOptions = {}): DataBundle {
     edgar: { sic: opts.sic ?? null },
   } as unknown as DataBundle;
 }
+
+const MEMBER_GAP = { ok: false as const, gap: { field: "fixture", reason: "fixture gap", severity: "info" as const } };
+
+function okRows<T>(rows: T[], asOf: string, endpoint: string) {
+  return {
+    ok: true as const,
+    value: { data: { rows, raw: {} }, asOf, source: "fmp" as const, endpoint, fetchedAt: BUILT_AT },
+  };
+}
+
+/**
+ * currencyBundle plus every member the payload assembler and the data-only
+ * report read, with one analyst-estimate row and a price-target consensus.
+ * Debt-free by default.
+ */
+export function completeCurrencyBundle(opts: CurrencyBundleOptions): DataBundle {
+  const base = currencyBundle({ debt: 0, ...opts }) as unknown as Record<string, unknown>;
+  return {
+    ...base,
+    analystEstimates: okRows(
+      [{ symbol: base.symbol, date: "2026-12-31", revenueAvg: 1300 * M, epsAvg: 1.9 }],
+      "2026-07-01",
+      "analyst-estimates",
+    ),
+    priceTargetConsensus: okRows(
+      [{ symbol: base.symbol, targetConsensus: 120, targetHigh: 150, targetLow: 90 }],
+      "2026-07-01",
+      "price-target-consensus",
+    ),
+    priceTargetSummary: MEMBER_GAP,
+    gradesConsensus: MEMBER_GAP,
+    financialGrowth: MEMBER_GAP,
+    financialScores: MEMBER_GAP,
+    earningsHistory: MEMBER_GAP,
+    earningsCalendarNext: MEMBER_GAP,
+    transcript: { latest: MEMBER_GAP },
+    insiderTrades: MEMBER_GAP,
+    insiderStats: MEMBER_GAP,
+    institutional: { positionsSummary: MEMBER_GAP, topHolders: MEMBER_GAP, quarterEnd: null },
+    peers: MEMBER_GAP,
+    segmentation: { product: MEMBER_GAP, geographic: MEMBER_GAP },
+    executives: MEMBER_GAP,
+    compensation: MEMBER_GAP,
+    sharesFloat: MEMBER_GAP,
+    secFilings: MEMBER_GAP,
+    news: MEMBER_GAP,
+    pressReleases: MEMBER_GAP,
+    shortInterest: MEMBER_GAP,
+    shortInterestTrend: MEMBER_GAP,
+    insiderSentiment: MEMBER_GAP,
+    edgar: { sic: opts.sic ?? null, item1a: MEMBER_GAP, mdna: MEMBER_GAP, tenQMdna: MEMBER_GAP },
+    sourceManifest: {},
+  } as unknown as DataBundle;
+}

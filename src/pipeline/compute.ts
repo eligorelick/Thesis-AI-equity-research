@@ -633,7 +633,7 @@ function sumField(rows: FmpIncomeStatementRow[], key: keyof FmpIncomeStatementRo
 }
 
 /** A statement row as currency evidence: its period end, its own label and its filing identity. */
-type CurrencyEvidenceRow = { date?: unknown; reportedCurrency?: unknown; acceptedDate?: unknown; cik?: unknown };
+export type CurrencyEvidenceRow = { date?: unknown; reportedCurrency?: unknown; acceptedDate?: unknown; cik?: unknown };
 
 function filingField(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
@@ -822,6 +822,38 @@ function rowsInModelCurrency<T extends CurrencyEvidenceRow>(
       attemptedSources: [endpoint],
     },
   };
+}
+
+/**
+ * Every statement row of a bundle, as currency evidence: a row's own label,
+ * and the labels of the statements filed with it (sameFiling). Tolerant of a
+ * degraded bundle missing members.
+ */
+export function statementCurrencyEvidence(bundle: DataBundle): CurrencyEvidenceRow[] {
+  const statements: Partial<DataBundle["statements"]> = bundle.statements ?? {};
+  const rows = (f: FmpFetch<FmpRawRow> | undefined): FmpRawRow[] => (f === undefined ? [] : rowsOf(f));
+  return [
+    ...rows(statements.incomeAnnual),
+    ...rows(statements.balanceAnnual),
+    ...rows(statements.cashflowAnnual),
+    ...rows(statements.incomeQuarterly),
+    ...rows(statements.balanceQuarterly),
+    ...rows(statements.cashflowQuarterly),
+  ];
+}
+
+/**
+ * The currency the statement row(s) for one period end are established in —
+ * each by its own label or a statement of the same filing — or null when no
+ * row has that date, any is unknown or in conflict, or two differ.
+ */
+export function establishedCurrencyOn(
+  rows: readonly CurrencyEvidenceRow[],
+  date: string | null,
+  evidence: readonly CurrencyEvidenceRow[],
+): string | null {
+  const day = date === null ? null : isoDay(date);
+  return day === null ? null : establishedRowsCurrency(rows.filter((row) => isoDay(row.date) === day), evidence);
 }
 
 /** Withhold a window whose currency is not established; null when it is. */

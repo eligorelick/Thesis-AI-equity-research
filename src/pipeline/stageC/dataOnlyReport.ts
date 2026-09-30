@@ -25,7 +25,14 @@
  * pulling in a provider client.
  */
 
-import { routeMetricsBlock, type ComputedMetrics } from "@/pipeline/compute";
+import {
+  establishedCurrencyOn,
+  routeMetricsBlock,
+  statementCurrencies,
+  statementCurrencyEvidence,
+  type ComputedMetrics,
+  type CurrencyEvidenceRow,
+} from "@/pipeline/compute";
 import type { DataBundle } from "@/pipeline/types";
 import type { ForensicFlag } from "@/pipeline/stageB/forensics";
 import { scoreToBand } from "@/pipeline/stageB/grading";
@@ -139,12 +146,51 @@ function fmtMoney(v: number, currency: string): string {
   return `${sign}${scaled} ${currency}`;
 }
 
-/** The statements' own reporting currency — never the profile's trading one. */
-function statementCurrency(bundle: DataBundle): string | null {
-  const row = bundle.statements.incomeAnnual.ok
-    ? bundle.statements.incomeAnnual.value.data.rows[0]
-    : undefined;
-  return isoCurrency(row?.reportedCurrency);
+/**
+ * The currency Stage B's combined figures are in: the model currency. Stage B
+ * combines statements or years only on rows established in it
+ * (rowsInModelCurrency), so a net debt, an EBITDA or an EBIT it reports is in
+ * that currency — not in whatever the latest income row happens to carry.
+ */
+function modelCurrency(bundle: DataBundle): string | null {
+  return statementCurrencies(bundle).model;
+}
+
+/** One statement family's reported annual cash-flow rows, and every row as evidence. */
+interface CashFlowCurrency {
+  rows: CurrencyEvidenceRow[];
+  evidence: CurrencyEvidenceRow[];
+}
+
+function cashFlowCurrency(bundle: DataBundle): CashFlowCurrency {
+  return {
+    rows: bundle.statements.cashflowAnnual.ok ? bundle.statements.cashflowAnnual.value.data.rows : [],
+    evidence: statementCurrencyEvidence(bundle),
+  };
+}
+
+/**
+ * A per-year cash-flow series, each point in the currency of ITS OWN cash-flow
+ * row. The series runs back from the newest year only while the years share
+ * one established currency: a year in another currency (or unknown) breaks it
+ * there, so the report never sets two currencies side by side, and an unknown
+ * year is never shown with a currency it does not have.
+ */
+function cashFlowSeries(
+  points: readonly { date: string; value: number | null }[],
+  cf: CashFlowCurrency,
+): { date: string; value: number | null; currency: string }[] {
+  const dated = points
+    .map((point) => ({ ...point, currency: establishedCurrencyOn(cf.rows, point.date, cf.evidence) }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const newest = dated[0]?.currency ?? null;
+  if (newest === null) return [];
+  const kept = new Set<string>();
+  for (const point of dated) {
+    if (point.currency !== newest) break;
+    kept.add(point.date);
+  }
+  return points.filter((point) => kept.has(point.date)).map((point) => ({ ...point, currency: newest }));
 }
 
 function tradingCurrency(bundle: DataBundle): string | null {
@@ -251,14 +297,14 @@ function cagrRow(
 
 function seriesRow(
   label: string,
-  points: readonly { date: string; value: number | null }[],
+  points: readonly { date: string; value: number | null; currency?: string | null }[],
   unit: string,
   source: string,
   currency: string | null,
 ): MetricRow | null {
   const values: MetricRow["values"] = [];
   for (const point of points) {
-    const value = traced(point.value, unit, source, point.date, { currency, period: point.date });
+    const value = traced(point.value, unit, source, point.date, { currency: point.currency ?? currency, period: point.date });
     if (value !== null) values.push({ period: point.date, value });
   }
   return values.length > 0 ? { label, values } : null;
@@ -283,7 +329,7 @@ function present<T>(rows: (T | null)[]): T[] {
 
 function fundamentalsSections(
   computed: ComputedMetrics,
-  currency: string | null,
+  cf: CashFlowCurrency,
 ): Pick<Report["fundamentals"], "growthTable" | "marginTrend" | "returns" | "fcf"> {
   const g = computed.growth;
   const r = computed.returns;
@@ -322,8 +368,10 @@ function fundamentalsSections(
     // WS6 review (SHOULD-FIX 4): the data-only report has no note channel, so
     // the row label itself has to carry the definition — "Free cash flow" alone
     // printed the after-SBC figure beside a P/FCF built on the before-SBC one.
-    seriesRow("Free cash flow (after SBC, house default)", cap.fcf.series.map((y) => ({ date: y.date, value: y.fcf })), "currency", "computed.capital.fcf", currency),
-    seriesRow("Free cash flow (before SBC, vendor convention)", cap.fcf.series.map((y) => ({ date: y.date, value: y.fcfBeforeSbc })), "currency", "computed.capital.fcf.beforeSbc", currency),
+    // Each year's FCF is in its own cash-flow row's currency (never the
+    // income statement's), and a history is never shown across a currency break.
+    seriesRow("Free cash flow (after SBC, house default)", cashFlowSeries(cap.fcf.series.map((y) => ({ date: y.date, value: y.fcf })), cf), "currency", "computed.capital.fcf", null),
+    seriesRow("Free cash flow (before SBC, vendor convention)", cashFlowSeries(cap.fcf.series.map((y) => ({ date: y.date, value: y.fcfBeforeSbc })), cf), "currency", "computed.capital.fcf.beforeSbc", null),
     seriesRow("FCF conversion (FCF after SBC / net income)", cap.fcf.series.map((y) => ({ date: y.date, value: y.fcfConversion })), "x", "computed.capital.fcf.conversion", null),
     seriesRow("FCF conversion (FCF before SBC / net income — the graded ratio)", cap.fcf.series.map((y) => ({ date: y.date, value: y.fcfConversionBeforeSbc })), "x", "computed.capital.fcf.conversionBeforeSbc", null),
     seriesRow("Capex / revenue", cap.capexIntensity.series.map((y) => ({ date: y.date, value: y.capexToRevenuePct })), "%", "computed.capital.capexIntensity", null),
@@ -339,6 +387,7 @@ function fundamentalsSections(
 function balanceSheetSection(
   computed: ComputedMetrics,
   currency: string | null,
+  cf: CashFlowCurrency,
   flagClaim: SourcedClaim,
 ): Report["balanceSheet"] {
   const cap = computed.capital;
@@ -419,12 +468,19 @@ function balanceSheetSection(
   // stated — criterion (d). It reached no reader surface before.
   allocation.push(fact(cap.dilution.note, "computed.capital.dilution", cap.dilution.asOf));
   const bb = cap.buybackPriceAnalysis;
-  if (bb.totalRepurchased > 0 && currency !== null) {
+  // A total of repurchases across the analysed years is a sum of cash-flow
+  // rows: stated only when every one of those years is established in one
+  // currency, and in that currency.
+  const analysedYears = cap.fcf.series.map((y) => y.date);
+  const repurchaseCurrencies = new Set(analysedYears.map((date) => establishedCurrencyOn(cf.rows, date, cf.evidence)));
+  const repurchaseCurrency =
+    analysedYears.length > 0 && repurchaseCurrencies.size === 1 ? ([...repurchaseCurrencies][0] ?? null) : null;
+  if (bb.totalRepurchased > 0 && repurchaseCurrency !== null) {
     const priceNote = isNum(bb.premiumDiscountPct)
       ? ` at an average price proxy ${fmtPct(Math.abs(bb.premiumDiscountPct))} ${bb.premiumDiscountPct >= 0 ? "below" : "above"} the current price`
       : "";
     allocation.push(
-      fact(`Repurchased ${fmtMoney(bb.totalRepurchased, currency)} of stock across the analysed years${priceNote}.`, "computed.capital.buybackPriceAnalysis", cap.asOf),
+      fact(`Repurchased ${fmtMoney(bb.totalRepurchased, repurchaseCurrency)} of stock across the analysed years${priceNote}.`, "computed.capital.buybackPriceAnalysis", cap.asOf),
     );
   }
   if (bb.note) allocation.push(fact(bb.note, "computed.capital.buybackPriceAnalysis", cap.asOf));
@@ -811,7 +867,10 @@ export interface EnrichDataOnlyReportArgs {
 export function enrichDataOnlyReport(stub: Report, args: EnrichDataOnlyReportArgs): Report {
   const { bundle, computed } = args;
   const routeMetrics = routeMetricsBlock(computed);
-  const currency = statementCurrency(bundle);
+  // Stage B's combined figures (net debt, EBITDA, EBIT) are in the model
+  // currency; per-year cash-flow figures carry their own rows' currency.
+  const currency = modelCurrency(bundle);
+  const cf = cashFlowCurrency(bundle);
   // Prices are in the listing's trading currency; the statements' currency
   // says nothing about it, so an unknown listing currency stays unknown.
   const priceCurrency = tradingCurrency(bundle);
@@ -851,9 +910,9 @@ export function enrichDataOnlyReport(stub: Report, args: EnrichDataOnlyReportArg
     fundamentals: {
       ...stub.fundamentals,
       graded: fundamentalsGrade,
-      ...fundamentalsSections(computed, currency),
+      ...fundamentalsSections(computed, cf),
     },
-    balanceSheet: { graded: balanceSheetGrade, ...balanceSheetSection(computed, currency, flagClaim) },
+    balanceSheet: { graded: balanceSheetGrade, ...balanceSheetSection(computed, currency, cf, flagClaim) },
     valuation: valuationSection(stub.valuation, computed, valuationGrade),
     quality: qualitySection(stub.quality, computed, qualityGrade),
     technicals: technicalsSection(computed, technicalsGrade, priceCurrency),

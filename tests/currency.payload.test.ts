@@ -27,59 +27,9 @@ import type { DataBundle } from "@/pipeline/types";
 import { formatTracedValue } from "@/report/format";
 import type { JudgeOutput } from "@/report/schema";
 
-import { BUILT_AT, M, currencyBundle, type CurrencyBundleOptions } from "./helpers/currencyBundle";
+import { M, completeCurrencyBundle as payloadBundle, type CurrencyBundleOptions } from "./helpers/currencyBundle";
 
 const UNLABELLED = [null, null, null, null] as const;
-const GAP = { ok: false as const, gap: { field: "fixture", reason: "fixture gap", severity: "info" as const } };
-
-function ok<T>(rows: T[], asOf: string, endpoint: string) {
-  return {
-    ok: true as const,
-    value: { data: { rows, raw: {} }, asOf, source: "fmp" as const, endpoint, fetchedAt: BUILT_AT },
-  };
-}
-
-/** currencyBundle plus every member the payload assembler reads, with estimates and targets. */
-function payloadBundle(opts: CurrencyBundleOptions): DataBundle {
-  const base = currencyBundle({ debt: 0, ...opts }) as unknown as Record<string, unknown>;
-  return {
-    ...base,
-    analystEstimates: ok(
-      [{ symbol: base.symbol, date: "2026-12-31", revenueAvg: 1300 * M, epsAvg: 1.9 }],
-      "2026-07-01",
-      "analyst-estimates",
-    ),
-    priceTargetConsensus: ok(
-      [{ symbol: base.symbol, targetConsensus: 120, targetHigh: 150, targetLow: 90 }],
-      "2026-07-01",
-      "price-target-consensus",
-    ),
-    priceTargetSummary: GAP,
-    gradesConsensus: GAP,
-    financialGrowth: GAP,
-    financialScores: GAP,
-    earningsHistory: GAP,
-    earningsCalendarNext: GAP,
-    transcript: { latest: GAP },
-    insiderTrades: GAP,
-    insiderStats: GAP,
-    institutional: { positionsSummary: GAP, topHolders: GAP, quarterEnd: null },
-    peers: GAP,
-    segmentation: { product: GAP, geographic: GAP },
-    executives: GAP,
-    compensation: GAP,
-    sharesFloat: GAP,
-    secFilings: GAP,
-    news: GAP,
-    pressReleases: GAP,
-    shortInterest: GAP,
-    shortInterestTrend: GAP,
-    insiderSentiment: GAP,
-    edgar: { sic: opts.sic ?? null, item1a: GAP, mdna: GAP, tenQMdna: GAP },
-    sourceManifest: {},
-  } as unknown as DataBundle;
-}
-
 const VALIDATION: ValidationReport = { checks: [], flags: [], gaps: [] } as unknown as ValidationReport;
 
 interface Assembled {

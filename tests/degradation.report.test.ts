@@ -61,6 +61,20 @@ function fmpPayload<T>(rows: T[], asOf: string, endpoint: string) {
   return ok({ rows, raw: {} }, asOf, endpoint);
 }
 
+/**
+ * FMP stamps EVERY statement row with its reportedCurrency; this fixture's
+ * balance-sheet and cash-flow rows were written without one. Calculations
+ * that combine statements need each row's currency established (2026-09-30),
+ * so the rows carry Apple's USD as the provider's would. A row's own label is
+ * kept.
+ */
+function reportedIn<T>(payload: T, code = "USD"): T {
+  const p = payload as unknown as { ok: boolean; value?: { data: { rows: Record<string, unknown>[] } } };
+  if (!p.ok || p.value === undefined) return payload;
+  const rows = p.value.data.rows.map((row) => ("reportedCurrency" in row ? row : { ...row, reportedCurrency: code }));
+  return { ...p, value: { ...p.value, data: { ...p.value.data, rows } } } as unknown as T;
+}
+
 function fixtureBundle(symbol = "AAPL"): DataBundle {
   const incomeAnnual = fmpPayload(
     [
@@ -121,9 +135,9 @@ function fixtureBundle(symbol = "AAPL"): DataBundle {
     statements: {
       incomeAnnual,
       incomeQuarterly: gap,
-      balanceAnnual,
+      balanceAnnual: reportedIn(balanceAnnual),
       balanceQuarterly: gap,
-      cashflowAnnual,
+      cashflowAnnual: reportedIn(cashflowAnnual),
       cashflowQuarterly: gap,
       periods: { annualRequested: 10, quarterlyRequested: 8 },
     },

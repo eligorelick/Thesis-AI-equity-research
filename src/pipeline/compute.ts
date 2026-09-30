@@ -745,6 +745,85 @@ function establishedRowsCurrency(
   return rows.length > 0 && codes.size === 1 && !codes.has(null) ? ([...codes][0] ?? null) : null;
 }
 
+type StatementFamily = "incomeAnnual" | "balanceAnnual" | "cashflowAnnual" | "balanceQuarterly";
+
+const STATEMENT_FAMILY: Record<StatementFamily, { label: string; endpoint: string }> = {
+  incomeAnnual: { label: "annual income statement", endpoint: "fmp:/stable/income-statement" },
+  balanceAnnual: { label: "annual balance sheet", endpoint: "fmp:/stable/balance-sheet-statement" },
+  cashflowAnnual: { label: "annual cash-flow statement", endpoint: "fmp:/stable/cash-flow-statement" },
+  balanceQuarterly: { label: "quarterly balance sheet", endpoint: "fmp:/stable/balance-sheet-statement?period=quarter" },
+};
+
+/**
+ * The rows of one statement family that may be COMBINED with the model's other
+ * rows — across statements (interest over debt, net income over equity, EBIT
+ * against net debt) or across years (growth rates, averages, forensic deltas).
+ *
+ * A row qualifies only when its currency is ESTABLISHED (own label, or a
+ * statement of the same filing) as the model currency. Missing evidence
+ * establishes nothing, and no exchange rate is invented. Walking back from
+ * the newest row, the history stops at the first row that does not qualify:
+ * a gap year is never skipped over, so a "YoY" or a two-year average can
+ * never silently span a currency change. The rows left out stay in the
+ * statements as reported; only the calculations that combine rows lose them,
+ * and the gap says why.
+ */
+function rowsInModelCurrency<T extends CurrencyEvidenceRow>(
+  family: StatementFamily,
+  rows: readonly T[],
+  model: string | null,
+  evidence: readonly CurrencyEvidenceRow[],
+): { rows: T[]; gap: ManifestEntry | null } {
+  const ordered = rows
+    .map((row, index) => ({ row, index, day: isoDay(row.date) }))
+    .sort((a, b) => (b.day ?? "").localeCompare(a.day ?? "") || a.index - b.index);
+  const kept = new Set<T>();
+  let breakAt: { day: string; evidence: QuarterCurrency } | null = null;
+  let excluded = 0;
+  for (const { row, day } of ordered) {
+    if (breakAt === null) {
+      const found = quarterCurrency(row, evidence);
+      if (model !== null && day !== null && found.state === "known" && found.code === model) {
+        kept.add(row);
+        continue;
+      }
+      breakAt = { day: day ?? String(row.date ?? "?"), evidence: found };
+    }
+    excluded += 1;
+  }
+  if (breakAt === null) return { rows: [...rows], gap: null };
+
+  const { label, endpoint } = STATEMENT_FAMILY[family];
+  const found = breakAt.evidence;
+  const why =
+    model === null
+      ? "the model's own currency is not established, so no row can be shown to share it"
+      : found.state === "known"
+        ? `the ${label} for ${breakAt.day} is in ${found.code} but the model runs in ${model}`
+        : found.state === "conflict"
+          ? `the currency evidence for the ${label} of ${breakAt.day} is in conflict (${found.codes.join(" vs ")}) while the model runs in ${model}`
+          : `the ${label} for ${breakAt.day} carries no currency label and no statement of the same filing supplies one, so its currency is not established (unknown), and it is not assumed to be the model's ${model}`;
+  const scope =
+    model === null
+      ? `all ${excluded} ${label} row${excluded === 1 ? "" : "s"} are`
+      : excluded === 1
+        ? "that row is"
+        : `that row and the ${excluded - 1} older one${excluded === 2 ? "" : "s"} are`;
+  return {
+    rows: rows.filter((row) => kept.has(row)),
+    gap: {
+      field: `compute.${family}.currency`,
+      reason:
+        `${why}. No FX conversion is applied, so ${scope} left out of every calculation that combines statements or ` +
+        "years (cost of debt, WACC, ROIC and DuPont, net debt, the DCF and multiples bridges, forensic scores, growth rates " +
+        "and projections), and those figures are withheld where they depended on them; each row's own margins and its " +
+        "reported figures remain, in their own currency or as currency unknown",
+      severity: "warn",
+      attemptedSources: [endpoint],
+    },
+  };
+}
+
 /** Withhold a window whose currency is not established; null when it is. */
 function windowCurrencyGap(
   window: "income" | "cash-flow",
@@ -1311,9 +1390,11 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   if (!support.supported) throw new UnsupportedInstrumentError(support);
   const quote = firstRow(bundle.quote);
 
-  const incomeAnnual = rowsOf(bundle.statements.incomeAnnual);
-  const balanceAnnual = rowsOf(bundle.statements.balanceAnnual);
-  const cashflowAnnual = rowsOf(bundle.statements.cashflowAnnual);
+  // The statements AS REPORTED. Calculations that combine rows read the
+  // currency-compatible subsets below (rowsInModelCurrency) instead.
+  const incomeAnnualReported = rowsOf(bundle.statements.incomeAnnual);
+  const balanceAnnualReported = rowsOf(bundle.statements.balanceAnnual);
+  const cashflowAnnualReported = rowsOf(bundle.statements.cashflowAnnual);
   const ttmGaps: ManifestEntry[] = [];
   const incomeQuarterSet = normalizeStatementQuarters(
     rowsOf(bundle.statements.incomeQuarterly),
@@ -1331,7 +1412,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     ttmGaps,
   );
   const incomeQuarterly = incomeQuarterSet.rows;
-  const balanceQuarterly = balanceQuarterSet.rows;
+  const balanceQuarterlyReported = balanceQuarterSet.rows;
   const cashflowQuarterly = cashflowQuarterSet.rows;
 
   const todayIso = bundle.builtAt.slice(0, 10);
@@ -1340,8 +1421,8 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   const routingEvidence = deriveRoutingEvidence(bundle.edgar?.companyFacts ?? null);
 
   // --- Route FIRST -----------------------------------------------------------
-  const inc0 = incomeAnnual[0];
-  const cf0 = cashflowAnnual[0];
+  const inc0 = incomeAnnualReported[0];
+  const cf0 = cashflowAnnualReported[0];
   const routingIncomeAnnual: RoutingIncomeRow | null = inc0
     ? {
         date: isoDay(inc0.date),
@@ -1370,6 +1451,30 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     ...balanceQuarterSet.rows,
   ]);
   const currencies = resolveStatementCurrencies(profile?.currency, inc0, ttmInc, ttmCf, ttmGaps);
+
+  // Rows that may be combined with one another: those established in the
+  // model currency, back to the first that is not. Filing-linked statements
+  // of any period are evidence for an unlabelled row.
+  const currencyEvidence: CurrencyEvidenceRow[] = [
+    ...incomeAnnualReported,
+    ...balanceAnnualReported,
+    ...cashflowAnnualReported,
+    ...incomeQuarterSet.rows,
+    ...balanceQuarterSet.rows,
+    ...cashflowQuarterSet.rows,
+  ];
+  const compatible = {
+    incomeAnnual: rowsInModelCurrency("incomeAnnual", incomeAnnualReported, currencies.model, currencyEvidence),
+    balanceAnnual: rowsInModelCurrency("balanceAnnual", balanceAnnualReported, currencies.model, currencyEvidence),
+    cashflowAnnual: rowsInModelCurrency("cashflowAnnual", cashflowAnnualReported, currencies.model, currencyEvidence),
+    balanceQuarterly: rowsInModelCurrency("balanceQuarterly", balanceQuarterlyReported, currencies.model, currencyEvidence),
+  };
+  const incomeAnnual = compatible.incomeAnnual.rows;
+  const balanceAnnual = compatible.balanceAnnual.rows;
+  const cashflowAnnual = compatible.cashflowAnnual.rows;
+  const balanceQuarterly = compatible.balanceQuarterly.rows;
+  for (const family of Object.values(compatible)) if (family.gap !== null) ttmGaps.push(family.gap);
+
   const routingCashflowTtm: RoutingCashflowRow | null = ttmCf
     ? { date: ttmCf.date, operatingCashFlow: ttmCf.operatingCashFlow }
     : null;
@@ -1417,11 +1522,18 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
   );
 
   // --- Growth ----------------------------------------------------------------
-  const growth = computeGrowth(
+  // Growth rates compare years, so they read the currency-compatible rows. A
+  // margin is a ratio within one row — one presentation currency, whatever it
+  // is — so the margin series keeps every reported year.
+  const growthCompatible = computeGrowth(
     incomeAnnual.map(toGrowthIncome),
     cashflowAnnual.map(toGrowthCashFlow),
     { period: "annual" },
   );
+  const growth = {
+    ...growthCompatible,
+    margins: computeGrowth(incomeAnnualReported.map(toGrowthIncome), [], { period: "annual" }).margins,
+  };
 
   // --- Returns (WACC / ROIC / DuPont) ---------------------------------------
   // WS6 (D-19): THESIS_EV_INCLUDE_LEASES is read ONCE per Stage B run and
@@ -1435,6 +1547,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     incomeAnnual,
     balanceAnnual,
     balanceQuarterly,
+    cashflowAnnual,
     ttmInc,
     route,
     evIncludeLeases,
@@ -1607,7 +1720,9 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     route.overlays.includes("unprofitable") ||
     route.overlays.includes("recent-ipo");
   if (needsRunway) {
-    const b0 = newestBalanceRow(balanceQuarterly[0], balanceAnnual[0]);
+    // The runway reads the reported rows: gateRunwayCurrency below sets the
+    // liquidity row's own currency against the burn's.
+    const b0 = newestBalanceRow(balanceQuarterlyReported[0], balanceAnnualReported[0]);
     if (b0) {
       runway = computeRunway(
         {
@@ -1930,6 +2045,8 @@ function computeReturns(
   incomeAnnual: FmpIncomeStatementRow[],
   balanceAnnual: FmpBalanceSheetRow[],
   balanceQuarterly: FmpBalanceSheetRow[],
+  /** Currency-compatible annual cash flows (preferred dividends for ROTE). */
+  cashflowAnnual: FmpCashFlowRow[],
   ttmInc: TtmIncome | null,
   route: CompanyRouteResult,
   /** One lease basis for the EV bridge, invested capital and the WACC's debt leg (read once in runStageB). */
@@ -2114,7 +2231,7 @@ function computeReturns(
   // Preferred dividends live on the CASH-FLOW statement; ROTE nets them out of
   // its numerator because its denominator already excludes preferred.
   const preferredByDate = new Map<string, FmpCashFlowRow>(
-    rowsOf(bundle.statements.cashflowAnnual).map((r: FmpCashFlowRow) => [String(r.date ?? ""), r]),
+    cashflowAnnual.map((r: FmpCashFlowRow) => [String(r.date ?? ""), r]),
   );
   const returnsIncome = incomeAnnual.map((r) => toReturnsIncome(r, preferredByDate));
   const returnsBalance = balanceAnnual.map(toReturnsBalance);

@@ -148,22 +148,22 @@ describe("payload registration: each figure's own currency evidence", () => {
   });
 
   it("does not stamp the listing currency on statement-derived values whose currency is unknown", () => {
-    const { computed, payload } = assemble(UNKNOWN_STATEMENTS);
+    const { payload } = assemble(UNKNOWN_STATEMENTS);
     // The quote is still in its trading currency.
     expect(record(payload, "price")).toMatchObject({ value: 100, currency: "USD" });
     expect(record(payload, "last close")?.currency).toBe("USD");
-    // The model still ran (on the annual statement); its output is not in USD.
-    expect(figure(payload, "DCF per share").value).toBe(dcfPerShare(computed));
+    // No statement row establishes a currency, so the DCF and FCF (which
+    // combine statements and years) are withheld rather than stated in USD.
+    // (Until 2026-09-30 they ran and were registered as currency unknown.)
     for (const label of ["DCF per share", "latest FCF (after SBC, house default)"]) {
-      expect(figure(payload, label).currency).toBeNull();
+      expect(figure(payload, label).value).toBeNull();
       expect(record(payload, label)).toBeUndefined();
     }
-    const projections = payload.computed.flatMap((s) => s.figures).filter((f) => /^(revenue|fcf) (weighted|bull|bear) /.test(f.label));
-    expect(projections.length).toBeGreaterThan(0);
-    for (const f of projections) {
-      expect(f.currency).toBeNull();
-      expect(f.provenanceId).toBeUndefined();
-    }
+    // Nothing statement-derived is registered in USD: only the quote and the
+    // price technicals carry the listing's currency.
+    const usdRecords = payload.provenanceRegistry!.filter((r) => r.currency === "USD").map((r) => r.id);
+    expect(usdRecords.length).toBeGreaterThan(0);
+    for (const id of usdRecords) expect(id).toMatch(/^(payload\.quote\.|computed\.technicals)/);
     // Estimates: the listing says USD, the statements say nothing — unknown.
     expect(figure(payload, "est revenue 2026-12-31").currency).toBeNull();
     expect(record(payload, "est revenue 2026-12-31")).toBeUndefined();
@@ -203,9 +203,11 @@ describe("verification and rendering of an unknown-currency figure", () => {
     return collectTracedNumbers(result.verifiedReport);
   }
 
-  it("a model citation of the unknown-currency DCF does not verify and is stored with no currency", async () => {
+  it("a model citation of an unknown-currency computed figure does not verify and is stored with no currency", async () => {
+    // USD statements, listing currency unknown: the DCF is in the model's
+    // USD; the last close is a computed price in the unknown listing currency.
     const usd = assemble(USD);
-    const unknown = assemble(UNKNOWN_STATEMENTS);
+    const unknown = assemble(UNKNOWN_LISTING);
     const cite = (p: ContextPayload, label: string, currency?: string) => {
       const f = figure(p, label);
       return {
@@ -220,17 +222,18 @@ describe("verification and rendering of an unknown-currency figure", () => {
     const [usdDcf] = await verify(usd.payload, [cite(usd.payload, "DCF per share")]);
     expect(usdDcf).toMatchObject({ verified: true, currency: "USD" });
 
-    const [omitted, claimedUsd, price] = await verify(unknown.payload, [
+    const [omitted, claimedUsd, dcf] = await verify(unknown.payload, [
+      cite(unknown.payload, "last close"),
+      cite(unknown.payload, "last close", "USD"),
       cite(unknown.payload, "DCF per share"),
-      cite(unknown.payload, "DCF per share", "USD"),
-      cite(unknown.payload, "price"),
     ]);
+    expect(figure(unknown.payload, "last close").currency).toBeNull();
     expect(omitted?.verified).toBe(false);
     expect(omitted?.currency ?? null).toBeNull();
     expect(formatTracedValue(omitted!)).toMatch(/\(currency unknown\)$/);
     expect(claimedUsd?.verified).toBe(false);
-    // The quote keeps its legitimate trading currency.
-    expect(price).toMatchObject({ verified: true, currency: "USD" });
+    // The model's value keeps its legitimate statement currency.
+    expect(dcf).toMatchObject({ verified: true, currency: "USD" });
   });
 
   it("the prompt states each money figure's currency, and says unknown rather than implying one", () => {
@@ -240,9 +243,14 @@ describe("verification and rendering of an unknown-currency figure", () => {
 
     const prompt = serializePayloadForPrompt(assemble(UNKNOWN_STATEMENTS).payload);
     expect(prompt).toMatch(/- price: 100 currency\/share \(USD\) \[/);
-    expect(prompt).toMatch(/- DCF per share: [\d.]+ currency\/share \(currency unknown\) \[/);
+    // Withheld, not stated in the listing's currency.
+    expect(prompt).toMatch(/- DCF per share: n\/a \[/);
     expect(prompt).toMatch(/- est revenue 2026-12-31: \d+ currency \(currency unknown\) \[/);
     expect(prompt).not.toMatch(/DCF per share[^\n]*USD/);
+
+    const listingPrompt = serializePayloadForPrompt(assemble(UNKNOWN_LISTING).payload);
+    expect(listingPrompt).toMatch(/- last close: [\d.]+ currency\/share \(currency unknown\) \[/);
+    expect(listingPrompt).toMatch(/- DCF per share: [\d.]+ currency\/share \(USD\) \[/);
   });
 });
 

@@ -93,23 +93,24 @@ describe("company page money cells", () => {
     for (const html of Object.values(p)) expect(html).not.toContain("$");
   });
 
-  it("prices the quote in its trading currency and the model in the statements' currency", async () => {
-    // Statements carry no currency: the quote is still USD, the model's output is not.
-    // Debt-free: with a currency unknown the WACC may not weight the market cap,
-    // so a levered issuer would have no DCF to label at all.
+  it("prices the quote in its trading currency and withholds a model whose statements establish no currency", async () => {
+    // Statements carry no currency: the quote is still USD. The DCF combines
+    // statements and years, which needs one established currency, so it is
+    // withheld — never shown in the listing's dollars. (Until 2026-09-30 it
+    // ran and was labelled "currency unknown".)
     const p = await panels({ debt: 0, profileCurrency: "USD", annualCurrency: null, quarterCurrencies: [null, null, null, null] });
     expect(cell(p.QuoteHeader!, "price")).toBe("$100.00");
-    expect(cell(p.ValuationPanel!, "dcf / share")).toMatch(/\(currency unknown\)$/);
-    const grid = heatmapAmounts(p.ValuationPanel!);
-    expect(grid.length).toBeGreaterThan(0);
-    for (const amount of grid) expect(amount).not.toContain("$");
+    expect(cell(p.ValuationPanel!, "dcf / share")).toBe("n/a");
+    expect(heatmapAmounts(p.ValuationPanel!)).toEqual([]);
+    expect(p.ValuationPanel).not.toContain("$");
   });
 
   it("says currency unknown when neither the listing nor the statements establish one", async () => {
     const p = await panels({ debt: 0, profileCurrency: null, annualCurrency: null, quarterCurrencies: [null, null, null, null] });
     expect(cell(p.QuoteHeader!, "price")).toBe("100.00 (currency unknown)");
     expect(cell(p.TechnicalsPanel!, "last close")).toMatch(/\(currency unknown\)$/);
-    expect(cell(p.ValuationPanel!, "dcf / share")).toMatch(/\(currency unknown\)$/);
+    // No established statement currency: the DCF is withheld, not labelled.
+    expect(cell(p.ValuationPanel!, "dcf / share")).toBe("n/a");
     for (const html of Object.values(p)) expect(html).not.toContain("$");
   });
 
@@ -117,7 +118,7 @@ describe("company page money cells", () => {
     const usd = await panels({ debt: 0 });
     expect(cell(usd.ValuationPanel!, "vs price")).toMatch(/^[+-]\d+\.\d%$/);
     const unknownModel = await panels({ debt: 0, annualCurrency: null, quarterCurrencies: [null, null, null, null] });
-    expect(cell(unknownModel.ValuationPanel!, "dcf / share")).toMatch(/\(currency unknown\)$/);
+    expect(cell(unknownModel.ValuationPanel!, "dcf / share")).toBe("n/a");
     expect(cell(unknownModel.ValuationPanel!, "vs price")).toBe("n/a");
     const unknownQuote = await panels({ debt: 0, profileCurrency: null });
     expect(cell(unknownQuote.ValuationPanel!, "vs price")).toBe("n/a");

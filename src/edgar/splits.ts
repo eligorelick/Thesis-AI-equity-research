@@ -21,6 +21,13 @@
  * evidence fixes the direction; a ratio it contradicts is not applied at all,
  * and the reason is named so nothing is silently guessed.
  *
+ * Every decision is made AS OF a date the caller supplies. A split is an event
+ * with an effective date, and a filer can tag it before that date arrives (an
+ * 8-K announcing a split effective next quarter). Until the effective date the
+ * market still trades on the pre-split basis — prices, cover counts and every
+ * filed per-share figure agree with each other — so a split dated after
+ * `asOf` is recorded as pending and applied to nothing.
+ *
  * The module is pure: no network, no clock, no environment.
  */
 
@@ -81,25 +88,66 @@ export interface SplitNote {
   severity: "info" | "warn";
 }
 
+/** A tagged split dated after `asOf`: announced, not yet in effect, applied to nothing. */
+export interface PendingSplit {
+  date: string;
+  /** The ratio exactly as the filer tagged it; its direction is not yet evidenced. */
+  tagged: number;
+}
+
+/**
+ * A tagged split that was NOT applied and whose effect on the share basis at
+ * `asOf` is therefore unknown: a disputed or contradicted ratio, or tagged
+ * dates on both sides of `asOf`. `from`..`to` spans its tagged dates.
+ */
+export interface UnresolvedSplit {
+  from: string;
+  to: string;
+}
+
 export interface StockSplits {
-  /** Applied events, oldest first. */
+  /** The date the share basis is fixed at: splits dated after it are pending. */
+  asOf: string;
+  /** Applied events (dated on or before `asOf`), oldest first. */
   events: SplitEvent[];
+  /** Splits tagged for a date after `asOf`, oldest first. */
+  pending: PendingSplit[];
+  /** Splits whose effect on the `asOf` share basis could not be established. */
+  unresolved: UnresolvedSplit[];
   /** One note per tagged split, applied or not, in date order. */
   notes: SplitNote[];
   /**
-   * The factor that carries a fact filed on `filed` to the current share
-   * basis: the product of the ratios of every applied split dated after that
+   * The factor that carries a fact filed on `filed` to the share basis of
+   * `asOf`: the product of the ratios of every applied split dated after that
    * filing. Multiply a share count by it; divide a per-share amount by it.
+   * Pending splits never contribute.
    */
   factorFor(filed: string): number;
-}
-
-function noSplits(): StockSplits {
-  return { events: [], notes: [], factorFor: () => 1 };
+  /**
+   * Why a share count filed on `filed` cannot be put on the `asOf` basis by
+   * `factorFor`, or null when it can. `measured` is the date the count was
+   * TAKEN when that differs from a restated statement figure — the cover-page
+   * count is a point-in-time count as of its own date, not an ASC 260 / SAB
+   * Topic 4C figure a later filing restates — so a count measured before a
+   * split and filed after it could be on either basis. Pass null for a
+   * statement figure (weighted average, balance-sheet count), which a filing
+   * made after the split states on the post-split basis.
+   */
+  shareCountBasisIssue(measured: string | null, filed: string): string | null;
+  /**
+   * Why a figure that its source split-adjusted as of `day` — a price series
+   * retrieved that day, a vendor statement row, or a quote for that session —
+   * is not on the `asOf` share basis, or null when it is. Price vendors restate
+   * history only for splits that have happened by the time they serve it.
+   */
+  sourceBasisIssue(day: string): string | null;
 }
 
 interface Candidate {
+  /** Earliest tagged date in the group: the date the split is keyed and applied by. */
   date: string;
+  /** Latest tagged date in the group. */
+  last: string;
   values: number[];
 }
 
@@ -149,9 +197,10 @@ function tagCandidates(facts: CompanyFacts): Candidate[] {
     const last = candidates[candidates.length - 1];
     if (last !== undefined && daysBetween(last.date, date) <= SAME_SPLIT_WINDOW_DAYS) {
       last.values.push(...values);
+      last.last = date;
       continue;
     }
-    candidates.push({ date, values: [...values] });
+    candidates.push({ date, last: date, values: [...values] });
   }
   return candidates;
 }
@@ -221,13 +270,13 @@ const APPLIES_TO = "per-share and share-count facts filed before that date are r
 const LEFT_AS_FILED = "per-share and share-count facts filed before it are left as filed";
 
 /**
- * Discover the splits a filer tagged and decide which to apply. Pure and
- * total: a payload with no split concept yields no events, no notes and a
- * factor of 1 everywhere.
+ * Discover the splits a filer tagged and decide which to apply as of `asOf`
+ * (ISO date; the analysis date). Pure and total: a payload with no split
+ * concept yields no events, no notes and a factor of 1 everywhere.
  */
-export function discoverStockSplits(facts: CompanyFacts): StockSplits {
+export function discoverStockSplits(facts: CompanyFacts, asOf: string): StockSplits {
   const candidates = tagCandidates(facts);
-  if (candidates.length === 0) return noSplits();
+  if (candidates.length === 0) return assemble(asOf, [], [], [], []);
 
   const shares: FactPoint[] = [];
   for (const tag of SHARE_EVIDENCE_TAGS) {
@@ -238,6 +287,8 @@ export function discoverStockSplits(facts: CompanyFacts): StockSplits {
   }
 
   const events: SplitEvent[] = [];
+  const pending: PendingSplit[] = [];
+  const unresolved: UnresolvedSplit[] = [];
   const notes: SplitNote[] = [];
   /** The most recent context date each tagged ratio appeared with. */
   const lastTaggedAt = new Map<string | number, string>();
@@ -247,14 +298,35 @@ export function discoverStockSplits(facts: CompanyFacts): StockSplits {
     const info = (text: string): void => {
       notes.push({ date, text, severity: "info" });
     };
+    /** Not applied, and its effect on the share basis is unknown. */
     const warn = (text: string): void => {
       notes.push({ date, text, severity: "warn" });
+      unresolved.push({ from: date, to: candidate.last });
     };
     const values = distinct(candidate.values);
     const tagged = values[0] as number;
     const previous = i > 0 ? (candidates[i - 1] as Candidate).date : null;
     const next = i + 1 < candidates.length ? (candidates[i + 1] as Candidate).date : null;
     const where = `${date} (${SPLIT_RATIO_TAG})`;
+
+    if (date > asOf) {
+      // Filed ahead of its effective date. Every figure filed so far, and every
+      // price up to `asOf`, is still on the pre-split basis: applying it would
+      // multiply today's share count by a ratio the market has not seen yet.
+      pending.push({ date, tagged });
+      notes.push({
+        date,
+        severity: "info",
+        text: `stock split ratio ${values.map(formatRatio).join(", ")} tagged for ${where} is not yet effective as of ${asOf}: not applied — share counts, per-share facts and prices stay on the pre-split basis until that date`,
+      });
+      continue;
+    }
+    if (candidate.last > asOf) {
+      warn(
+        `stock split ratio ${values.map(formatRatio).join(", ")} tagged for ${where} NOT applied: filings also date it ${candidate.last}, after ${asOf}, so whether it had taken effect by ${asOf} cannot be established; ${LEFT_AS_FILED}, and market values that combine a price with a share count across it are withheld`,
+      );
+      continue;
+    }
 
     if (values.length > 1) {
       warn(
@@ -322,14 +394,51 @@ export function discoverStockSplits(facts: CompanyFacts): StockSplits {
     );
   }
 
-  if (events.length === 0) return { events, notes, factorFor: () => 1 };
+  return assemble(asOf, events, pending, unresolved, notes);
+}
+
+function assemble(
+  asOf: string,
+  events: SplitEvent[],
+  pending: PendingSplit[],
+  unresolved: UnresolvedSplit[],
+  notes: SplitNote[],
+): StockSplits {
+  const splitName = (e: SplitEvent): string => `${describeSplitRatio(e.ratio)} split of ${e.date}`;
+  const unresolvedName = (u: UnresolvedSplit): string =>
+    u.from === u.to ? `the split tagged ${u.from}` : `the split tagged ${u.from} and ${u.to}`;
   return {
+    asOf,
     events,
+    pending,
+    unresolved,
     notes,
     factorFor(filed: string): number {
       let factor = 1;
       for (const e of events) if (e.date > filed) factor *= e.ratio;
       return factor;
+    },
+    shareCountBasisIssue(measured: string | null, filed: string): string | null {
+      if (measured !== null) {
+        const straddled = events.find((e) => measured < e.date && e.date <= filed);
+        if (straddled !== undefined) {
+          return `the share count was measured ${measured}, before the ${splitName(straddled)}, but filed ${filed}, after it, so whether it is stated on the pre- or post-split basis cannot be established`;
+        }
+      }
+      const open = unresolved.find((u) => filed < u.to);
+      return open === undefined
+        ? null
+        : `the share count was filed ${filed}, before ${unresolvedName(open)} (${SPLIT_RATIO_TAG}), whose ratio or effective date could not be established, so its share basis at ${asOf} is unknown`;
+    },
+    sourceBasisIssue(day: string): string | null {
+      const missed = events.find((e) => day < e.date);
+      if (missed !== undefined) {
+        return `the source figure is split-adjusted only as of ${day}, before the ${splitName(missed)}, while the share counts are on the post-split basis of ${asOf}`;
+      }
+      const open = unresolved.find((u) => day < u.to);
+      return open === undefined
+        ? null
+        : `the source figure is split-adjusted only as of ${day}, before ${unresolvedName(open)} (${SPLIT_RATIO_TAG}), whose ratio or effective date could not be established`;
     },
   };
 }

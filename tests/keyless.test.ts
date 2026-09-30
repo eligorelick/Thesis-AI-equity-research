@@ -23,6 +23,7 @@ import type { FetchResult } from "@/types/core";
 import type { FmpPayload, FmpRawRow } from "@/providers/fmp";
 
 const NOW = new Date("2026-09-01T00:00:00Z");
+const TODAY = "2026-09-01";
 const gap = <T extends FmpRawRow>(field: string, reason = "no API key + no fixture"): FetchResult<FmpPayload<T>> => ({
   ok: false,
   gap: { field, reason, severity: "warn" },
@@ -1029,6 +1030,7 @@ describe("sharesOutstandingSeries", () => {
         },
         { [SPLIT_TAG]: "pure" },
       ),
+      TODAY,
     );
     expect(series.basis).toBe("dei cover page");
     expect(series.points).toEqual([
@@ -1039,7 +1041,7 @@ describe("sharesOutstandingSeries", () => {
   });
 
   it("leaves a series without a split concept exactly as filed", () => {
-    const series = sharesOutstandingSeries(appleFacts());
+    const series = sharesOutstandingSeries(appleFacts(), TODAY);
     expect(series.splits).toEqual([]);
     expect(series.points.map((p) => p.value)).toEqual([14_900, 14_776]);
   });
@@ -1051,7 +1053,7 @@ describe("sharesOutstandingSeries", () => {
     const multiClass = JSON.parse(
       readFileSync(path.join(process.cwd(), "fixtures", "edgar", "multiclass_companyfacts.json"), "utf8"),
     ) as CompanyFacts;
-    const series = sharesOutstandingSeries(multiClass);
+    const series = sharesOutstandingSeries(multiClass, TODAY);
     expect(series.basis).toBe("dei cover page");
     expect(series.points).toEqual([
       { value: 7_800_000, asOf: "2025-02-14" }, // 4,800,000 + 3,000,000
@@ -1063,6 +1065,7 @@ describe("sharesOutstandingSeries", () => {
       cik: "0009900001",
       annualPeriods: 10,
       quarterlyPeriods: 24,
+      asOf: TODAY,
     });
     expect(series.points[series.points.length - 1]!.value).toBe(built.shares.outstanding!.value);
   });
@@ -1080,6 +1083,7 @@ describe("sharesOutstandingSeries", () => {
           ],
         },
       ),
+      TODAY,
     );
     expect(series.points).toEqual([{ value: 950, asOf: "2026-02-13" }]);
   });

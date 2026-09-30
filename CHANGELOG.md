@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — stock-split correctness (2026-09-30)
+
+Share counts and prices are combined only on one established split basis.
+The convention is D-30 in [`docs/audit/DECISIONS.md`](docs/audit/DECISIONS.md).
+
+- **A split takes effect on its date, not when it is announced.** A split a
+  filer tagged for a date after the analysis date is recorded as pending and
+  scales nothing: a 4-for-1 tagged on 2026-09-01 for 2027-01-15 no longer
+  turns a 10M share count into 40M on 2026-09-30.
+- **Keyless market values need price and shares on one basis.** The spot and
+  quote market cap, the market-cap history (and its plan-limit backfill), the
+  enterprise values and the free float are withheld, with the reason, when a
+  price series was served or a quote dated before a split the share counts
+  reflect, when a cover-page count was measured before a split and filed after
+  it, or when a split's ratio or effective date could not be established.
+- **Nothing is adjusted twice.** A count filed after a split, and a vendor's
+  already split-adjusted rows, are used as they are.
+
 ## Unreleased — currency integrity (2026-09-28 to 2026-09-30)
 
 Money figures now carry only a currency their own evidence establishes, and

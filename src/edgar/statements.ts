@@ -94,6 +94,12 @@ export interface StatementBuildOptions {
   cik: string | null;
   annualPeriods: number;
   quarterlyPeriods: number;
+  /**
+   * ISO date the share basis is fixed at (the analysis date). A stock split
+   * tagged for a later date has not taken effect yet and is applied to
+   * nothing; see `discoverStockSplits`.
+   */
+  asOf: string;
 }
 
 export type Derivation = "ytd-difference" | "fy-minus-ytd" | "fy-minus-quarters";
@@ -254,8 +260,9 @@ export interface BuiltStatements {
   filesTwentyF: boolean;
   /**
    * The stock splits applied to per-share and share-count facts filed before
-   * them (see src/edgar/splits.ts) and one note per tagged split, applied or
-   * not. The note texts are also carried on the income and balance rows' notes.
+   * them (see src/edgar/splits.ts), as of `StatementBuildOptions.asOf`, and one
+   * note per tagged split, applied, pending or not. The note texts are also
+   * carried on the income and balance rows' notes.
    */
   splits: { events: SplitEvent[]; notes: SplitNote[] };
 }
@@ -2367,7 +2374,7 @@ const CASHFLOW_DEF: StatementDef = {
  * lists plus one manifest gap per statement and scope, never a throw.
  */
 export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: StatementBuildOptions): BuiltStatements {
-  const splits = discoverStockSplits(facts);
+  const splits = discoverStockSplits(facts, opts.asOf);
   const index = buildFactIndex(facts, splits);
   const state: BuildState = { filesTwentyF: false };
 

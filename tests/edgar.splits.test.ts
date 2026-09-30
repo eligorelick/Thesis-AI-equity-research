@@ -32,6 +32,8 @@ function facts(usGaap: Record<string, Pt[]>, units: Record<string, string> = {},
 }
 
 const DILUTED = "WeightedAverageNumberOfDilutedSharesOutstanding";
+/** The analysis date: after every split tagged in this file except the explicitly future ones. */
+const AS_OF = "2026-09-30";
 const FY2019 = { start: "2018-09-30", end: "2019-09-28" };
 
 /** Apple's 4:1 split of 2020-08-28: FY2019 diluted shares as first filed, then restated one year later. */
@@ -51,14 +53,14 @@ function appleSplit2020(extra: Record<string, Pt[]> = {}): CompanyFacts {
 
 describe("discoverStockSplits", () => {
   it("finds nothing and scales by 1 when the split ratio concept is absent", () => {
-    const splits = discoverStockSplits(facts({ [DILUTED]: [{ ...FY2019, val: 100, filed: "2019-10-31" }] }));
+    const splits = discoverStockSplits(facts({ [DILUTED]: [{ ...FY2019, val: 100, filed: "2019-10-31" }] }), AS_OF);
     expect(splits.events).toEqual([]);
     expect(splits.notes).toEqual([]);
     expect(splits.factorFor("2015-01-01")).toBe(1);
   });
 
   it("applies a forward split to facts filed before it and leaves later filings alone", () => {
-    const splits = discoverStockSplits(appleSplit2020());
+    const splits = discoverStockSplits(appleSplit2020(), AS_OF);
     expect(splits.events).toEqual([{ date: "2020-08-28", ratio: 4, tagged: 4, evidence: 4 }]);
     expect(splits.factorFor("2019-10-31")).toBe(4);
     expect(splits.factorFor("2016-10-26")).toBe(4);
@@ -89,6 +91,7 @@ describe("discoverStockSplits", () => {
           { ...FY2013, val: 6_521_634_000, filed: "2014-10-27" },
         ],
       }),
+      AS_OF,
     );
     expect(splits.events.map((e) => [e.date, e.ratio])).toEqual([
       ["2014-06-06", 7],
@@ -112,6 +115,7 @@ describe("discoverStockSplits", () => {
         },
         { [SPLIT_RATIO_TAG]: "pure" },
       ),
+      AS_OF,
     );
     expect(splits.events).toEqual([{ date: "2021-08-02", ratio: 0.125, tagged: 8, evidence: 0.125 }]);
     expect(splits.factorFor("2021-02-12")).toBe(0.125);
@@ -123,6 +127,7 @@ describe("discoverStockSplits", () => {
       appleSplit2020({
         [SPLIT_RATIO_TAG]: [{ end: "2020-08-28", val: 3, filed: "2020-10-30" }],
       }),
+      AS_OF,
     );
     expect(splits.events).toEqual([]);
     expect(splits.factorFor("2019-10-31")).toBe(1);
@@ -136,7 +141,7 @@ describe("discoverStockSplits", () => {
   });
 
   it("marks only the unapplied ratios as warnings", () => {
-    const applied = discoverStockSplits(appleSplit2020());
+    const applied = discoverStockSplits(appleSplit2020(), AS_OF);
     expect(applied.notes.map((n) => n.severity)).toEqual(["info"]);
     const disagreeing = discoverStockSplits(
       appleSplit2020({
@@ -145,6 +150,7 @@ describe("discoverStockSplits", () => {
           { end: "2020-08-28", val: 2, filed: "2021-01-28", form: "10-Q" },
         ],
       }),
+      AS_OF,
     );
     expect(disagreeing.notes.map((n) => [n.date, n.severity])).toEqual([["2020-08-28", "warn"]]);
   });
@@ -157,6 +163,7 @@ describe("discoverStockSplits", () => {
           { end: "2020-08-28", val: 2, filed: "2021-01-28", form: "10-Q" },
         ],
       }),
+      AS_OF,
     );
     expect(splits.events).toEqual([]);
     expect(splits.notes[0]!.text).toMatch(/NOT applied: filings disagree on the ratio \(2, 4\)/);
@@ -165,12 +172,14 @@ describe("discoverStockSplits", () => {
   it("trusts the tagged ratio as filed when no share count was restated across the split", () => {
     const forward = discoverStockSplits(
       facts({ [SPLIT_RATIO_TAG]: [{ end: "2022-07-15", val: 20, filed: "2022-07-29", form: "10-Q" }] }, { [SPLIT_RATIO_TAG]: "pure" }),
+      AS_OF,
     );
     expect(forward.events).toEqual([{ date: "2022-07-15", ratio: 20, tagged: 20, evidence: null }]);
     expect(forward.notes[0]!.text).toMatch(/20-for-1 on 2022-07-15 .*no restated share count to confirm it/);
 
     const reverse = discoverStockSplits(
       facts({ [SPLIT_RATIO_TAG]: [{ end: "2023-03-01", val: 0.1, filed: "2023-05-10", form: "10-Q" }] }, { [SPLIT_RATIO_TAG]: "pure" }),
+      AS_OF,
     );
     expect(reverse.events).toEqual([{ date: "2023-03-01", ratio: 0.1, tagged: 0.1, evidence: null }]);
     expect(reverse.factorFor("2022-02-01")).toBe(0.1);
@@ -190,6 +199,7 @@ describe("discoverStockSplits", () => {
         },
         { [SPLIT_RATIO_TAG]: "pure" },
       ),
+      AS_OF,
     );
     expect(splits.events.map((e) => [e.date, e.ratio])).toEqual([["2022-07-15", 20]]);
   });
@@ -212,6 +222,7 @@ describe("discoverStockSplits", () => {
           { ...FY2013, val: 26_086_536_000, filed: "2020-10-30" },
         ],
       }),
+      AS_OF,
     );
     expect(splits.events.map((e) => [e.date, e.ratio, e.evidence])).toEqual([
       ["2014-06-06", 7, 7],
@@ -245,6 +256,7 @@ describe("discoverStockSplits — repeated and near-duplicate tags", () => {
           { end: "2024-06-10", val: 10, filed: "2024-11-20", form: "10-Q" },
         ],
       }),
+      AS_OF,
     );
     expect(splits.events.map((e) => [e.date, e.ratio])).toEqual([["2024-06-07", 10]]);
     expect(splits.factorFor("2024-02-21")).toBe(10);
@@ -258,6 +270,7 @@ describe("discoverStockSplits — repeated and near-duplicate tags", () => {
           { end: "2024-10-27", val: 10, filed: "2024-11-20", form: "10-Q" },
         ],
       }),
+      AS_OF,
     );
     expect(splits.events.map((e) => [e.date, e.ratio])).toEqual([["2024-06-07", 10]]);
     expect(splits.factorFor("2024-02-21")).toBe(10);
@@ -282,6 +295,7 @@ describe("discoverStockSplits — repeated and near-duplicate tags", () => {
           { ...Q2, val: 24_848_000_000, filed: "2025-02-26" },
         ],
       }),
+      AS_OF,
     );
     expect(splits.events.map((e) => [e.date, e.ratio])).toEqual([["2024-06-07", 10]]);
     expect(splits.notes[1]!.text).toMatch(/tagged again for 2025-01-26 .* is the 10-for-1 split of 2024-06-07 restated/);
@@ -300,6 +314,7 @@ describe("discoverStockSplits — repeated and near-duplicate tags", () => {
           ...retags.map((end) => ({ end, val: 10, filed: end, form: "10-Q" })),
         ],
       }),
+      AS_OF,
     );
     expect(splits.events.map((e) => [e.date, e.ratio])).toEqual([["2024-06-07", 10]]);
     expect(splits.factorFor("2024-02-21")).toBe(10);
@@ -314,6 +329,7 @@ describe("discoverStockSplits — repeated and near-duplicate tags", () => {
           { end: "2026-06-07", val: 10, filed: "2026-08-28", form: "10-Q" },
         ],
       }),
+      AS_OF,
     );
     expect(splits.events.map((e) => [e.date, e.ratio])).toEqual([["2024-06-07", 10]]);
     expect(splits.factorFor("2024-02-21")).toBe(10);
@@ -337,11 +353,172 @@ describe("discoverStockSplits — repeated and near-duplicate tags", () => {
           { ...FY2025, val: 245_000_000_000, filed: "2026-08-28", form: "10-Q" },
         ],
       }),
+      AS_OF,
     );
     expect(splits.events.map((e) => [e.date, e.ratio, e.evidence])).toEqual([
       ["2024-06-07", 10, 10],
       ["2026-06-07", 10, 10],
     ]);
     expect(splits.factorFor("2024-02-21")).toBe(100);
+  });
+});
+
+describe("discoverStockSplits — effective dates and share basis as of the analysis date", () => {
+  const Q1_2026 = { start: "2026-01-01", end: "2026-03-31" };
+  /** Q1 2026 diluted count as first filed (pre-split) and as restated after a split of 2026-06-15. */
+  const restated = (before: number, after: number): Pt[] => [
+    { ...Q1_2026, val: before, filed: "2026-05-05", form: "10-Q" },
+    { ...Q1_2026, val: after, filed: "2026-08-05", form: "10-Q" },
+  ];
+
+  it("does not apply a split filed 2026-09-01 but effective 2027-01-15 as of 2026-09-30", () => {
+    const f = facts(
+      {
+        [SPLIT_RATIO_TAG]: [{ end: "2027-01-15", val: 4, filed: "2026-09-01", form: "8-K" }],
+        [DILUTED]: [{ ...Q1_2026, val: 10_000_000, filed: "2026-05-05", form: "10-Q" }],
+      },
+      { [SPLIT_RATIO_TAG]: "pure" },
+    );
+    const splits = discoverStockSplits(f, "2026-09-30");
+    expect(splits.events).toEqual([]);
+    expect(splits.pending).toEqual([{ date: "2027-01-15", tagged: 4 }]);
+    expect(splits.unresolved).toEqual([]);
+    // The older count stays exactly as filed: no factor of 4.
+    expect(splits.factorFor("2026-05-05")).toBe(1);
+    expect(splits.factorFor("2026-09-01")).toBe(1);
+    expect(splits.shareCountBasisIssue("2026-07-24", "2026-08-05")).toBeNull();
+    expect(splits.sourceBasisIssue("2026-09-30")).toBeNull();
+    expect(splits.notes).toEqual([
+      {
+        date: "2027-01-15",
+        severity: "info",
+        text: `stock split ratio 4 tagged for 2027-01-15 (${SPLIT_RATIO_TAG}) is not yet effective as of 2026-09-30: not applied — share counts, per-share facts and prices stay on the pre-split basis until that date`,
+      },
+    ]);
+
+    // Once the effective date has passed, the same tag applies to everything filed before it.
+    const later = discoverStockSplits(f, "2027-02-01");
+    expect(later.pending).toEqual([]);
+    expect(later.events).toEqual([{ date: "2027-01-15", ratio: 4, tagged: 4, evidence: null }]);
+    expect(later.factorFor("2026-05-05")).toBe(4);
+    expect(later.factorFor("2027-01-15")).toBe(1);
+  });
+
+  it("applies a split dated exactly on the analysis date", () => {
+    const splits = discoverStockSplits(
+      facts({ [SPLIT_RATIO_TAG]: [{ end: "2026-09-30", val: 2, filed: "2026-09-30", form: "8-K" }] }, { [SPLIT_RATIO_TAG]: "pure" }),
+      "2026-09-30",
+    );
+    expect(splits.events.map((e) => [e.date, e.ratio])).toEqual([["2026-09-30", 2]]);
+    expect(splits.factorFor("2026-08-05")).toBe(2);
+  });
+
+  it("scales a 4-for-1 forward split so 10M pre-split shares become 40M", () => {
+    const splits = discoverStockSplits(
+      facts(
+        { [SPLIT_RATIO_TAG]: [{ end: "2026-06-15", val: 4, filed: "2026-08-05", form: "10-Q" }], [DILUTED]: restated(10_000_000, 40_000_000) },
+        { [SPLIT_RATIO_TAG]: "pure" },
+      ),
+      "2026-09-30",
+    );
+    expect(splits.events).toEqual([{ date: "2026-06-15", ratio: 4, tagged: 4, evidence: 4 }]);
+    expect(10_000_000 * splits.factorFor("2026-05-05")).toBe(40_000_000);
+    // Already on the post-split basis: filed on or after the split, never scaled again.
+    expect(40_000_000 * splits.factorFor("2026-08-05")).toBe(40_000_000);
+    expect(40_000_000 * splits.factorFor("2026-06-15")).toBe(40_000_000);
+  });
+
+  it("scales a 1-for-10 reverse split tagged as 0.1 so 100M pre-split shares become 10M", () => {
+    const splits = discoverStockSplits(
+      facts(
+        { [SPLIT_RATIO_TAG]: [{ end: "2026-06-15", val: 0.1, filed: "2026-08-05", form: "10-Q" }], [DILUTED]: restated(100_000_000, 10_000_000) },
+        { [SPLIT_RATIO_TAG]: "pure" },
+      ),
+      "2026-09-30",
+    );
+    expect(splits.events).toEqual([{ date: "2026-06-15", ratio: 0.1, tagged: 0.1, evidence: 0.1 }]);
+    expect(100_000_000 * splits.factorFor("2026-05-05")).toBe(10_000_000);
+    expect(10_000_000 * splits.factorFor("2026-08-05")).toBe(10_000_000);
+  });
+
+  it("names a cover count measured before a split but filed after it as of unknown basis", () => {
+    const splits = discoverStockSplits(
+      facts(
+        { [SPLIT_RATIO_TAG]: [{ end: "2026-06-15", val: 4, filed: "2026-08-05", form: "10-Q" }], [DILUTED]: restated(10_000_000, 40_000_000) },
+        { [SPLIT_RATIO_TAG]: "pure" },
+      ),
+      "2026-09-30",
+    );
+    expect(splits.shareCountBasisIssue("2026-06-10", "2026-06-20")).toBe(
+      "the share count was measured 2026-06-10, before the 4-for-1 split of 2026-06-15, but filed 2026-06-20, after it, so whether it is stated on the pre- or post-split basis cannot be established",
+    );
+    // Measured and filed on the same side of the split: the basis is known.
+    expect(splits.shareCountBasisIssue("2026-04-24", "2026-05-05")).toBeNull();
+    expect(splits.shareCountBasisIssue("2026-06-15", "2026-06-20")).toBeNull();
+    // A statement figure filed after the split is restated to it (ASC 260 / SAB Topic 4C).
+    expect(splits.shareCountBasisIssue(null, "2026-06-20")).toBeNull();
+  });
+
+  it("names a source split-adjusted before an applied split as off the share basis", () => {
+    const splits = discoverStockSplits(
+      facts(
+        { [SPLIT_RATIO_TAG]: [{ end: "2026-06-15", val: 4, filed: "2026-08-05", form: "10-Q" }], [DILUTED]: restated(10_000_000, 40_000_000) },
+        { [SPLIT_RATIO_TAG]: "pure" },
+      ),
+      "2026-09-30",
+    );
+    expect(splits.sourceBasisIssue("2026-06-10")).toBe(
+      "the source figure is split-adjusted only as of 2026-06-10, before the 4-for-1 split of 2026-06-15, while the share counts are on the post-split basis of 2026-09-30",
+    );
+    expect(splits.sourceBasisIssue("2026-06-15")).toBeNull();
+    expect(splits.sourceBasisIssue("2026-09-30")).toBeNull();
+  });
+
+  it("does not apply a split whose tagged dates fall on both sides of the analysis date, and withholds every basis", () => {
+    const splits = discoverStockSplits(
+      facts(
+        {
+          [SPLIT_RATIO_TAG]: [
+            { end: "2026-09-20", val: 3, filed: "2026-09-21", form: "8-K" },
+            { end: "2026-10-20", val: 3, filed: "2026-09-21", form: "8-K" },
+          ],
+        },
+        { [SPLIT_RATIO_TAG]: "pure" },
+      ),
+      "2026-09-30",
+    );
+    expect(splits.events).toEqual([]);
+    expect(splits.pending).toEqual([]);
+    expect(splits.unresolved).toEqual([{ from: "2026-09-20", to: "2026-10-20" }]);
+    expect(splits.factorFor("2026-08-05")).toBe(1);
+    expect(splits.notes[0]).toMatchObject({ date: "2026-09-20", severity: "warn" });
+    expect(splits.notes[0]!.text).toMatch(/filings also date it 2026-10-20, after 2026-09-30, so whether it had taken effect by 2026-09-30 cannot be established/);
+    expect(splits.shareCountBasisIssue(null, "2026-09-25")).toMatch(
+      /^the share count was filed 2026-09-25, before the split tagged 2026-09-20 and 2026-10-20 .* its share basis at 2026-09-30 is unknown$/,
+    );
+    expect(splits.sourceBasisIssue("2026-09-30")).toMatch(
+      /^the source figure is split-adjusted only as of 2026-09-30, before the split tagged 2026-09-20 and 2026-10-20 /,
+    );
+  });
+
+  it("marks share counts filed before a ratio the filings dispute as of unknown basis, and later ones as known", () => {
+    const splits = discoverStockSplits(appleSplit2020({ [SPLIT_RATIO_TAG]: [
+      { end: "2020-08-28", val: 4, filed: "2020-10-30" },
+      { end: "2020-08-28", val: 5, filed: "2021-10-29" },
+    ] }), AS_OF);
+    expect(splits.events).toEqual([]);
+    expect(splits.unresolved).toEqual([{ from: "2020-08-28", to: "2020-08-28" }]);
+    expect(splits.shareCountBasisIssue(null, "2019-10-31")).toMatch(/^the share count was filed 2019-10-31, before the split tagged 2020-08-28 /);
+    expect(splits.shareCountBasisIssue(null, "2020-10-30")).toBeNull();
+    expect(splits.sourceBasisIssue("2020-08-27")).toMatch(/before the split tagged 2020-08-28 /);
+    expect(splits.sourceBasisIssue("2026-09-30")).toBeNull();
+  });
+
+  it("finds no basis issue at all when no split was tagged", () => {
+    const splits = discoverStockSplits(facts({ [DILUTED]: [{ ...Q1_2026, val: 10_000_000, filed: "2026-05-05" }] }), "2026-09-30");
+    expect(splits).toMatchObject({ asOf: "2026-09-30", events: [], pending: [], unresolved: [], notes: [] });
+    expect(splits.factorFor("2020-01-01")).toBe(1);
+    expect(splits.shareCountBasisIssue("2026-04-24", "2026-05-05")).toBeNull();
+    expect(splits.sourceBasisIssue("2020-01-01")).toBeNull();
   });
 });

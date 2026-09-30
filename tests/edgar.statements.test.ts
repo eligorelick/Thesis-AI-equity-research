@@ -125,7 +125,7 @@ function addTags(f: CompanyFacts, extra: Record<string, Pt[]>): CompanyFacts {
   };
 }
 
-const OPTS = { symbol: "AAPL", cik: "0000320193", annualPeriods: 10, quarterlyPeriods: 24 };
+const OPTS = { symbol: "AAPL", cik: "0000320193", annualPeriods: 10, quarterlyPeriods: 24, asOf: "2026-09-30" };
 
 /** FY2025 balance-sheet instant with the appleLike() filing labels. */
 const FY25_INSTANT = { end: "2025-09-27", form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" } as const;

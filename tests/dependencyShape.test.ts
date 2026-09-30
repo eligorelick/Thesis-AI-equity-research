@@ -18,7 +18,7 @@ const EXPECTED = {
   postcss: ["8.5.26"],
   sharp: ["0.35.5"],
   "js-yaml": ["4.3.2"],
-  "brace-expansion": ["1.1.18", "5.0.9"],
+  "brace-expansion": ["1.1.21", "5.0.12"],
 } as const;
 
 interface DependencyShapeModule {
@@ -61,13 +61,13 @@ function syntheticInstalledTree(): unknown {
         version: "1.0.0",
         dependencies: {
           "js-yaml": { version: "4.3.2" },
-          "brace-expansion": { version: "1.1.18" },
+          "brace-expansion": { version: "1.1.21" },
         },
       },
       loaderB: {
         version: "1.0.0",
         dependencies: {
-          "brace-expansion": { version: "5.0.9" },
+          "brace-expansion": { version: "5.0.12" },
         },
       },
     },
@@ -104,7 +104,7 @@ describe("dependency shape gate", () => {
     ];
     expect(() =>
       checker.validateExactVersions(checker.collectLockVersions(missing)),
-    ).toThrow(/lock.*brace-expansion.*5\.0\.9/i);
+    ).toThrow(/lock.*brace-expansion.*5\.0\.12/i);
 
     const extra = clone();
     extra.packages["node_modules/fake/node_modules/postcss"] = {

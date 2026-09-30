@@ -28,6 +28,11 @@
  * 2026-09-28 for the security bump out of published advisory ranges (next and
  * eslint-config-next 16.3.6, sharp 0.35.5, js-yaml 4.3.2, vitest 4.1.11);
  * the projection was re-run against the new tree under Node 24 before the pin
+ * moved. Rolled forward a fourth time on 2026-09-30 for brace-expansion
+ * 1.1.18 -> 1.1.21 and 5.0.9 -> 5.0.12 (GHSA-q2hr-2g5m-vwhr,
+ * GHSA-qhr7-859c-m2p7, GHSA-6j4f-fj2g-mc7p), both within their minimatch
+ * parents' ranges (^1.1.7, ^5.0.5); only those two lock entries changed, and
+ * the projection was re-run against the new tree under Node 24 before the pin
  * moved. Roll the pin forward again only with the same evidence.
  */
 import { createHash } from "node:crypto";
@@ -178,7 +183,7 @@ describe("Task 32 provider-free historical fixture comparison", () => {
       generator: {
         helperSha256: "48af864a1d2a5bb165eb2832871bc2651f34a5951959450d2074512e4a7a26d7",
         basePackageLockBlob: "66f7242846b6d20cfe99e21400d2dada27bbfbfd",
-        comparisonPackageLockBlob: "4f66e44a3bdec6cb34c8bc6ee92c8cb7542b9f4b",
+        comparisonPackageLockBlob: "f5d7a34132660c8caaba3ad9f90ee571b3b71708",
         generationNode: "v24.11.1",
         generationNpm: "11.6.2",
         command:

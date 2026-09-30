@@ -10,7 +10,7 @@ export const APPROVED_VERSIONS = {
   postcss: ["8.5.26"],
   sharp: ["0.35.5"],
   "js-yaml": ["4.3.2"],
-  "brace-expansion": ["1.1.18", "5.0.9"],
+  "brace-expansion": ["1.1.21", "5.0.12"],
 };
 
 const TARGET_NAMES = Object.keys(APPROVED_VERSIONS);

@@ -527,6 +527,15 @@ describe("split evidence — missing and merged vendor answers", () => {
       ["2024-06-10", 10, ["vendor"]],
     ]);
     expect(factor(splits, "2021-01-01")).toBe(40);
+    // Events arriving out of order, twice from two answers, come out once and in session order.
+    const unordered = mergeSplitEvidence([
+      { ...vendor(["2024-06-10", 10, 1], ["2021-07-20", 4, 1], ["2024-06-10", 10, 1]), source: "x" },
+      { ...vendor(["2021-07-20", 4, 1]), source: "x" },
+    ]);
+    expect(unordered.status === "retrieved" && unordered.events.map((e) => e.session)).toEqual(["2021-07-20", "2024-06-10"]);
+    expect(unordered.status === "retrieved" && unordered.source).toBe("x");
+    // Nothing asked for is never "no splits".
+    expect(mergeSplitEvidence([])).toEqual({ status: "unavailable", source: "none", reason: "no vendor split list was requested" });
     expect(mergeSplitEvidence([unavailableSplitEvidence("a", "x"), unavailableSplitEvidence("b", "y")])).toEqual({
       status: "unavailable",
       source: "a + b",

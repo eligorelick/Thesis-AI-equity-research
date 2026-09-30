@@ -52,7 +52,8 @@ export function unavailableSplitEvidence(source: string, reason: string): Vendor
 export function mergeSplitEvidence(parts: readonly VendorSplitEvidence[]): VendorSplitEvidence {
   const retrieved = parts.filter((p): p is Extract<VendorSplitEvidence, { status: "retrieved" }> => p.status === "retrieved");
   if (retrieved.length === 0) {
-    const reasons = parts.map((p) => (p.status === "unavailable" ? `${p.source}: ${p.reason}` : p.source));
+    // Every part is unavailable here.
+    const reasons = parts.flatMap((p) => (p.status === "unavailable" ? [`${p.source}: ${p.reason}`] : []));
     return unavailableSplitEvidence(
       [...new Set(parts.map((p) => p.source))].join(" + ") || "none",
       reasons.length === 0 ? "no vendor split list was requested" : reasons.join("; "),

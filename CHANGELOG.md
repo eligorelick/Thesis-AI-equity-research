@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased — currency integrity (2026-09-28 to 2026-09-30)
+
+Money figures now carry only a currency their own evidence establishes, and
+nothing combines figures across currencies. The conventions are D-28 and D-29
+in [`docs/audit/DECISIONS.md`](docs/audit/DECISIONS.md).
+
+### Version stamps
+
+- **`REPORT_SPEC_VERSION` 1.2.0 → 1.3.0** and **`PAYLOAD_VERSION` 1.3.0 →
+  1.4.0.** Reports saved under 1.2.0 are read, rendered and exported exactly
+  as stored — never restamped or rewritten — and the history diff marks a
+  1.2.0 → 1.3.0 comparison "spec-version-mismatch" instead of setting the two
+  side by side. The checked-in sample report stays a 1.2.0 report.
+
+### What a reader notices
+
+- **No figure is shown in dollars by default.** An unestablished currency
+  reads "currency unknown"; the quote is in the trading currency, model values
+  in the model's (statement) currency.
+- **Figures that combine statements or years need one established
+  currency.** Interest over debt, ROIC, DuPont, net debt, the DCF, forensic
+  scores, growth rates and projections use only rows established in the model
+  currency, back to the first that is not; a row with no currency label is not
+  assumed compatible. Where that leaves too little, the figure is withheld with
+  the reason (`compute.<statement>.currency`). Margins stay per row.
+- **No comparison with the price across currencies.** Upside, price
+  multiples, reverse valuations, market-value weights and the grades built on
+  them need the model and the quote in one known currency. No FX conversion is
+  ever applied.
+- **Analyst estimates count as money only in their own currency.** FMP's
+  estimate and price-target rows carry none, so they are shown as "currency
+  unknown", are not citable evidence, and no longer feed the DCF growth
+  anchor; the DEMO sample's DCF per share moves from 146.23 to 152.09.
+- **The report built without AI states each year's free cash flow in its own
+  cash-flow row's currency**, and never shows a history across a currency
+  change.
+
 ## Unreleased — full codebase audit of 2026-09-06
 
 Every source file, test and document was read against the others; 232

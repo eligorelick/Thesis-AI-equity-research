@@ -39,8 +39,18 @@ import { z } from "zod";
 
 import type { Grade, ClaimLabel, ManifestEntry } from "@/types/core";
 
-/** Bumped whenever the report shape changes in a persistence-visible way. */
-export const REPORT_SPEC_VERSION = "1.2.0" as const;
+/**
+ * Bumped whenever the report shape changes in a persistence-visible way.
+ *
+ * 1.3.0 (2026-09-30, currency integrity): every money figure carries only a
+ * currency established by its own evidence — never a legacy dollar default;
+ * figures that combine statements or years exist only when those rows share
+ * one established currency; analyst estimates count as money only in their
+ * own currency; route metrics may carry an optional `currency`. Reports saved
+ * under 1.2.0 are still read and rendered as stored (never rewritten); the
+ * history diff marks a 1.2.0 → 1.3.0 comparison "spec-version-mismatch".
+ */
+export const REPORT_SPEC_VERSION = "1.3.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Legacy-read leniency

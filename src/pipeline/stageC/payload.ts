@@ -221,8 +221,15 @@ export interface ContextPayload {
   asOfMap: Record<string, string>;
 }
 
-/** Current payload format version. */
-export const PAYLOAD_VERSION = "1.3.0" as const;
+/**
+ * Current payload format version.
+ *
+ * 1.4.0 (2026-09-30, currency integrity): each money figure is rendered with
+ * its currency or "(currency unknown)", and the provenance registry holds a
+ * money figure only when its own evidence establishes the currency (no
+ * payload-wide listing-currency default; estimates only in their own).
+ */
+export const PAYLOAD_VERSION = "1.4.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Small pure helpers

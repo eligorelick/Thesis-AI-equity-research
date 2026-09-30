@@ -54,7 +54,12 @@ describe("DEMO-sample.json fixture", () => {
     expect(parsed.success).toBe(true);
     expect(parsed.data.meta.symbol).toBe("DEMO");
     expect(parsed.data.meta.companyName).toBe("Thesis Example Systems");
-    expect(parsed.data.meta.specVersion).toBe(REPORT_SPEC_VERSION);
+    // A report saved under spec 1.2.0 and kept byte-for-byte (the audited
+    // fixture comparison pins its SHA-256): it still parses through the strict
+    // current schema and keeps its own stamp — saved reports are never
+    // restamped or rewritten when the spec moves (1.3.0, 2026-09-30).
+    expect(parsed.data.meta.specVersion).toBe("1.2.0");
+    expect(REPORT_SPEC_VERSION).not.toBe("1.2.0");
     expect(rawText).toContain("SYNTHETIC");
     expect(rawText).not.toMatch(
       /Apple|AAPL|iPhone|Tim Cook|Cupertino|apple\.com/i,

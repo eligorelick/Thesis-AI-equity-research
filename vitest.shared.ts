@@ -116,4 +116,8 @@ export const RISK_SOURCE_MANIFEST = [
   "src/pipeline/stageC/consistency.ts",
   "src/pipeline/stageC/dataOnlyReport.ts",
   "src/pipeline/stageC/judgeProtocol.ts",
+  // Added 2026-09-30: the one rule for an analyst estimate's or price
+  // target's currency, read by both the Stage B valuation and the Stage C
+  // payload registry (tests/currency.analystEstimates.test.ts).
+  "src/pipeline/estimateCurrency.ts",
 ];

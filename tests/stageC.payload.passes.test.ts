@@ -595,11 +595,18 @@ describe("payload determinism + provenance", () => {
       // (+75 records), the TTM cash flow and the TTM cost-of-debt basis come
       // back, and financeHash returns to its pre-currency-work f9ea3f0e: on
       // correctly labelled data the finance figures are unchanged.
-      fingerprint: "1.3.0:4b1710be",
-      promptBytes: 93_925,
-      provenanceCount: 372,
-      provenanceHash: "6bd9f98f",
-      provenanceIdsHash: "187951ea",
+      // Changed 2026-09-30 again (analyst-estimate currency): an estimate's
+      // currency comes only from its own row or a documented provider
+      // convention. This fixture's estimate and price-target rows state none,
+      // so their 7 records leave the registry (4 estimates, 3 targets), their
+      // prompt lines say "(currency unknown)", and the DCF growth anchor no
+      // longer takes the analyst-consensus case — the DCF, projection and
+      // scenario values (financeHash) move with it.
+      fingerprint: "1.3.0:7fb16ae3",
+      promptBytes: 94_365,
+      provenanceCount: 365,
+      provenanceHash: "323c9887",
+      provenanceIdsHash: "a3f69ec6",
       citationCount: 11,
       citationHash: "7ebe5276",
       computedFigureLabelHash: "26cc3d2a",
@@ -610,7 +617,7 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "f9ea3f0e",
+      financeHash: "67988825",
     });
   });
 
@@ -843,7 +850,12 @@ describe("payload determinism + provenance", () => {
   });
 
   it("keeps an analyst forecast period separate from its provider observation time", () => {
-    const { payload } = buildInputs();
+    // An estimate registers only in a currency its own row states (2026-09-30;
+    // tests/currency.analystEstimates.test.ts), so these rows state USD.
+    const { bundle, computed } = buildInputs();
+    if (!bundle.analystEstimates.ok) throw new Error("fixture requires analyst estimates");
+    for (const row of bundle.analystEstimates.value.data.rows) row.reportedCurrency = "USD";
+    const payload = assembleContextPayload(bundle, computed, validateBundle(bundle, { now: new Date("2026-07-06T00:00:00Z") }));
     const fy2027 = payload.provenanceRegistry!.find(
       (entry) => entry.id === "payload.estimates.est-revenue-2027-09-30",
     )!;

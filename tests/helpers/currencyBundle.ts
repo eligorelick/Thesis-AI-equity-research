@@ -53,6 +53,15 @@ export interface CurrencyBundleOptions {
    * overlay and runs the runway model on 120 of quarter-end liquidity.
    */
   burning?: boolean;
+  /**
+   * completeCurrencyBundle only: analyst estimates (FY2026 revenue 1,300,
+   * FY2027 1,450) and a price-target consensus (120). `false` leaves them out;
+   * `estimateCurrency` / `priceTargetCurrency` put a currency on the rows
+   * themselves (absent by default, as in FMP's feed).
+   */
+  estimates?: boolean;
+  estimateCurrency?: string | null;
+  priceTargetCurrency?: string | null;
   /** SEC SIC code (3571 routes Altman to the original, market-equity variant). */
   sic?: string;
   symbol?: string;
@@ -218,16 +227,27 @@ export function completeCurrencyBundle(opts: CurrencyBundleOptions): DataBundle 
   const base = currencyBundle({ debt: 0, ...opts }) as unknown as Record<string, unknown>;
   return {
     ...base,
-    analystEstimates: okRows(
-      [{ symbol: base.symbol, date: "2026-12-31", revenueAvg: 1300 * M, epsAvg: 1.9 }],
-      "2026-07-01",
-      "analyst-estimates",
-    ),
-    priceTargetConsensus: okRows(
-      [{ symbol: base.symbol, targetConsensus: 120, targetHigh: 150, targetLow: 90 }],
-      "2026-07-01",
-      "price-target-consensus",
-    ),
+    analystEstimates:
+      opts.estimates === false
+        ? MEMBER_GAP
+        : okRows(
+            [
+              { symbol: base.symbol, date: "2026-12-31", revenueAvg: 1300 * M, epsAvg: 1.9 },
+              { symbol: base.symbol, date: "2027-12-31", revenueAvg: 1450 * M, epsAvg: 2.1 },
+            ].map((r) => (opts.estimateCurrency == null ? r : { ...r, reportedCurrency: opts.estimateCurrency })),
+            "2026-07-01",
+            "analyst-estimates",
+          ),
+    priceTargetConsensus:
+      opts.estimates === false
+        ? MEMBER_GAP
+        : okRows(
+            [{ symbol: base.symbol, targetConsensus: 120, targetHigh: 150, targetLow: 90 }].map((r) =>
+              opts.priceTargetCurrency == null ? r : { ...r, currency: opts.priceTargetCurrency },
+            ),
+            "2026-07-01",
+            "price-target-consensus",
+          ),
     priceTargetSummary: MEMBER_GAP,
     gradesConsensus: MEMBER_GAP,
     financialGrowth: MEMBER_GAP,

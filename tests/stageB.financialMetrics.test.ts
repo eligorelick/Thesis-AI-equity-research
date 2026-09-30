@@ -25,6 +25,8 @@ import {
 import { metricPolicy } from "@/pipeline/stageB/sectorRouting";
 import { RouteMetricsSchema } from "@/report/schema";
 import type { CompanyFacts } from "@/edgar/xbrl";
+import { discoverStockSplits } from "@/edgar/splits";
+import type { VendorSplitEvent, VendorSplitEvidence } from "@/providers/splitEvents";
 import type { FetchResult } from "@/types/core";
 
 interface Pt {
@@ -456,20 +458,31 @@ describe("mortgage-REIT route metrics", () => {
     expect(spread.basis).toContain("unlike at a bank");
   });
 
+  /** The period-end count below is filed 2026-02-15; the basis is that of the 2026-09-30 session. */
+  const periodEndFacts = okFacts({
+    InterestAndDividendIncomeOperating: [{ ...FY, val: 3_000 }],
+    InterestExpense: [{ ...FY, val: 1_800 }],
+    SecuritiesSoldUnderAgreementsToRepurchase: [{ end: "2025-12-31", val: 60_000 }],
+    CommonStockSharesOutstanding: [{ end: "2025-12-31", val: 1_000 }],
+  });
+  const vendor = (events: VendorSplitEvent[]): VendorSplitEvidence => ({
+    status: "retrieved",
+    source: "test:vendor",
+    events,
+    coverage: [{ from: "1995-01-01", to: "2026-09-30" }],
+  });
+  const basisWith = (evidence: VendorSplitEvidence) => ({
+    splits: discoverStockSplits(periodEndFacts.ok ? periodEndFacts.value.data : ({} as CompanyFacts), { asOf: "2026-09-30", vendor: evidence }),
+    basisDay: "2026-09-30",
+  });
+
   it("divides period-end equity by PERIOD-END shares when the filer tags them", () => {
     // The numerator is a period-end balance. Dividing it by the weighted-AVERAGE
     // diluted count overstated book value per share for any REIT running a
     // continuous at-the-market programme, and `proxy` was false while it did.
     const r = computeFinancialMetrics(
       "reit-mortgage",
-      mreitInputs({
-        companyFacts: okFacts({
-          InterestAndDividendIncomeOperating: [{ ...FY, val: 3_000 }],
-          InterestExpense: [{ ...FY, val: 1_800 }],
-          SecuritiesSoldUnderAgreementsToRepurchase: [{ end: "2025-12-31", val: 60_000 }],
-          CommonStockSharesOutstanding: [{ end: "2025-12-31", val: 1_000 }],
-        }),
-      }),
+      mreitInputs({ companyFacts: periodEndFacts, shareBasis: basisWith(vendor([])) }),
     );
     const bvps = find(r.metrics, "bookValuePerShare");
 
@@ -478,6 +491,56 @@ describe("mortgage-REIT route metrics", () => {
     expect(bvps.value).toBeCloseTo(9, 9);
     expect(bvps.proxy).toBe(false);
     expect(bvps.basis).toContain("period-end common shares outstanding");
+  });
+
+  it("carries the filed period-end count across a split that first traded after it was filed", () => {
+    // 1,000 shares filed 2026-02-15; a 4-for-1 first traded 2026-03-02. On the
+    // 2026-09-30 basis the count is 4,000: (10,000 − 1,000) / 4,000 = 2.25.
+    const r = computeFinancialMetrics(
+      "reit-mortgage",
+      mreitInputs({
+        companyFacts: periodEndFacts,
+        shareBasis: basisWith(vendor([{ session: "2026-03-02", ratio: 4, numerator: 4, denominator: 1 }])),
+      }),
+    );
+    const bvps = find(r.metrics, "bookValuePerShare");
+    expect(bvps.value).toBeCloseTo(2.25, 9);
+    expect(bvps.proxy).toBe(false);
+  });
+
+  it("does not use a raw period-end count whose split basis is unestablished (no split resolution)", () => {
+    const bvps = find(
+      computeFinancialMetrics("reit-mortgage", mreitInputs({ companyFacts: periodEndFacts })).metrics,
+      "bookValuePerShare",
+    );
+    // Falls back to the statements' weighted-average count (already on the basis), marked a proxy.
+    expect(bvps.value).toBeCloseTo(10, 9);
+    expect(bvps.proxy).toBe(true);
+    expect(bvps.basis).toContain("is not used because no split resolution accompanies the companyfacts payload");
+  });
+
+  it("does not use a raw period-end count filed inside a split's unpinned window", () => {
+    const bvps = find(
+      computeFinancialMetrics(
+        "reit-mortgage",
+        mreitInputs({
+          companyFacts: periodEndFacts,
+          shareBasis: {
+            ...basisWith(vendor([])),
+            // Filed 2026-02-15, three days before a split whose first session only the tag bounds.
+            splits: { ...basisWith(vendor([])).splits, events: [
+              {
+                date: "2026-02-18", ratio: 4, tagged: 4, evidence: null, contextDates: ["2026-02-18"], announced: "2026-02-18",
+                firstAdjustedSession: null, sessionWindow: { from: "2026-02-11", to: "2026-04-19" }, legalFrom: "2026-02-04", sources: ["edgar"],
+              },
+            ] },
+          },
+        }),
+      ).metrics,
+      "bookValuePerShare",
+    );
+    expect(bvps.proxy).toBe(true);
+    expect(bvps.basis).toMatch(/is not used because the figure was filed 2026-02-15, between the earliest legal effectiveness \(2026-02-04\)/);
   });
 
   it("marks the weighted-average share count a proxy and names the direction of the error", () => {

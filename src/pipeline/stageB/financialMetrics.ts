@@ -36,6 +36,7 @@
  */
 
 import { getConcept, type ChainStep, type CompanyFacts } from "@/edgar/xbrl";
+import { shareCountOnBasis, type StockSplits } from "@/edgar/splits";
 import { tangibleCommonEquity } from "@/pipeline/stageB/returns";
 import type { FetchResult, ManifestEntry, SectorRoute } from "@/types/core";
 
@@ -114,6 +115,13 @@ export interface FinancialMetricsInputs {
   shares?: number | null;
   /** What `shares` is, for the basis string. */
   sharesBasis?: string | null;
+  /**
+   * The split resolution the statements were built with (the bundle's
+   * `edgar.shareBasis`). A period-end share count read straight from
+   * companyfacts is AS FILED; it is used only when this puts it on the basis of
+   * `basisDay`. Absent or null ⇒ its basis is unestablished and it is not used.
+   */
+  shareBasis?: { splits: StockSplits; basisDay: string } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +293,8 @@ interface TagHit {
   unit: string;
   tag: string;
   end: string;
+  /** Filing date of the winning fact. */
+  filed: string;
   sourcePath: string;
 }
 
@@ -299,7 +309,7 @@ function resolveTag(
   const r = getConcept(facts, chain, { period });
   if (!r.ok) return null;
   const v = r.value.data;
-  return { value: v.value, unit: v.unit, tag: v.tag, end: v.period.end, sourcePath: tagPath(v.tag) };
+  return { value: v.value, unit: v.unit, tag: v.tag, end: v.period.end, filed: v.filed, sourcePath: tagPath(v.tag) };
 }
 
 /** An ISO-4217 code, or null: the currency a money metric is stated in. */
@@ -871,7 +881,17 @@ function mortgageReitMetrics(
   // of the error named rather than published as though it were the closing
   // count.
   const sharesOutstanding = instant === null ? null : resolveTag(facts, SHARES_OUTSTANDING_TAGS, instant);
-  const periodEndShares = sharesOutstanding === null ? null : pos(sharesOutstanding.value);
+  // The period-end count is read AS FILED, outside the statements' split
+  // handling, so it is put on the statements' share basis here or not used:
+  // divided into equity it becomes a per-share figure compared with the price.
+  const periodEndOnBasis =
+    sharesOutstanding === null
+      ? null
+      : inputs.shareBasis === null || inputs.shareBasis === undefined
+        ? { withheld: "no split resolution accompanies the companyfacts payload, so the filed count's split basis is unestablished" }
+        : shareCountOnBasis(inputs.shareBasis.splits, sharesOutstanding.value, sharesOutstanding.filed, null, inputs.shareBasis.basisDay);
+  const periodEndWithheld = periodEndOnBasis !== null && "withheld" in periodEndOnBasis ? periodEndOnBasis.withheld : null;
+  const periodEndShares = periodEndOnBasis === null || "withheld" in periodEndOnBasis ? null : pos(periodEndOnBasis.value);
   const shares = periodEndShares ?? pos(inputs.shares ?? null);
   const sharesLabel =
     periodEndShares !== null
@@ -895,7 +915,11 @@ function mortgageReitMetrics(
             "close to liquidation value and P/B is the primary multiple." +
             (periodEndShares !== null
               ? ""
-              : ` PROXY denominator: the filer tags no ${SHARES_OUTSTANDING_TAGS[0]} fact at ${bal0?.date ?? "the period end"}, so the WEIGHTED-AVERAGE diluted count stands in. It is an average over the year while the equity above is a period-end balance, so for a REIT issuing through a continuous at-the-market programme this figure sits ABOVE the true book value per share.`),
+              : ` PROXY denominator: ${
+                  periodEndWithheld !== null
+                    ? `the filed ${SHARES_OUTSTANDING_TAGS[0]} at ${bal0?.date ?? "the period end"} is not used because ${periodEndWithheld}`
+                    : `the filer tags no ${SHARES_OUTSTANDING_TAGS[0]} fact at ${bal0?.date ?? "the period end"}`
+                }, so the WEIGHTED-AVERAGE diluted count stands in. It is an average over the year while the equity above is a period-end balance, so for a REIT issuing through a continuous at-the-market programme this figure sits ABOVE the true book value per share.`),
           sources: [
             "statements:balance.totalStockholdersEquity",
             "statements:balance.preferredStock",

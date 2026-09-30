@@ -49,8 +49,16 @@ import type { Grade, ClaimLabel, ManifestEntry } from "@/types/core";
  * own currency; route metrics may carry an optional `currency`. Reports saved
  * under 1.2.0 are still read and rendered as stored (never rewritten); the
  * history diff marks a 1.2.0 → 1.3.0 comparison "spec-version-mismatch".
+ *
+ * 1.4.0 (2026-09-30, stock-split correctness): every share count and
+ * per-share figure is stated on the share basis of the price it is compared
+ * with, fixed from the price vendor's first split-adjusted session (never an
+ * XBRL context date); a figure whose basis cannot be established is withheld —
+ * EPS and share counts, the market values, EV, float and every per-share
+ * valuation and grade built on them. Reports saved under 1.3.0 are read and
+ * rendered as stored; a 1.3.0 → 1.4.0 comparison is "spec-version-mismatch".
  */
-export const REPORT_SPEC_VERSION = "1.3.0" as const;
+export const REPORT_SPEC_VERSION = "1.4.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Legacy-read leniency

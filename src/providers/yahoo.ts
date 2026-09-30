@@ -44,6 +44,7 @@ import {
   type FmpQuoteRow,
 } from "@/providers/fmp";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
+import { unavailableSplitEvidence, type VendorSplitEvidence, type VendorSplitEvent } from "@/providers/splitEvents";
 
 const DEFAULT_BASE_URL = "https://query1.finance.yahoo.com";
 const MINUTE = 60_000;
@@ -86,6 +87,12 @@ export interface YahooMeta {
    * the quote uses {@link YahooMeta.previousSessionClose}.
    */
   chartPreviousClose: number | null;
+  /**
+   * The split events Yahoo listed for the chart's sessions (the quote request
+   * asks for them), dated by the first split-adjusted session. `unavailable`
+   * when the body carried a malformed events block.
+   */
+  splitEvents: VendorSplitEvidence;
   /**
    * The last settled close before the session `regularMarketTime` falls in,
    * read from the chart's own bars: the penultimate close when the latest bar
@@ -204,6 +211,57 @@ function sessionDate(epoch: number, gmtoffset: number | null | undefined): strin
   return new Date((epoch + (gmtoffset ?? 0)) * 1000).toISOString().slice(0, 10);
 }
 
+const splitEventsSchema = z.looseObject({
+  splits: z
+    .record(
+      z.string(),
+      z.looseObject({ date: z.number().finite(), numerator: z.number().finite(), denominator: z.number().finite() }),
+    )
+    .optional(),
+});
+
+/**
+ * The split events of one chart body, for a request that asked for them. The
+ * events block is parsed on its own: a malformed one makes the split evidence
+ * `unavailable` without discarding the prices. Yahoo omits the block when the
+ * range holds no event, so a well-formed body without one is a retrieved
+ * answer of "none in this coverage". Coverage runs from `from` (the requested
+ * start, or the first bar) to the later of the last bar's session and the
+ * quote's own session (a quarterly bar is stamped at its quarter's start, but
+ * the chart's range still runs to now), never past `to` when one was asked for.
+ */
+function splitEvidenceOf(result: ChartResult, source: string, from: string | null, to: string | null = null): VendorSplitEvidence {
+  const gmtoffset = result.meta.gmtoffset;
+  const stamps = result.timestamp ?? [];
+  if (stamps.length === 0) return unavailableSplitEvidence(source, "the chart carried no sessions, so it covers no dates");
+  const first = sessionDate(stamps[0]!, gmtoffset);
+  const lastBar = sessionDate(stamps[stamps.length - 1]!, gmtoffset);
+  const marketTime = result.meta.regularMarketTime;
+  const quoteSession = typeof marketTime === "number" ? sessionDate(marketTime, gmtoffset) : null;
+  const latest = quoteSession !== null && quoteSession > lastBar ? quoteSession : lastBar;
+  const last = to !== null && latest > to ? to : latest;
+  const raw = (result as Record<string, unknown>)["events"];
+  const parsed = raw === undefined || raw === null ? { success: true as const, data: {} } : splitEventsSchema.safeParse(raw);
+  if (!parsed.success) {
+    return unavailableSplitEvidence(source, `the chart's events block did not parse: ${parsed.error.issues[0]?.message ?? "invalid"}`);
+  }
+  const events: VendorSplitEvent[] = [];
+  for (const e of Object.values(parsed.data.splits ?? {})) {
+    if (!(e.numerator > 0) || !(e.denominator > 0) || e.numerator === e.denominator) continue;
+    events.push({
+      session: sessionDate(e.date, gmtoffset),
+      ratio: e.numerator / e.denominator,
+      numerator: e.numerator,
+      denominator: e.denominator,
+    });
+  }
+  const start = from !== null && from < first ? from : first;
+  // Only events inside the coverage the answer speaks for.
+  const inside = events.filter((e) => e.session >= start && e.session <= last);
+  inside.sort((a, b) => (a.session < b.session ? -1 : a.session > b.session ? 1 : 0));
+  return { status: "retrieved", source, events: inside, coverage: [{ from: start, to: last }] };
+}
+
 function epochSeconds(isoDay: string): number {
   return Math.floor(Date.parse(`${isoDay}T00:00:00Z`) / 1000);
 }
@@ -262,6 +320,7 @@ function metaOf(result: ChartResult): YahooMeta {
     fiftyTwoWeekLow: num(m.fiftyTwoWeekLow),
     chartPreviousClose: num(m.chartPreviousClose),
     previousSessionClose: previousSessionClose(result),
+    splitEvents: splitEvidenceOf(result, "yahoo:chart(range=5d)", null),
   };
 }
 
@@ -443,7 +502,9 @@ export class YahooClient {
     rows.sort((a, b) => (a.date! < b.date! ? 1 : a.date! > b.date! ? -1 : 0));
 
     const sourced: Sourced<FmpPayload<FmpEodBarRow>> = {
-      data: { rows, raw: null },
+      // The wire query asks for split events; the closes are adjusted for
+      // exactly the splits the vendor lists here.
+      data: { rows, raw: null, splitEvents: splitEvidenceOf(result, "yahoo:chart(interval=1d)", from, to) },
       asOf: deriveAsOf(rows, fetchedAt),
       source: "yahoo",
       endpoint,
@@ -457,8 +518,12 @@ export class YahooClient {
   async meta(symbol: string): Promise<FetchResult<YahooMeta>> {
     const field = `yahoo.meta(${symbol.trim().toUpperCase()})`;
     const ySymbol = yahooSymbol(symbol);
-    const query = "range=5d&interval=1d";
-    const endpoint = chartEndpoint(ySymbol, query);
+    // Split events are requested with the quote so the latest sessions' share
+    // basis is evidenced by the same answer as the price. The endpoint (and so
+    // the cache key) names them: a body cached before they were asked for can
+    // never be read as "no splits".
+    const query = "range=5d&interval=1d&events=div%2Csplits";
+    const endpoint = chartEndpoint(ySymbol, "range=5d&interval=1d&events=splits");
     const fetched = await this.chartRaw(ySymbol, query, endpoint, YAHOO_TTLS.quote);
     if (!fetched.ok) return gap(field, fetched.reason, [fetched.endpoint]);
 
@@ -475,6 +540,34 @@ export class YahooClient {
       value: {
         data: meta,
         asOf,
+        source: "yahoo",
+        endpoint: fetched.endpoint,
+        fetchedAt: fetched.fetchedAt,
+        ...(fetched.stale ? { stale: true } : {}),
+        ...(fetched.staleReason ? { staleReason: fetched.staleReason } : {}),
+      },
+    };
+  }
+
+  /**
+   * Every split Yahoo lists over the instrument's whole trading history, from
+   * a quarterly chart (the bars are not used). The daily history reaches back
+   * only as far as the price window; a share count filed before that window
+   * needs the splits since it was filed, not only those inside the window.
+   */
+  async splitHistory(symbol: string): Promise<FetchResult<VendorSplitEvidence>> {
+    const field = `yahoo.splitHistory(${symbol.trim().toUpperCase()})`;
+    const ySymbol = yahooSymbol(symbol);
+    const query = "range=max&interval=3mo&events=split";
+    const endpoint = chartEndpoint(ySymbol, query);
+    const fetched = await this.chartRaw(ySymbol, query, endpoint, YAHOO_TTLS.history);
+    if (!fetched.ok) return gap(field, fetched.reason, [fetched.endpoint]);
+    const evidence = splitEvidenceOf(fetched.result, "yahoo:chart(range=max)", null);
+    return {
+      ok: true,
+      value: {
+        data: evidence,
+        asOf: evidence.status === "retrieved" ? (evidence.coverage[0]?.to ?? fetched.fetchedAt.slice(0, 10)) : fetched.fetchedAt.slice(0, 10),
         source: "yahoo",
         endpoint: fetched.endpoint,
         fetchedAt: fetched.fetchedAt,
@@ -533,7 +626,7 @@ export class YahooClient {
     return {
       ok: true,
       value: {
-        data: { rows: [row], raw: null },
+        data: { rows: [row], raw: null, splitEvents: m.splitEvents },
         asOf: metaRes.value.asOf,
         source: "yahoo",
         endpoint: metaRes.value.endpoint,

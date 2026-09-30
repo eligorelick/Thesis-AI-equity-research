@@ -25,6 +25,7 @@ const EXPECTED_RISK_SOURCES = [
   "src/providers/fred.ts",
   "src/providers/http.ts",
   "src/providers/yahoo.ts",
+  "src/providers/splitEvents.ts",
   "src/edgar/extract.ts",
   "src/edgar/xbrl.ts",
   "src/edgar/statements.ts",

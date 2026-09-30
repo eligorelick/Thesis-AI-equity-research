@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 import { buildStatementsFromCompanyFacts } from "@/edgar/statements";
+import type { VendorSplitEvidence } from "@/providers/splitEvents";
 import type { CompanyFacts } from "@/edgar/xbrl";
 
 interface Pt { start?: string; end: string; val: number; form?: string; fy?: number; fp?: string; filed?: string; accn?: string }
@@ -125,7 +126,25 @@ function addTags(f: CompanyFacts, extra: Record<string, Pt[]>): CompanyFacts {
   };
 }
 
-const OPTS = { symbol: "AAPL", cik: "0000320193", annualPeriods: 10, quarterlyPeriods: 24, asOf: "2026-09-30" };
+/**
+ * A price vendor's split list that was retrieved and lists no split over every
+ * session these fixtures file in: the share basis of every fact is then
+ * established without any adjustment.
+ */
+const NO_VENDOR_SPLITS: VendorSplitEvidence = {
+  status: "retrieved",
+  source: "test:vendor",
+  events: [],
+  coverage: [{ from: "1980-12-12", to: "2026-09-30" }],
+};
+const OPTS = {
+  symbol: "AAPL",
+  cik: "0000320193",
+  annualPeriods: 10,
+  quarterlyPeriods: 24,
+  asOf: "2026-09-30",
+  vendorSplits: NO_VENDOR_SPLITS,
+};
 
 /** FY2025 balance-sheet instant with the appleLike() filing labels. */
 const FY25_INSTANT = { end: "2025-09-27", form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" } as const;
@@ -1280,6 +1299,11 @@ describe("buildStatementsFromCompanyFacts — stock splits", () => {
   };
   /** FY2016 as Apple filed it in 2016: pre-split EPS and share count, never restated in a later core form. */
   const fy2016 = { start: "2015-09-27", end: "2016-09-24", form: "10-K", fp: "FY", fy: 2016, filed: "2016-10-26" } as const;
+  /** The vendor's record of the same split: first split-adjusted session 2020-08-31, 4:1. */
+  const APPLE_VENDOR: VendorSplitEvidence = {
+    ...NO_VENDOR_SPLITS,
+    events: [{ session: "2020-08-31", ratio: 4, numerator: 4, denominator: 1 }],
+  };
 
   it("carries per-share and share-count facts filed before a split to the current share basis, money facts untouched", () => {
     const built = buildStatementsFromCompanyFacts(
@@ -1293,7 +1317,7 @@ describe("buildStatementsFromCompanyFacts — stock splits", () => {
           { ...fy2016, val: 5_500_281_000 },
         ],
       }),
-      OPTS,
+      { ...OPTS, vendorSplits: APPLE_VENDOR },
     );
     const rows = built.incomeAnnual.rows;
     expect(rows.map((r) => r.date)).toEqual(["2025-09-27", "2024-09-28", "2016-09-24"]);
@@ -1305,9 +1329,25 @@ describe("buildStatementsFromCompanyFacts — stock splits", () => {
     });
     // Filed after the split: already on the current basis, scaled by 1.
     expect(rows[0]).toMatchObject({ epsDiluted: 7.5, weightedAverageShsOutDil: 15_000 });
-    expect(built.splits.events).toEqual([{ date: "2020-08-28", ratio: 4, tagged: 4, evidence: 4 }]);
-    const note = `stock split 4-for-1 on 2020-08-28 (${SPLIT_TAG}, confirmed by restated share counts ×4): per-share and share-count facts filed before that date are restated to the post-split basis`;
-    expect(built.splits.notes).toEqual([{ date: "2020-08-28", text: note, severity: "info" }]);
+    expect(built.splits.events).toEqual([
+      {
+        date: "2020-08-28",
+        ratio: 4,
+        tagged: 4,
+        evidence: 4,
+        contextDates: ["2020-08-28"],
+        announced: "2020-10-30",
+        firstAdjustedSession: "2020-08-31",
+        sessionWindow: { from: "2020-08-31", to: "2020-08-31" },
+        legalFrom: "2020-08-24",
+        sources: ["edgar", "vendor"],
+      },
+    ]);
+    expect(built.splits.notes).toHaveLength(1);
+    const note = built.splits.notes[0]!.text;
+    expect(note).toMatch(/^stock split 4-for-1 tagged for 2020-08-28 \(StockholdersEquityNoteStockSplitConversionRatio1\), confirmed by restated share counts ×4; /);
+    expect(note).toContain("First split-adjusted session 2020-08-31 per test:vendor; the XBRL context date(s) 2020-08-28 are accounting context only");
+    expect(built.shareBasisWithheld).toEqual([]);
     for (const result of [built.incomeAnnual, built.incomeQuarterly, built.balanceAnnual, built.balanceQuarterly]) {
       expect(result.notes).toContain(note);
     }
@@ -1328,7 +1368,7 @@ describe("buildStatementsFromCompanyFacts — stock splits", () => {
           { ...fy2018, val: 2.98, form: "10-K", fp: "FY", fy: 2020, filed: "2020-10-30" },
         ],
       }),
-      OPTS,
+      { ...OPTS, vendorSplits: APPLE_VENDOR },
     );
     const fy18 = built.incomeAnnual.rows.find((r) => r.date === "2018-09-29");
     expect(fy18?.epsDiluted).toBe(2.98);
@@ -1337,7 +1377,7 @@ describe("buildStatementsFromCompanyFacts — stock splits", () => {
 
   it("reports no splits and adds no notes when the concept is absent", () => {
     const built = buildStatementsFromCompanyFacts(appleLike(), OPTS);
-    expect(built.splits).toEqual({ events: [], notes: [] });
+    expect(built.splits).toMatchObject({ events: [], unresolved: [], notes: [] });
     expect(built.incomeAnnual.rows[0]?.epsDiluted).toBe(7.5);
   });
 });

@@ -6100,7 +6100,7 @@ describe("runJob — full pipeline with mock passes", () => {
     expect(repRow?.symbol).toBe("AAPL");
     expect(repRow?.status).toBe("done");
     expect(repRow?.verificationRate).toBe(1);
-    expect(repRow?.specVersion).toBe("1.3.0");
+    expect(repRow?.specVersion).toBe("1.4.0");
     expect(repRow?.costUsd).toBeCloseTo(totalCost, 6);
     const parsed = ReportSchema.safeParse(JSON.parse(repRow?.reportJson ?? "{}"));
     expect(parsed.success).toBe(true);
@@ -7505,6 +7505,32 @@ describe("runJob — resume from persisted analyst snapshots", () => {
     expect(
       handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all(),
     ).toHaveLength(2);
+  });
+
+  it("rejects a pass saved under payload 1.4.0 when resumed under 1.5.0, before any paid call", async () => {
+    // Identical payload content: only the version prefix of the fingerprint
+    // differs, exactly what the stock-split bump (PAYLOAD_VERSION 1.5.0) does
+    // to a pass saved before it.
+    const { jobId } = createJob("AAPL");
+    const first = failingJudgePasses();
+    await runJob(
+      jobId,
+      { ...first.passes, fingerprintPayload: () => "1.4.0:0a1b2c3d" },
+      { bundle: fakeBundle("AAPL"), hasAnthropicKey: true, now: NOW },
+    );
+    handle.db.update(jobs).set({ reportId: null }).where(eq(jobs.id, jobId)).run();
+    const base = mockPasses();
+    const paidAnalysts = vi.fn(base.passes.runBullThenBear);
+    const paidJudge = vi.fn(base.passes.runJudgePass);
+    await expect(
+      runJob(
+        jobId,
+        { ...base.passes, fingerprintPayload: () => "1.5.0:0a1b2c3d", runBullThenBear: paidAnalysts, runJudgePass: paidJudge },
+        { bundle: fakeBundle("AAPL"), hasAnthropicKey: true, now: NOW, resume: true },
+      ),
+    ).rejects.toThrow(/fingerprint mismatch|start a fresh job/i);
+    expect(paidAnalysts).not.toHaveBeenCalled();
+    expect(paidJudge).not.toHaveBeenCalled();
   });
 
   it.each([

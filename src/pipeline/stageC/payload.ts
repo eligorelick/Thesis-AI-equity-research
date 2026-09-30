@@ -228,8 +228,13 @@ export interface ContextPayload {
  * its currency or "(currency unknown)", and the provenance registry holds a
  * money figure only when its own evidence establishes the currency (no
  * payload-wide listing-currency default; estimates only in their own).
+ *
+ * 1.5.0 (2026-09-30, stock-split correctness): EPS, share counts, market
+ * values and per-share figures appear only where their split basis is
+ * established, and read "n/a" otherwise; an analyst or judge pass stored under
+ * 1.4.0 carries a 1.4.0 fingerprint and is never resumed under 1.5.0.
  */
-export const PAYLOAD_VERSION = "1.4.0" as const;
+export const PAYLOAD_VERSION = "1.5.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Small pure helpers

@@ -46,7 +46,8 @@
 
 import type { FmpBalanceSheetRow, FmpCashFlowRow, FmpIncomeStatementRow } from "@/providers/fmp";
 import type { ManifestEntry } from "@/types/core";
-import { discoverStockSplits, type SplitEvent, type SplitNote, type StockSplits } from "@/edgar/splits";
+import { discoverStockSplits, shareBasisFactor, type StockSplits } from "@/edgar/splits";
+import type { VendorSplitEvidence } from "@/providers/splitEvents";
 import {
   BALANCE_SHEET_SHARES_TAG,
   COMBINED_CURRENT_DEBT_TAG,
@@ -94,12 +95,30 @@ export interface StatementBuildOptions {
   cik: string | null;
   annualPeriods: number;
   quarterlyPeriods: number;
-  /**
-   * ISO date the share basis is fixed at (the analysis date). A stock split
-   * tagged for a later date has not taken effect yet and is applied to
-   * nothing; see `discoverStockSplits`.
-   */
+  /** ISO analysis date. */
   asOf: string;
+  /**
+   * The price vendor's split events (src/providers/splitEvents.ts). Required:
+   * a caller that has none passes an `unavailable` answer, and then no share
+   * count or per-share figure is published, because a split since it was filed
+   * cannot be ruled out.
+   */
+  vendorSplits: VendorSplitEvidence;
+  /**
+   * The session whose share basis every share count and per-share figure is
+   * put on: the session of the price they will be compared with. Defaults to
+   * `asOf`.
+   */
+  basisDay?: string;
+}
+
+/** A share or per-share fact left out because its split basis could not be established. */
+export interface ShareBasisWithheld {
+  concept: string;
+  /** Period end (instant or duration end). */
+  end: string;
+  filed: string;
+  reason: string;
 }
 
 export type Derivation = "ytd-difference" | "fy-minus-ytd" | "fy-minus-quarters";
@@ -259,12 +278,14 @@ export interface BuiltStatements {
    */
   filesTwentyF: boolean;
   /**
-   * The stock splits applied to per-share and share-count facts filed before
-   * them (see src/edgar/splits.ts), as of `StatementBuildOptions.asOf`, and one
-   * note per tagged split, applied, pending or not. The note texts are also
-   * carried on the income and balance rows' notes.
+   * The resolved stock splits (see src/edgar/splits.ts) and one note per split.
+   * The note texts are also carried on the income and balance rows' notes.
    */
-  splits: { events: SplitEvent[]; notes: SplitNote[] };
+  splits: StockSplits;
+  /** The session every share count and per-share figure here is stated on the basis of. */
+  basisDay: string;
+  /** Share and per-share facts left out because their basis on `basisDay` could not be established. */
+  shareBasisWithheld: ShareBasisWithheld[];
 }
 
 // ---------------------------------------------------------------------------
@@ -955,23 +976,39 @@ function unitMatches(unit: string, kind: UnitKind): boolean {
   return unit === "shares";
 }
 
+/** Where the split basis of a share or per-share point is decided, and what was left out. */
+interface ShareBasisContext {
+  splits: StockSplits;
+  day: string;
+  withheld: ShareBasisWithheld[];
+}
+
 /**
- * Carry every per-share and share-count point filed before a stock split to
- * the current share basis (see src/edgar/splits.ts). Applied to each point by
- * its OWN filing date, before the max(filed) dedup, so a period restated in a
- * post-split filing is scaled once (by 1) and a period only ever filed
- * pre-split is scaled by the splits since. Money facts are untouched.
+ * Put every per-share and share-count point on the share basis of the session
+ * `ctx.day` (see src/edgar/splits.ts). Applied to each point by its OWN filing
+ * date, before the max(filed) dedup, so a period restated in a post-split
+ * filing is scaled once (by 1) and a period only ever filed pre-split is
+ * scaled by the splits since. A point whose side of a split cannot be
+ * established is LEFT OUT (and recorded), so the dedup falls to a filing of
+ * that period whose basis is known, or the field stays empty; it is never
+ * published on a guessed basis. A cover-page count is a count as of its own
+ * date (`measured`). Money facts are untouched.
  */
-function toCurrentShareBasis(points: FactPoint[], unit: string, splits: StockSplits): FactPoint[] {
-  if (splits.events.length === 0) return points;
+function toShareBasis(points: FactPoint[], concept: string, unit: string, ctx: ShareBasisContext): FactPoint[] {
   const perShare = unitMatches(unit, "perShare");
   const shares = unitMatches(unit, "shares");
   if (!perShare && !shares) return points;
-  return points.map((p) => {
-    const factor = splits.factorFor(p.filed);
-    if (factor === 1 || !Number.isFinite(p.val)) return p;
-    const val = perShare ? tidy(p.val / factor, PER_SHARE_DECIMALS) : Math.round(p.val * factor);
-    return { ...p, val };
+  const pointInTime = concept === `dei:${DEI_SHARES_TAG}`;
+  return points.flatMap((p) => {
+    if (!Number.isFinite(p.val)) return [p];
+    const basis = shareBasisFactor(ctx.splits, p.filed, pointInTime ? p.end : null, ctx.day);
+    if ("withheld" in basis) {
+      ctx.withheld.push({ concept, end: p.end, filed: p.filed, reason: basis.withheld });
+      return [];
+    }
+    if (basis.factor === 1) return [p];
+    const val = perShare ? tidy(p.val / basis.factor, PER_SHARE_DECIMALS) : Math.round(p.val * basis.factor);
+    return [{ ...p, val }];
   });
 }
 
@@ -980,7 +1017,7 @@ function toCurrentShareBasis(points: FactPoint[], unit: string, splits: StockSpl
  * per (tag, unit). Unit entries are ordered USD-first then alphabetically so a
  * filer reporting in two currencies resolves deterministically.
  */
-function buildFactIndex(facts: CompanyFacts, splits: StockSplits): FactIndex {
+function buildFactIndex(facts: CompanyFacts, ctx: ShareBasisContext): FactIndex {
   const index: FactIndex = new Map();
   const namespaces: [string, string, ReadonlySet<string>][] = [
     ["us-gaap", "", NEEDED_US_GAAP_TAGS],
@@ -996,7 +1033,7 @@ function buildFactIndex(facts: CompanyFacts, splits: StockSplits): FactIndex {
       const entries: UnitPoints[] = [];
       for (const [unit, rawPoints] of Object.entries(parsed.data.units)) {
         if (!Array.isArray(rawPoints)) continue;
-        const core = filterToCoreForms(toCurrentShareBasis(parseFactPoints(rawPoints), unit, splits));
+        const core = filterToCoreForms(toShareBasis(parseFactPoints(rawPoints), prefix + tag, unit, ctx));
         const points = dedupByPeriod(core);
         if (points.length > 0) entries.push({ unit, points, reporters: buildReporters(core), all: core });
       }
@@ -2374,8 +2411,10 @@ const CASHFLOW_DEF: StatementDef = {
  * lists plus one manifest gap per statement and scope, never a throw.
  */
 export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: StatementBuildOptions): BuiltStatements {
-  const splits = discoverStockSplits(facts, opts.asOf);
-  const index = buildFactIndex(facts, splits);
+  const splits = discoverStockSplits(facts, { asOf: opts.asOf, vendor: opts.vendorSplits });
+  const basisDay = opts.basisDay ?? opts.asOf;
+  const shareBasisWithheld: ShareBasisWithheld[] = [];
+  const index = buildFactIndex(facts, { splits, day: basisDay, withheld: shareBasisWithheld });
   const state: BuildState = { filesTwentyF: false };
 
   const allFiscalYears = discoverFiscalYears(index);
@@ -2417,11 +2456,12 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
   // balance rows.
   const balanceAnnualNotes = createNoteSink();
   const balanceQuarterlyNotes = createNoteSink();
-  for (const note of splits.notes) {
-    incomeAnnualNotes.add(note.text);
-    incomeQuarterlyNotes.add(note.text);
-    balanceAnnualNotes.add(note.text);
-    balanceQuarterlyNotes.add(note.text);
+  const withheldSummary = describeShareBasisWithheld(shareBasisWithheld, basisDay);
+  for (const text of [...splits.notes.map((n) => n.text), ...(withheldSummary === null ? [] : [withheldSummary])]) {
+    incomeAnnualNotes.add(text);
+    incomeQuarterlyNotes.add(text);
+    balanceAnnualNotes.add(text);
+    balanceQuarterlyNotes.add(text);
   }
 
   const incomeAnnual = buildStatementRows<FmpIncomeStatementRow>(
@@ -2515,6 +2555,21 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
     },
     reportedCurrency: currency,
     filesTwentyF: state.filesTwentyF,
-    splits: { events: splits.events, notes: splits.notes },
+    splits,
+    basisDay,
+    shareBasisWithheld,
   };
+}
+
+/** One line naming the share and per-share facts left out for their split basis; null when none. */
+export function describeShareBasisWithheld(withheld: readonly ShareBasisWithheld[], basisDay: string): string | null {
+  if (withheld.length === 0) return null;
+  const concepts = [...new Set(withheld.map((w) => w.concept))].sort();
+  const ends = withheld.map((w) => w.end).sort();
+  const reasons = [...new Set(withheld.map((w) => w.reason))];
+  return (
+    `${withheld.length} share or per-share fact(s) left out (${concepts.join(", ")}; periods ${ends[0]} … ${ends[ends.length - 1]}) ` +
+    `because their split basis on ${basisDay} could not be established: ${reasons.slice(0, 3).join("; ")}` +
+    (reasons.length > 3 ? `; and ${reasons.length - 3} more reason(s)` : "")
+  );
 }

@@ -1739,7 +1739,7 @@ export async function buildDataBundle(
     gicsSector,
     attribution: FRED_ATTRIBUTION,
   };
-  const edgarBundle = await pEdgar;
+  let edgarBundle = await pEdgar;
 
   // ---- keyless fallbacks: fill what FMP could not serve from EDGAR + Yahoo ---
   // Runs only after EDGAR resolved the ticker to a CIK, never overwrites an FMP
@@ -1843,6 +1843,7 @@ export async function buildDataBundle(
 
     if (keyless !== null) {
       const m = keyless.members;
+      if (keyless.shareBasis !== null) edgarBundle = { ...edgarBundle, shareBasis: keyless.shareBasis };
       // A member the fallback left alone is the very object that went in; only a
       // genuinely new result is re-sorted, so a skipped run cannot perturb
       // anything (the fictional-fixture projection depends on that).

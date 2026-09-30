@@ -30,6 +30,7 @@ export const RISK_SOURCE_MANIFEST = [
   "src/providers/fred.ts",
   "src/providers/http.ts",
   "src/providers/yahoo.ts",
+  "src/providers/splitEvents.ts",
   "src/edgar/extract.ts",
   "src/edgar/xbrl.ts",
   "src/edgar/statements.ts",

@@ -2,21 +2,38 @@
 
 ## Unreleased — stock-split correctness (2026-09-30)
 
-Share counts and prices are combined only on one established split basis.
-The convention is D-30 in [`docs/audit/DECISIONS.md`](docs/audit/DECISIONS.md).
+Share counts and prices are combined only on one established split basis. The
+convention is D-30 in [`docs/audit/DECISIONS.md`](docs/audit/DECISIONS.md); the
+provider conventions are tabled in
+[`docs/METHODOLOGY.md`](docs/METHODOLOGY.md#stock-splits-and-the-share-basis).
 
-- **A split takes effect on its date, not when it is announced.** A split a
-  filer tagged for a date after the analysis date is recorded as pending and
-  scales nothing: a 4-for-1 tagged on 2026-09-01 for 2027-01-15 no longer
-  turns a 10M share count into 40M on 2026-09-30.
-- **Keyless market values need price and shares on one basis.** The spot and
-  quote market cap, the market-cap history (and its plan-limit backfill), the
-  enterprise values and the free float are withheld, with the reason, when a
-  price series was served or a quote dated before a split the share counts
-  reflect, when a cover-page count was measured before a split and filed after
-  it, or when a split's ratio or effective date could not be established.
-- **Nothing is adjusted twice.** A count filed after a split, and a vendor's
-  already split-adjusted rows, are used as they are.
+### Version stamps
+
+- **`REPORT_SPEC_VERSION` 1.3.0 → 1.4.0** and **`PAYLOAD_VERSION` 1.4.0 →
+  1.5.0.** Reports saved under 1.3.0 are read, rendered and exported as stored;
+  the history diff marks a 1.3.0 → 1.4.0 comparison "spec-version-mismatch". An
+  analyst or judge pass stored under payload 1.4.0 is not resumed under 1.5.0.
+
+### What a reader notices
+
+- **A split changes the share basis on its first split-adjusted trading
+  session**, taken from the price vendor's split events — not on an XBRL
+  context date, which may be an approval, record or legal-effective date. A
+  board approval tagged weeks before trading no longer multiplies the share
+  count while the market still prices the old shares.
+- **A split the market has priced but SEC companyfacts does not carry yet** is
+  applied from the vendor's event; one both describe is applied once.
+- **No split list, no share figure.** When the vendor's split list could not be
+  retrieved, or does not cover the span a share count must be carried across,
+  the count is withheld rather than read as "no splits".
+- **Uncertain share basis empties the figure at its source**: EPS and share
+  counts on the affected statement rows, the market cap, market-cap history,
+  enterprise values and free float. EPS growth, P/E, DCF and excess-return per
+  share, the reverse DCF, REIT P/FFO, the share-count trend, dilution, the
+  grades and the AI payload therefore read "n/a" for it; revenue, margins and
+  free cash flow are unaffected.
+- **Nothing is adjusted twice.** A count filed after a split, and a vendor row
+  whose diluted count matches the filer's restated count, are used as they are.
 
 ## Unreleased — currency integrity (2026-09-28 to 2026-09-30)
 

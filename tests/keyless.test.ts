@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 import { buildStatementsFromCompanyFacts } from "@/edgar/statements";
+import { discoverStockSplits } from "@/edgar/splits";
 import {
   applyKeylessFallbacks,
   isUsJurisdiction,
@@ -10,6 +11,7 @@ import {
   lastCloseOnOrBefore,
   needsFallback,
   sharesOnOrBefore,
+  seriesCountOn,
   sharesOutstandingSeries,
   type KeylessInputs,
   type KeylessMembers,
@@ -184,17 +186,31 @@ function appleFacts(): CompanyFacts {
 }
 
 /** Yahoo fake serving 5y of synthetic daily bars for any symbol and a quote meta. */
-function fakeYahoo(opts: { fail?: Set<string>; instrumentType?: string } = {}) {
+function fakeYahoo(opts: { fail?: Set<string>; instrumentType?: string; splits?: { session: string; numerator: number; denominator: number }[] } = {}) {
   const impl = (async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     const symbol = /chart\/([^?]+)/.exec(url)![1]!;
     if (opts.fail?.has(symbol)) return new Response("Too Many Requests", { status: 429 });
     const isQuote = url.includes("range=5d");
-    const start = Date.UTC(2021, 8, 1, 13, 30) / 1000;
+    const isSplitList = url.includes("range=max");
+    // Daily sessions end the day before NOW, so the quote and the history are
+    // current for the analysis date; the quote's five closes are the series'
+    // first five (the prices every expectation below was written against).
+    const lastSession = Date.UTC(2026, 7, 31, 13, 30) / 1000;
     const n = isQuote ? 5 : 1250;
-    const timestamp = Array.from({ length: n }, (_, i) => start + i * 86400);
+    const start = isQuote ? lastSession - 4 * 86400 : lastSession - (n - 1) * 86400;
+    const timestamp = isSplitList
+      ? Array.from({ length: 128 }, (_, i) => Date.UTC(1995, i * 3, 1, 13, 30) / 1000)
+      : Array.from({ length: n }, (_, i) => start + i * 86400);
     const close = timestamp.map((_, i) => (symbol === "SPY" ? 400 : 150) * Math.exp(0.0002 * i));
-    return new Response(JSON.stringify({ chart: { result: [{ meta: { currency: "USD", symbol, exchangeName: "NMS", fullExchangeName: "NasdaqGS", instrumentType: opts.instrumentType ?? "EQUITY", firstTradeDate: 345479400, regularMarketTime: timestamp[n - 1]! + 23400, gmtoffset: -14400, regularMarketPrice: close[n - 1], regularMarketDayHigh: 1, regularMarketDayLow: 1, regularMarketVolume: 5, fiftyTwoWeekHigh: 1, fiftyTwoWeekLow: 1, chartPreviousClose: 1, longName: "Apple Inc." }, timestamp, indicators: { quote: [{ open: close, high: close, low: close, close, volume: close.map(() => 1000) }], adjclose: [{ adjclose: close }] } }], error: null } }), { status: 200, headers: { "content-type": "application/json" } });
+    // Yahoo's split events, stamped at the session's open, as the chart carries them.
+    const events = opts.splits === undefined || opts.splits.length === 0
+      ? {}
+      : { events: { splits: Object.fromEntries(opts.splits.map((e) => {
+          const date = Date.parse(`${e.session}T13:30:00Z`) / 1000;
+          return [String(date), { date, numerator: e.numerator, denominator: e.denominator, splitRatio: `${e.numerator}:${e.denominator}` }];
+        })) } };
+    return new Response(JSON.stringify({ chart: { result: [{ ...events, meta: { currency: "USD", symbol, exchangeName: "NMS", fullExchangeName: "NasdaqGS", instrumentType: opts.instrumentType ?? "EQUITY", firstTradeDate: 345479400, regularMarketTime: lastSession + 23400, gmtoffset: -14400, regularMarketPrice: close[n - 1], regularMarketDayHigh: 1, regularMarketDayLow: 1, regularMarketVolume: 5, fiftyTwoWeekHigh: 1, fiftyTwoWeekLow: 1, chartPreviousClose: 1, longName: "Apple Inc." }, timestamp, indicators: { quote: [{ open: close, high: close, low: close, close, volume: close.map(() => 1000) }], adjclose: [{ adjclose: close }] } }], error: null } }), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
   return createYahooClient({ fetchImpl: impl, limiter: makeLimiter(1000, 1000), now: () => NOW, maxRetries: 0 });
 }
@@ -642,8 +658,15 @@ describe("applyKeylessFallbacks", () => {
     expect(out.gaps.some((g) => g.field === "profile.beta")).toBe(true);
     expect(out.members.enterpriseValues.ok).toBe(false);
     expect(out.members.marketCapHistory.ok).toBe(false);
-    // Float needs a price to turn the filed dollar float into shares.
-    expect(out.members.sharesFloat.ok && out.members.sharesFloat.value.data.rows[0]).toMatchObject({ outstandingShares: 14_776, floatShares: null, freeFloat: null });
+    // Without Yahoo there is no vendor split list: a split since the cover
+    // count was filed cannot be ruled out, so no filed share count is
+    // published at all (Batch 2 intent — "no split list" never reads as "no
+    // splits"), and the float says why rather than claiming none was filed.
+    expect(out.members.sharesFloat.ok).toBe(false);
+    expect(out.gaps.find((g) => g.field === "keyless.sharesFloat")?.reason).toMatch(
+      /^the filed share counts were withheld because their split basis on 2026-09-01 could not be established: no vendor split list is available/,
+    );
+    expect(out.gaps.find((g) => g.field === "keyless.statements.shareBasis")?.severity).toBe("warn");
   });
 
   it("fills only the benchmark series when EDGAR did not confirm the issuer", async () => {
@@ -956,9 +979,12 @@ describe("applyKeylessFallbacks", () => {
     expect(out.members.eodPrices.ok).toBe(false);
     expect(out.gaps.find((g) => g.field === "keyless.eodPrices")?.reason).toMatch(/threw: socket hang up/);
     expect(out.gaps.find((g) => g.field === "keyless.quote")?.reason).toMatch(/threw: not an Error/);
-    // The EDGAR half of the fallback is untouched by a broken price source.
+    // The EDGAR money figures are untouched by a broken price source; its share
+    // counts are not published, because the broken source is also the split list.
     expect(out.members.incomeAnnual.ok).toBe(true);
-    expect(out.members.sharesFloat.ok).toBe(true);
+    expect(out.members.incomeAnnual.ok && out.members.incomeAnnual.value.data.rows[0]).toMatchObject({ revenue: 400, netIncome: 100 });
+    expect(out.members.incomeAnnual.ok && out.members.incomeAnnual.value.data.rows[0]!.epsDiluted).toBeNull();
+    expect(out.members.sharesFloat.ok).toBe(false);
   });
 
   it("keeps the FMP gap when companyfacts holds no usable facts for a statement", async () => {
@@ -1011,9 +1037,9 @@ describe("applyKeylessFallbacks", () => {
 });
 
 describe("sharesOutstandingSeries", () => {
-  it("carries cover counts filed before a split to the current share basis and names the split", () => {
+  it("keeps cover counts as filed and puts each on the share basis of the session it meets", () => {
     const SPLIT_TAG = "StockholdersEquityNoteStockSplitConversionRatio1";
-    const series = sharesOutstandingSeries(
+    const f =
       facts(
         {
           [SPLIT_TAG]: [{ end: "2020-08-28", val: 4, filed: "2020-10-30" }],
@@ -1029,20 +1055,27 @@ describe("sharesOutstandingSeries", () => {
           ],
         },
         { [SPLIT_TAG]: "pure" },
-      ),
-      TODAY,
-    );
+      );
+    const series = sharesOutstandingSeries(f);
     expect(series.basis).toBe("dei cover page");
     expect(series.points).toEqual([
-      { value: 17_773_060_000, asOf: "2019-10-18" },
-      { value: 17_001_802_000, asOf: "2020-10-16" },
+      { value: 4_443_265_000, asOf: "2019-10-18", filed: "2019-10-31", pointInTime: true },
+      { value: 17_001_802_000, asOf: "2020-10-16", filed: "2020-10-30", pointInTime: true },
     ]);
-    expect(series.splits.map((e) => [e.date, e.ratio])).toEqual([["2020-08-28", 4]]);
+    const splits = discoverStockSplits(f, {
+      asOf: TODAY,
+      vendor: { status: "retrieved", source: "test:vendor", events: [{ session: "2020-08-31", ratio: 4, numerator: 4, denominator: 1 }], coverage: [{ from: "1995-01-01", to: TODAY }] },
+    });
+    // The pre-split count on a post-split session: ×4. On a session before the split: as filed.
+    expect(seriesCountOn(splits, series.points[0]!, "2020-12-31")).toEqual({ value: 17_773_060_000 });
+    expect(seriesCountOn(splits, series.points[0]!, "2020-08-28")).toEqual({ value: 4_443_265_000 });
+    // The post-split count is never scaled again, and is withheld on a pre-split session.
+    expect(seriesCountOn(splits, series.points[1]!, "2020-12-31")).toEqual({ value: 17_001_802_000 });
+    expect(seriesCountOn(splits, series.points[1]!, "2020-08-28")).toMatchObject({ withheld: expect.stringMatching(/filed 2020-10-30, after the session 2020-08-28/) });
   });
 
   it("leaves a series without a split concept exactly as filed", () => {
-    const series = sharesOutstandingSeries(appleFacts(), TODAY);
-    expect(series.splits).toEqual([]);
+    const series = sharesOutstandingSeries(appleFacts());
     expect(series.points.map((p) => p.value)).toEqual([14_900, 14_776]);
   });
 
@@ -1053,9 +1086,9 @@ describe("sharesOutstandingSeries", () => {
     const multiClass = JSON.parse(
       readFileSync(path.join(process.cwd(), "fixtures", "edgar", "multiclass_companyfacts.json"), "utf8"),
     ) as CompanyFacts;
-    const series = sharesOutstandingSeries(multiClass, TODAY);
+    const series = sharesOutstandingSeries(multiClass);
     expect(series.basis).toBe("dei cover page");
-    expect(series.points).toEqual([
+    expect(series.points.map(({ value, asOf }) => ({ value, asOf }))).toEqual([
       { value: 7_800_000, asOf: "2025-02-14" }, // 4,800,000 + 3,000,000
       { value: 10_000_000, asOf: "2026-02-13" }, // 5,000,000 + 3,000,000 + 2,000,000
     ]);
@@ -1066,6 +1099,7 @@ describe("sharesOutstandingSeries", () => {
       annualPeriods: 10,
       quarterlyPeriods: 24,
       asOf: TODAY,
+      vendorSplits: { status: "retrieved", source: "test:vendor", events: [], coverage: [{ from: "1995-01-01", to: TODAY }] },
     });
     expect(series.points[series.points.length - 1]!.value).toBe(built.shares.outstanding!.value);
   });
@@ -1083,9 +1117,8 @@ describe("sharesOutstandingSeries", () => {
           ],
         },
       ),
-      TODAY,
     );
-    expect(series.points).toEqual([{ value: 950, asOf: "2026-02-13" }]);
+    expect(series.points.map(({ value, asOf }) => ({ value, asOf }))).toEqual([{ value: 950, asOf: "2026-02-13" }]);
   });
 });
 
@@ -1104,9 +1137,11 @@ describe("applyKeylessFallbacks — stock split disclosure", () => {
     );
     return f;
   }
+  // Yahoo lists Apple's 4-for-1: first split-adjusted session 2020-08-31.
   const run = (facts: CompanyFacts) =>
     applyKeylessFallbacks(
       inputs({
+        yahoo: fakeYahoo({ splits: [{ session: "2020-08-31", numerator: 4, denominator: 1 }] }),
         edgar: {
           ...inputs().edgar,
           companyFacts: { ok: true, value: { data: facts, asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
@@ -1114,17 +1149,35 @@ describe("applyKeylessFallbacks — stock split disclosure", () => {
       }),
     );
 
-  it("records an applied split in the manifest as an expected info entry", async () => {
+  it("records an applied split in the manifest as an expected info entry, with its dates told apart", async () => {
     const out = await run(withSplit(4));
-    expect(out.gaps.filter((g) => g.field.startsWith("keyless.stockSplits"))).toEqual([
-      {
-        field: "keyless.stockSplits(2020-08-28)",
-        reason: `stock split 4-for-1 on 2020-08-28 (${SPLIT_TAG}, confirmed by restated share counts ×4): per-share and share-count facts filed before that date are restated to the post-split basis`,
-        severity: "info",
-        attemptedSources: [`edgar:companyfacts us-gaap/${SPLIT_TAG}`],
-        expected: true,
-      },
-    ]);
+    const entries = out.gaps.filter((g) => g.field.startsWith("keyless.stockSplits"));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      field: "keyless.stockSplits(2020-08-28)",
+      severity: "info",
+      attemptedSources: [`edgar:companyfacts us-gaap/${SPLIT_TAG}`, "yahoo:chart(range=max) + yahoo:chart(interval=1d) + yahoo:chart(range=5d)"],
+      expected: true,
+    });
+    expect(entries[0]!.reason).toMatch(/^stock split 4-for-1 tagged for 2020-08-28 \(StockholdersEquityNoteStockSplitConversionRatio1\), confirmed by restated share counts ×4; /);
+    expect(entries[0]!.reason).toContain("First split-adjusted session 2020-08-31 per yahoo:chart(range=max) + yahoo:chart(interval=1d) + yahoo:chart(range=5d);");
+    expect(entries[0]!.reason).toContain("the XBRL context date(s) 2020-08-28 are accounting context only");
+  });
+
+  it("does not apply a tagged split the vendor's list contradicts, and says so", async () => {
+    // The full list covers 2020 and lists nothing: a tag and a price series
+    // that disagree about whether there was a split at all.
+    const out = await applyKeylessFallbacks(
+      inputs({
+        edgar: {
+          ...inputs().edgar,
+          companyFacts: { ok: true, value: { data: withSplit(4), asOf: "2025-09-27", source: "edgar", endpoint: "companyfacts", fetchedAt: NOW.toISOString() } },
+        },
+      }),
+    );
+    const entry = out.gaps.find((g) => g.field === "keyless.stockSplits(2020-08-28)")!;
+    expect(entry).toMatchObject({ severity: "warn", expected: false });
+    expect(entry.reason).toContain("NOT applied: yahoo:chart(range=max) + yahoo:chart(interval=1d) + yahoo:chart(range=5d) covers every session from 2020-08-21 to 2020-10-27 and lists no split in them");
   });
 
   it("records a ratio it could not apply as an unexpected warning", async () => {
@@ -1134,9 +1187,16 @@ describe("applyKeylessFallbacks — stock split disclosure", () => {
     expect(entry?.reason).toMatch(/^stock split ratio 3 tagged for 2020-08-28 .* NOT applied: share counts restated across that date moved by ×4/);
   });
 
-  it("adds no split entry when the concept is absent", async () => {
-    const out = await run(appleFacts());
+  it("adds no split entry when neither the filer nor the vendor lists a split", async () => {
+    const out = await applyKeylessFallbacks(inputs());
     expect(out.gaps.some((g) => g.field.startsWith("keyless.stockSplits"))).toBe(false);
+  });
+
+  it("records a split only the vendor lists as a vendor-sourced entry", async () => {
+    const out = await run(appleFacts());
+    const entry = out.gaps.find((g) => g.field === "keyless.stockSplits(2020-08-31)")!;
+    expect(entry).toMatchObject({ severity: "info", expected: true });
+    expect(entry.reason).toMatch(/^stock split 4-for-1 first traded 2020-08-31 per .* \(4:1\); companyfacts carries no StockholdersEquityNoteStockSplitConversionRatio1 for it/);
   });
 });
 
@@ -1268,23 +1328,23 @@ describe("applyKeylessFallbacks — public float measurement date", () => {
     // Dividing by the latest quote rescaled the share count by every price move
     // since the measurement date: an issuer whose stock doubled reported half
     // its float shares and a free float falling from ~90% to ~45%.
-    const out = await applyKeylessFallbacks(withFacts(withFloatDate("2022-06-30")));
+    const out = await applyKeylessFallbacks(withFacts(withFloatDate("2024-06-28")));
     const bars = out.members.eodPrices.ok ? out.members.eodPrices.value.data.rows : [];
-    const onDate = bars.find((b) => b.date === "2022-06-30")!;
+    const onDate = bars.find((b) => b.date === "2024-06-28")!;
     const latest = bars.reduce((a, b) => ((a.date ?? "") > (b.date ?? "") ? a : b));
     expect(onDate.close).toBeDefined();
     expect(latest.close).not.toBeCloseTo(onDate.close!, 6); // the two dates really differ
     const row = out.members.sharesFloat.ok ? out.members.sharesFloat.value.data.rows[0]! : null;
-    expect(row).toMatchObject({ publicFloatPriceDate: "2022-06-30", publicFloatPriceBasis: "measurement date" });
+    expect(row).toMatchObject({ publicFloatPriceDate: "2024-06-28", publicFloatPriceBasis: "measurement date" });
     expect(row!.publicFloatPrice).toBeCloseTo(onDate.close!, 8);
     expect(row!.floatShares).toBeCloseTo(3_000_000 / onDate.close!, 6);
     const entry = out.gaps.find((g) => g.field === "keyless.sharesFloat.publicFloat")!;
-    expect(entry.reason).toMatch(/divided by the close of 2022-06-30, the float's own measurement date/);
-    expect(entry.reason).toMatch(/both sides of the division are dated 2022-06-30/);
+    expect(entry.reason).toMatch(/divided by the close of 2024-06-28, the float's own measurement date/);
+    expect(entry.reason).toMatch(/both sides of the division are dated 2024-06-28/);
   });
 
   it("falls back to the latest quote, as a warn, when no close reaches the measurement date", async () => {
-    // The fake price history starts 2021-09-01.
+    // The fake price history starts 2023-03-11.
     const out = await applyKeylessFallbacks(withFacts(withFloatDate("2019-06-28")));
     const row = out.members.sharesFloat.ok ? out.members.sharesFloat.value.data.rows[0]! : null;
     expect(row).toMatchObject({ publicFloatPriceBasis: "latest quote", publicFloatPriceDate: null });

@@ -10,6 +10,7 @@
  * missing inputs NEVER throw (non-negotiable rule #4).
  */
 
+import type { StockSplits } from "@/edgar/splits";
 import type { DataSource, FetchResult, ManifestEntry } from "@/types/core";
 import type {
   FmpAnalystEstimatesRow,
@@ -172,6 +173,15 @@ export interface EdgarBundle {
    * discovers FetchResult members and the audit fixture pins their gaps.
    */
   registrant: EdgarRegistrant | null;
+  /**
+   * The resolved stock splits and the session whose share basis the EDGAR
+   * share counts and per-share figures are stated on (src/edgar/splits.ts),
+   * set by the keyless layer when it built statements from companyfacts. Plain
+   * data, not a FetchResult, for the same reason as `registrant`. Absent when
+   * no resolution was made; a consumer that reads a raw share count from
+   * `companyFacts` must then treat its basis as unestablished.
+   */
+  shareBasis?: { splits: StockSplits; basisDay: string } | null;
 }
 
 /** 13F data resolved to a specific reporting quarter (see resolve13FQuarter). */

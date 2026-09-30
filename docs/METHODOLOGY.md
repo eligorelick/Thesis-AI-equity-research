@@ -270,6 +270,71 @@ is available, the report says the figure may lag recent buybacks or issuance.
 
 ---
 
+## Stock splits and the share basis
+
+A share count or per-share figure is used only on the share basis of the price
+it meets, and withheld when that basis cannot be established (decision D-30 in
+[`docs/audit/DECISIONS.md`](audit/DECISIONS.md); code in `src/edgar/splits.ts`).
+
+**Dates.** A split has an announcement (the earliest filing that tags it), a
+record date, a legal-effective moment, and a first split-adjusted trading
+session; the filer's XBRL context date for
+`us-gaap:StockholdersEquityNoteStockSplitConversionRatio1` may be any of them
+and is treated as accounting context only. NVIDIA's 10-for-1 of 2024 is the
+reference case: legally effective 2024-06-07 at 4:01 p.m. Eastern (Form 8-K,
+accession 0001045810-24-000144), first split-adjusted session 2024-06-10,
+tagged in companyfacts for both dates.
+
+- The **first split-adjusted session** comes only from the price vendor's split
+  event. A quote is on the basis of its own session; a split-adjusted history is
+  on the basis of the last session it was adjusted through.
+- Without a vendor event, the first session is bounded to 7 days before the
+  earliest context date through 60 days after the latest one (narrowed by the
+  sessions the vendor covered without listing it); a price dated or a count
+  filed inside the bound is withheld.
+- **Legal effectiveness** decides a filing's side: a statement figure filed
+  after it is restated to the split (ASC 260, SAB Topic 4C). It is taken to fall
+  no earlier than the earliest context date or 7 days before the first
+  split-adjusted session (NVIDIA: 3 days); a figure filed between that bound and
+  the first session is withheld. A cover-page count is a count as of its own
+  date, so one measured before the split and filed after it is withheld.
+- A split both sources describe is applied once. A split only the vendor lists
+  (companyfacts carries the ratio only from the next periodic report) is applied
+  from the vendor's event. A tagged split the vendor's covering list does not
+  contain, or lists with another ratio, is unresolved, and every figure filed
+  before it is withheld.
+- A vendor list that was not retrieved establishes nothing: without one, and for
+  any span it does not cover, no filed share count is put on a price's basis.
+
+**What is withheld, and what stands.** Withheld figures are left empty at the
+source — EPS and share counts on the statement rows, the keyless market cap,
+market-cap history, enterprise values and free float — so no downstream
+calculation can rebuild them: EPS growth, P/E from EPS, DCF and excess-return
+per share, the reverse DCF, REIT price × shares (P/FFO, P/AFFO), the share-count
+trend, dilution, the grades built on them, and the AI payload all read the empty
+value. Figures that need no share count (revenue, margins, free cash flow,
+capex, EV/sales on a vendor market cap) are unaffected.
+
+**Provider conventions, mapped to the fields used.** "Documented" means stated
+by the provider; "tested" means exercised by a test in this repository. No test
+here calls a live provider: every tested behaviour is on synthetic responses.
+
+| Source and field | Adjustment basis | Documented | Tested here |
+| --- | --- | --- | --- |
+| FMP `historical-price-eod/full` `close` | split-adjusted, as of the day served | yes — FMP FAQ (site.financialmodelingprep.com/faqs, as read by the reviewer on 2026-09-30; not fetchable from the build environment): "close is split-adjusted" | synthetic rows: a series served before a split is priced on that day's basis (`tests/keyless.splitBasis.test.ts`) |
+| FMP `adjClose` | splits and dividends | yes — same FAQ | not used by this code |
+| FMP `quote`/`profile` `price`, `marketCap` | the quote's own session | current values; the FAQ's history statement does not apply | vendor market cap used as served (P/E fallback), unverified |
+| FMP `shares-float` `outstandingShares`, `enterprise-values` `numberOfShares` | "historical prices and shares outstanding are adjusted for splits" | by the FAQ's wording, which names no endpoint or field | not tested |
+| FMP `income-statement` `eps`, `epsDiluted`, `weightedAverageShsOut`, `weightedAverageShsOutDil` | not stated by the FAQ | **no** | a row for a period before a known split is kept only when its diluted count matches the filer's restated count (±3%); otherwise its four share fields are withheld (`guardVendorShareFields`) |
+| FMP `key-metrics`, `ratios` (own-history multiples) | ratios of price to per-share figures; basis-invariant only if both sides share one | not stated | not tested |
+| FMP `analyst-estimates` `epsAvg` | not stated | **no** | not tested; shown as "currency unknown" and not registered (D-28) |
+| Yahoo chart `close` | adjusted for the splits the same answer lists | no published contract (unofficial endpoint) | synthetic responses only |
+| Yahoo chart `adjclose` | splits and dividends | no published contract | synthetic responses only (beta) |
+| Yahoo chart `events.splits` | dated by the first split-adjusted session; `numerator`/`denominator` post:pre | no published contract | synthetic responses only (`tests/yahoo.client.test.ts`) |
+| SEC companyfacts share and per-share facts | as filed, each with its own filing date | SEC | `tests/edgar.splits.test.ts`, `tests/edgar.statements.test.ts` |
+
+---
+
 ## EV bridge
 
 Enterprise value is computed the same way everywhere it is used:

@@ -1744,6 +1744,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     })),
     shares: num(incomeAnnual[0]?.weightedAverageShsOutDil),
     sharesBasis: "statements:income.weightedAverageShsOutDil",
+    shareBasis: bundle.edgar?.shareBasis ?? null,
   });
 
   // --- Runway (overlay-gated) ------------------------------------------------

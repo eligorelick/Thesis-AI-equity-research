@@ -153,11 +153,18 @@ function fakeYahoo(opts: { fail?: Set<string>; instrumentType?: string } = {}) {
     const symbol = /chart\/([^?]+)/.exec(url)![1]!;
     if (opts.fail?.has(symbol)) return new Response("Too Many Requests", { status: 429 });
     const isQuote = url.includes("range=5d");
-    const start = Date.UTC(2021, 8, 1, 13, 30) / 1000;
+    const isSplitList = url.includes("range=max");
+    // Sessions end the day before NOW so the quote and history are current for
+    // the analysis date (the split basis is checked against them); the quote's
+    // five closes are the series' first five, the prices written against.
+    const lastSession = Date.UTC(2026, 7, 31, 13, 30) / 1000;
     const n = isQuote ? 5 : 1250;
-    const timestamp = Array.from({ length: n }, (_, i) => start + i * 86400);
+    const start = isQuote ? lastSession - 4 * 86400 : lastSession - (n - 1) * 86400;
+    const timestamp = isSplitList
+      ? Array.from({ length: 128 }, (_, i) => Date.UTC(1995, i * 3, 1, 13, 30) / 1000)
+      : Array.from({ length: n }, (_, i) => start + i * 86400);
     const close = timestamp.map((_, i) => (symbol === "SPY" ? 400 : 150) * Math.exp(0.0002 * i));
-    return new Response(JSON.stringify({ chart: { result: [{ meta: { currency: "USD", symbol, exchangeName: "NMS", fullExchangeName: "NasdaqGS", instrumentType: opts.instrumentType ?? "EQUITY", firstTradeDate: 345479400, regularMarketTime: timestamp[n - 1]! + 23400, gmtoffset: -14400, regularMarketPrice: close[n - 1], regularMarketDayHigh: 1, regularMarketDayLow: 1, regularMarketVolume: 5, fiftyTwoWeekHigh: 1, fiftyTwoWeekLow: 1, chartPreviousClose: 1, longName: "Apple Inc." }, timestamp, indicators: { quote: [{ open: close, high: close, low: close, close, volume: close.map(() => 1000) }], adjclose: [{ adjclose: close }] } }], error: null } }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ chart: { result: [{ meta: { currency: "USD", symbol, exchangeName: "NMS", fullExchangeName: "NasdaqGS", instrumentType: opts.instrumentType ?? "EQUITY", firstTradeDate: 345479400, regularMarketTime: lastSession + 23400, gmtoffset: -14400, regularMarketPrice: close[n - 1], regularMarketDayHigh: 1, regularMarketDayLow: 1, regularMarketVolume: 5, fiftyTwoWeekHigh: 1, fiftyTwoWeekLow: 1, chartPreviousClose: 1, longName: "Apple Inc." }, timestamp, indicators: { quote: [{ open: close, high: close, low: close, close, volume: close.map(() => 1000) }], adjclose: [{ adjclose: close }] } }], error: null } }), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
   return createYahooClient({ fetchImpl: impl, limiter: makeLimiter(1000, 1000), now: () => NOW, maxRetries: 0 });
 }

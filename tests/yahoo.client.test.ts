@@ -454,7 +454,11 @@ describe("YahooClient.quote and meta", () => {
     expect(typeof row.timestamp).toBe("number");
     expect(res.value.asOf).toBe("2026-08-26");
     expect(res.value.source).toBe("yahoo");
-    expect(res.value.endpoint).toBe("/v8/finance/chart/AAPL?range=5d&interval=1d");
+    // The quote asks for split events too (Batch 2), and its endpoint and cache
+    // key name them, so a body cached before they were requested is never read
+    // as "no splits".
+    expect(res.value.endpoint).toBe("/v8/finance/chart/AAPL?range=5d&interval=1d&events=splits");
+    expect(calls[0]!.url).toContain("events=div%2Csplits");
     expect(calls[0]!.url).toContain("range=5d");
   });
 
@@ -543,6 +547,9 @@ describe("YahooClient.quote and meta", () => {
       // With regularMarketTime null the latest bar cannot be identified as the
       // current session, so the last close is the prior settled close.
       previousSessionClose: 101.5,
+      // No events block and no regularMarketTime: a retrieved answer of "no
+      // split" over the chart's own sessions.
+      splitEvents: { status: "retrieved", source: "yahoo:chart(range=5d)", events: [], coverage: [{ from: "2026-08-24", to: "2026-08-25" }] },
     });
     expect(res.value.asOf).toBe("2026-09-01");
   });
@@ -624,7 +631,7 @@ describe("YahooClient.quote and meta", () => {
     if (res.ok) return;
     expect(res.gap.field).toBe("yahoo.quote(ZZZZ)");
     expect(res.gap.reason).toMatch(/No data found/);
-    expect(res.gap.attemptedSources).toEqual(["/v8/finance/chart/ZZZZ?range=5d&interval=1d"]);
+    expect(res.gap.attemptedSources).toEqual(["/v8/finance/chart/ZZZZ?range=5d&interval=1d&events=splits"]);
   });
 
   it("carries cache staleness through both meta and the quote built from it", async () => {
@@ -658,7 +665,73 @@ describe("YahooClient.quote and meta", () => {
     const { impl } = fakeFetch(() => ({ status: 200, body: chart() }));
     await client(impl, cachedFetch).meta("brk.b");
     expect(keys).toEqual([
-      { key: "yahoo:/v8/finance/chart/BRK-B?range=5d&interval=1d", ttl: YAHOO_TTLS.quote },
+      { key: "yahoo:/v8/finance/chart/BRK-B?range=5d&interval=1d&events=splits", ttl: YAHOO_TTLS.quote },
     ]);
+  });
+});
+
+describe("YahooClient split events (Batch 2)", () => {
+  /** The chart body with Yahoo's events block: NVIDIA's 10:1, first split-adjusted session 2024-06-10. */
+  function withSplits(splits: unknown) {
+    const body = chart({ bars: 5 }) as { chart: { result: Record<string, unknown>[] } };
+    body.chart.result[0]!["events"] = splits;
+    return body;
+  }
+  const NVDA = { splits: { "1718026200": { date: 1718026200, numerator: 10, denominator: 1, splitRatio: "10:1" } } };
+
+  it("reads the daily history's split events, dated by their first split-adjusted session", async () => {
+    const { impl } = fakeFetch(() => ({ status: 200, body: withSplits(NVDA) }));
+    const res = await client(impl).dailyHistory("NVDA", "2024-01-01", "2026-08-28");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.value.data.splitEvents).toEqual({
+      status: "retrieved",
+      source: "yahoo:chart(interval=1d)",
+      events: [{ session: "2024-06-10", ratio: 10, numerator: 10, denominator: 1 }],
+      coverage: [{ from: "2024-01-01", to: "2026-08-28" }],
+    });
+  });
+
+  it("keeps the prices but marks the split evidence unavailable when the events block is malformed", async () => {
+    const { impl } = fakeFetch(() => ({ status: 200, body: withSplits({ splits: { x: { date: "soon", numerator: 2 } } }) }));
+    const res = await client(impl).dailyHistory("NVDA", "2026-08-24", "2026-08-28");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.value.data.rows.length).toBe(5);
+    expect(res.value.data.splitEvents).toMatchObject({ status: "unavailable", source: "yahoo:chart(interval=1d)" });
+  });
+
+  it("reads the full split list over the instrument's history, with its own endpoint", async () => {
+    // A 1-for-8 inside the chart's sessions (first split-adjusted session 2026-08-26).
+    const inside = Date.UTC(2026, 7, 26, 13, 30) / 1000;
+    const { impl, calls } = fakeFetch(() => ({
+      status: 200,
+      body: withSplits({ splits: { [String(inside)]: { date: inside, numerator: 1, denominator: 8 } } }),
+    }));
+    const res = await client(impl).splitHistory("GE");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(calls[0]!.url).toContain("range=max&interval=3mo&events=split");
+    expect(res.value.endpoint).toBe("/v8/finance/chart/GE?range=max&interval=3mo&events=split");
+    expect(res.value.data).toMatchObject({ status: "retrieved", events: [{ session: "2026-08-26", ratio: 0.125, numerator: 1, denominator: 8 }] });
+  });
+
+  it("reads no event outside the sessions the answer covers", async () => {
+    // The chart's sessions begin 2026-08-24; a 2024 event is not this answer's to vouch for.
+    const { impl } = fakeFetch(() => ({ status: 200, body: withSplits(NVDA) }));
+    const res = await client(impl).splitHistory("NVDA");
+    expect(res.ok && res.value.data).toMatchObject({ status: "retrieved", events: [], coverage: [{ from: "2026-08-24" }] });
+  });
+
+  it("turns a failed full split list into a gap, never an empty list", async () => {
+    const { impl } = fakeFetch(() => ({ status: 429, body: "Too Many Requests" }));
+    const res = await client(impl).splitHistory("NVDA");
+    expect(res.ok).toBe(false);
+  });
+
+  it("lists nothing from a chart with no sessions, and says so", async () => {
+    const { impl } = fakeFetch(() => ({ status: 200, body: chart({ bars: 0 }) }));
+    const res = await client(impl).splitHistory("NVDA");
+    expect(res.ok && res.value.data).toMatchObject({ status: "unavailable", reason: "the chart carried no sessions, so it covers no dates" });
   });
 });

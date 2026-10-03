@@ -4,11 +4,9 @@ Thesis is a local-first equity research application. Enter a ticker to validate
 market data, compute financial metrics and optionally run grounded AI analysis.
 Saved reports give every number a source path and an as-of date.
 
-> **Informational only — not investment advice.** Reports contain A-F letter
-> grades and scenario price targets: model outputs derived from the data and
-> assumptions the report discloses, not a recommendation to buy, sell or hold
-> any security, and no price target in one is authored by a person. Market data
-> and AI output can be delayed, incomplete, or wrong.
+> **Informational only — not investment advice.** Grades and price targets are
+> model outputs from disclosed data and assumptions, not human recommendations.
+> Market data and AI output can be delayed, incomplete, or wrong.
 
 ## What it does
 
@@ -25,8 +23,7 @@ Saved reports give every number a source path and an as-of date.
 
 ## Quick start
 
-Node.js 22.18 or newer, and npm. CI tests Node 24, the supported configuration;
-Node 20 reached end of life in April 2026.
+Node.js 22.18+ and npm are required; Node 24 is the CI-verified configuration.
 
 ```powershell
 git clone https://github.com/eligorelick/Thesis-AI-equity-research.git
@@ -36,9 +33,8 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-On macOS or Linux, use `cp .env.example .env` instead of `Copy-Item`.
-For production, use `npm run build` then `npm start`. Keep `.env*` private;
-only the placeholder `.env.example` belongs in Git.
+On macOS/Linux, use `cp .env.example .env`. Production: `npm run build`, then `npm start`.
+Keep `.env*` private; only the placeholder `.env.example` belongs in Git.
 
 Open <http://127.0.0.1:3000>; development and production both bind to
 `127.0.0.1`. Every provider key is optional: with no `FMP_API_KEY`, set
@@ -51,49 +47,15 @@ labelled synthetic throughout; any other symbol is a live request.
 
 ## AI connections
 
-Open **Settings → AI connections**, connect an account, choose a model, and
-save it as the report connection. Signing in does not run inference. AI can
-also be switched off for data-only reports.
-
-| Connection | Authorization | Usage |
-| --- | --- | --- |
-| ChatGPT | Official browser OAuth for local open-source apps; eligible Plus/Pro account | Your ChatGPT plan allowance and account credit settings |
-| Gemini | Official Gemini CLI 0.36.x, installed separately; Google browser sign-in | Your Google CLI allowance and account settings |
-| Claude | Optional `ANTHROPIC_API_KEY` | Separately billed Anthropic API usage |
-
-ChatGPT sign-in opens normal Chrome, with a fallback link. Gemini's own CLI
-opens the system browser; use Chrome as the default browser for its saved
-sign-in/autofill. Thesis gives Gemini an isolated local home and disables
-tools, extensions, hooks, MCP and inherited API keys. CLI support is restricted
-to the reviewed 0.36 minor line; newer minor releases need compatibility review.
-Only one running Thesis server per OS user can manage or use AI connections;
-stop that server before moving these connections to another local instance.
-Its Google connection
-is separate from an existing personal CLI login. See Google's
-[installation guide](https://geminicli.com/docs/get-started/installation/).
-
-ChatGPT models come from the connected account's catalog. A catalog entry
-does not prove remaining quota or model access. Check
-[ChatGPT usage](https://chatgpt.com/#settings/Usage) and
-[Gemini quotas](https://geminicli.com/docs/resources/quota-and-pricing/)
-before generating reports. Thesis does not know your remaining allowance.
-There is no automatic change to a paid API when a connection fails.
-Subscription reports use the supplied evidence without additional web search;
-the existing Claude API path retains its bounded web search.
-
-The financial calculations and deterministic citation checks are shared by
-all providers. Account/model changes invalidate incompatible partial report
-work. The existing Claude model and effort controls apply only to that API
-connection. A subscription report's `$0` means no API charge recorded by
-Thesis, not free or unlimited usage; provider account credit settings still
-apply. Thesis's USD API caps do not cap subscription tokens or provider credits.
-
-ChatGPT credentials stay server-side in protected per-user storage (Windows
-DPAPI; owner-only files on macOS/Linux). Disconnect stops local requests and
-attempts ChatGPT session revocation. Google disconnect clears Thesis's CLI
-state; revoke the Google grant from your Google Account if desired. See
-[Privacy](docs/PRIVACY.md). The OAuth paths have offline regression coverage;
-live account sign-in/inference has not been verified for this release.
+In **Settings → AI connections**, connect an account, choose a model and save.
+ChatGPT uses official plan OAuth; Gemini uses the separately installed official
+CLI **0.36.x**. Claude API remains optional and separately billed. Sign-in runs
+no inference, and failed connections never switch to paid API usage.
+ChatGPT opens normal Chrome; make Chrome the default browser for Gemini.
+Only one running Thesis server per OS user can use these account connections.
+Plan allowances and provider credit settings apply; API dollar caps do not
+measure subscription usage. Live OAuth sign-in/inference remains unverified.
+See [connection setup, privacy and limits](docs/PRIVACY.md#ai-connection-setup).
 
 ## Configuration
 
@@ -161,25 +123,19 @@ no keyless source, as do IFRS filers' statements, and all stay disclosed gaps.
 See [License and data rights](docs/DATA-RIGHTS.md) for what each allows.
 ## What the numbers mean
 
-[`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) documents every convention and
-names its sources. Sector routing reads XBRL tag evidence alongside the SIC
-code and industry label, and evidence contradicting the declared classification
-is disclosed rather than acted on. Bank, insurer and mortgage-REIT routes
-withhold the FCFF DCF, the reverse DCF, EV/EBITDA, ROIC-minus-WACC, Altman Z,
-Beneish M and the accrual ratios — every estimation sample behind those
-excluded financial institutions — and value the company on excess returns to
-equity instead. Near-term growth is the median of the methods the data
-supports, range shown and unavailable ones named. Free cash flow is reported
-after stock-based compensation with the before figure beside it; an own-history
-multiple is a rank among N quarters rather than a percentile, N printed beside
-it. Where a rule is this project's own choice rather than a standard, the
-report calls it a house convention in the same breath as the number.
+[Methodology](docs/METHODOLOGY.md) defines the conventions and sources. Sector
+routing weighs XBRL evidence, SIC and industry labels, disclosing contradictions.
+Banks, insurers and mortgage REITs use excess returns to equity instead of
+inapplicable industrial-company valuation and forensic models. Growth shows
+supported methods and their range; free cash flow shows before/after stock-based
+compensation. Historical multiple ranks show sample size. Project-specific
+choices are labelled house conventions beside the affected figures.
 
 [`docs/RESEARCH.md`](docs/RESEARCH.md) documents the forensic scores' papers,
 coefficients, estimation populations and limits; the source cites it by section.
 
-A report with no Anthropic key still carries every deterministic result and
-says that no analyst pass ran; only the narrative sections are empty.
+With AI off or unavailable, reports retain deterministic results and disclose
+that no analyst pass ran; the narrative sections remain empty.
 ## AI analysis
 
 Two analysts build the bull and bear cases independently: neither sees the
@@ -201,7 +157,7 @@ the registered unit, and a claim naming a person must rest on a filing, a
 transcript, a registry figure or the payload's own executive rows; any other
 source, or none, fails it. Checked is printed beside cited, never merged into it.
 
-`ANALYSIS_MODEL` takes `auto` or a model from `config/models.json`, which is
+For the Claude API, `ANALYSIS_MODEL` takes `auto` or a model from `config/models.json`, which is
 also where prices and limits come from; anything else is rejected, because the
 scheduler cannot prove a spend bound for it, and the run degrades to a
 data-only report. Choosing Haiku does not make the whole run Haiku — the judge
@@ -294,10 +250,8 @@ repository's [private advisory form](https://github.com/eligorelick/Thesis-AI-eq
 
 The product suite makes no network request whatever your `.env` contains; one
 live SEC check is opt-in with `EDGAR_LIVE_SMOKE=1` and a real `EDGAR_CONTACT`.
-GitHub Actions runs the release gates on Node 24. Protect `main` by requiring
-the `full` and `windows-smoke` checks; the workflow cannot enable this itself.
-Contributions are welcome: add focused regression tests, preserve source
-tracing and deterministic computation, and run `npm run verify` first.
+GitHub Actions requires `full` and `windows-smoke` on Node 24. Contributions
+should preserve source tracing, add focused regressions and pass `npm run verify`.
 
 ## Limitations
 

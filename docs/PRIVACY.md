@@ -128,15 +128,16 @@ was. The server prints the resolved path at every start:
 
 ## Deleting local data
 
-- Everything: quit Thesis and delete the database file together with its
+- Reports, cache and database settings: quit Thesis and delete the database file together with its
   `-wal` and `-shm` siblings. The next start creates an empty database. The
   `csrf-token` file is deleted separately, at the path the server printed at
   startup — `THESIS_TOKEN_FILE` if you set it, otherwise `csrf-token` in the
   application-data directory, which is not necessarily the directory the
   database is in.
 - Start clean while keeping the old data: point `THESIS_DATA_DIR` at a fresh
-  directory (or `THESIS_DB_PATH` at a new file). Nothing reads the previous
-  location afterwards.
+  directory (or `THESIS_DB_PATH` at a new file). Reports and cache use the new
+  location. AI connections remain in their
+  separate per-user store until disconnected from Settings.
 - Stored settings only: `npm run settings:reset -- --yes`. Settings resolve in
   one order — a value stored in the database beats the matching environment
   variable, which beats the built-in default (`src/settings/settings.ts`,
@@ -144,10 +145,60 @@ was. The server prints the resolved path at every start:
   goes on overriding `.env` until this command deletes it. Without `--yes` it
   prints the rows it would delete and changes nothing. Two internal rows are
   always kept, because neither is a setting: the cache-maintenance stamp and
-  the settings revision counter.
+  the settings revision counter. AI connection selections are managed separately.
+- AI connections: disconnect accounts in Settings, then quit Thesis and delete
+  its `ai` directory described above to remove retained registration metadata.
+  Deleting local files alone does not revoke remote grants; use the provider's
+  account settings if remote revocation was not confirmed.
 
 ## Sharing a report
 
 An exported report embeds provider data and, when a filing or transcript was
 cited, quoted excerpts of it. Sending one sends that data along with it — see
 [License and data rights](DATA-RIGHTS.md).
+
+## AI connection setup
+
+Open **Settings → AI connections**, connect an account, choose a model, and
+save it as the report connection. Signing in does not run inference. AI can
+also be switched off for data-only reports.
+
+| Connection | Authorization | Usage |
+| --- | --- | --- |
+| ChatGPT | Official browser OAuth for local open-source apps; eligible Plus/Pro account | Your ChatGPT plan allowance and account credit settings |
+| Gemini | Official Gemini CLI 0.36.x, installed separately; Google browser sign-in | Your Google CLI allowance and account settings |
+| Claude | Optional `ANTHROPIC_API_KEY` | Separately billed Anthropic API usage |
+
+ChatGPT sign-in opens normal Chrome, with a fallback link. Gemini's own CLI
+opens the system browser; use Chrome as the default browser for its saved
+sign-in/autofill. Thesis gives Gemini an isolated local home and disables
+tools, extensions, hooks, MCP and inherited API keys. CLI support is restricted
+to the reviewed 0.36 minor line; newer minor releases need compatibility review.
+Only one running Thesis server per OS user can manage or use AI connections;
+stop that server before moving these connections to another local instance.
+Its Google connection
+is separate from an existing personal CLI login. See Google's
+[installation guide](https://geminicli.com/docs/get-started/installation/).
+
+ChatGPT models come from the connected account's catalog. A catalog entry
+does not prove remaining quota or model access. Check
+[ChatGPT usage](https://chatgpt.com/#settings/Usage) and
+[Gemini quotas](https://geminicli.com/docs/resources/quota-and-pricing/)
+before generating reports. Thesis does not know your remaining allowance.
+There is no automatic change to a paid API when a connection fails.
+Subscription reports use the supplied evidence without additional web search;
+the existing Claude API path retains its bounded web search.
+
+The financial calculations and deterministic citation checks are shared by
+all providers. Account/model changes invalidate incompatible partial report
+work. The existing Claude model and effort controls apply only to that API
+connection. A subscription report's `$0` means no API charge recorded by
+Thesis, not free or unlimited usage; provider account credit settings still
+apply. Thesis's USD API caps do not cap subscription tokens or provider credits.
+
+ChatGPT credentials stay server-side in protected per-user storage (Windows
+DPAPI; owner-only files on macOS/Linux). Disconnect stops local requests and
+attempts ChatGPT session revocation. Google disconnect clears Thesis's CLI
+state; revoke the Google grant from your Google Account if desired. See
+[Privacy](PRIVACY.md). The OAuth paths have offline regression coverage;
+live account sign-in/inference has not been verified for this release.

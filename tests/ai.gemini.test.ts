@@ -7,9 +7,9 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AiStore } from "@/ai/store";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fake = vi.hoisted(() => ({ directory: "", store: null as AiStore | null, queue: Promise.resolve() as Promise<unknown>, spawn: vi.fn(), autoClose: true }));
+const fake = vi.hoisted(() => ({ directory: "", store: null as AiStore | null, queue: Promise.resolve() as Promise<unknown>, spawn: vi.fn(), autoClose: true, chrome: true }));
 vi.mock("node:child_process", () => ({ spawn: (...args: unknown[]) => fake.spawn(...args) }));
-vi.mock("@/ai/browser", () => ({ chromeExecutable: () => "fixture-chrome" }));
+vi.mock("@/ai/browser", () => ({ chromeExecutable: () => fake.chrome ? "fixture-chrome" : null }));
 vi.mock("@/ai/store", () => ({
   aiDirectory: () => fake.directory,
   claimAiRuntime: () => {},
@@ -18,7 +18,7 @@ vi.mock("@/ai/store", () => ({
     const result = fake.queue.then(() => fn(fake.store!)); fake.queue = result.catch(() => {}); return result;
   },
 }));
-import { beginGemini, disconnectGemini, geminiEnvironment, geminiPending, runGemini } from "@/ai/gemini";
+import { beginGemini, disconnectGemini, geminiEnvironment, geminiPending, runGemini, geminiExecutable, prepareGeminiHome, stopGeminiChild } from "@/ai/gemini";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "thesis-gemini-lifecycle-"));
 const bin = path.join(root, "bin");
@@ -31,7 +31,8 @@ function closed() { Object.assign(child, { signalCode: "SIGKILL" }); child.emit(
 beforeEach(() => {
   fake.directory = path.join(root, "owned");
   fake.store = { version: 1, hostId: "urn:uuid:fixture", profiles: [], gemini: null, selection: { provider: "none" } };
-  fake.queue = Promise.resolve(); fake.autoClose = true;
+  fake.queue = Promise.resolve(); fake.autoClose = true; fake.chrome = true;
+  fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({ name: "@google/gemini-cli", version: "0.36.0" }));
   vi.stubEnv("PATH", bin);
   fake.spawn.mockReset().mockImplementation(() => {
     child = Object.assign(new EventEmitter(), {
@@ -42,7 +43,7 @@ beforeEach(() => {
     return child;
   });
 });
-afterEach(async () => { fake.autoClose = true; await disconnectGemini(); vi.unstubAllEnvs(); });
+afterEach(async () => { fake.autoClose = true; vi.useRealTimers(); await disconnectGemini(); vi.unstubAllEnvs(); });
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 describe("Gemini lifecycle without authentication or inference", () => {
@@ -108,5 +109,82 @@ describe("Gemini lifecycle without authentication or inference", () => {
     fake.autoClose = false; controller.abort();
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
     closed(); await rejected;
+  });
+  it("requires a supported official CLI and a browser before starting authentication", async () => {
+    fake.chrome = false; await expect(beginGemini()).rejects.toThrow("Chrome");
+    expect(geminiEnvironment("isolated", true).BROWSER).toBeUndefined(); fake.chrome = true;
+    for (const version of ["0.35.0", "0.37.0", "1.0.0"]) {
+      fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({ name: "@google/gemini-cli", version }));
+      expect(geminiExecutable()).toBeNull();
+    }
+    await expect(beginGemini()).rejects.toThrow("0.36.x");
+    fs.writeFileSync(path.join(packageDir, "package.json"), "malformed"); expect(geminiExecutable()).toBeNull();
+    vi.stubEnv("PATH", undefined); expect(geminiExecutable()).toBeNull();
+    expect(() => prepareGeminiHome("../not-an-account")).toThrow("Invalid");
+    expect(fake.spawn).not.toHaveBeenCalled();
+  });
+  it("resolves an installed CLI path and handles a process launch error", async () => {
+    fs.writeFileSync(path.join(bin, "gemini"), "fixture-link-target");
+    expect(geminiExecutable()).toBe(path.join(packageDir, "bundle", "gemini.js"));
+    fake.spawn.mockImplementationOnce(() => { throw new Error("cannot start"); });
+    await expect(beginGemini()).rejects.toThrow("cannot start"); expect(geminiPending()?.status).toBe("error");
+  });
+  it("negotiates only Google OAuth and records connection after authentication", async () => {
+    await beginGemini(); const requests: string[] = []; child.stdin.on("data", (data) => requests.push(data.toString()));
+    child.stdout.emit("data", Buffer.from('not-json\n{"id":1,"result":{"authMethods":[{"id":"oauth-personal"}]}}\n'));
+    expect(requests.join("")).toContain('"authenticate"'); expect(requests.join("")).toContain('"oauth-personal"');
+    child.stdout.emit("data", Buffer.from('{"id":2,"result":{}}\n'));
+    await vi.waitFor(() => expect(geminiPending()?.status).toBe("connected"));
+    expect(fake.store!.gemini?.connected).toBe(true); expect(fake.store!.selection).toEqual({ provider: "none" });
+    await vi.waitFor(() => expect(child.signalCode).toBe("SIGKILL"));
+    await stopGeminiChild(child);
+  });
+  it.each(['{"error":{"message":"failed"}}\n', '{"id":1,"result":{}}\n', "x".repeat(2_000_001)])("stops unusable ACP output %#", async (output) => {
+    await beginGemini(); child.stdout.emit("data", Buffer.from(output));
+    await vi.waitFor(() => expect(geminiPending()?.status).toBe("error"));
+    expect(fake.store!.gemini?.connected).toBe(false);
+  });
+  it("does not restore connection state when disconnect races an auth response", async () => {
+    await beginGemini();
+    let unlock!: () => void; fake.queue = new Promise<void>((resolve) => { unlock = resolve; });
+    child.stdout.emit("data", Buffer.from('{"id":2,"result":{}}\n'));
+    const disconnect = disconnectGemini(); unlock(); await disconnect;
+    expect(fake.store!.gemini).toBeNull();
+  });
+  it.each([
+    { response: "{}", stats: { models: { first: { tokens: { input: 3, candidates: 1 } }, second: { tokens: { input: 5, candidates: 2 } } } } },
+    { response: "{}", stats: { models: { first: {} } } },
+    { response: "{}" },
+  ])("reads completed CLI JSON and combines usage %#", async (output) => {
+    fake.store!.gemini = { id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", connected: true };
+    const result = runGemini(fake.store!.gemini.id, "example-model", "evidence");
+    await vi.waitFor(() => expect(fake.spawn).toHaveBeenCalled());
+    expect(fake.spawn.mock.calls[0][1]).toContain("--model");
+    child.stdout.emit("data", Buffer.from(JSON.stringify(output))); Object.assign(child, { exitCode: 0 }); child.emit("close", 0);
+    const value = await result; expect(value.text).toBe("{}");
+    if ("stats" in output && output.stats?.models && "second" in output.stats.models) expect(value).toEqual({ text: "{}", model: "second", input: 8, output: 3 });
+  });
+  it.each(["invalid-json", '{"error":"quota"}', '{"response":""}', '{"response":2}'])("rejects failed CLI results %s", async (output) => {
+    fake.store!.gemini = { id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", connected: true };
+    const result = runGemini(fake.store!.gemini.id, "auto", "evidence"); const rejected = expect(result).rejects.toThrow("could not complete");
+    await vi.waitFor(() => expect(fake.spawn).toHaveBeenCalled());
+    child.stdout.emit("data", Buffer.from(output)); Object.assign(child, { exitCode: 0 }); child.emit("close", 0); await rejected;
+  });
+  it("refuses signed-out accounts and survives asynchronous process errors", async () => {
+    await expect(runGemini("missing", "auto", "evidence")).rejects.toThrow("signed out");
+    fake.store!.gemini = { id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", connected: true };
+    const result = runGemini(fake.store!.gemini.id, "auto", "evidence"); const rejected = expect(result).rejects.toThrow("could not start");
+    await vi.waitFor(() => expect(fake.spawn).toHaveBeenCalled()); child.emit("error", new Error("spawn failed")); closed(); await rejected;
+  });
+  it("retains credentials and reports a bounded error when a child will not exit", async () => {
+    await beginGemini(); fake.autoClose = false; vi.useFakeTimers();
+    const result = expect(stopGeminiChild(child)).rejects.toThrow("files were retained");
+    await vi.advanceTimersByTimeAsync(10_000); await result;
+    expect(fake.store!.gemini).not.toBeNull(); closed();
+  });
+  it("terminates authentication on its deadline", async () => {
+    vi.useFakeTimers(); await beginGemini();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   });
 });

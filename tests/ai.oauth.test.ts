@@ -11,7 +11,7 @@ vi.mock("@/ai/store", () => ({
 }));
 vi.mock("@/ai/browser", () => ({ openChrome: vi.fn(async () => false) }));
 vi.mock("jose", () => ({ createRemoteJWKSet: vi.fn(() => "jwks"), jwtVerify: vi.fn(async () => ({ payload: { sub: "account-subject", nonce: fake.nonce, email: "person@example.test" } })) }));
-import { beginChatGpt, chatGptPending, chatGptAccess, disconnectChatGpt } from "@/ai/chatgpt";
+import { beginChatGpt, chatGptPending, chatGptAccess, disconnectChatGpt, chatGptConnected, trackChatGptRequest } from "@/ai/chatgpt";
 import { jwtVerify } from "jose";
 
 let remote: ReturnType<typeof vi.fn>;
@@ -24,6 +24,7 @@ beforeEach(() => {
     return Response.json({ access_token: "fake-access", refresh_token: "fake-refresh", id_token: "fake-id", token_type: "Bearer", expires_in: 3600, scope: "openid chatgpt.tokens.use.direct" });
   });
   vi.stubGlobal("fetch", remote); vi.clearAllMocks();
+  vi.mocked(jwtVerify).mockImplementation(async () => ({ payload: { sub: "account-subject", nonce: fake.nonce, email: "person@example.test" } }) as never);
 });
 afterEach(async () => {
   for (const profile of fake.store?.profiles ?? []) await disconnectChatGpt(profile.id);
@@ -94,5 +95,58 @@ describe("ChatGPT OAuth account boundaries", () => {
     expect(chatGptPending()?.status).toBe("error");
     expect(chatGptPending()?.url).toBeUndefined();
     expect(profile.tokens).toBeUndefined();
+  });
+  it("rejects invalid registrations before opening a callback", async () => {
+    await expect(beginChatGpt("unknown")).rejects.toThrow("Unknown");
+    for (let n = 0; n < 20; n++) fake.store!.profiles.push({ id: String(n), clientId: `oaiapp_${n}` });
+    await expect(beginChatGpt()).rejects.toThrow("Too many");
+    expect(chatGptPending()?.status).toBe("error");
+  });
+  it.each(["declined", "missing-code", "bad-client", "missing-id-token", "missing-refresh", "bad-token", "expired", "unavailable", "issuer", "endpoint", "subject"])("fails closed for %s authorization", async (failure) => {
+    const { target } = await authorize();
+    if (failure === "declined") target.searchParams.set("error", "access_denied");
+    if (failure === "missing-code") target.searchParams.delete("code");
+    if (failure === "bad-client") target.searchParams.set("client_id", "untrusted-client");
+    if (["missing-id-token", "missing-refresh", "bad-token"].includes(failure)) remote.mockResolvedValueOnce(Response.json({
+      access_token: "fake-access", refresh_token: failure === "missing-refresh" ? undefined : "fake-refresh",
+      id_token: failure === "missing-id-token" ? undefined : "fake-id", expires_in: 3600,
+      token_type: failure === "bad-token" ? "not-bearer" : "Bearer",
+    }));
+    if (failure === "expired" || failure === "unavailable") remote.mockResolvedValueOnce(new Response("", { status: failure === "expired" ? 400 : 503 }));
+    if (failure === "issuer" || failure === "endpoint") {
+      const original = remote.getMockImplementation() as (url: string) => Promise<Response>;
+      remote.mockImplementation(async (url: string) => String(url).includes("openid-configuration")
+        ? Response.json({ issuer: failure === "issuer" ? "https://wrong.example" : "https://auth.openai.com", jwks_uri: "https://wrong.example/jwks", revocation_endpoint: "https://auth.openai.com/revoke" })
+        : original(url));
+    }
+    if (failure === "subject") vi.mocked(jwtVerify).mockResolvedValueOnce({ payload: { nonce: fake.nonce } } as never);
+    expect((await callback(target.href)).status).toBe(400);
+    expect(fake.store!.profiles.every((profile) => !profile.tokens)).toBe(true);
+    expect(chatGptPending()?.status).toBe("error");
+  });
+  it("reuses issued registrations, rejects account switching, and allows a legitimate reconnect", async () => {
+    const { target } = await authorize(); await callback(target.href);
+    const profile = fake.store!.profiles[0];
+    await beginChatGpt(profile.id);
+    let url = new URL(chatGptPending()!.url!); expect(url.searchParams.get("client_id")).toBe(profile.clientId);
+    let dest = new URL(url.searchParams.get("redirect_uri")!); dest.search = new URLSearchParams({ state: url.searchParams.get("state")!, code: "second", client_id: "oaiapp_other" }).toString();
+    expect((await callback(dest.href)).status).toBe(400);
+    await beginChatGpt(profile.id); url = new URL(chatGptPending()!.url!); fake.nonce = url.searchParams.get("nonce")!;
+    dest = new URL(url.searchParams.get("redirect_uri")!); dest.search = new URLSearchParams({ state: url.searchParams.get("state")!, code: "third" }).toString();
+    expect((await callback(dest.href)).status).toBe(200);
+    expect(fake.store!.profiles).toHaveLength(1); expect(chatGptConnected(profile.id)).toBe(true);
+  });
+  it("reports a missing plan grant and cancels tracked requests before clearing local credentials", async () => {
+    const { target } = await authorize();
+    remote.mockResolvedValueOnce(Response.json({ access_token: "a", refresh_token: "r", id_token: "i", token_type: "Bearer", expires_in: 3600 }));
+    await callback(target.href); const profile = fake.store!.profiles[0];
+    expect(chatGptPending()?.message).toContain("not granted"); expect(chatGptConnected(profile.id)).toBe(false);
+    await expect(chatGptAccess(profile.id)).rejects.toThrow("not granted");
+    const request = trackChatGptRequest(profile.id, new AbortController().signal);
+    remote.mockRejectedValueOnce(new Error("offline"));
+    expect(await disconnectChatGpt(profile.id)).toContain("not confirmed");
+    expect(request.signal.aborted).toBe(true); request.release();
+    expect(await disconnectChatGpt(profile.id)).toBe("Disconnected.");
+    await expect(disconnectChatGpt("missing")).rejects.toThrow("Unknown");
   });
 });

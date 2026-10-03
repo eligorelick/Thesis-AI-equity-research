@@ -23,15 +23,20 @@ exports.globSync = function globSync(pattern, options) {
     try { return fs.statSync(pattern).isDirectory() ? [pattern] : []; }
     catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return []; throw error; }
   }
-  const matches = glob(pattern, {
+  const globOptions = {
     onlyDirectories: true,
     expandDirectories: false,
     absolute: path.isAbsolute(pattern),
     dot: false,
     followSymbolicLinks: false,
-  }).map((entry) => entry.replace(/\/$/, ''));
+  };
+  const matches = [
+    ...glob(pattern, globOptions),
+    ...(terminalGlobstar && prefix.includes('*') ? glob(prefix, globOptions) : []),
+  ].map((entry) => entry.replace(/\/$/, ''));
   // fast-glob excludes the literal base of "root/**", but includes the
-  // matched bases of "root/*/**". tinyglobby includes both.
+  // matched bases of "root/*/**". Include wildcard bases explicitly because
+  // tinyglobby can return only their descendants on Linux.
   const literalBase = terminalGlobstar && !prefix.includes('*')
     ? prefix.replace(/^\.\//, '').replace(/\/$/, '') : null;
   return [...new Set(matches.filter((entry) => entry !== literalBase))];

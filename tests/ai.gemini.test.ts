@@ -132,7 +132,8 @@ describe("Gemini lifecycle without authentication or inference", () => {
   it("negotiates only Google OAuth and records connection after authentication", async () => {
     await beginGemini(); const requests: string[] = []; child.stdin.on("data", (data) => requests.push(data.toString()));
     child.stdout.emit("data", Buffer.from('not-json\n{"id":1,"result":{"authMethods":[{"id":"oauth-personal"}]}}\n'));
-    expect(requests.join("")).toContain('"authenticate"'); expect(requests.join("")).toContain('"oauth-personal"');
+    await vi.waitFor(() => expect(requests.join("")).toContain('"authenticate"'));
+    expect(requests.join("")).toContain('"oauth-personal"');
     child.stdout.emit("data", Buffer.from('{"id":2,"result":{}}\n'));
     await vi.waitFor(() => expect(geminiPending()?.status).toBe("connected"));
     expect(fake.store!.gemini?.connected).toBe(true); expect(fake.store!.selection).toEqual({ provider: "none" });

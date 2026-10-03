@@ -23,7 +23,7 @@ Saved reports give every number a source path and an as-of date.
 
 ## Quick start
 
-Node.js 22.18+ and npm are required; Node 24 is the CI-verified configuration.
+Node.js 22.18 or newer and npm are required; CI verifies Node 24.
 
 ```powershell
 git clone https://github.com/eligorelick/Thesis-AI-equity-research.git

@@ -48,7 +48,7 @@
  */
 
 import { conceptFactsSchema, filterToCoreForms, parseFactPoints, type CompanyFacts, type FactPoint } from "@/edgar/xbrl";
-import type { VendorSplitCoverage, VendorSplitEvidence, VendorSplitEvent } from "@/providers/splitEvents";
+import type { VendorSplitCoverage, VendorSplitEvidence, VendorSplitEvent, VendorSplitObservation } from "@/providers/splitEvents";
 
 /** The equity-note concept that carries a split's conversion ratio. */
 export const SPLIT_RATIO_TAG = "StockholdersEquityNoteStockSplitConversionRatio1";
@@ -98,8 +98,12 @@ export const SESSION_AFTER_CONTEXT_MAX_DAYS = SAME_SPLIT_WINDOW_DAYS;
  * made in the days between is withheld, never assigned a basis.
  */
 export const LEGAL_BEFORE_SESSION_MAX_DAYS = 7;
-/** Coverage spans this close together are one span (weekends and exchange holidays). */
-const COVERAGE_GAP_DAYS = 4;
+/**
+ * Vendor split events this close together are descriptions of one split. Two
+ * that differ in ratio or session are a conflict, never two splits: applying
+ * both would compound them (a 4-for-1 and a 5-for-1 read as ×20).
+ */
+export const VENDOR_SAME_SPLIT_DAYS = LEGAL_BEFORE_SESSION_MAX_DAYS;
 
 const DAY_MS = 86_400_000;
 
@@ -416,13 +420,17 @@ function decideEdgar(facts: CompanyFacts, candidates: Candidate[], notes: SplitN
   return decisions;
 }
 
-/** Coverage spans merged, with gaps up to `COVERAGE_GAP_DAYS` closed. */
+/**
+ * Coverage spans merged where they overlap or touch (the next begins the day
+ * after the last ends). A gap of any length stays a gap: the vendor did not
+ * answer for those days, and a weekend or holiday is not assumed.
+ */
 function mergeCoverage(spans: readonly VendorSplitCoverage[]): VendorSplitCoverage[] {
   const sorted = [...spans].sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0));
   const out: VendorSplitCoverage[] = [];
   for (const span of sorted) {
     const last = out[out.length - 1];
-    if (last !== undefined && daysBetween(last.to, span.from) <= COVERAGE_GAP_DAYS) {
+    if (last !== undefined && span.from <= addDays(last.to, 1)) {
       if (span.to > last.to) last.to = span.to;
       continue;
     }
@@ -431,9 +439,9 @@ function mergeCoverage(spans: readonly VendorSplitCoverage[]): VendorSplitCovera
   return out;
 }
 
-/** True when every day from `from` to `to` lies in one merged coverage span (edges within `COVERAGE_GAP_DAYS`). */
+/** True when every day from `from` to `to` lies in one merged coverage span. */
 function covers(coverage: readonly VendorSplitCoverage[], from: string, to: string): boolean {
-  return coverage.some((c) => daysBetween(c.from, from) >= -COVERAGE_GAP_DAYS && daysBetween(to, c.to) >= -COVERAGE_GAP_DAYS);
+  return coverage.some((c) => c.from <= from && c.to >= to);
 }
 
 /**
@@ -457,6 +465,44 @@ function describeWindow(w: { from: string; to: string }): string {
   return w.from === w.to ? w.from : `${w.from} … ${w.to}`;
 }
 
+/** Vendor events with exact duplicates (same session and ratio) dropped, oldest first. */
+function distinctVendorEvents(events: readonly VendorSplitEvent[]): VendorSplitEvent[] {
+  const byKey = new Map<string, VendorSplitEvent>();
+  for (const e of events) byKey.set(`${e.session}|${Number(e.ratio.toFixed(6))}`, e);
+  return [...byKey.values()].sort((a, b) => (a.session < b.session ? -1 : a.session > b.session ? 1 : 0));
+}
+
+/** An answer covering a session but omitting this event contradicts it, at any date distance. */
+function vendorDisagreement(event: VendorSplitEvent, observations: readonly VendorSplitObservation[]): string | null {
+  const listsEvent = (answer: VendorSplitObservation): boolean => answer.events.some(
+    (e) => e.session === event.session && e.ratio.toFixed(6) === event.ratio.toFixed(6),
+  );
+  const opposing = observations.filter(
+    (answer) => answer.coverage.some((c) => c.from <= event.session && event.session <= c.to) && !listsEvent(answer),
+  );
+  if (opposing.length === 0) return null;
+  const supporting = observations.filter(listsEvent).map((answer) => answer.source);
+  return `${supporting.join(" + ")} lists ${describeSplitRatio(event.ratio)} first traded ${event.session}, but ${opposing.map((answer) => answer.source).join(" + ")} covers that session and omits that event`;
+}
+
+/**
+ * Indices of `events` (oldest first) grouped into descriptions of one split:
+ * each event within `VENDOR_SAME_SPLIT_DAYS` of the previous one joins its group.
+ */
+function clusterVendorEvents(events: readonly VendorSplitEvent[]): number[][] {
+  const clusters: number[][] = [];
+  for (const [i, e] of events.entries()) {
+    const last = clusters[clusters.length - 1];
+    const prev = last === undefined ? undefined : events[last[last.length - 1] as number];
+    if (last !== undefined && prev !== undefined && daysBetween(prev.session, e.session) <= VENDOR_SAME_SPLIT_DAYS) {
+      last.push(i);
+      continue;
+    }
+    clusters.push([i]);
+  }
+  return clusters;
+}
+
 /**
  * Discover the splits the filer tagged, reconcile them with the vendor's split
  * events, and fix each split's timing. Pure and total.
@@ -469,14 +515,26 @@ export function discoverStockSplits(
   const decisions = decideEdgar(facts, tagCandidates(facts), notes);
   const vendor = opts.vendor;
   const coverage = vendor.status === "retrieved" ? mergeCoverage(vendor.coverage) : [];
-  const vendorEvents: VendorSplitEvent[] = vendor.status === "retrieved" ? vendor.events : [];
+  const vendorEvents = distinctVendorEvents(vendor.status === "retrieved" ? vendor.events : []);
+  const observations = vendor.status === "retrieved" ? vendor.observations ?? [vendor] : [];
+  const disagreements = vendorEvents.map((e) => vendorDisagreement(e, observations));
+  const clusters = clusterVendorEvents(vendorEvents);
+  const clusterOf = new Map<number, number[]>(clusters.flatMap((c) => c.map((i) => [i, c] as const)));
   const consumed = new Set<number>();
   const events: SplitEvent[] = [];
   const unresolved: UnresolvedSplit[] = [];
   const source = vendor.source;
 
-  const inWindow = (w: { from: string; to: string }): number[] =>
-    vendorEvents.flatMap((e, i) => (!consumed.has(i) && e.session >= w.from && e.session <= w.to ? [i] : []));
+  // Every description of a split one of whose descriptions falls in the
+  // window: a conflicting description just outside it is the same split.
+  const inWindow = (w: { from: string; to: string }): number[] => {
+    const hits = new Set<number>();
+    for (const [i, e] of vendorEvents.entries()) {
+      if (e.session < w.from || e.session > w.to) continue;
+      for (const j of clusterOf.get(i) ?? [i]) if (!consumed.has(j)) hits.add(j);
+    }
+    return [...hits].sort((a, b) => a - b);
+  };
 
   for (const d of decisions) {
     const cand = d.cand;
@@ -513,13 +571,14 @@ export function discoverStockSplits(
     const contexts = cand.contexts.join(", ");
     if (nearby.length > 0) {
       const hit = nearby.length === 1 ? (vendorEvents[nearby[0] as number] as VendorSplitEvent) : null;
-      if (hit === null || !fits(hit)) {
+      const conflicts = nearby.flatMap((i) => disagreements[i] ?? []);
+      if (hit === null || !fits(hit) || conflicts.length > 0) {
         const listed = nearby.map((i) => {
           const e = vendorEvents[i] as VendorSplitEvent;
           return `${describeSplitRatio(e.ratio)} first traded ${e.session}`;
         });
         unresolve(
-          `${d.text} — but NOT applied: ${source} lists ${listed.join(" and ")} within ${describeWindow(window)}, which does not match; ${LEFT_AS_FILED}`,
+          `${d.text} — but NOT applied: ${source} lists ${listed.join(" and ")} within ${describeWindow(window)}, which does not match or is disputed${conflicts.length > 0 ? ` (${conflicts.join("; ")})` : ""}; ${LEFT_AS_FILED}`,
         );
         continue;
       }
@@ -554,8 +613,23 @@ export function discoverStockSplits(
 
   // A split the vendor lists and companyfacts does not carry yet: the filer
   // tags the ratio only in its next periodic report, months after the event.
-  for (const [i, e] of vendorEvents.entries()) {
-    if (consumed.has(i)) continue;
+  for (const cluster of clusters) {
+    if (cluster.some((i) => consumed.has(i))) continue;
+    const conflicts = cluster.flatMap((i) => disagreements[i] ?? []);
+    if (cluster.length > 1 || conflicts.length > 0) {
+      // Descriptions of one split that disagree on its ratio or its session.
+      const listed = cluster.map((i) => {
+        const e = vendorEvents[i] as VendorSplitEvent;
+        return `${describeSplitRatio(e.ratio)} first traded ${e.session} (${e.numerator}:${e.denominator})`;
+      });
+      const first = (vendorEvents[cluster[0] as number] as VendorSplitEvent).session;
+      const last = (vendorEvents[cluster[cluster.length - 1] as number] as VendorSplitEvent).session;
+      const reason = `stock split around ${describeWindow({ from: first, to: last })} NOT applied: ${source} describes it as ${listed.join(" and ")}; ${conflicts.length > 0 ? conflicts.join("; ") : "these descriptions disagree and do not establish separate splits to compound"}; ${LEFT_AS_FILED}`;
+      notes.push({ date: first, text: reason, severity: "warn" });
+      unresolved.push({ from: addDays(first, -LEGAL_BEFORE_SESSION_MAX_DAYS), to: last, reason });
+      continue;
+    }
+    const e = vendorEvents[cluster[0] as number] as VendorSplitEvent;
     const legalFrom = addDays(e.session, -LEGAL_BEFORE_SESSION_MAX_DAYS);
     events.push({
       date: e.session,
@@ -652,6 +726,11 @@ export function shareBasisFactor(s: StockSplits, filed: string, measured: string
   for (const u of s.unresolved) {
     if (day >= u.from && filed < u.to) {
       return { withheld: `the figure was filed ${filed}, before an unresolved split (${u.reason}), so its basis on ${day} is unknown` };
+    }
+    // Filing after a disputed event does not establish the basis of a count
+    // measured earlier (for example a cover-page count).
+    if (day >= u.from && measured !== null && measured < u.to) {
+      return { withheld: `the count was measured ${measured}, before an unresolved split (${u.reason}), and filed ${filed}, so its basis on ${day} is unknown` };
     }
   }
   let factor = 1;

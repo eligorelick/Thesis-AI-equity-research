@@ -29,6 +29,13 @@ export interface VendorSplitCoverage {
   to: string;
 }
 
+/** One retrieved answer, before its events and coverage are combined with others. */
+export interface VendorSplitObservation {
+  source: string;
+  events: VendorSplitEvent[];
+  coverage: VendorSplitCoverage[];
+}
+
 export type VendorSplitEvidence =
   | {
       status: "retrieved";
@@ -36,6 +43,8 @@ export type VendorSplitEvidence =
       events: VendorSplitEvent[];
       /** Sessions the answer covers; there may be several (daily history, recent quote, full history). */
       coverage: VendorSplitCoverage[];
+      /** Original answers retained by a merge, including covered dates with no event. */
+      observations?: VendorSplitObservation[];
     }
   | { status: "unavailable"; source: string; reason: string };
 
@@ -46,8 +55,9 @@ export function unavailableSplitEvidence(source: string, reason: string): Vendor
 /**
  * Merge several vendor answers. Events describing the same session and ratio
  * are one event; the coverage is the union. Any retrieved answer makes the
- * merge retrieved (its coverage says how far it reaches); only when none was
- * retrieved is the merge unavailable, naming every reason.
+ * merge retrieved (its coverage says how far it reaches). Original answers
+ * survive nested merges so reconciliation can detect contradictions. Only when
+ * none was retrieved is the merge unavailable, naming every reason.
  */
 export function mergeSplitEvidence(parts: readonly VendorSplitEvidence[]): VendorSplitEvidence {
   const retrieved = parts.filter((p): p is Extract<VendorSplitEvidence, { status: "retrieved" }> => p.status === "retrieved");
@@ -68,5 +78,6 @@ export function mergeSplitEvidence(parts: readonly VendorSplitEvidence[]): Vendo
     source: [...new Set(retrieved.map((p) => p.source))].join(" + "),
     events: [...events.values()].sort((a, b) => (a.session < b.session ? -1 : a.session > b.session ? 1 : 0)),
     coverage: retrieved.flatMap((p) => p.coverage),
+    observations: retrieved.flatMap((p) => p.observations ?? [{ source: p.source, events: p.events, coverage: p.coverage }]),
   };
 }

@@ -26,7 +26,8 @@ const FY2025 = { start: "2025-01-01", end: "2025-12-31", form: "10-K", filed: "2
 interface Pt { start?: string; end: string; val: number; form?: string; filed: string }
 
 function facts(usGaap: Record<string, Pt[]>, dei: Record<string, Pt[]> = {}): CompanyFacts {
-  const unit = (tag: string): string => (tag === SPLIT_RATIO_TAG ? "pure" : tag === FLOAT ? "USD" : /Shares/.test(tag) ? "shares" : "USD");
+  const unit = (tag: string): string =>
+    tag === SPLIT_RATIO_TAG ? "pure" : tag === FLOAT ? "USD" : /^EarningsPerShare/.test(tag) ? "USD/shares" : /Shares/.test(tag) ? "shares" : "USD";
   const concept = (tag: string, points: Pt[]) => ({
     label: tag,
     units: {
@@ -214,9 +215,10 @@ const gapFor = (out: Outcome, field: string) => out.gaps.find((g) => g.field ===
 
 /** A 4-for-1 whose first split-adjusted session was 2026-06-15, confirmed by the Q1 diluted count restated from 10M to 40M. */
 const FORWARD_SPLIT_EVENT: YahooSplit = { session: "2026-06-15", numerator: 4, denominator: 1 };
-function forwardSplit(cover: Pt[], extraDei: Record<string, Pt[]> = {}): CompanyFacts {
+function forwardSplit(cover: Pt[], extraDei: Record<string, Pt[]> = {}, extraGaap: Record<string, Pt[]> = {}): CompanyFacts {
   return facts(
     {
+      ...extraGaap,
       [SPLIT_RATIO_TAG]: [{ end: "2026-06-12", val: 4, filed: "2026-08-05" }],
       [DILUTED]: [
         { ...Q1_2026, val: 10_000_000, filed: "2026-05-05" },
@@ -377,8 +379,26 @@ describe("P2 (permanent): a split the market has priced but companyfacts does no
 describe("keyless market values: stale sources and ambiguous counts", () => {
   it("already-adjusted vendor share counts are not scaled again", async () => {
     // FMP served FY2025 after the split, already on the post-split basis
-    // (40M diluted, EPS 2.00), and it agrees with the filer's count carried to
-    // that basis (10M as filed × 4). Kept exactly as served: not 160M.
+    // (40M diluted, EPS 2.00). Each field agrees with the filer's own carried
+    // to that basis: 10M as filed × 4 = 40M, and diluted EPS $8.00 as filed
+    // (80 / 10M) ÷ 4 = $2.00. Kept exactly as served: not 160M, not $0.50.
+    const annual = vendorRows([{ symbol: "SPLT", date: "2025-12-31", revenue: 2_000, weightedAverageShsOutDil: 40_000_000, epsDiluted: 2 }], "2026-09-30T20:00:00Z");
+    const out = await run({
+      today: "2026-09-30",
+      facts: forwardSplit(PRE_AND_POST_SPLIT_COVERS, {}, { EarningsPerShareDiluted: [{ ...FY2025, val: 8 }] }),
+      close: () => 25,
+      price: 25,
+      splits: [FORWARD_SPLIT_EVENT],
+      fmp: { incomeAnnual: annual },
+    });
+    expect(out.members.incomeAnnual.ok && out.members.incomeAnnual.value.data.rows[0]).toMatchObject({ weightedAverageShsOutDil: 40_000_000, epsDiluted: 2 });
+    expect(gapFor(out, "keyless.incomeAnnual.shareBasis")).toBeUndefined();
+  });
+
+  it("a matching diluted count does not vouch for an EPS the filer never stated", async () => {
+    // The same post-split row, but companyfacts carries no diluted EPS for
+    // FY2025: the 40M count is shown to be on the basis, the $2.00 is not, and
+    // it is not rebuilt from net income. Count kept, EPS withheld.
     const annual = vendorRows([{ symbol: "SPLT", date: "2025-12-31", revenue: 2_000, weightedAverageShsOutDil: 40_000_000, epsDiluted: 2 }], "2026-09-30T20:00:00Z");
     const out = await run({
       today: "2026-09-30",
@@ -388,8 +408,10 @@ describe("keyless market values: stale sources and ambiguous counts", () => {
       splits: [FORWARD_SPLIT_EVENT],
       fmp: { incomeAnnual: annual },
     });
-    expect(out.members.incomeAnnual.ok && out.members.incomeAnnual.value.data.rows[0]).toMatchObject({ weightedAverageShsOutDil: 40_000_000, epsDiluted: 2 });
-    expect(gapFor(out, "keyless.incomeAnnual.shareBasis")).toBeUndefined();
+    const row = out.members.incomeAnnual.ok ? out.members.incomeAnnual.value.data.rows[0]! : null;
+    expect(row).toMatchObject({ revenue: 2_000, weightedAverageShsOutDil: 40_000_000 });
+    expect(row!.epsDiluted).toBeUndefined();
+    expect(gapFor(out, "keyless.incomeAnnual.shareBasis")!.reason).toMatch(/1 field\(s\) in 1 vendor row\(s\) \(2025-12-31 … 2025-12-31; epsDiluted\) withheld.*no filed epsDiluted for 2025-12-31 on the 2026-09-30 basis/);
   });
 
   it("withholds a vendor row's EPS and share counts when they are still on the pre-split basis", async () => {

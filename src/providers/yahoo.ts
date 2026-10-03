@@ -222,8 +222,9 @@ const splitEventsSchema = z.looseObject({
 
 /**
  * The split events of one chart body, for a request that asked for them. The
- * events block is parsed on its own: a malformed one makes the split evidence
- * `unavailable` without discarding the prices. Yahoo omits the block when the
+ * events block is parsed on its own: a malformed one, or one listing an event
+ * that is not a split ratio, makes the split evidence `unavailable` without
+ * discarding the prices. Yahoo omits the block when the
  * range holds no event, so a well-formed body without one is a retrieved
  * answer of "none in this coverage". Coverage runs from `from` (the requested
  * start, or the first bar) to the later of the last bar's session and the
@@ -247,7 +248,15 @@ function splitEvidenceOf(result: ChartResult, source: string, from: string | nul
   }
   const events: VendorSplitEvent[] = [];
   for (const e of Object.values(parsed.data.splits ?? {})) {
-    if (!(e.numerator > 0) || !(e.denominator > 0) || e.numerator === e.denominator) continue;
+    // An event that is not a split ratio (a zero or negative side, or 1:1)
+    // makes the whole list unreadable: skipping it would read a split Yahoo
+    // did report as "no split on that date".
+    if (!(e.numerator > 0) || !(e.denominator > 0) || e.numerator === e.denominator) {
+      return unavailableSplitEvidence(
+        source,
+        `the chart lists a split on ${sessionDate(e.date, gmtoffset)} with numerator ${e.numerator}, denominator ${e.denominator}, which is not a split ratio, so its split list cannot be read`,
+      );
+    }
     events.push({
       session: sessionDate(e.date, gmtoffset),
       ratio: e.numerator / e.denominator,

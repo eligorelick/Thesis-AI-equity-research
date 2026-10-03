@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — stock-split correctness (2026-09-30)
+## Unreleased — stock-split correctness (2026-09-30 to 2026-10-02)
 
 Share counts and prices are combined only on one established split basis. The
 convention is D-30 in [`docs/audit/DECISIONS.md`](docs/audit/DECISIONS.md); the
@@ -24,16 +24,29 @@ provider conventions are tabled in
 - **A split the market has priced but SEC companyfacts does not carry yet** is
   applied from the vendor's event; one both describe is applied once.
 - **No split list, no share figure.** When the vendor's split list could not be
-  retrieved, or does not cover the span a share count must be carried across,
-  the count is withheld rather than read as "no splits".
+  retrieved, does not cover every day a share count must be carried across
+  (no weekend or holiday allowance), or lists an event that is not a split
+  ratio, the count is withheld rather than read as "no splits".
+- **Disagreeing split descriptions are not multiplied.** Two vendor events
+  within a week that differ in ratio or session leave the split unresolved and
+  its figures withheld. Each retrieved answer also retains its own coverage:
+  an answer that omits an event another lists within that coverage makes it
+  unresolved even when their reported dates differ by more than a week.
+  Warnings name the answers that disagree.
+- **Small EPS cannot hide a split error behind cent rounding.** Vendor EPS
+  must match the filer's same field within 3% of its magnitude, and zero must
+  match exactly. A fourfold error from $0.0025 to $0.01 is withheld. Ordinary
+  rounding inside 3% still passes; greater rounding uncertainty withholds the
+  field instead of approving its basis.
 - **Uncertain share basis empties the figure at its source**: EPS and share
   counts on the affected statement rows, the market cap, market-cap history,
   enterprise values and free float. EPS growth, P/E, DCF and excess-return per
   share, the reverse DCF, REIT P/FFO, the share-count trend, dilution, the
   grades and the AI payload therefore read "n/a" for it; revenue, margins and
   free cash flow are unaffected.
-- **Nothing is adjusted twice.** A count filed after a split, and a vendor row
-  whose diluted count matches the filer's restated count, are used as they are.
+- **Nothing is adjusted twice.** A count filed after a split, and each vendor
+  EPS or share-count field that matches the filer's restated value for the same
+  field, are used as they are; a field the filer does not state is withheld.
 
 ## Unreleased — currency integrity (2026-09-28 to 2026-09-30)
 

@@ -303,8 +303,24 @@ tagged in companyfacts for both dates.
   from the vendor's event. A tagged split the vendor's covering list does not
   contain, or lists with another ratio, is unresolved, and every figure filed
   before it is withheld.
+- Vendor events within 7 days of each other describe one split. When they
+  disagree on the ratio or the session (Yahoo's daily history says 4-for-1 and
+  its full list 5-for-1), the split is unresolved and its figures are withheld;
+  the descriptions are never compounded. Identical descriptions are one event.
+- Each retrieved answer retains its own source, events and coverage. If one
+  answer lists a split that another covering answer omits or describes with a
+  different ratio, the event is unresolved regardless of how far apart the
+  reported dates are. A merged list cannot turn contradictory answers into
+  multiple splits. A request that does not cover the event, or failed, does
+  not contradict it. Warnings name the individual answers that disagree.
+  A count measured before an unresolved event remains withheld even if its
+  filing came afterward; the later filing alone does not establish its basis.
 - A vendor list that was not retrieved establishes nothing: without one, and for
-  any span it does not cover, no filed share count is put on a price's basis.
+  any day it does not cover, no filed share count is put on a price's basis.
+  Coverage spans join only where they overlap or touch; a gap of any length,
+  weekend or not, is uncovered, and a session after the coverage ends is too.
+- A Yahoo split event whose numerator or denominator is zero, negative or equal
+  to the other makes that answer's split list unavailable (its prices stand).
 
 **What is withheld, and what stands.** Withheld figures are left empty at the
 source — EPS and share counts on the statement rows, the keyless market cap,
@@ -325,7 +341,7 @@ here calls a live provider: every tested behaviour is on synthetic responses.
 | FMP `adjClose` | splits and dividends | yes — same FAQ | not used by this code |
 | FMP `quote`/`profile` `price`, `marketCap` | the quote's own session | current values; the FAQ's history statement does not apply | vendor market cap used as served (P/E fallback), unverified |
 | FMP `shares-float` `outstandingShares`, `enterprise-values` `numberOfShares` | "historical prices and shares outstanding are adjusted for splits" | by the FAQ's wording, which names no endpoint or field | not tested |
-| FMP `income-statement` `eps`, `epsDiluted`, `weightedAverageShsOut`, `weightedAverageShsOutDil` | not stated by the FAQ | **no** | a row for a period before a known split is kept only when its diluted count matches the filer's restated count (±3%); otherwise its four share fields are withheld (`guardVendorShareFields`) |
+| FMP `income-statement` `eps`, `epsDiluted`, `weightedAverageShsOut`, `weightedAverageShsOutDil` | not stated by the FAQ | **no** | for a row for a period before a known split, each field is kept only when it matches the filer's same field on the same basis (±3% relative to the filer's magnitude; zero must match exactly); no absolute EPS allowance can approve a large proportional difference in a small amount. A field that does not match, or that the filer does not state, is withheld on its own, and EPS is never rebuilt from net income (`guardVendorShareFields`) |
 | FMP `key-metrics`, `ratios` (own-history multiples) | ratios of price to per-share figures; basis-invariant only if both sides share one | not stated | not tested |
 | FMP `analyst-estimates` `epsAvg` | not stated | **no** | not tested; shown as "currency unknown" and not registered (D-28) |
 | Yahoo chart `close` | adjusted for the splits the same answer lists | no published contract (unofficial endpoint) | synthetic responses only |

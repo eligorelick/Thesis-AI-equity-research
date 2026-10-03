@@ -337,17 +337,30 @@ export function sharesOnOrBefore(
 /** The vendor income-statement fields whose split basis is checked (and withheld when unestablished). */
 export const VENDOR_SHARE_FIELDS = ["eps", "epsDiluted", "weightedAverageShsOut", "weightedAverageShsOutDil"] as const;
 
-/** A vendor diluted count agrees with the filer's when within this relative tolerance. */
+/** A vendor share count or EPS agrees with the filer's when within this relative tolerance. */
 const VENDOR_SHARES_TOLERANCE = 0.03;
+
+/** How each checked field is named in a reason. */
+const VENDOR_SHARE_FIELD_LABELS: Record<(typeof VENDOR_SHARE_FIELDS)[number], string> = {
+  weightedAverageShsOutDil: "diluted count",
+  weightedAverageShsOut: "basic count",
+  epsDiluted: "epsDiluted",
+  eps: "eps",
+};
 
 /**
  * Keep a vendor income row's share and per-share fields only where their split
  * basis on `basisDay` is established. A row that no split the report knows of
- * postdates needs nothing. A row for a period before such a split (or before
- * an unresolved one) is kept only when the filer's own diluted count for the
- * same period — put on the `basisDay` basis by src/edgar/statements.ts —
- * agrees with the vendor's within `VENDOR_SHARES_TOLERANCE`; otherwise its
- * EPS and share counts are withheld. EDGAR rows already carried in the member
+ * postdates needs nothing. For a row for a period before such a split (or
+ * before an unresolved one) EACH field is tested on its own against the
+ * filer's same field for the same period — put on the `basisDay` basis by
+ * src/edgar/statements.ts — within `VENDOR_SHARES_TOLERANCE`: a matching diluted
+ * count says nothing about the basic count or EPS beside it, which vendors
+ * adjust separately. A field the
+ * filer does not state, or states differently, is withheld; nothing is rebuilt
+ * from net income. There is no absolute EPS allowance: a sub-cent difference
+ * can still be a manyfold split-basis error. Zero must match exactly.
+ * EDGAR rows already carried in the member
  * (`source: "edgar"`) were built on that basis and are left alone.
  */
 export function guardVendorShareFields<TRow extends FmpRawRow>(
@@ -355,36 +368,47 @@ export function guardVendorShareFields<TRow extends FmpRawRow>(
   edgarRows: readonly FmpRawRow[],
   splits: StockSplits,
   basisDay: string,
-): { rows: TRow[]; withheld: { date: string; reason: string }[] } {
-  const edgarDiluted = new Map<string, unknown>();
+): { rows: TRow[]; withheld: { date: string; field: (typeof VENDOR_SHARE_FIELDS)[number]; reason: string }[] } {
+  const filed = new Map<string, FmpRawRow>();
   for (const r of edgarRows) {
     const day = isoDay(r["date"]);
-    if (day !== null) edgarDiluted.set(day, r["weightedAverageShsOutDil"]);
+    if (day !== null) filed.set(day, r);
   }
-  const withheld: { date: string; reason: string }[] = [];
+  const withheld: { date: string; field: (typeof VENDOR_SHARE_FIELDS)[number]; reason: string }[] = [];
   const out = rows.map((row) => {
     const date = isoDay(row["date"]);
     if (date === null || row["source"] === "edgar") return row;
-    if (!VENDOR_SHARE_FIELDS.some((f) => row[f] !== undefined && row[f] !== null)) return row;
+    const present = VENDOR_SHARE_FIELDS.filter((f) => row[f] !== undefined && row[f] !== null);
+    if (present.length === 0) return row;
     const later = splits.events.find((e) => date < e.sessionWindow.to && e.sessionWindow.from <= basisDay);
     const open = splits.unresolved.find((u) => date < u.to && u.from <= basisDay);
     if (later === undefined && open === undefined) return row;
-    const vendor = row["weightedAverageShsOutDil"];
-    const filer = edgarDiluted.get(date);
     const against = later !== undefined ? `the ${describeSplits({ ...splits, events: [later] })}` : `an unresolved split (${open!.reason})`;
-    let reason: string | null = null;
-    if (!isFiniteNumber(vendor) || vendor <= 0) {
-      reason = `the vendor's row for ${date} carries no diluted count to test against ${against}`;
-    } else if (!isFiniteNumber(filer) || filer <= 0) {
-      reason = `no filed diluted count for ${date} on the ${basisDay} basis to test the vendor's ${vendor} against ${against}`;
-    } else if (Math.abs(vendor / filer - 1) > VENDOR_SHARES_TOLERANCE) {
-      reason = `the vendor's diluted count for ${date} (${vendor}) differs from the filer's (${filer}) on the ${basisDay} basis, across ${against}`;
+    const filer = filed.get(date);
+    let copy: Record<string, unknown> | null = null;
+    for (const field of present) {
+      const label = VENDOR_SHARE_FIELD_LABELS[field];
+      const isEps = field === "eps" || field === "epsDiluted";
+      const vendorValue = row[field];
+      const filerValue = filer?.[field];
+      let reason: string | null = null;
+      if (!isFiniteNumber(vendorValue) || (!isEps && vendorValue <= 0)) {
+        reason = `the vendor's ${label} for ${date} (${String(vendorValue)}) is not a usable figure to test against ${against}`;
+      } else if (!isFiniteNumber(filerValue) || (!isEps && filerValue <= 0)) {
+        reason = `no filed ${label} for ${date} on the ${basisDay} basis to test the vendor's ${vendorValue} against ${against}`;
+      } else {
+        const diff = Math.abs(vendorValue - filerValue);
+        const agrees = vendorValue === filerValue || diff <= Math.abs(filerValue) * VENDOR_SHARES_TOLERANCE;
+        if (!agrees) {
+          reason = `the vendor's ${label} for ${date} (${vendorValue}) differs from the filer's (${filerValue}) on the ${basisDay} basis, across ${against}`;
+        }
+      }
+      if (reason === null) continue;
+      withheld.push({ date, field, reason });
+      copy ??= { ...row };
+      delete copy[field];
     }
-    if (reason === null) return row;
-    withheld.push({ date, reason });
-    const copy: Record<string, unknown> = { ...row };
-    for (const f of VENDOR_SHARE_FIELDS) delete copy[f];
-    return copy as TRow;
+    return copy === null ? row : (copy as TRow);
   });
   return { rows: out, withheld };
 }
@@ -1236,10 +1260,9 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   // FMP's FAQ documents that historical prices and shares outstanding are
   // split-adjusted; it says nothing specific about the income statement's
   // weighted-average share counts and EPS. A vendor row for a period before a
-  // split the report knows of is therefore kept only where the filer's own
-  // restated count for that period, on the same basis, agrees with it; every
-  // other such row loses its share and per-share fields (the rest of the row
-  // stands), and the manifest says which and why.
+  // split the report knows of keeps each share or per-share field only where
+  // the filer's same field for that period, on the same basis, agrees with it.
+  // Other fields stand, and the manifest says which were withheld and why.
   if (built !== null) {
     for (const [member, edgarRows] of [
       ["incomeAnnual", built.incomeAnnual.rows],
@@ -1250,12 +1273,13 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       const guarded = guardVendorShareFields(current.value.data.rows, edgarRows, built.splits, basisDay);
       if (guarded.withheld.length === 0) continue;
       members[member] = { ok: true, value: { ...current.value, data: { ...current.value.data, rows: guarded.rows } } };
-      const dates = guarded.withheld.map((w) => w.date).sort();
+      const dates = [...new Set(guarded.withheld.map((w) => w.date))].sort();
+      const fields = VENDOR_SHARE_FIELDS.filter((f) => guarded.withheld.some((w) => w.field === f));
       const reasons = [...new Set(guarded.withheld.map((w) => w.reason))];
       gaps.push({
         field: `keyless.${member}.shareBasis`,
         reason:
-          `${guarded.withheld.length} vendor row(s) (${dates[0]} … ${dates[dates.length - 1]}) had ${VENDOR_SHARE_FIELDS.join(", ")} withheld: ` +
+          `${guarded.withheld.length} field(s) in ${dates.length} vendor row(s) (${dates[0]} … ${dates[dates.length - 1]}; ${fields.join(", ")}) withheld: ` +
           `each period precedes a split the report knows of, and its split basis on ${basisDay} could not be established — ${reasons.slice(0, 3).join("; ")}` +
           (reasons.length > 3 ? `; and ${reasons.length - 3} more reason(s)` : ""),
         severity: "warn",

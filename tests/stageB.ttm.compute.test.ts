@@ -1181,6 +1181,22 @@ describe("runStageB wiring — keyless excess-return and WACC fallbacks (task 8)
     expect(computed.valuation.notes.some((n) => /DuPont/i.test(n))).toBe(false);
   });
 
+  it("does not treat an obsolete annual key-metrics ROE as current TTM ROE", () => {
+    const bundle = wiringBundle({ bank: true, noKeyMetricsTtm: true });
+    bundle.keyMetrics = {
+      ok: true,
+      value: {
+        data: { rows: [{ date: "2024-12-31", returnOnEquity: 0.8 }], raw: {} },
+        source: "fmp", endpoint: "key-metrics", asOf: "2024-12-31", fetchedAt: bundle.builtAt,
+      },
+    };
+    const computed = runStageB(bundle);
+    expect(computed.valuation.kind).toBe("excess-return");
+    if (computed.valuation.kind !== "excess-return") return;
+    expect(computed.valuation.excessReturn.roePathPct.value[0]).toBeCloseTo(DUPONT_ROE_PCT, 9);
+    expect(computed.valuation.excessReturn.roePathPct.basis).toMatch(/FY 2025-12-31 DuPont ROE/);
+  });
+
   it("bank with an undisclosed interest expense: no historical cost-of-debt inference", () => {
     const computed = runStageB(wiringBundle({ bank: true, zeroInterestExpense: true }));
     const w = computed.returns.wacc;

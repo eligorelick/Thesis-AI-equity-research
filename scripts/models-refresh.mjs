@@ -6,11 +6,10 @@
  *   npm run models:refresh -- --write # writes config/models.json
  *
  * Needs ANTHROPIC_API_KEY (the Models API is free; no message is sent). The
- * script never runs from tests; tests import its pure functions with fixture
- * inputs. Context windows, output ceilings, effort/sampling/thinking support
- * and lifecycle are not served by the API: the script keeps the checked-in
- * values and prints a reminder to review them against the models overview
- * page whenever a new id appears.
+ * tests use fixture inputs and intercept CLI provider reads. The Models API
+ * now exposes token limits and capabilities, but this
+ * script keeps the checked-in limits and request policy. Review those fields
+ * against the Models API and model guides whenever a new id appears.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -18,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isEntryPoint } from "./lib/entrypoint.mjs";
+import { loadMaintenanceEnv } from "./lib/load-env.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REGISTRY_PATH = path.join(HERE, "..", "config", "models.json");
@@ -25,8 +25,16 @@ export const MODELS_URL = "https://api.anthropic.com/v1/models";
 export const PRICING_URL = "https://docs.anthropic.com/en/docs/about-claude/pricing";
 export const ANTHROPIC_VERSION = "2023-06-01";
 
-/** Pricing-page column order: base input, 5m cache write, 1h cache write, cache read, output. */
+/** Registry price fields; HTML table headers determine their column positions. */
 const PRICING_COLUMNS = ["inputPerMTok", "cacheWrite5mPerMTok", "cacheWrite1hPerMTok", "cacheReadPerMTok", "outputPerMTok"];
+const PRICING_HEADERS = {
+  name: "name",
+  input: "inputPerMTok",
+  output: "outputPerMTok",
+  "5m writes": "cacheWrite5mPerMTok",
+  "1h writes": "cacheWrite1hPerMTok",
+  "hits and refreshes": "cacheReadPerMTok",
+};
 
 /** Collapse an HTML document to whitespace-normalized text. */
 export function htmlToText(html) {
@@ -41,32 +49,65 @@ export function htmlToText(html) {
 }
 
 /**
- * Find the five dollar figures that follow each display name in the pricing
- * text. Returns { [displayName]: pricing } for names that yielded exactly the
- * expected columns and lists the rest in `unparsed`.
+ * Read named rows only from HTML tables with all six explicit pricing headers.
+ * Sidebar mentions and similarly named models cannot supply another row's
+ * prices. Duplicate rows, missing columns and ambiguous cells fail closed.
  */
-export function parsePricingText(text, displayNames) {
+export function parsePricingText(html, displayNames) {
   const parsed = {};
   const unparsed = [];
+  const candidates = new Map(displayNames.map((name) => [name, []]));
+  for (const table of html.match(/<table\b[\s\S]*?<\/table>/gi) ?? []) {
+    let columns;
+    for (const row of table.match(/<tr\b[\s\S]*?<\/tr>/gi) ?? []) {
+      const headers = [...row.matchAll(/<th\b[^>]*>([\s\S]*?)<\/th>/gi)];
+      if (headers.length > 0) {
+        const mapped = headers.map((cell) => PRICING_HEADERS[htmlToText(cell[1]).toLowerCase()]);
+        // Group headings such as "Additional models" do not replace the columns.
+        if (mapped.length === 6) columns = new Set(mapped).size === 6 && mapped.every(Boolean)
+          ? mapped : undefined;
+        continue;
+      }
+      if (columns === undefined) continue;
+      const cells = [...row.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => cell[1]);
+      const nameCell = cells[columns.indexOf("name")];
+      if (nameCell === undefined) continue;
+      const link = /<a\b[^>]*>([\s\S]*?)<\/a>/i.exec(nameCell);
+      const name = htmlToText(link ? link[1] : nameCell);
+      const rows = candidates.get(name);
+      if (rows === undefined) continue;
+      const pricing = {};
+      let valid = cells.length === columns.length;
+      for (const field of PRICING_COLUMNS) {
+        const price = /^\$\s?(\d+(?:\.\d+)?)(?:\s*\/\s*MTok)?$/.exec(htmlToText(cells[columns.indexOf(field)] ?? ""));
+        const amount = price === null ? NaN : Number(price[1]);
+        if (!Number.isFinite(amount) || amount <= 0) valid = false;
+        pricing[field] = amount;
+      }
+      rows.push(valid ? pricing : null);
+    }
+  }
   for (const name of displayNames) {
-    const at = text.indexOf(name);
-    if (at < 0) {
-      unparsed.push(`${name}: not found on the pricing page`);
-      continue;
-    }
-    const window = text.slice(at + name.length, at + name.length + 400);
-    const amounts = [...window.matchAll(/\$\s?(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]));
-    if (amounts.length < PRICING_COLUMNS.length) {
-      unparsed.push(`${name}: found ${amounts.length} dollar figures, expected ${PRICING_COLUMNS.length}`);
-      continue;
-    }
-    const pricing = {};
-    PRICING_COLUMNS.forEach((column, index) => {
-      pricing[column] = amounts[index];
-    });
-    parsed[name] = pricing;
+    const rows = candidates.get(name);
+    if (rows.length === 0) unparsed.push(`${name}: not found in a recognized pricing table`);
+    else if (rows.length !== 1 || rows[0] === null) unparsed.push(`${name}: ambiguous or incomplete pricing row`);
+    else parsed[name] = rows[0];
   }
   return { parsed, unparsed };
+}
+
+/** Prepare a refresh, and write only when every registry entry has valid prices. */
+export function refreshRegistryFile(registryPath, apiModels, pricingHtml, today, write) {
+  const registry = JSON.parse(readFileSync(registryPath, "utf8"));
+  const merged = mergeModelList(registry, apiModels, today);
+  const { parsed, unparsed } = parsePricingText(pricingHtml, merged.registry.models.map((model) => model.displayName));
+  const priced = applyPricing(merged.registry, parsed);
+  const report = [...merged.report, ...priced.report, ...unparsed.map((line) => `pricing: ${line}`)];
+  if (write) {
+    if (unparsed.length > 0) throw new Error(`Refusing to write incomplete pricing: ${unparsed.join("; ")}`);
+    writeFileSync(registryPath, `${JSON.stringify(priced.registry, null, 2)}\n`, "utf8");
+  }
+  return { registry: priced.registry, report };
 }
 
 /**
@@ -140,34 +181,28 @@ async function fetchAllModels(apiKey) {
 }
 
 async function main(argv) {
+  loadMaintenanceEnv();
   const write = argv.includes("--write");
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     console.error("ANTHROPIC_API_KEY is required (the Models API is free; no message is sent).");
     return 2;
   }
-  const registry = JSON.parse(readFileSync(REGISTRY_PATH, "utf8"));
   const today = new Date().toISOString().slice(0, 10);
 
   const apiModels = await fetchAllModels(apiKey);
-  const merged = mergeModelList(registry, apiModels, today);
 
   const pricingResponse = await fetch(PRICING_URL);
   if (!pricingResponse.ok) {
     throw new Error(`${PRICING_URL} responded ${pricingResponse.status}`);
   }
-  const pricingText = htmlToText(await pricingResponse.text());
-  const { parsed, unparsed } = parsePricingText(pricingText, merged.registry.models.map((m) => m.displayName));
-  const priced = applyPricing(merged.registry, parsed);
-
-  const report = [...merged.report, ...priced.report, ...unparsed.map((line) => `pricing: ${line}`)];
+  const { report } = refreshRegistryFile(REGISTRY_PATH, apiModels, await pricingResponse.text(), today, write);
   console.log(`models:refresh — snapshot ${today}`);
   for (const line of report) console.log(`  ${line}`);
   if (report.length === 0) console.log("  no changes");
-  console.log("  review context windows, output ceilings, effort/sampling/thinking support and lifecycle by hand; the API does not serve them.");
+  console.log("  review registry limits and request policy against the Models API capabilities, model guides and lifecycle documentation.");
 
   if (write) {
-    writeFileSync(REGISTRY_PATH, `${JSON.stringify(priced.registry, null, 2)}\n`, "utf8");
     console.log(`  wrote ${REGISTRY_PATH}`);
   } else {
     console.log("  dry run — pass --write to update config/models.json");

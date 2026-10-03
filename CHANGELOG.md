@@ -1,6 +1,42 @@
 # Changelog
 
-## Unreleased — stock-split correctness (2026-09-30 to 2026-10-02)
+## 0.1.0 — 2026-10-03
+
+First tagged open-source release of the local, single-user application. The
+sections below record the earlier development batches included in this release.
+
+- AI connections support official ChatGPT plan OAuth and Google sign-in through
+  the installed Gemini CLI. The selected connection runs bull, bear and judge
+  passes; calculations and citation verification remain deterministic.
+- Account/model changes invalidate incompatible partial work. Connection or
+  quota failures never switch to API billing. Claude API remains optional.
+- Subscription passes use supplied evidence without extra web search and
+  disclose that `$0` API charges do not measure subscription allowance.
+- Credentials remain in protected per-user storage; disconnect stops local
+  requests. ChatGPT revocation failures are disclosed. Live OAuth sign-in and
+  inference remain unverified; see D-33 and the release review.
+
+- Historical valuation bands stop at a quarter whose currency is missing or
+  incompatible; annual vendor ROE no longer masquerades as TTM ROE.
+- Operating margins, projections, returns and debt coverage use operating
+  income. Broader vendor EBIT cannot substitute for missing operating income.
+- Computed REIT FFO and AFFO disclose unreconciled affiliate and ownership
+  adjustments. Neither is claimed to bound the issuer's reported figure.
+- Data-only fair-value prose uses the figure's established currency.
+- Maintenance commands load the application's environment files before using
+  keys or database paths. The pricing refresh reads explicit table headers
+  and refuses incomplete or ambiguous updates.
+- Remove the vulnerable lint-only glob dependency through a scoped directory
+  adapter; unsupported custom root patterns fail explicitly (D-32).
+- Setup includes clone and production instructions; private environment-file
+  variants are ignored while the placeholder example remains tracked.
+- Report spec **1.5.0**, payload **1.6.0**: earlier reports retain their saved
+  values and incompatible analysis passes cannot be resumed.
+
+Validation and remaining limits are recorded in the
+[release review](docs/audit/REMEDIATION-REPORT.md#release-review-2026-10-02).
+
+## Included development batch — stock-split correctness (2026-09-30 to 2026-10-02)
 
 Share counts and prices are combined only on one established split basis. The
 convention is D-30 in [`docs/audit/DECISIONS.md`](docs/audit/DECISIONS.md); the

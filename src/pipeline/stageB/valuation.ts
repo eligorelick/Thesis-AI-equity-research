@@ -2353,14 +2353,14 @@ export function multiplesFramework(
     notes.push(reason);
     gaps.push(gapEntry("valuation.multiples.ownHistory.evLeaseBasis", reason, "info"));
   }
-  // The current FFO is NAREIT (gains, impairments or real-estate-only D&A
-  // netted) while the history can only be net income + D&A: withhold the FFO
+  // The current FFO has component adjustments (gains, impairments or real-estate-only
+  // D&A) while the history can only be net income + D&A: withhold the FFO
   // bands rather than rank two definitions against each other (the same rule
   // the lease basis applies to EV above).
   const ffoKeys: readonly MultipleKey[] = ["priceToFfo", "priceToAffo"];
   if (route === "reit" && inputs.ffoHistoryComparable === false) {
     const reason =
-      "the current FFO is the NAREIT figure (property-sale gains, impairments or real-estate-only depreciation netted, on the latest fiscal year) " +
+      "the current FFO uses a component-adjusted reconstruction (property-sale gains, impairments or real-estate-only depreciation netted, on the latest fiscal year; ownership reconciliation remains unavailable) " +
       "while the own-history series can only be rebuilt as net income + D&A per rolling four quarters — the P/FFO and P/AFFO bands are withheld " +
       "rather than ranking one definition inside a history built on another";
     for (const key of ffoKeys) {
@@ -3053,9 +3053,8 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
 
 export interface ReitInputs {
   /**
-   * FFO. When `ffoBasis` says so this is the NAREIT computation (net income +
-   * real-estate D&A − gains on property sales + impairments); otherwise it is
-   * the netIncome + D&A approximation.
+   * Approximate FFO reconstruction. `ffoBasis` identifies the available NAREIT
+   * components and missing ownership / affiliated-entity reconciliation.
    */
   ffoApprox: number | null;
   /** AFFO — recurring capex and straight-line rent when tagged, else FFO − all capex. */
@@ -3070,9 +3069,9 @@ export interface ReitInputs {
   ffoBasis?: string | null;
   /** WS5: how AFFO was actually built. */
   affoBasis?: string | null;
-  /** WS5: true when FFO added back total D&A because real-estate D&A is untagged. */
+  /** True when FFO components or the ownership / affiliated-entity basis remain unreconciled. */
   ffoApproximate?: boolean;
-  /** WS5: true when AFFO could not subtract recurring capex / straight-line rent. */
+  /** True when AFFO inherits approximate FFO or lacks recurring capex / straight-line rent. */
   affoApproximate?: boolean;
   /**
    * WS5 (D-16): the REIT sub-map. "undetermined" withholds every FFO-based
@@ -3114,10 +3113,9 @@ export interface ReitValuationResult {
  * REIT valuation block: P/FFO + P/AFFO + implied-cap-rate sketch.
  *
  * WS5: FFO and AFFO now arrive already computed (see
- * `computeNareitFfo` in stageB/financialMetrics.ts), which applies the NAREIT
- * definition where the filer's tags allow and labels the figure approximate
- * where they do not. This function prints the basis it is given rather than a
- * fixed disclaimer that was wrong whenever the definition DID apply.
+ * `computeNareitFfo` in stageB/financialMetrics.ts), which reconstructs available
+ * NAREIT components and discloses unreconciled ownership and affiliated entities.
+ * This function prints the basis it is given and preserves its uncertainty.
  *
  * When the equity-vs-mortgage sub-map is undetermined every FFO-based figure is
  * withheld: P/FFO on a mortgage REIT is meaningless, and asserting an equity
@@ -3163,14 +3161,14 @@ export function reitValuation(inputs: ReitInputs): ReitValuationResult {
       "FFO (approx.) = netIncome + D&A — gains on property sales / RE impairments not netted (no tagged lines)",
   );
   notes.push(
-    inputs.affoBasis ?? "AFFO (rough) = FFO - |capex| — treats ALL capex as maintenance (conservative)",
+    inputs.affoBasis ??
+      "AFFO (rough) = approximate FFO - |capex| — treats ALL capex as maintenance; unreconciled FFO and issuer-specific adjustments prevent a guaranteed bound",
   );
   if (inputs.ffoApproximate === true) {
     notes.push(
-      "FFO is labeled APPROXIMATE: a component stood in for the NAREIT definition — the FFO basis above names which " +
-        "(total depreciation and amortization where real-estate depreciation is untagged, the generic asset-impairment " +
-        "charge where the real-estate impairment is untagged). Both stand-ins err the same way, so the figure sits at " +
-        "or above the NAREIT definition.",
+      "FFO is labeled APPROXIMATE: ownership reconciliation and/or NAREIT components remain incomplete — the FFO basis above identifies the limitations. " +
+        "Common/preferred shareholder allocations, noncontrolling interests and consolidated/unconsolidated partnerships and joint ventures " +
+        "are not fully reconciled, so the reconstruction may be above or below the issuer's common-holder FFO.",
     );
   }
   const price = posOrNull(inputs.sharePrice);

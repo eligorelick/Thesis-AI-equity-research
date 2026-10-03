@@ -18,7 +18,9 @@ telemetry (`telemetry.nextjs.org`). `.env.example` ships
 | Recipient | Sent on every request | Only when |
 | --- | --- | --- |
 | SEC EDGAR (`www.sec.gov`, `data.sec.gov`, `efts.sec.gov`) | `EDGAR_CONTACT`, verbatim, as the `User-Agent`; the ticker, CIK, and filing paths being read | A real contact is configured (`src/providers/edgar.ts` `EDGAR_USER_AGENT`, `hasConfiguredEdgarIdentity`) |
-| Anthropic (`api.anthropic.com`) | The analysis prompt and the serialized ticker context payload; `ANTHROPIC_API_KEY` | `ANTHROPIC_API_KEY` is set |
+| Anthropic (`api.anthropic.com`) | The analysis prompt and the serialized ticker context payload; `ANTHROPIC_API_KEY` | Claude API is selected and a key is configured |
+| OpenAI (`auth.openai.com`, `api.openai.com`) | OAuth registration, token renewal/revocation and account model catalog; research prompt and ticker payload for inference | You connect ChatGPT, request its models, or run a report using that connection |
+| Google through the official Gemini CLI | Google OAuth and CLI service requests; the research prompt and ticker payload for inference | You connect Gemini or run a report using that connection |
 | Anthropic's server-side web search | Search queries the model composes, executed by Anthropic on its own servers | The model chooses to search; capped at `MAX_PROVIDER_WEB_SEARCHES` = 8 uses per request (`src/providers/anthropic.ts`) |
 | Financial Modeling Prep (`financialmodelingprep.com`) | The symbol and endpoint parameters; `FMP_API_KEY` in an `apikey` header, never in the URL | `FMP_API_KEY` is set |
 | Yahoo (`query1.finance.yahoo.com`) | The symbol and the requested date range; a Thesis-identifying `User-Agent` (`YAHOO_DEFAULT_USER_AGENT`, mandatory — the endpoint answers 429 without one). It names the product only: **`EDGAR_CONTACT` is never sent to Yahoo**, or to any provider other than SEC | Prices are needed and FMP could not serve them |
@@ -26,7 +28,7 @@ telemetry (`telemetry.nextjs.org`). `.env.example` ships
 | Finnhub (`finnhub.io`) | The symbol; `FINNHUB_API_KEY` in an `X-Finnhub-Token` header | `FINNHUB_API_KEY` is set |
 | FINRA (`api.finra.org`) | The symbol and date range. Keyless: no credential is configured or sent | Short-interest data is requested |
 
-What the Anthropic payload contains, precisely
+What the selected AI provider's research payload contains, precisely
 (`src/pipeline/stageC/payload.ts`, `src/pipeline/stageC/prompts.ts`):
 
 - Excerpts of the company's public SEC filings: 10-K Item 1A (or 20-F Item 3.D)
@@ -65,7 +67,7 @@ provider.
 
 ## Where local data is kept
 
-The SQLite database is the only durable store. Its default location is the OS
+The SQLite database holds reports, caches and ordinary settings. Its default location is the OS
 application-data directory (`src/db/paths.ts`):
 
 - Windows: `%LOCALAPPDATA%\Thesis\thesis.db`
@@ -77,6 +79,25 @@ SQLite writes `thesis.db-wal` and `thesis.db-shm` beside the database file.
 
 It holds your watchlist, generated reports, job history and per-pass cost
 records, saved settings, and the `api_cache` table of provider responses.
+
+AI connections are kept separately in the OS user's `Thesis/ai` directory:
+`%LOCALAPPDATA%` on Windows, `$HOME/Library/Application Support` on macOS,
+and `$XDG_CONFIG_HOME` or `$HOME/.config` on Linux. Database path overrides
+do not move these credentials. ChatGPT's `connections.v1.json` is encrypted
+with Windows DPAPI on Windows and restricted to its owner on macOS/Linux.
+It contains a stable installation ID, separate account registrations and
+tokens, and the selected report connection. Only account labels and status
+reach the browser. Tokens are excluded from reports, source control and logs.
+
+Gemini stores its own OAuth state under an isolated `gemini-<id>` subdirectory
+owned by Thesis. Thesis does not read another app's Google credentials. CLI
+telemetry, extensions, hooks, MCP and tools are disabled; prompts are passed
+on standard input rather than command-line arguments. The CLI may retain its
+own session files inside this directory. Disconnect stops local child
+processes and removes that directory. Remove the CLI's remote authorization
+from Google Account connections if needed. ChatGPT disconnect clears local
+tokens and attempts to revoke the renewable session; an unconfirmed remote
+revocation is reported. Account registrations remain for later reconnection.
 
 The `csrf-token` file does not follow `THESIS_DB_PATH`. It is written to
 `THESIS_TOKEN_FILE` when that is set, and otherwise to `csrf-token` in the

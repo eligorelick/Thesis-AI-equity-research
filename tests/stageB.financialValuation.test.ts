@@ -246,11 +246,12 @@ describe("reitValuation — the basis it prints is the basis it used", () => {
     expect(r.withheldReason).toBeNull();
   });
 
-  it("labels an approximate FFO and says which way it errs", () => {
+  it("labels unreconciled FFO approximate without claiming a bound", () => {
     const r = reitValuation({ ...BASE_REIT, ffoApproximate: true });
 
     expect(r.notes.join(" ")).toContain("labeled APPROXIMATE");
-    expect(r.notes.join(" ")).toContain("at or above the NAREIT definition");
+    expect(r.notes.join(" ")).toMatch(/ownership.*reconcil/i);
+    expect(r.notes.join(" ")).not.toMatch(/at or above|or above the NAREIT|conservative\)|conservative floor/i);
   });
 
   it("withholds every FFO-based figure when the REIT sub-map is undetermined", () => {
@@ -316,6 +317,38 @@ describe("valueCompany — financial routes state every withheld model", () => {
       preferredStock: 0,
     },
   };
+
+  it("keeps approximate ownership basis through actual REIT valuation output without directional guarantees", () => {
+    const r = valueCompany(route("reit"), {
+      currentPrice: 50,
+      waccPct: 9,
+      netDebt: 2_000,
+      dilutedShares: 100,
+      dcfInputs: null,
+      multiples: { ...multiples, ffoHistoryComparable: false },
+      excessReturn: null,
+      reit: {
+        ffoApprox: 400,
+        affoApprox: 300,
+        ffoApproximate: true,
+        affoApproximate: true,
+        ffoBasis: "FFO approximate: ownership and joint-venture reconciliation unavailable.",
+        sharePrice: 50,
+        shares: 100,
+        netDebt: 2_000,
+        submap: "equity",
+      },
+    });
+    expect(r.kind).toBe("reit");
+    if (r.kind !== "reit") throw new Error("expected REIT output");
+    expect(r.reit.pToFfo).toBe(12.5);
+    expect(r.reit.pToAffo).toBeCloseTo(16.6666666667, 8);
+    const basis = [...r.notes, ...r.reit.notes, ...r.multiples.notes, ...r.gaps.map((g) => g.reason)].join(" ");
+    expect(basis).toMatch(/ownership and joint-venture reconciliation unavailable/i);
+    expect(r.reit.notes.find((note) => note.startsWith("AFFO"))).toMatch(/approximate FFO/i);
+    expect(basis).not.toMatch(/at or above|or above the NAREIT|conservative floor|maintenance \(conservative\)|current FFO is the NAREIT figure/i);
+    expect(r.gaps.find((g) => g.field === "valuation.multiples.ownHistory.ffoBasis")?.reason).toMatch(/component-adjusted/i);
+  });
 
   it("withholds the FCFF DCF, the reverse DCF, EV/EBITDA and ROIC−WACC with a reason each", () => {
     for (const base of ["bank", "insurer", "reit-mortgage"] as const) {

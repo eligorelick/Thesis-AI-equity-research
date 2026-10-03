@@ -622,10 +622,37 @@ describe("mortgage-REIT route metrics", () => {
   });
 });
 
-describe("computeNareitFfo — the NAREIT definition, and what stands in for it", () => {
+describe("computeNareitFfo — approximate reconstruction and missing reconciliation", () => {
   const REIT_FY = { start: "2025-01-01", end: "2025-12-31" };
 
-  it("applies the definition exactly when real-estate depreciation, gains and impairments are tagged", () => {
+  it("discloses unreconciled ownership even with Realty Income-style real-estate components", () => {
+    // Realty Income FY2025 SEC supplemental, pp14/16:
+    // https://www.sec.gov/Archives/edgar/data/726728/000072672826000009/realtyincomeq42025supple.htm
+    // Common-holder FFO is 3,860,323 (USD thousands). This reconstruction
+    // omits +33,345 JV adjustments and -10,047 FFO NCI, and starts from
+    // consolidated NI rather than common-holder NI. Specific tags alone
+    // cannot establish an exact NAREIT/common-holder reconciliation.
+    const r = computeNareitFfo({
+      companyFacts: okFacts({
+        NetIncomeLoss: [{ ...REIT_FY, val: 1_069_783_000 }],
+        DepreciationAndAmortizationRealEstate: [{ ...REIT_FY, val: 2_521_578_000 }],
+        GainsLossesOnSalesOfInvestmentRealEstate: [{ ...REIT_FY, val: 177_640_000 }],
+        ImpairmentOfRealEstate: [{ ...REIT_FY, val: 434_497_000 }],
+      }),
+      periodEnd: REIT_FY.end,
+      netIncome: 1_069_783_000,
+      depreciationAndAmortization: 2_524_200_000,
+    });
+    expect(r.ffo).toBe(3_848_218_000);
+    expect(r.ffo).toBeLessThan(3_860_323_000);
+    expect(r.ffoApproximate).toBe(true);
+    expect(r.ffoBasis).toMatch(/ownership.*reconcil/i);
+    expect(r.ffoBasis).toMatch(/joint ventures/i);
+    expect(r.ffoBasis).not.toMatch(/at or above the definition/i);
+    expect(r.gaps.some((g) => g.field === "valuation.reit.ffo.ownershipReconciliation")).toBe(true);
+  });
+
+  it("AFFO inherits unreconciled FFO even when recurring capex and rent are available", () => {
     const r = computeNareitFfo({
       companyFacts: okFacts({
         NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
@@ -642,12 +669,13 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
 
     // 400 + 900 − 120 + 60 = 1,240
     expect(r.ffo).toBe(1_240);
-    expect(r.ffoApproximate).toBe(false);
+    expect(r.ffoApproximate).toBe(true);
     expect(r.ffoBasis).toContain("gains on property sales 120");
     // AFFO = 1,240 − 150 − 40 = 1,050
     expect(r.affo).toBe(1_050);
-    expect(r.affoApproximate).toBe(false);
-    expect(r.gaps).toEqual([]);
+    expect(r.affoApproximate).toBe(true);
+    expect(r.affoBasis).toMatch(/inherits.*FFO/i);
+    expect(r.gaps.some((g) => g.field === "valuation.reit.affo.ffoBasis")).toBe(true);
   });
 
   it("nets the disposition-gain element most equity REITs actually use", () => {
@@ -668,7 +696,7 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
     // 400 + 900 − 300 = 1,000
     expect(r.ffo).toBe(1_000);
     expect(r.ffoBasis).toContain("GainsLossesOnSalesOfInvestmentRealEstate");
-    expect(r.ffoApproximate).toBe(false);
+    expect(r.ffoApproximate).toBe(true);
   });
 
   it("does not subtract a generic asset-disposal gain, and names the direction of the untagged case", () => {
@@ -712,7 +740,7 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
     expect(r.ffoApproximate).toBe(true);
     expect(r.ffoBasis).toContain("APPROXIMATE");
     expect(r.ffoBasis).toContain("AssetImpairmentCharges");
-    expect(r.ffoBasis).toContain("at or above the definition");
+    expect(r.ffoBasis).not.toContain("at or above the definition");
     expect(r.gaps.some((g) => g.field === "valuation.reit.ffo.realEstateImpairment")).toBe(true);
     // The real-estate element wins outright when it is on file.
     const exact = computeNareitFfo({
@@ -727,7 +755,7 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
       depreciationAndAmortization: 900,
     });
     expect(exact.ffo).toBe(1_360);
-    expect(exact.ffoApproximate).toBe(false);
+    expect(exact.ffoApproximate).toBe(true);
   });
 
   it("never adds a securities write-down back into FFO", () => {
@@ -744,10 +772,10 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
     });
 
     expect(r.ffo).toBe(1_300);
-    expect(r.ffoApproximate).toBe(false);
+    expect(r.ffoApproximate).toBe(true);
   });
 
-  it("labels FFO approximate when only total D&A is on file, and says which way it errs", () => {
+  it("labels total-D&A FFO approximate without asserting a bound on unreconciled common FFO", () => {
     const r = computeNareitFfo({
       companyFacts: okFacts({
         NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
@@ -762,12 +790,14 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
     expect(r.ffo).toBe(1_350);
     expect(r.ffoApproximate).toBe(true);
     expect(r.ffoBasis).toContain("APPROXIMATE");
-    expect(r.ffoBasis).toContain("at or above the definition");
+    expect(r.ffoBasis).not.toContain("at or above the definition");
     expect(r.gaps.some((g) => g.field === "valuation.reit.ffo.realEstateDepreciation")).toBe(true);
-    // AFFO falls back to all-capex and is disclosed as a conservative floor.
+    // All-capex AFFO remains approximate; missing ownership adjustments
+    // prevent a guaranteed bound on the issuer's reported AFFO.
     expect(r.affo).toBe(1_150);
     expect(r.affoApproximate).toBe(true);
-    expect(r.affoBasis).toContain("conservative floor");
+    expect(r.affoBasis).not.toContain("conservative floor");
+    expect(r.affoBasis).toMatch(/development spending/i);
   });
 
   it("falls back to the statement rows when companyfacts are unavailable", () => {
@@ -801,7 +831,7 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
   // spending, not recurring capex. It was subtracted under the recurring label
   // with the result marked exact, so a developer REIT's AFFO was understated
   // by its whole pipeline and published as the NAREIT figure.
-  it("does not count development spending as recurring capex: a development-only filer gets the approximate floor", () => {
+  it("does not count development spending as recurring capex: a development-only filer gets an approximation", () => {
     const r = computeNareitFfo({
       companyFacts: okFacts({
         NetIncomeLoss: [{ ...REIT_FY, val: 400 }],
@@ -817,7 +847,7 @@ describe("computeNareitFfo — the NAREIT definition, and what stands in for it"
 
     expect(r.ffo).toBe(1_300);
     expect(r.affoApproximate).toBe(true);
-    expect(r.affoBasis).toContain("conservative floor");
+    expect(r.affoBasis).not.toContain("conservative floor");
     expect(r.affo).toBe(1_300 - 2_150);
     expect(r.affoBasis).not.toContain("PaymentsToDevelopRealEstateAssets");
   });

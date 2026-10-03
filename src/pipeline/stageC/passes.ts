@@ -32,6 +32,7 @@
  */
 
 import type { ManifestEntry } from "@/types/core";
+import { parseSubscriptionModel } from "@/ai/contracts";
 import { sourceManifestEntries, type DataBundle } from "@/pipeline/types";
 import { routeMetricsBlock, type ComputedMetrics } from "@/pipeline/compute";
 import { computeDcfDisplay } from "@/pipeline/stageB/fairValue";
@@ -845,7 +846,7 @@ function telemetryFromPassRun<T>(
     webSearches: run.ok ? run.result.webSearches : (run.webSearches ?? 0),
     costUsd: run.ok ? run.result.costUsd : (run.costUsd ?? 0),
     fallbackUsed: run.ok ? run.result.fallbackUsed : (run.fallbackUsed ?? false),
-    billable: run.ok || run.costUsd !== undefined,
+    billable: !parseSubscriptionModel(requestedModel) && (run.ok || run.costUsd !== undefined),
     fetchedUrls,
   };
 }

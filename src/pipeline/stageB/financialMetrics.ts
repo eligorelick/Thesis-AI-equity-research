@@ -256,8 +256,8 @@ export const STRAIGHT_LINE_RENT_TAGS = [
  * is the cash outflow to DEVELOP real estate — growth spending — and was
  * subtracted here under the recurring label with the result marked exact; a
  * developer REIT's AFFO was understated by its whole pipeline. A filer that
- * tags development but no recurring element falls to the all-capex floor
- * below, which says it is approximate and in which direction.
+ * tags development but no recurring element falls to the all-capex approximation
+ * below; unreconciled FFO and issuer-specific adjustments prevent a guaranteed bound.
  */
 export const RECURRING_CAPEX_TAGS = ["PaymentsForCapitalImprovements"] as const;
 export const DEPRECIATION_AMORTIZATION_TAGS = [
@@ -1075,7 +1075,7 @@ function mortgageReitMetrics(
 }
 
 // ---------------------------------------------------------------------------
-// Equity-REIT FFO / AFFO — the NAREIT definition (criterion e)
+// Equity-REIT FFO / AFFO — approximate NAREIT reconstruction (criterion e)
 // ---------------------------------------------------------------------------
 
 export interface NareitFfoResult {
@@ -1084,13 +1084,13 @@ export interface NareitFfoResult {
   /** AFFO in currency; null when withheld. */
   affo: number | null;
   /**
-   * True when a component stood in for the definition — total D&A where
-   * real-estate D&A is untagged, or the generic asset-impairment charge where
-   * the real-estate impairment is untagged. `ffoBasis` names which, and both
-   * stand-ins err in the same direction: FFO sits at or ABOVE the definition.
+   * True when FFO is not reconciled to the issuer's ownership basis, or a
+   * component stands in for the definition. This reconstruction always lacks
+   * common/preferred, noncontrolling-interest and joint-venture adjustments;
+   * real-estate-specific tags alone cannot establish exact common-holder FFO.
    */
   ffoApproximate: boolean;
-  /** True when AFFO could not subtract recurring capex / straight-line rent. */
+  /** True when AFFO inherits approximate FFO or lacks recurring capex / rent. */
   affoApproximate: boolean;
   /**
    * True when FFO is exactly net income + TOTAL depreciation and amortization
@@ -1125,15 +1125,17 @@ export interface NareitFfoInputs {
 }
 
 /**
- * FFO per the NAREIT definition: net income (GAAP) plus real-estate
+ * Approximate FFO reconstruction: net income (GAAP) plus real-estate
  * depreciation and amortization, minus gains on property sales, plus
  * impairments of depreciable real estate.
  *
  * Real-estate D&A is the part of D&A NAREIT adds back; a diversified REIT's
  * corporate D&A is not supposed to be. Where the filer tags real-estate
- * depreciation separately the definition is applied exactly; where it does not,
- * total D&A stands in and the figure is labeled approximate rather than
- * published as if it were the definition.
+ * depreciation separately that component is available; where it does not,
+ * total D&A stands in. Neither case reconciles ownership: NAREIT also requires
+ * appropriate consolidated/unconsolidated partnership and joint-venture
+ * adjustments, and common-holder FFO must account for preferred and NCI.
+ * The result stays approximate and has no guaranteed direction of error.
  *
  * AFFO subtracts recurring capital expenditure and straight-line rent when the
  * filer tags them; otherwise it falls back to the existing rough treatment
@@ -1238,7 +1240,18 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
       ? `+ impairments ${impairmentsValue} (${impairments.tag})`
       : "+ impairments (none tagged; treated as zero)",
   ];
-  const ffoApproximateReasons: string[] = [];
+  const ownershipReason =
+    "ownership reconciliation is unavailable: common/preferred shareholder allocation, noncontrolling interests, " +
+    "and consolidated/unconsolidated partnerships and joint ventures are not reconciled — " +
+    "this simplified reconstruction may be above or below the issuer's common-holder FFO";
+  const ffoApproximateReasons: string[] = [ownershipReason];
+  notes.push(`FFO is approximate because ${ownershipReason}.`);
+  gaps.push({
+    field: "valuation.reit.ffo.ownershipReconciliation",
+    reason: ownershipReason,
+    severity: "info",
+    attemptedSources: ["edgar:companyfacts", "statements:income.netIncome"],
+  });
   if (!daIsRealEstate) {
     ffoApproximateReasons.push(
       "the filer does not tag real-estate depreciation separately, so TOTAL depreciation and amortization is added back — NAREIT adds back only the real-estate portion",
@@ -1250,18 +1263,18 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
     );
   }
   const ffoBasis =
-    `FFO (NAREIT) = ${ffoParts.join(" ")} = ${ffo}.` +
+    `FFO (approximate NAREIT reconstruction) = ${ffoParts.join(" ")} = ${ffo}.` +
     (ffoApproximateReasons.length === 0
       ? ""
-      : ` APPROXIMATE: ${ffoApproximateReasons.join("; and ")} — so this figure sits at or above the definition.`);
+      : ` APPROXIMATE: ${ffoApproximateReasons.join("; and ")}.`);
   if (impairmentIsGeneric) {
     notes.push(
-      "FFO adds back the generic asset-impairment charge because the filer tags no real-estate impairment — labeled approximate: NAREIT adds back only impairments of depreciable real estate, so a goodwill or other non-real-estate write-down in that charge leaves FFO ABOVE the definition.",
+      "FFO adds back the generic asset-impairment charge because the filer tags no real-estate impairment — labeled approximate: NAREIT adds back only impairments of depreciable real estate, so this component may include ineligible goodwill or other non-real-estate write-downs.",
     );
     gaps.push({
       field: "valuation.reit.ffo.realEstateImpairment",
       reason:
-        "real-estate impairment is not separately tagged — FFO adds back the generic asset-impairment charge instead and is labeled approximate (the figure sits at or above the definition)",
+        "real-estate impairment is not separately tagged — FFO adds back the generic asset-impairment charge instead and is labeled approximate",
       severity: "info",
       attemptedSources: REAL_ESTATE_IMPAIRMENT_TAGS.map(tagPath),
     });
@@ -1314,11 +1327,11 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
     affoApproximate = true;
     affoBasis =
       `AFFO (rough) = FFO ${ffo} − ALL capital expenditure ${Math.abs(inputs.capitalExpenditure)}. APPROXIMATE: the ` +
-      "filer tags no recurring/maintenance capital-expenditure element, so development spending is subtracted too — " +
-      "this is a conservative floor, below a true AFFO.";
+      "filer tags no recurring/maintenance capital-expenditure element, so development spending is subtracted too; " +
+      "unreconciled FFO and omitted issuer AFFO adjustments prevent a guaranteed bound on reported AFFO.";
     sources.push("statements:cashFlow.capitalExpenditure");
     notes.push(
-      "AFFO treats ALL capital expenditure as recurring because no maintenance-capex element is tagged — a conservative floor, disclosed as approximate.",
+      "AFFO treats ALL capital expenditure as recurring because no maintenance-capex element is tagged — disclosed as approximate, with no guaranteed bound on reported AFFO.",
     );
     gaps.push({
       field: "valuation.reit.affo",
@@ -1334,6 +1347,19 @@ export function computeNareitFfo(inputs: NareitFfoInputs): NareitFfoResult {
       reason: "no capital-expenditure figure available — AFFO not computable",
       severity: "warn",
       attemptedSources: [...RECURRING_CAPEX_TAGS.map(tagPath), "statements:cashFlow.capitalExpenditure"],
+    });
+  }
+
+  if (affo !== null && ffoApproximateReasons.length > 0) {
+    affoApproximate = true;
+    const inheritedReason = "AFFO inherits approximate FFO, including the unreconciled ownership basis; issuer-specific AFFO adjustments are not fully reconciled";
+    affoBasis += ` APPROXIMATE: ${inheritedReason}.`;
+    notes.push(`${inheritedReason}.`);
+    gaps.push({
+      field: "valuation.reit.affo.ffoBasis",
+      reason: inheritedReason,
+      severity: "info",
+      attemptedSources: ["valuation.reit.ffo"],
     });
   }
 

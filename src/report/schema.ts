@@ -58,7 +58,10 @@ import type { Grade, ClaimLabel, ManifestEntry } from "@/types/core";
  * valuation and grade built on them. Reports saved under 1.3.0 are read and
  * rendered as stored; a 1.3.0 → 1.4.0 comparison is "spec-version-mismatch".
  */
-export const REPORT_SPEC_VERSION = "1.4.0" as const;
+// 1.5.0 (2026-10-02): currency-safe own-history bands, dated ROE fallback,
+// and explicit FFO/AFFO ownership-basis approximation. Older reports retain
+// their stored stamp and are not compared as the same financial convention.
+export const REPORT_SPEC_VERSION = "1.5.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Legacy-read leniency

@@ -15,6 +15,75 @@ Read alongside:
   whose record supersedes them; the reconciliation row numbers (R-nn, V-nn)
   cited below refer to that retired table.
 
+## Release review 2026-10-02
+
+**2026-10-03 connection addition (D-33):** ChatGPT plan OAuth and an isolated
+official Gemini CLI connection now feed the same analyst/judge/verification
+pipeline. Connection selection is explicit; no paid API fallback is possible
+from these adapters. Local regression cases were added for auth and transport
+boundaries for required CI execution. The earlier counts and live data-only
+checks below describe the financial correction tree, before this addition.
+No live OAuth sign-in or inference was performed, and the full local suites
+were not repeated at the owner's request. Static checks, independent review
+and required GitHub checks gate publication of the combined release.
+
+The first tagged release includes the currency and split-basis batches plus
+the following reproduced corrections (D-31): historical multiple bands now
+stop at an incompatible or unknown quarterly currency; annual vendor ROE no
+longer overrides the dated statement-derived fallback for a TTM figure;
+computed FFO/AFFO disclose missing affiliate and ownership reconciliation;
+data-only fair-value prose reads an established currency from its own figure.
+Live-source checking also exposed broader vendor EBIT being labeled operating
+income: MSFT FY2026's margin was 50.92% instead of 46.78%. Operating projections,
+returns and current/prior debt coverage now consistently use operating income,
+with missing values withheld instead of replaced by broader vendor EBIT.
+Maintenance commands load the same environment files as the application, and
+the model-pricing refresh refuses incomplete, ambiguous or malformed tables.
+
+Each behavior correction has a regression that failed before the fix. Independent
+review found no additional actionable issue, including a separate review of the
+operating-income repair. The candidate passed 4,172 product tests (two skipped),
+four integration tests, both coverage contracts, typecheck, lint and the
+production build. Final release also requires the dependency audit and Windows
+smoke check; neither gate is waived.
+The audited numerical baseline and fixture bytes remain unchanged: only its
+comparison lockfile provenance and the explicitly documented report-version
+delta changed for this release.
+
+Production smoke runs used isolated databases: synthetic DEMO and DBNK,
+plus live MSFT, NVDA, JPM, O and TSM. All seven produced saved data-only
+reports, Markdown exports and print-ready HTML for the PDF flow. Dated
+spot-checks are evidence for these specific figures, not every output:
+
+| Check | Evidence and result |
+| --- | --- |
+| MSFT FY2026 | [Issuer release](https://www.microsoft.com/en-us/Investor/earnings/FY-2026-Q4/press-release-webcast): revenue USD 331.839bn, operating margin 46.78%, diluted EPS USD 17.95, FCF before SBC USD 66.987bn and after SBC USD 54.582bn matched the report. |
+| NVDA FY2024 comparative | [FY2025 filing](https://www.sec.gov/Archives/edgar/data/1045810/000104581025000023/nvda-20250126.htm): report's split-adjusted historical EPS USD 1.19 matched the restated comparative, without applying the split twice. |
+| JPM FY2025 | [Issuer 10-K](https://www.jpmorganchase.com/content/dam/jpmc/jpmorgan-chase-and-co/investor-relations/documents/quarterly-earnings/2025/4th-quarter/corp-10k-2025.pdf): reported-basis expense / (net interest income + noninterest revenue), 95,640 / (95,443 + 87,004), matched the displayed 52.4% efficiency ratio. |
+| Realty Income | [Issuer FFO reconciliation](https://www.sec.gov/Archives/edgar/data/726728/000072672826000009/realtyincomeq42025supple.htm) exposed unreconciled affiliate and ownership adjustments; the app's reconstruction is explicitly approximate, not claimed equal to issuer FFO. |
+| TSM ADR | Live report identified statements in TWD and quote in USD and withheld DCF, price multiples and upside requiring an unimplemented FX/share-basis bridge. Missing IFRS XBRL coverage remained disclosed. |
+
+The seven reports were regenerated with report spec 1.5.0. Browser checks
+confirmed saved history survives restart, the report view renders, Markdown
+downloads, and comparison with a 1.4.0 report says the versions are not
+comparable. Cancellation returned a terminal user-canceled job, no saved report
+and zero cost. Explicit scheduler resume and subsequent reports completed.
+
+The separately authorized paid smoke used Haiku 4.5 at low effort with a
+USD 2 job and rolling cap. Bull and bear passes succeeded and settled at
+USD 0.111518 and USD 0.142243 (total **USD 0.253761**, no pending settlement).
+The Sonnet judge's conservative request reservation exceeded the remaining
+budget, so it was blocked before submission and the app saved a disclosed
+data-only report. This verifies API access, two analyst passes, cost settlement
+and budget enforcement; it is **not** a completed live judge/synthesis test.
+No larger budget was used. Earlier measured runs below are historical evidence.
+
+Remaining product limits: one local user on loopback; provider access and
+coverage can fail; unsupported currencies and share bases are withheld;
+FFO/AFFO are approximations; grades and forecasts are house-model outputs,
+not independently established investment conclusions. Passing tests and
+spot-checks do not prove all companies or future provider responses correct.
+
 ## How the work was done
 
 **Phase 0 established what the code does before trusting either the README or

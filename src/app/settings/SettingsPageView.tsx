@@ -15,6 +15,7 @@ import {
   type SettingsPageControllerState,
 } from "@/settings/writeQueue";
 import { ResumeQueueControl } from "./ResumeQueueControl";
+import { AiConnections } from "./AiConnections";
 
 /**
  * Labels come from the model registry, which is also where the options come
@@ -96,7 +97,8 @@ export function SettingsPageView({
           </div>
         )}
 
-        <Panel title="analysis model" right={saveBadge}>
+        <AiConnections />
+        <Panel title="Claude API model (used only when selected above)" right={saveBadge}>
           {settings === null && state.status === "loading" ? (
             <div className="py-2 text-[11px] text-faint">loading…</div>
           ) : settings !== null ? (
@@ -142,7 +144,7 @@ export function SettingsPageView({
           ) : null}
         </Panel>
 
-        <Panel title="analysis effort" right={saveBadge}>
+        <Panel title="Claude API effort" right={saveBadge}>
           {settings === null && state.status === "loading" ? (
             <div className="py-2 text-[11px] text-faint">loading…</div>
           ) : settings !== null ? (

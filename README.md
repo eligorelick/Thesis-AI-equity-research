@@ -1,9 +1,8 @@
 # Thesis
 
-Thesis is a local-first equity research application. Enter a ticker: it collects
-and validates market data, computes deterministic financial metrics, optionally
-runs grounded AI analysis, and saves a report in which every number carries a
-source path and an as-of date.
+Thesis is a local-first equity research application. Enter a ticker to validate
+market data, compute financial metrics and optionally run grounded AI analysis.
+Saved reports give every number a source path and an as-of date.
 
 > **Informational only — not investment advice.** Reports contain A-F letter
 > grades and scenario price targets: model outputs derived from the data and
@@ -20,20 +19,26 @@ source path and an as-of date.
   technicals, grades and forensic indicators in deterministic TypeScript, on a
   sector route drawn from the industry label and SIC code and checked against
   what the filer actually tags — tags decide only where those are silent.
-- Optionally runs independent Anthropic bull and bear analyses and a judge
+- Optionally runs separate bull and bear analyses and a judge
   pass, verifies every cited number without another model call, and turns
   missing inputs into disclosed gaps rather than fabricated values.
 
 ## Quick start
 
-Node.js 22.18 or newer, and npm. CI tests Node 24, the supported
-configuration; Node 20 reached end of life in April 2026.
+Node.js 22.18 or newer, and npm. CI tests Node 24, the supported configuration;
+Node 20 reached end of life in April 2026.
 
 ```powershell
+git clone https://github.com/eligorelick/Thesis-AI-equity-research.git
+cd Thesis-AI-equity-research
 npm ci
-Copy-Item .env.example .env   # cp on macOS and Linux
+Copy-Item .env.example .env
 npm run dev
 ```
+
+On macOS or Linux, use `cp .env.example .env` instead of `Copy-Item`.
+For production, use `npm run build` then `npm start`. Keep `.env*` private;
+only the placeholder `.env.example` belongs in Git.
 
 Open <http://127.0.0.1:3000>; development and production both bind to
 `127.0.0.1`. Every provider key is optional: with no `FMP_API_KEY`, set
@@ -43,6 +48,48 @@ fictional report, and `/company/DEMO` and `/company/DBNK` are reserved strings
 served from `fixtures/fmp` whatever keys are set. None of the three reaches a
 provider: the two company slices say so in the manifest and the sample is
 labelled synthetic throughout; any other symbol is a live request.
+
+## AI connections
+
+Open **Settings → AI connections**, connect an account, choose a model, and
+save it as the report connection. Signing in does not run inference. AI can
+also be switched off for data-only reports.
+
+| Connection | Authorization | Usage |
+| --- | --- | --- |
+| ChatGPT | Official browser OAuth for local open-source apps; eligible Plus/Pro account | Your ChatGPT plan allowance and account credit settings |
+| Gemini | Official Gemini CLI 0.36 or newer, installed separately; Google browser sign-in | Your Google CLI allowance and account settings |
+| Claude | Optional `ANTHROPIC_API_KEY` | Separately billed Anthropic API usage |
+
+ChatGPT sign-in opens normal Chrome, with a fallback link. Gemini's own CLI
+opens the system browser; use Chrome as the default browser for its saved
+sign-in/autofill. Thesis gives Gemini an isolated local home and disables
+tools, extensions, hooks, MCP and inherited API keys. Its Google connection
+is separate from an existing personal CLI login. See Google's
+[installation guide](https://geminicli.com/docs/get-started/installation/).
+
+ChatGPT models come from the connected account's catalog. A catalog entry
+does not prove remaining quota or model access. Check
+[ChatGPT usage](https://chatgpt.com/#settings/Usage) and
+[Gemini quotas](https://geminicli.com/docs/resources/quota-and-pricing/)
+before generating reports. Thesis does not know your remaining allowance.
+There is no automatic change to a paid API when a connection fails.
+Subscription reports use the supplied evidence without additional web search;
+the existing Claude API path retains its bounded web search.
+
+The financial calculations and deterministic citation checks are shared by
+all providers. Account/model changes invalidate incompatible partial report
+work. The existing Claude model and effort controls apply only to that API
+connection. A subscription report's `$0` means no API charge recorded by
+Thesis, not free or unlimited usage; provider account credit settings still
+apply. Thesis's USD API caps do not cap subscription tokens or provider credits.
+
+ChatGPT credentials stay server-side in protected per-user storage (Windows
+DPAPI; owner-only files on macOS/Linux). Disconnect stops local requests and
+attempts ChatGPT session revocation. Google disconnect clears Thesis's CLI
+state; revoke the Google grant from your Google Account if desired. See
+[Privacy](docs/PRIVACY.md). The OAuth paths have offline regression coverage;
+live account sign-in/inference has not been verified for this release.
 
 ## Configuration
 
@@ -124,10 +171,8 @@ multiple is a rank among N quarters rather than a percentile, N printed beside
 it. Where a rule is this project's own choice rather than a standard, the
 report calls it a house convention in the same breath as the number.
 
-The forensic scores are published models;
-[`docs/RESEARCH.md`](docs/RESEARCH.md) is their evidence base — coefficients
-with their papers, the population each was fitted on, and where each stops
-applying. The source cites it by section.
+[`docs/RESEARCH.md`](docs/RESEARCH.md) documents the forensic scores' papers,
+coefficients, estimation populations and limits; the source cites it by section.
 
 A report with no Anthropic key still carries every deterministic result and
 says that no analyst pass ran; only the narrative sections are empty.
@@ -245,11 +290,10 @@ repository's [private advisory form](https://github.com/eligorelick/Thesis-AI-eq
 
 The product suite makes no network request whatever your `.env` contains; one
 live SEC check is opt-in with `EDGAR_LIVE_SMOKE=1` and a real `EDGAR_CONTACT`.
-GitHub Actions runs the same gates on Node 24; administrators must configure
-branch protection to require the `CI / full` check, which the workflow cannot
-enable itself. Issues and pull requests are welcome: keep changes focused, add
-regression tests, preserve deterministic computation and source tracing, and
-run `npm run verify` first.
+GitHub Actions runs the release gates on Node 24. Protect `main` by requiring
+the `full` and `windows-smoke` checks; the workflow cannot enable this itself.
+Contributions are welcome: add focused regression tests, preserve source
+tracing and deterministic computation, and run `npm run verify` first.
 
 ## Limitations
 
@@ -264,7 +308,5 @@ run `npm run verify` first.
 
 ## License and data rights
 
-The code is [MIT](LICENSE). The license does not cover the market data,
-filings, news or model output Thesis retrieves, and sharing a generated report
-shares that provider data with it. See
-[License and data rights](docs/DATA-RIGHTS.md).
+The code is [MIT](LICENSE); retrieved data and model output have separate
+[data rights](docs/DATA-RIGHTS.md), including when shared in reports.

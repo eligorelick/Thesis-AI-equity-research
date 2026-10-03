@@ -7,6 +7,102 @@ reversibility, the choice, and why. Reversible and disclosed beats clever.
 
 Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
 
+## D-33 (AI connections 2026-10-03) Explicit account allowance, no billing fallback
+
+- **Options**: support only API keys; imitate private subscription endpoints;
+  or use documented authorization paths and a shared injected pass contract.
+- **Choice**: official ChatGPT public OAuth registration, PKCE and verified
+  OIDC identity, with protected account records, serialized refresh and
+  revocation. Gemini delegates authentication and inference to the official
+  installed CLI, with an isolated home and tools disabled. Claude API remains
+  available explicitly; no Claude subscription login is offered without the
+  provider's required approval. No OpenRouter or hidden API fallback is added.
+- **Boundaries**: connection routes require loopback and the existing browser
+  origin guard. Tokens never cross into the UI, reports or logs. A run captures
+  its connection and binds the provider/account/model to durable payload
+  fingerprints. Existing deterministic calculations and verification are shared.
+- **Usage**: subscription adapters cannot accept API keys. Their zero API cost
+  does not claim zero subscription usage. Provider allowance/credit settings
+  apply; Thesis cannot read remaining quota or impose its API USD cap on it.
+  Requests have deadlines and size limits. Subscription passes use only supplied
+  evidence, with no extra web search. Effort controls remain Claude-specific.
+- **Why**: implement supported multi-provider sign-in without treating OAuth as
+  unlimited usage or turning a failed connection into a surprise API charge.
+- **Validation limit**: offline regression cases cover callback state, identity
+  validation, refresh/sign-out, origin guards, interrupted streams, account
+  binding and API-key isolation. No live OAuth inference was run; provider
+  eligibility, model access and quota must be established on the user's account.
+- **References**: [ChatGPT registration](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),
+  [sessions](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions),
+  [inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference),
+  [Gemini ACP](https://geminicli.com/docs/cli/acp-mode/),
+  [Gemini headless](https://geminicli.com/docs/cli/headless/), and
+  [Claude developer authentication](https://code.claude.com/docs/en/agent-sdk/overview).
+
+## D-32 (release tooling 2026-10-02) Remove the vulnerable lint glob dependency
+
+- **Evidence**: the unchanged development-inclusive dependency audit identified
+  [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) in
+  `braces` through 3.0.3, with no published fixed version. The only installed
+  path is Next's ESLint plugin, through `fast-glob` and `micromatch`.
+- **Options**: wait for an upstream release; weaken the audit; substitute an
+  apparently compatible glob package; or remove the dependency through an
+  explicit, limited adapter. A direct `tinyglobby` alias was rejected after
+  comparing literal, absolute and terminal-globstar directory results.
+- **Choice**: a local adapter scoped to the pinned Next ESLint plugin supports
+  its directory-only synchronous call for a tested subset of root patterns.
+  Unsupported APIs, options and complex patterns throw actionable errors.
+  The repository uses default project roots, and retains every existing lint
+  rule. No vulnerable source is renamed or copied into the adapter.
+- **Why**: this removes the vulnerable dependency chain without downgrading
+  the framework, claiming full glob compatibility, or suppressing the audit.
+  Tests must exercise the real internal-link lint rule: an empty root match
+  can otherwise silently disable its checks.
+- **Compatibility and validation**: customized `settings.next.rootDir` values
+  are limited to the adapter's documented subset. New Next plugin consumers
+  or options require explicit review. Clean install, dependency shape, lint,
+  security audit, and Linux/Windows tests remain release requirements. The
+  lockfile provenance changes; financial fixture and baseline bytes do not.
+
+---
+
+## D-31 (release review 2026-10-02) Preserve period, currency and ownership evidence
+
+- **Options**: retain plausible vendor fallbacks and exact-sounding labels, or
+  apply the same evidence rules to history, TTM fallbacks and REIT adjustments
+  that the current-period calculations already require.
+- **Choice**: quarterly income and cash-flow history enter own-history bands
+  only through `rowsInModelCurrency`; annual vendor ROE cannot stand in for TTM
+  and the existing dated statement-derived fallback remains. Reconstructed
+  FFO is always approximate until affiliate and ownership adjustments are
+  reconciled; AFFO inherits that limit. Neither has a guaranteed error bound.
+- **Operating-income basis**: operating margins, projection/scenario history,
+  operating-return and capital adapters, and current/prior WACC coverage use
+  reported operating income. Broader vendor EBIT may include non-operating
+  gains and is not a substitute when operating income is missing. MSFT FY2026
+  exposed the distinction: 155,237 / 331,839 gives 46.78%, whereas the vendor's
+  168,985 EBIT incorrectly produced a 50.92% "operating" margin. Raw vendor
+  statement fields and explicitly forensic EBIT formulas remain as reported.
+- **Why**: independently reproduced mixed-currency historical bands, a stale
+  annual ROE overriding the later statement basis, and Realty Income's issuer
+  reconciliation contradicting the claimed FFO upper bound. These affect
+  computed evidence and how a reader interprets it.
+- **Disclosure and compatibility**: currency-break gaps identify excluded
+  history; `valuation.reit.ffo.ownershipReconciliation` and
+  `valuation.reit.affo.ffoBasis` state the approximation. Report spec 1.5.0 and
+  payload 1.6.0 separate new reports and analyst passes from prior conventions;
+  saved reports retain their original bytes. The DEMO audit projection moves
+  only its spec stamp for this step; all existing finance hashes stay pinned.
+- **Operational corrections**: CLIs load Next environment files before keys
+  or database paths are read. Pricing maintenance parses named table columns
+  and fails closed on malformed/incomplete data. No registry rates changed.
+  The exact `@next/env` direct dependency changes the comparison lock blob,
+  not the historical audited baseline or dependency resolutions.
+- **Validation limit**: the authorized USD 2 live AI cap admitted two analyst
+  passes (USD 0.253761 settled total) but correctly rejected the judge's larger
+  reservation. This release does not describe that run as a completed live
+  synthesis or weaken spend enforcement to make a smoke test pass.
+
 ---
 
 ## D-01 (WS1) Model registry as a checked-in JSON file

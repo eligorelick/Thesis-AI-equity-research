@@ -779,7 +779,7 @@ missing; a one-legged figure would misstate it.
 
 ### FFO and AFFO (NAREIT)
 
-FFO follows the NAREIT white-paper definition:
+The app reconstructs the following components of NAREIT FFO:
 
 ```
 FFO = net income (GAAP)
@@ -788,9 +788,13 @@ FFO = net income (GAAP)
     + impairments of depreciable real estate
 ```
 
-Applied exactly where the filer tags the components. Two stand-ins exist, and
-both err in the same direction — FFO sits at or **above** the definition — so
-both are labeled **approximate** with the direction stated:
+The result is always **approximate**: affiliate/joint-venture adjustments are
+not fully reconciled, nor is consolidated income reconciled to the common,
+noncontrolling and preferred interests needed for a common-equity valuation.
+NAREIT requires the affiliate adjustments but does not prescribe one ownership
+attribution for every presentation. The app cannot claim equality with a
+filer's FFO, or a guaranteed direction of error. Two component stand-ins can
+individually increase the reconstruction:
 
 - Where **real-estate** depreciation is not tagged separately, total
   depreciation and amortization is added back; NAREIT adds back only the
@@ -811,16 +815,22 @@ disposition gain the filer did not tag leaves FFO overstated by that gain.
 
 AFFO subtracts recurring (maintenance) capital expenditure and straight-line
 rent where the filer tags them. Where it does not, AFFO falls back to
-`FFO − all capital expenditure` and is disclosed as a **conservative floor**,
-since development spending is subtracted too.
+`FFO − all capital expenditure`, which also subtracts development spending.
+AFFO inherits FFO's approximation and omits some issuer-specific adjustments;
+neither fallback is a guaranteed bound on the issuer's AFFO.
+
+For example, Realty Income's [2025 reconciliation](https://www.sec.gov/Archives/edgar/data/726728/000072672826000009/realtyincomeq42025supple.htm)
+contains unconsolidated-entity and noncontrolling-interest adjustments. Even
+using its real-estate-only components, the app's unreconciled formula is
+USD 12.105 million below common FFO, disproving an unconditional upper bound.
 
 The implied cap rate divides NOI by the **house enterprise value** — market
 capitalisation + net debt + preferred + minority interest, less the
 operating-lease slice by default — the same definition the multiples and the
 DCF bridge use, so a report carries one EV. The own-history P/FFO and P/AFFO
 bands are built from net income + D&A per rolling four quarters, the only
-construction quarterly statements support; when the current FFO is the NAREIT
-figure (a property-sale gain, an impairment or real-estate-only depreciation
+construction quarterly statements support; when the current FFO adjusts
+additional NAREIT components (a property-sale gain, an impairment or real-estate-only depreciation
 netted) the bands are withheld with `valuation.multiples.ownHistory.ffoBasis`
 rather than rank one definition inside another.
 

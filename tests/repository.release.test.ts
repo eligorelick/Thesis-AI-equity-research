@@ -436,7 +436,7 @@ describe("public release contract", () => {
     expect(readme).toMatch(/CI tests Node 24/);
     expect(readme).toMatch(/Node 20 reached end of life/);
     expect(readme).not.toContain("compatibility lane");
-    expect(readme).toMatch(/branch protection.*require.*CI \/ full/is);
+    expect(readme).toMatch(/Protect `main` by requiring\s+the `full` and `windows-smoke` checks/);
   });
 
   it("publishes only the exact tracked release allowlist", () => {

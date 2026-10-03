@@ -29,6 +29,7 @@
  */
 
 import { isEntryPoint } from "./lib/entrypoint.mjs";
+import { loadMaintenanceEnv } from "./lib/load-env.mjs";
 
 export const COST_API_URL = "https://api.anthropic.com/v1/organizations/cost_report";
 export const ANTHROPIC_VERSION = "2023-06-01";
@@ -96,6 +97,7 @@ export async function fetchCostReport(adminKey, startTime, endTime, fetchImpl = 
 }
 
 async function main(argv) {
+  loadMaintenanceEnv();
   const write = argv.includes("--write");
   // The validated config is the single reader of ANTHROPIC_ADMIN_KEY: it
   // trims, treats a blank value as absent, and fails loudly on a malformed

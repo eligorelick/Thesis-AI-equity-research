@@ -23,7 +23,7 @@ Saved reports give every number a source path and an as-of date.
 
 ## Quick start
 
-Node.js 22.18 or newer and npm are required; CI verifies Node 24.
+Node.js 22.18 or newer and npm. CI tests Node 24; Node 20 reached end of life.
 
 ```powershell
 git clone https://github.com/eligorelick/Thesis-AI-equity-research.git
@@ -250,8 +250,8 @@ repository's [private advisory form](https://github.com/eligorelick/Thesis-AI-eq
 
 The product suite makes no network request whatever your `.env` contains; one
 live SEC check is opt-in with `EDGAR_LIVE_SMOKE=1` and a real `EDGAR_CONTACT`.
-GitHub Actions requires `full` and `windows-smoke` on Node 24. Contributions
-should preserve source tracing, add focused regressions and pass `npm run verify`.
+Protect `main` by requiring the `full` and `windows-smoke` checks in GitHub.
+Contributions should preserve source tracing, add regressions and pass `npm run verify`.
 
 ## Limitations
 

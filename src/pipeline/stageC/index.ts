@@ -30,6 +30,8 @@
  */
 
 import type { DataBundle } from "@/pipeline/types";
+import { parseSubscriptionModel } from "@/ai/contracts";
+import { runSubscriptionPass } from "@/ai/transport";
 import type { ComputedMetrics } from "@/pipeline/compute";
 import type { ValidationReport } from "@/pipeline/stageA/validate";
 import type {
@@ -240,6 +242,21 @@ const runPassStreaming: RunPassStreamingFn = (args) => {
  * the user's cost/quality knob; the default stays "high".
  */
 function toPassDeps(deps: RunnerPassDeps<ContextPayload>): PassDeps {
+  if (parseSubscriptionModel(deps.analysisModel)) {
+    const connectionId = deps.connectionId;
+    if (!connectionId) throw new Error("Subscription pass is missing its captured account connection");
+    return {
+      model: deps.analysisModel, signal: deps.signal, jobSeed: deps.jobSeed,
+      runPass: (args) => runSubscriptionPass(args, connectionId),
+      validateRunPass: (args) => {
+        if (args.model !== deps.analysisModel || JSON.stringify(args.messages).length > 2_000_000) {
+          throw new Error("Subscription pass changed model or exceeded the local input size limit");
+        }
+      },
+      // Omit web-search and streaming overlap: these adapters use only the
+      // supplied evidence, and each bounded pass settles before the next one.
+    };
+  }
   return {
     runPass,
     runPassStreaming,
@@ -488,7 +505,7 @@ export const pipelinePasses: PipelinePasses<ContextPayload> = {
     } else {
       args = buildAnalystRunPassArgs(passDeps, deps.payload, request.pass);
     }
-    validateRunPassOptions(toRunPassOptions(args));
+    passDeps.validateRunPass?.(args);
   },
 
   async runBullThenBear(

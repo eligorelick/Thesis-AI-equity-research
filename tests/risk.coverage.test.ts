@@ -17,6 +17,15 @@ const ROOT = path.resolve(__dirname, "..");
 const VITEST_CLI = path.join(ROOT, "node_modules", "vitest", "vitest.mjs");
 
 const EXPECTED_RISK_SOURCES = [
+  "src/ai/browser.ts",
+  "src/ai/chatgpt.ts",
+  "src/ai/connections.ts",
+  "src/ai/contracts.ts",
+  "src/ai/fingerprint.ts",
+  "src/ai/gemini.ts",
+  "src/ai/store.ts",
+  "src/ai/transport.ts",
+  "src/app/api/ai/connections/route.ts",
   "src/providers/anthropic.ts",
   "src/providers/edgar.ts",
   "src/providers/finnhub.ts",
@@ -25,6 +34,7 @@ const EXPECTED_RISK_SOURCES = [
   "src/providers/fred.ts",
   "src/providers/http.ts",
   "src/providers/yahoo.ts",
+  "src/providers/splitEvents.ts",
   "src/edgar/extract.ts",
   "src/edgar/xbrl.ts",
   "src/edgar/statements.ts",

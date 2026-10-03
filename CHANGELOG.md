@@ -1,5 +1,89 @@
 # Changelog
 
+## 0.1.0 — 2026-10-03
+
+First tagged open-source release of the local, single-user application. The
+sections below record the earlier development batches included in this release.
+
+- AI connections support official ChatGPT plan OAuth and Google sign-in through
+  the installed Gemini CLI. The selected connection runs bull, bear and judge
+  passes; calculations and citation verification remain deterministic.
+- Account/model changes invalidate incompatible partial work. Connection or
+  quota failures never switch to API billing. Claude API remains optional.
+- Subscription passes use supplied evidence without extra web search and
+  disclose that `$0` API charges do not measure subscription allowance.
+- Credentials remain in protected per-user storage; disconnect stops local
+  requests. ChatGPT revocation failures are disclosed. Live OAuth sign-in and
+  inference remain unverified; see D-33 and the release review.
+
+- Historical valuation bands stop at a quarter whose currency is missing or
+  incompatible; annual vendor ROE no longer masquerades as TTM ROE.
+- Operating margins, projections, returns and debt coverage use operating
+  income. Broader vendor EBIT cannot substitute for missing operating income.
+- Computed REIT FFO and AFFO disclose unreconciled affiliate and ownership
+  adjustments. Neither is claimed to bound the issuer's reported figure.
+- Data-only fair-value prose uses the figure's established currency.
+- Maintenance commands load the application's environment files before using
+  keys or database paths. The pricing refresh reads explicit table headers
+  and refuses incomplete or ambiguous updates.
+- Remove the vulnerable lint-only glob dependency through a scoped directory
+  adapter; unsupported custom root patterns fail explicitly (D-32).
+- Setup includes clone and production instructions; private environment-file
+  variants are ignored while the placeholder example remains tracked.
+- Report spec **1.5.0**, payload **1.6.0**: earlier reports retain their saved
+  values and incompatible analysis passes cannot be resumed.
+
+Validation and remaining limits are recorded in the
+[release review](docs/audit/REMEDIATION-REPORT.md#release-review-2026-10-02).
+
+## Included development batch — stock-split correctness (2026-09-30 to 2026-10-02)
+
+Share counts and prices are combined only on one established split basis. The
+convention is D-30 in [`docs/audit/DECISIONS.md`](docs/audit/DECISIONS.md); the
+provider conventions are tabled in
+[`docs/METHODOLOGY.md`](docs/METHODOLOGY.md#stock-splits-and-the-share-basis).
+
+### Version stamps
+
+- **`REPORT_SPEC_VERSION` 1.3.0 → 1.4.0** and **`PAYLOAD_VERSION` 1.4.0 →
+  1.5.0.** Reports saved under 1.3.0 are read, rendered and exported as stored;
+  the history diff marks a 1.3.0 → 1.4.0 comparison "spec-version-mismatch". An
+  analyst or judge pass stored under payload 1.4.0 is not resumed under 1.5.0.
+
+### What a reader notices
+
+- **A split changes the share basis on its first split-adjusted trading
+  session**, taken from the price vendor's split events — not on an XBRL
+  context date, which may be an approval, record or legal-effective date. A
+  board approval tagged weeks before trading no longer multiplies the share
+  count while the market still prices the old shares.
+- **A split the market has priced but SEC companyfacts does not carry yet** is
+  applied from the vendor's event; one both describe is applied once.
+- **No split list, no share figure.** When the vendor's split list could not be
+  retrieved, does not cover every day a share count must be carried across
+  (no weekend or holiday allowance), or lists an event that is not a split
+  ratio, the count is withheld rather than read as "no splits".
+- **Disagreeing split descriptions are not multiplied.** Two vendor events
+  within a week that differ in ratio or session leave the split unresolved and
+  its figures withheld. Each retrieved answer also retains its own coverage:
+  an answer that omits an event another lists within that coverage makes it
+  unresolved even when their reported dates differ by more than a week.
+  Warnings name the answers that disagree.
+- **Small EPS cannot hide a split error behind cent rounding.** Vendor EPS
+  must match the filer's same field within 3% of its magnitude, and zero must
+  match exactly. A fourfold error from $0.0025 to $0.01 is withheld. Ordinary
+  rounding inside 3% still passes; greater rounding uncertainty withholds the
+  field instead of approving its basis.
+- **Uncertain share basis empties the figure at its source**: EPS and share
+  counts on the affected statement rows, the market cap, market-cap history,
+  enterprise values and free float. EPS growth, P/E, DCF and excess-return per
+  share, the reverse DCF, REIT P/FFO, the share-count trend, dilution, the
+  grades and the AI payload therefore read "n/a" for it; revenue, margins and
+  free cash flow are unaffected.
+- **Nothing is adjusted twice.** A count filed after a split, and each vendor
+  EPS or share-count field that matches the filer's restated value for the same
+  field, are used as they are; a field the filer does not state is withheld.
+
 ## Unreleased — currency integrity (2026-09-28 to 2026-09-30)
 
 Money figures now carry only a currency their own evidence establishes, and

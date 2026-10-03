@@ -401,7 +401,8 @@ function toReturnsIncome(
     preferredDividendsPaid: prefRow ? num(prefRow.preferredDividendsPaid) : null,
     revenue: num(r.revenue),
     operatingIncome: num(r.operatingIncome),
-    ebit: num(r.ebit),
+    // ROIC's EBIT is operating income; raw vendor EBIT may include other income.
+    ebit: num(r.operatingIncome),
     incomeBeforeTax: num(r.incomeBeforeTax),
     incomeTaxExpense: num(r.incomeTaxExpense),
     netIncome: num(r.netIncome),
@@ -437,7 +438,8 @@ function toCapitalIncome(r: FmpIncomeStatementRow): CapitalIncomeRow {
     filingDate: str(r.filingDate),
     revenue: num(r.revenue),
     operatingIncome: num(r.operatingIncome),
-    ebit: num(r.ebit),
+    // Coverage and own-computed EBITDA share the operating-income basis.
+    ebit: num(r.operatingIncome),
     ebitda: num(r.ebitda),
     interestExpense: num(r.interestExpense),
     netIncome: num(r.netIncome),
@@ -746,13 +748,15 @@ function establishedRowsCurrency(
   return rows.length > 0 && codes.size === 1 && !codes.has(null) ? ([...codes][0] ?? null) : null;
 }
 
-type StatementFamily = "incomeAnnual" | "balanceAnnual" | "cashflowAnnual" | "balanceQuarterly";
+type StatementFamily = "incomeAnnual" | "balanceAnnual" | "cashflowAnnual" | "balanceQuarterly" | "incomeQuarterly" | "cashflowQuarterly";
 
 const STATEMENT_FAMILY: Record<StatementFamily, { label: string; endpoint: string }> = {
   incomeAnnual: { label: "annual income statement", endpoint: "fmp:/stable/income-statement" },
   balanceAnnual: { label: "annual balance sheet", endpoint: "fmp:/stable/balance-sheet-statement" },
   cashflowAnnual: { label: "annual cash-flow statement", endpoint: "fmp:/stable/cash-flow-statement" },
   balanceQuarterly: { label: "quarterly balance sheet", endpoint: "fmp:/stable/balance-sheet-statement?period=quarter" },
+  incomeQuarterly: { label: "quarterly income statement", endpoint: "fmp:/stable/income-statement?period=quarter" },
+  cashflowQuarterly: { label: "quarterly cash-flow statement", endpoint: "fmp:/stable/cash-flow-statement?period=quarter" },
 };
 
 /**
@@ -1345,7 +1349,7 @@ export function priorYearCostOfDebt(
       yearsBack: index,
       interestExpense,
       totalDebtAvg,
-      ebit: num(income?.ebit) ?? num(income?.operatingIncome),
+      ebit: num(income?.operatingIncome),
     };
   }
   return null;
@@ -1701,6 +1705,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     ttmInc: currencies.ttmIncomeUsable ? ttmInc : null,
     ttmCf: currencies.ttmCashFlowUsable ? ttmCf : null,
     modelCurrency: currencies.model,
+    currencyEvidence,
     growth,
     evIncludeLeases,
     // WS6 wiring.
@@ -1744,6 +1749,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     })),
     shares: num(incomeAnnual[0]?.weightedAverageShsOutDil),
     sharesBasis: "statements:income.weightedAverageShsOutDil",
+    shareBasis: bundle.edgar?.shareBasis ?? null,
   });
 
   // --- Runway (overlay-gated) ------------------------------------------------
@@ -1844,7 +1850,9 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     (r): ProjectionIncomeRow => ({
       date: String(r.date ?? ""),
       revenue: num(r.revenue),
-      ebit: num(r.ebit) ?? num(r.operatingIncome),
+      // Projections and their EPS conversion use the DCF's operating EBIT.
+      // Vendor EBIT can include non-operating gains (pretax income + interest).
+      ebit: num(r.operatingIncome),
       netIncome: num(r.netIncome),
       epsDiluted: num(r.epsDiluted),
     }),
@@ -2129,7 +2137,7 @@ function computeReturns(
   // The basis also decides which balance-sheet pair averages the debt.
   const annualDate = isoDay(incomeAnnual[0]?.date) ?? "?";
   const interestExpenseAnnual = num(incomeAnnual[0]?.interestExpense);
-  const ebitAnnual = num(incomeAnnual[0]?.operatingIncome) ?? num(incomeAnnual[0]?.ebit);
+  const ebitAnnual = num(incomeAnnual[0]?.operatingIncome);
   // The TTM interest is divided by the debt balances at the window's ends; a
   // ratio of two sums is a figure only when both are in one currency. When the
   // balances are not established in the window's currency, the TTM pair is not
@@ -2152,7 +2160,9 @@ function computeReturns(
     );
   }
   const interestExpenseTtm = ttmDebtComparable ? (ttmInc?.interestExpense ?? null) : null;
-  const ebitTtm = ttmDebtComparable ? (ttmInc?.ebit ?? ttmInc?.operatingIncome ?? null) : null;
+  // Match the annual and DCF operating-income basis. A broader vendor EBIT
+  // is not a substitute for an unreported operating-income coverage leg.
+  const ebitTtm = ttmDebtComparable ? (ttmInc?.operatingIncome ?? null) : null;
   let interestExpenseForWacc: number | null;
   let ebitForWacc: number | null;
   let coverageBasis: string;
@@ -2330,6 +2340,8 @@ interface ValuationCtx {
   ttmCf: TtmCashFlow | null;
   /** StatementCurrencies.model: the currency the valuation's statements are in. */
   modelCurrency: string | null;
+  /** Normalized statements retain each quarter's own filing-linked currency evidence. */
+  currencyEvidence: readonly CurrencyEvidenceRow[];
   growth: GrowthResult;
   /** WS6 (D-19): FCF/SBC treatment for the DCF assumption block. */
   capital: CapitalResult;
@@ -2373,7 +2385,9 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
   const balPoint = balanceAnchor.row;
   const balPointBasis = balanceAnchor.basis;
   const ratiosTtm = rowsOf(bundle.ratiosTtm)[0] ?? rowsOf(bundle.ratios)[0];
-  const keyMetricsTtm = rowsOf(bundle.keyMetricsTtm)[0] ?? rowsOf(bundle.keyMetrics)[0];
+  // An annual vendor ROE is not a TTM snapshot; use the dated fiscal-year
+  // DuPont fallback below when the TTM observation is unavailable.
+  const keyMetricsTtm = rowsOf(bundle.keyMetricsTtm)[0];
 
   const currentPrice = num(quote?.price);
   const marketCap = num(quote?.marketCap ?? profile?.marketCap);
@@ -2583,9 +2597,14 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
       }
     : null;
 
+  // The latest TTM gate does not establish the currency of older quarters.
+  // Own-history bands roll over those older rows too, so apply the same
+  // filing-evidence rule before mergeQuarterly removes currency metadata.
+  const historyIncome = rowsInModelCurrency("incomeQuarterly", ctx.incomeQuarterly, ctx.modelCurrency, ctx.currencyEvidence);
+  const historyCashflow = rowsInModelCurrency("cashflowQuarterly", ctx.cashflowQuarterly, ctx.modelCurrency, ctx.currencyEvidence);
   const quarterlyFundamentals: QuarterlyFundamentalsRow[] = mergeQuarterly(
-    ctx.incomeQuarterly,
-    ctx.cashflowQuarterly,
+    historyIncome.rows,
+    historyCashflow.rows,
     ctx.balanceQuarterly,
   );
 
@@ -2734,6 +2753,9 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
   void ratiosTtm; // reserved for future ratio cross-checks
   const result = valueCompany(route, bundleInputs);
   result.gaps.push(...estimateGaps);
+  for (const history of [historyIncome, historyCashflow]) {
+    if (history.gap !== null) result.gaps.push(history.gap);
+  }
   // WS5: the FFO computation's own notes and gaps (which tags resolved, which
   // stand-in was used) reach the report on the route that consumes them.
   if (route.base === "reit") {

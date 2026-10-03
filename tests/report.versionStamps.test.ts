@@ -1,7 +1,17 @@
 /**
- * Version stamps after the 2026-09-30 currency-integrity changes, and legacy
- * reads.
+ * Version stamps after the 2026-10-02 release review, and legacy reads.
+ * Report 1.5.0 and payload 1.6.0 apply currency-safe historical multiples,
+ * dated ROE and explicit REIT approximation disclosures. Earlier stamps:
  *
+ *  - REPORT_SPEC_VERSION 1.4.0: every share count and per-share figure is on
+ *    the share basis of the price it meets, or withheld. A 1.3.0 report's
+ *    market values and per-share figures were computed under other split
+ *    rules, so the history diff says "spec-version-mismatch".
+ *  - PAYLOAD_VERSION 1.5.0: the payload states EPS, share counts and market
+ *    values only where their split basis is established; a pass stored under
+ *    1.4.0 is never resumed.
+ *
+ * Earlier:
  *  - REPORT_SPEC_VERSION 1.3.0: a report's money figures carry only
  *    established currencies (no legacy dollar default), statements and years
  *    are combined only in one currency, and route metrics may carry an
@@ -64,18 +74,40 @@ function newReport(): Report {
 }
 
 describe("new version stamps", () => {
-  it("bumps the report spec to 1.3.0 and the payload to 1.4.0", () => {
-    expect(REPORT_SPEC_VERSION).toBe("1.3.0");
-    expect(PAYLOAD_VERSION).toBe("1.4.0");
+  it("bumps the report spec to 1.5.0 and the payload to 1.6.0", () => {
+    expect(REPORT_SPEC_VERSION).toBe("1.5.0");
+    expect(PAYLOAD_VERSION).toBe("1.6.0");
   });
 
   it("stamps a newly built report and payload with them", () => {
-    expect(newReport().meta.specVersion).toBe("1.3.0");
+    expect(newReport().meta.specVersion).toBe("1.5.0");
     const bundle = completeCurrencyBundle({});
     const payload = assembleContextPayload(bundle, runStageB(bundle), VALIDATION);
-    expect(payload.payloadVersion).toBe("1.4.0");
-    expect(payloadFingerprint(payload)).toMatch(/^1\.4\.0:[0-9a-f]{8}$/);
-    expect(serializePayloadForPrompt(payload)).toMatch(/^# CONTEXT PAYLOAD \(payloadVersion 1\.4\.0\)/);
+    expect(payload.payloadVersion).toBe("1.6.0");
+    expect(payloadFingerprint(payload)).toMatch(/^1\.6\.0:[0-9a-f]{8}$/);
+    expect(serializePayloadForPrompt(payload)).toMatch(/^# CONTEXT PAYLOAD \(payloadVersion 1\.6\.0\)/);
+  });
+
+  it("never resumes a pass stored under the prior 1.5.0 financial conventions", () => {
+    const bundle = completeCurrencyBundle({});
+    const payload = assembleContextPayload(bundle, runStageB(bundle), VALIDATION);
+    const asStoredUnder150 = payloadFingerprint({ ...payload, payloadVersion: "1.5.0" });
+    expect(asStoredUnder150).toMatch(/^1\.5\.0:[0-9a-f]{8}$/);
+    expect(payloadFingerprint(payload)).not.toBe(asStoredUnder150);
+  });
+
+  it("does not compare a prior 1.4.0 report as the same financial convention", () => {
+    const before = newReport();
+    before.meta.specVersion = "1.4.0";
+    const after = newReport();
+    const diff = diffReports(before, after, {
+      fromReportVersion: before.meta.pipelineVersion,
+      toReportVersion: after.meta.pipelineVersion,
+      fromSpecVersion: before.meta.specVersion,
+      toSpecVersion: after.meta.specVersion,
+    });
+    expect(diff.comparisonStatus).toBe("not-comparable");
+    expect(diff.notComparableReasons).toContain("spec-version-mismatch");
   });
 });
 
@@ -125,7 +157,7 @@ describe("a report saved under spec 1.2.0", () => {
     expect(stored.specVersion).toBe("1.2.0");
   });
 
-  it("is not diffed like-for-like against a 1.3.0 report", () => {
+  it("is not diffed like-for-like against a report of the current spec", () => {
     const legacy = JSON.parse(LEGACY_REPORT_BYTES) as Report;
     const current = structuredClone(legacy);
     current.meta.specVersion = REPORT_SPEC_VERSION;
@@ -133,9 +165,33 @@ describe("a report saved under spec 1.2.0", () => {
       fromReportVersion: legacy.meta.pipelineVersion,
       toReportVersion: current.meta.pipelineVersion,
       fromSpecVersion: "1.2.0",
-      toSpecVersion: "1.3.0",
+      toSpecVersion: REPORT_SPEC_VERSION,
     });
     expect(diff.comparisonStatus).toBe("not-comparable");
     expect(diff.notComparableReasons).toContain("spec-version-mismatch");
+  });
+
+  it("a 1.3.0 report (split rules before Batch 2) is not diffed like-for-like against a 1.4.0 report", () => {
+    const legacy = JSON.parse(LEGACY_REPORT_BYTES) as Report;
+    const before = structuredClone(legacy);
+    before.meta.specVersion = "1.3.0";
+    const after = structuredClone(legacy);
+    after.meta.specVersion = "1.4.0";
+    const diff = diffReports(before, after, {
+      fromReportVersion: before.meta.pipelineVersion,
+      toReportVersion: after.meta.pipelineVersion,
+      fromSpecVersion: "1.3.0",
+      toSpecVersion: "1.4.0",
+    });
+    expect(diff.comparisonStatus).toBe("not-comparable");
+    expect(diff.notComparableReasons).toEqual(["spec-version-mismatch"]);
+    // Control: two 1.4.0 reports remain comparable on the version test.
+    const same = diffReports(after, structuredClone(after), {
+      fromReportVersion: after.meta.pipelineVersion,
+      toReportVersion: after.meta.pipelineVersion,
+      fromSpecVersion: "1.4.0",
+      toSpecVersion: "1.4.0",
+    });
+    expect(same.notComparableReasons ?? []).not.toContain("spec-version-mismatch");
   });
 });

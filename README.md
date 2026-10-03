@@ -1,15 +1,12 @@
 # Thesis
 
-Thesis is a local-first equity research application. Enter a ticker: it collects
-and validates market data, computes deterministic financial metrics, optionally
-runs grounded AI analysis, and saves a report in which every number carries a
-source path and an as-of date.
+Thesis is a local-first equity research application. Enter a ticker to validate
+market data, compute financial metrics and optionally run grounded AI analysis.
+Saved reports give every number a source path and an as-of date.
 
-> **Informational only — not investment advice.** Reports contain A-F letter
-> grades and scenario price targets: model outputs derived from the data and
-> assumptions the report discloses, not a recommendation to buy, sell or hold
-> any security, and no price target in one is authored by a person. Market data
-> and AI output can be delayed, incomplete, or wrong.
+> **Informational only — not investment advice.** Grades and price targets are
+> model outputs from disclosed data and assumptions, not human recommendations.
+> Market data and AI output can be delayed, incomplete, or wrong.
 
 ## What it does
 
@@ -20,20 +17,24 @@ source path and an as-of date.
   technicals, grades and forensic indicators in deterministic TypeScript, on a
   sector route drawn from the industry label and SIC code and checked against
   what the filer actually tags — tags decide only where those are silent.
-- Optionally runs independent Anthropic bull and bear analyses and a judge
+- Optionally runs separate bull and bear analyses and a judge
   pass, verifies every cited number without another model call, and turns
   missing inputs into disclosed gaps rather than fabricated values.
 
 ## Quick start
 
-Node.js 22.18 or newer, and npm. CI tests Node 24, the supported
-configuration; Node 20 reached end of life in April 2026.
+Node.js 22.18 or newer and npm. CI tests Node 24; Node 20 reached end of life.
 
 ```powershell
+git clone https://github.com/eligorelick/Thesis-AI-equity-research.git
+cd Thesis-AI-equity-research
 npm ci
-Copy-Item .env.example .env   # cp on macOS and Linux
+Copy-Item .env.example .env
 npm run dev
 ```
+
+On macOS/Linux, use `cp .env.example .env`. Production: `npm run build`, then `npm start`.
+Keep `.env*` private; only the placeholder `.env.example` belongs in Git.
 
 Open <http://127.0.0.1:3000>; development and production both bind to
 `127.0.0.1`. Every provider key is optional: with no `FMP_API_KEY`, set
@@ -43,6 +44,18 @@ fictional report, and `/company/DEMO` and `/company/DBNK` are reserved strings
 served from `fixtures/fmp` whatever keys are set. None of the three reaches a
 provider: the two company slices say so in the manifest and the sample is
 labelled synthetic throughout; any other symbol is a live request.
+
+## AI connections
+
+In **Settings → AI connections**, connect an account, choose a model and save.
+ChatGPT uses official plan OAuth; Gemini uses the separately installed official
+CLI **0.36.x**. Claude API remains optional and separately billed. Sign-in runs
+no inference, and failed connections never switch to paid API usage.
+ChatGPT opens normal Chrome; make Chrome the default browser for Gemini.
+Only one running Thesis server per OS user can use these account connections.
+Plan allowances and provider credit settings apply; API dollar caps do not
+measure subscription usage. Live OAuth sign-in/inference remains unverified.
+See [connection setup, privacy and limits](docs/PRIVACY.md#ai-connection-setup).
 
 ## Configuration
 
@@ -110,27 +123,19 @@ no keyless source, as do IFRS filers' statements, and all stay disclosed gaps.
 See [License and data rights](docs/DATA-RIGHTS.md) for what each allows.
 ## What the numbers mean
 
-[`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) documents every convention and
-names its sources. Sector routing reads XBRL tag evidence alongside the SIC
-code and industry label, and evidence contradicting the declared classification
-is disclosed rather than acted on. Bank, insurer and mortgage-REIT routes
-withhold the FCFF DCF, the reverse DCF, EV/EBITDA, ROIC-minus-WACC, Altman Z,
-Beneish M and the accrual ratios — every estimation sample behind those
-excluded financial institutions — and value the company on excess returns to
-equity instead. Near-term growth is the median of the methods the data
-supports, range shown and unavailable ones named. Free cash flow is reported
-after stock-based compensation with the before figure beside it; an own-history
-multiple is a rank among N quarters rather than a percentile, N printed beside
-it. Where a rule is this project's own choice rather than a standard, the
-report calls it a house convention in the same breath as the number.
+[Methodology](docs/METHODOLOGY.md) defines the conventions and sources. Sector
+routing weighs XBRL evidence, SIC and industry labels, disclosing contradictions.
+Banks, insurers and mortgage REITs use excess returns to equity instead of
+inapplicable industrial-company valuation and forensic models. Growth shows
+supported methods and their range; free cash flow shows before/after stock-based
+compensation. Historical multiple ranks show sample size. Project-specific
+choices are labelled house conventions beside the affected figures.
 
-The forensic scores are published models;
-[`docs/RESEARCH.md`](docs/RESEARCH.md) is their evidence base — coefficients
-with their papers, the population each was fitted on, and where each stops
-applying. The source cites it by section.
+[`docs/RESEARCH.md`](docs/RESEARCH.md) documents the forensic scores' papers,
+coefficients, estimation populations and limits; the source cites it by section.
 
-A report with no Anthropic key still carries every deterministic result and
-says that no analyst pass ran; only the narrative sections are empty.
+With AI off or unavailable, reports retain deterministic results and disclose
+that no analyst pass ran; the narrative sections remain empty.
 ## AI analysis
 
 Two analysts build the bull and bear cases independently: neither sees the
@@ -152,7 +157,7 @@ the registered unit, and a claim naming a person must rest on a filing, a
 transcript, a registry figure or the payload's own executive rows; any other
 source, or none, fails it. Checked is printed beside cited, never merged into it.
 
-`ANALYSIS_MODEL` takes `auto` or a model from `config/models.json`, which is
+For the Claude API, `ANALYSIS_MODEL` takes `auto` or a model from `config/models.json`, which is
 also where prices and limits come from; anything else is rejected, because the
 scheduler cannot prove a spend bound for it, and the run degrades to a
 data-only report. Choosing Haiku does not make the whole run Haiku — the judge
@@ -245,11 +250,8 @@ repository's [private advisory form](https://github.com/eligorelick/Thesis-AI-eq
 
 The product suite makes no network request whatever your `.env` contains; one
 live SEC check is opt-in with `EDGAR_LIVE_SMOKE=1` and a real `EDGAR_CONTACT`.
-GitHub Actions runs the same gates on Node 24; administrators must configure
-branch protection to require the `CI / full` check, which the workflow cannot
-enable itself. Issues and pull requests are welcome: keep changes focused, add
-regression tests, preserve deterministic computation and source tracing, and
-run `npm run verify` first.
+Protect `main` by requiring the `full` and `windows-smoke` checks in GitHub.
+Contributions should preserve source tracing, add regressions and pass `npm run verify`.
 
 ## Limitations
 
@@ -264,7 +266,5 @@ run `npm run verify` first.
 
 ## License and data rights
 
-The code is [MIT](LICENSE). The license does not cover the market data,
-filings, news or model output Thesis retrieves, and sharing a generated report
-shares that provider data with it. See
-[License and data rights](docs/DATA-RIGHTS.md).
+The code is [MIT](LICENSE); retrieved data and model output have separate
+[data rights](docs/DATA-RIGHTS.md), including when shared in reports.

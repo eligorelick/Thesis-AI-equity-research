@@ -1,4 +1,5 @@
 import { judgeFloorModelId, resolveRegistryModel } from "@/models/registry";
+import { parseSubscriptionModel } from "@/ai/contracts";
 
 export type ExecutionEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type ExecutionAdjustment =
@@ -64,6 +65,8 @@ export function buildExecutionMetadataEntry(input: {
     : null;
   const adjustments: ExecutionAdjustment[] = [];
   const notes: string[] = [];
+  const subscription = parseSubscriptionModel(input.effectiveModel);
+  if (subscription) notes.push(`${input.step}: ${subscription.provider === "chatgpt" ? "ChatGPT plan" : "Google Gemini CLI"} allowance was used. $0 records API charges only, not free or unlimited usage. Provider limits and account credit settings apply. This pass used the supplied evidence without additional web search.`);
   const requestedFamily = resolveRegistryModel(input.requestedModel)?.entry.family;
   const effectiveFamily = resolveRegistryModel(input.effectiveModel)?.entry.family;
   // The floor is applied by the provider to the synthesize pass only, and to
@@ -97,7 +100,9 @@ export function buildExecutionMetadataEntry(input: {
   if (input.requestedEffort !== null && effectiveEffort === null) {
     adjustments.push("effort-stripped");
     notes.push(
-      `${input.step}: ${input.effectiveModel} does not accept output_config.effort; the requested effort ${input.requestedEffort} was not sent.`,
+      subscription
+        ? `${input.step}: ${input.effectiveModel} does not use the Claude API effort control; the requested effort ${input.requestedEffort} was not sent.`
+        : `${input.step}: ${input.effectiveModel} does not accept output_config.effort; the requested effort ${input.requestedEffort} was not sent.`,
     );
   }
   return {
@@ -130,7 +135,7 @@ const ANALYST_STEPS = new Set(["bull", "bear"]);
 const JUDGE_STEP = "synthesize";
 
 function familyOf(model: string): string | null {
-  return resolveRegistryModel(model)?.entry.family ?? null;
+  return resolveRegistryModel(model)?.entry.family ?? (parseSubscriptionModel(model) ? model : null);
 }
 
 export interface SharedModelFamily {

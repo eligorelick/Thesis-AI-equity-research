@@ -26,6 +26,8 @@
 
 import "server-only";
 
+import type { VendorSplitEvidence } from "@/providers/splitEvents";
+
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -651,6 +653,11 @@ export interface FmpPayload<TRow extends FmpRawRow = FmpRawRow> {
   rows: TRow[];
   raw: unknown;
   planLimit?: FmpPlanLimit;
+  /**
+   * Split events the price source listed for these rows' sessions (Yahoo's
+   * daily chart). Absent on FMP payloads: FMP's EOD endpoint lists none.
+   */
+  splitEvents?: VendorSplitEvidence;
 }
 
 export function isPlanLimited(data: unknown): data is { planLimit: FmpPlanLimit } {

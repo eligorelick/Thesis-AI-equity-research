@@ -7,6 +7,113 @@ reversibility, the choice, and why. Reversible and disclosed beats clever.
 
 Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
 
+## D-33 (AI connections 2026-10-03) Explicit account allowance, no billing fallback
+
+- **Options**: support only API keys; imitate private subscription endpoints;
+  or use documented authorization paths and a shared injected pass contract.
+- **Choice**: official ChatGPT public OAuth registration, PKCE and verified
+  OIDC identity, with protected account records, serialized refresh and
+  revocation. Gemini delegates authentication and inference to the official
+  installed CLI, with an isolated home and tools disabled. Claude API remains
+  available explicitly; no Claude subscription login is offered without the
+  provider's required approval. No OpenRouter or hidden API fallback is added.
+- **Boundaries**: connection routes require loopback and the existing browser
+  origin guard. Tokens never cross into the UI, reports or logs. A run captures
+  its connection and binds the provider/account/model to durable payload
+  fingerprints. Existing deterministic calculations and verification are shared.
+- **Lifecycle and CLI isolation**: pending sign-ins are cancelable before any
+  storage wait. One live Thesis process owns connections under the serialized
+  store lock. Gemini 0.36.x runs without its wrapper relaunch; disconnect waits
+  for exit before deleting its directory. An empty work `.env` stops ancestor
+  discovery. The official CLI's post-admin MCP allowlist admits only a fresh
+  unconfigured name; `--extensions none`, disabled skills/agents, and deny-tool
+  policy prevent external capabilities. Local `admin` flags are deliberately
+  not used: this CLI overwrites them during remote admin merging. The storage
+  override isolates CLI state while preserving the real browser profile.
+- **Usage**: subscription adapters cannot accept API keys. Their zero API cost
+  does not claim zero subscription usage. Provider allowance/credit settings
+  apply; Thesis cannot read remaining quota or impose its API USD cap on it.
+  Requests have deadlines and size limits. Subscription passes use only supplied
+  evidence, with no extra web search. Effort controls remain Claude-specific.
+- **Why**: implement supported multi-provider sign-in without treating OAuth as
+  unlimited usage or turning a failed connection into a surprise API charge.
+- **Validation limit**: offline regression cases cover callback state, identity
+  validation, refresh/sign-out, origin guards, interrupted streams, account
+  binding and API-key isolation. No live OAuth inference was run; provider
+  eligibility, model access and quota must be established on the user's account.
+- **References**: [ChatGPT registration](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),
+  [sessions](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions),
+  [inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference),
+  [Gemini ACP](https://geminicli.com/docs/cli/acp-mode/),
+  [Gemini headless](https://geminicli.com/docs/cli/headless/), and
+  [Claude developer authentication](https://code.claude.com/docs/en/agent-sdk/overview).
+
+## D-32 (release tooling 2026-10-02) Remove the vulnerable lint glob dependency
+
+- **Evidence**: the unchanged development-inclusive dependency audit identified
+  [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) in
+  `braces` through 3.0.3, with no published fixed version. The only installed
+  path is Next's ESLint plugin, through `fast-glob` and `micromatch`.
+- **Options**: wait for an upstream release; weaken the audit; substitute an
+  apparently compatible glob package; or remove the dependency through an
+  explicit, limited adapter. A direct `tinyglobby` alias was rejected after
+  comparing literal, absolute and terminal-globstar directory results.
+- **Choice**: a local adapter scoped to the pinned Next ESLint plugin supports
+  its directory-only synchronous call for a tested subset of root patterns.
+  Unsupported APIs, options and complex patterns throw actionable errors.
+  The repository uses default project roots, and retains every existing lint
+  rule. No vulnerable source is renamed or copied into the adapter.
+  An explicit root development link, referenced by the scoped override,
+  keeps `npm ci` resolution consistent across npm 10/11 and both CI hosts.
+- **Why**: this removes the vulnerable dependency chain without downgrading
+  the framework, claiming full glob compatibility, or suppressing the audit.
+  Tests must exercise the real internal-link lint rule: an empty root match
+  can otherwise silently disable its checks.
+- **Compatibility and validation**: customized `settings.next.rootDir` values
+  are limited to the adapter's documented subset. New Next plugin consumers
+  or options require explicit review. Clean install, dependency shape, lint,
+  security audit, and Linux/Windows tests remain release requirements. The
+  lockfile provenance changes; financial fixture and baseline bytes do not.
+
+---
+
+## D-31 (release review 2026-10-02) Preserve period, currency and ownership evidence
+
+- **Options**: retain plausible vendor fallbacks and exact-sounding labels, or
+  apply the same evidence rules to history, TTM fallbacks and REIT adjustments
+  that the current-period calculations already require.
+- **Choice**: quarterly income and cash-flow history enter own-history bands
+  only through `rowsInModelCurrency`; annual vendor ROE cannot stand in for TTM
+  and the existing dated statement-derived fallback remains. Reconstructed
+  FFO is always approximate until affiliate and ownership adjustments are
+  reconciled; AFFO inherits that limit. Neither has a guaranteed error bound.
+- **Operating-income basis**: operating margins, projection/scenario history,
+  operating-return and capital adapters, and current/prior WACC coverage use
+  reported operating income. Broader vendor EBIT may include non-operating
+  gains and is not a substitute when operating income is missing. MSFT FY2026
+  exposed the distinction: 155,237 / 331,839 gives 46.78%, whereas the vendor's
+  168,985 EBIT incorrectly produced a 50.92% "operating" margin. Raw vendor
+  statement fields and explicitly forensic EBIT formulas remain as reported.
+- **Why**: independently reproduced mixed-currency historical bands, a stale
+  annual ROE overriding the later statement basis, and Realty Income's issuer
+  reconciliation contradicting the claimed FFO upper bound. These affect
+  computed evidence and how a reader interprets it.
+- **Disclosure and compatibility**: currency-break gaps identify excluded
+  history; `valuation.reit.ffo.ownershipReconciliation` and
+  `valuation.reit.affo.ffoBasis` state the approximation. Report spec 1.5.0 and
+  payload 1.6.0 separate new reports and analyst passes from prior conventions;
+  saved reports retain their original bytes. The DEMO audit projection moves
+  only its spec stamp for this step; all existing finance hashes stay pinned.
+- **Operational corrections**: CLIs load Next environment files before keys
+  or database paths are read. Pricing maintenance parses named table columns
+  and fails closed on malformed/incomplete data. No registry rates changed.
+  The exact `@next/env` direct dependency changes the comparison lock blob,
+  not the historical audited baseline or dependency resolutions.
+- **Validation limit**: the authorized USD 2 live AI cap admitted two analyst
+  passes (USD 0.253761 settled total) but correctly rejected the judge's larger
+  reservation. This release does not describe that run as a completed live
+  synthesis or weaken spend enforcement to make a smoke test pass.
+
 ---
 
 ## D-01 (WS1) Model registry as a checked-in JSON file
@@ -193,3 +300,11 @@ Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
 - **Choice**: (c). `rowsInModelCurrency` in src/pipeline/compute.ts gives every calculation that combines rows the history back to the first row that is not established in the model currency; margins, which never leave one row, keep every year. The data-only report states each year's cash-flow figures in that row's own currency and never across a break. `REPORT_SPEC_VERSION` moves to 1.3.0 and `PAYLOAD_VERSION` to 1.4.0 so a stored report or cached payload from before the change is never read as like-for-like.
 - **Why**: (a) produced a 5% cost of debt from 15 USD of interest over 300 JPY of debt, and ROIC, net debt and the DCF on the same mix; (b) invents a rate the product does not source; missing evidence establishing compatibility would be (a) again.
 - **Disclosure**: each break is a `compute.<family>.currency` manifest entry naming the row and its currency state. Saved 1.2.0 reports are read and rendered as stored; the history diff reports `spec-version-mismatch` against 1.3.0. The DEMO fixtures label every row USD, so the audited fixture comparison moved only for D-28.
+
+## D-30 (stock-split correctness 2026-09-30) One share basis per price, from the vendor's first split-adjusted session, or no figure
+
+- **Options**: (a) apply every tagged split to every share count filed before its XBRL context date; (b) the same, but only for splits dated on or before the analysis date (the first cut of this batch, commit 7f73608); (c) fix each split's timing from the price vendor's own split event, reconcile the vendor's list with the filer's tags, put every share count and per-share figure on the share basis of the price it meets, and withhold what cannot be put there — at the source, so nothing downstream rebuilds it.
+- **Choice**: (c). The XBRL context date is accounting context: NVIDIA tagged its 10-for-1 of 2024 for both 2024-06-07 (legally effective 4:01 p.m. Eastern) and 2024-06-10 (the first split-adjusted session). `discoverStockSplits(facts, { asOf, vendor })` in src/edgar/splits.ts takes the first split-adjusted session from Yahoo's split events (`src/providers/splitEvents.ts`; the full list, the daily history's and the quote's), applies a split both sources describe once, applies a split only the vendor lists, and leaves unresolved a tag the vendor's covering list contradicts, and vendor descriptions of one split (events within 7 days) that disagree; they are never compounded. Coverage is exact: a day no retrieved answer spans is uncovered, and a Yahoo event with an invalid ratio makes that answer's list unavailable. Without a vendor event the first session is bounded (7 days before to 60 days after the context dates); legal effectiveness is bounded below by the earliest context date and by the first session less 7 days. A figure whose side of a split falls inside a bound is withheld. A vendor list that was not retrieved, or does not cover the span from a count's filing to the price's session, establishes nothing: the count is withheld. The statements put every share and per-share fact on the basis of the quote's session; the keyless market values put each series count on the basis of the price it meets; a vendor income row for a period before a known split keeps each EPS and share-count field only when that field matches the filer's own on that basis (a matching diluted count vouches for nothing else) (FMP's FAQ documents split-adjusted prices and shares outstanding, not the income statement's per-share fields); the mortgage-REIT book value per share reads its raw period-end count only through the same resolution.
+- **Why**: (a) turned a 4-for-1 announced for 2027-01-15 into a 40M share count on 2026-09-30 while the market still priced 10M shares at $100 ($4B for a $1B company). (b) still applied a board approval tagged before the first split-adjusted session ($4B again) and ignored a split the market had priced but companyfacts did not yet carry ($250M). A warning beside either number leaves the number in every multiple, grade and AI input.
+- **2026-10-02 review corrections**: merged vendor lists retain each original answer's source, events and coverage, including through nested merges. An event omitted by another answer covering its session is disputed regardless of date distance; disagreements name both sources. Non-overlapping or unavailable answers cannot contradict it. Vendor EPS uses the same 3% relative comparison as share counts, with exact agreement at zero and no absolute one-cent allowance: a fourfold error in a small EPS is still a split-basis error. Legitimate rounding beyond the relative tolerance leaves the field withheld because its basis is unestablished.
+- **Disclosure**: each split is a `keyless.stockSplits(<date>)` entry naming its context dates, first filing, first split-adjusted session and source (`info`), or why it was not applied (`warn`). Withheld figures are `warn` entries: `keyless.statements.shareBasis`, `keyless.incomeAnnual.shareBasis` / `keyless.incomeQuarterly.shareBasis`, `keyless.profile.marketCap`, `keyless.quote.marketCap`, `keyless.marketCapHistory.shareBasis`, `keyless.enterpriseValues.shareBasis`, `keyless.sharesFloat.publicFloat`, `keyless.sharesFloat`. `REPORT_SPEC_VERSION` moves to 1.4.0 and `PAYLOAD_VERSION` to 1.5.0, so a report or a stored analyst pass computed under the earlier split rules is never read as like-for-like. The provider conventions, and which of them is documented rather than tested, are tabled in docs/METHODOLOGY.md, "Stock splits and the share basis". The DEMO fixtures carry no split: the audited fixture comparison moves only the spec-version leaf.

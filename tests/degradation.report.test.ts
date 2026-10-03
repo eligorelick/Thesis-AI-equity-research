@@ -447,6 +447,13 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
     expect(report.quality.forensicScores.piotroski.score).toBe(computed.forensics.piotroski?.score ?? null);
   });
 
+  it("states the fair value's explicit ISO unit in the data-only synthesis", () => {
+    const report = dataOnly();
+    expect(report.fairValue?.perShare?.unit).toBe("USD/share");
+    expect(report.verdict.synthesis).toMatch(/model: [\d.,]+ USD per share/);
+    expect(report.verdict.synthesis).not.toContain("(currency unknown)");
+  });
+
   it("fills the fundamentals, capital, technicals and macro tables from Stage B, and leaves narrative sections empty", () => {
     const report = dataOnly();
     const { computed } = buildInputs();

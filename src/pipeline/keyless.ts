@@ -33,6 +33,7 @@ import {
   buildStatementsFromCompanyFacts,
   coverShareCountsByPeriod,
   describeChangePct,
+  describeShareBasisWithheld,
   RESTATEMENT_THRESHOLD_PCT,
   type BuiltStatements,
   type SharesBasis,
@@ -41,7 +42,8 @@ import {
 } from "@/edgar/statements";
 import { conceptFactsSchema, dedupFactPoints, parseFactPoints, type CompanyFacts, type FactPoint } from "@/edgar/xbrl";
 import { tagsFor } from "@/edgar/tagSynonyms";
-import { describeSplitRatio, discoverStockSplits, SPLIT_RATIO_TAG, type SplitEvent } from "@/edgar/splits";
+import { describeSplits, sameShareBasis, shareCountOnBasis, SPLIT_RATIO_TAG, type StockSplits } from "@/edgar/splits";
+import { mergeSplitEvidence, unavailableSplitEvidence, type VendorSplitEvidence } from "@/providers/splitEvents";
 import {
   SUCCESSOR_FORM,
   predecessorManifestEntry,
@@ -158,6 +160,8 @@ export interface KeylessOutcome {
   notes: string[];
   /** Members actually replaced, for progress logging. */
   replaced: (keyof KeylessMembers)[];
+  /** The split resolution and basis session the EDGAR figures were stated on; null when none was built. */
+  shareBasis: { splits: StockSplits; basisDay: string } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -292,24 +296,121 @@ export function lastCloseOnOrBefore(rowsDesc: readonly FmpEodBarRow[], date: str
 }
 
 /**
- * The cover-page share count in force on `date`: the latest cover date at or
- * before it, else the earliest one known (a bar older than the first cover page
- * is priced on the oldest count we have rather than dropped).
+ * One observation of the share-count series, AS FILED. It is put on a price's
+ * share basis only where it meets that price (`seriesCountOn`), because a
+ * cached price series and a live quote can be on different bases.
  */
-export function sharesOnOrBefore(
-  points: readonly { value: number; asOf: string }[],
-  date: string,
-): number | null {
-  let earliest: { value: number; asOf: string } | null = null;
-  let latestOnOrBefore: { value: number; asOf: string } | null = null;
+export interface SharePoint {
+  value: number;
+  /** The count's own date (cover-page date, or balance-sheet period end). */
+  asOf: string;
+  filed: string;
+  /** True for a cover-page count: a count as of `asOf`, not a restated statement figure. */
+  pointInTime: boolean;
+}
+
+/**
+ * The cover-page share observation in force on `date`: the latest cover date
+ * at or before it, else the earliest one known (a bar older than the first
+ * cover page is priced on the oldest count we have rather than dropped).
+ */
+export function sharePointOnOrBefore<P extends { asOf: string }>(points: readonly P[], date: string): P | null {
+  let earliest: P | null = null;
+  let latestOnOrBefore: P | null = null;
   for (const point of points) {
     if (earliest === null || point.asOf < earliest.asOf) earliest = point;
     if (point.asOf <= date && (latestOnOrBefore === null || point.asOf > latestOnOrBefore.asOf)) {
       latestOnOrBefore = point;
     }
   }
-  const chosen = latestOnOrBefore ?? earliest;
-  return chosen === null ? null : chosen.value;
+  return latestOnOrBefore ?? earliest;
+}
+
+/** The share count in force on `date` (see `sharePointOnOrBefore`), as it stands in `points`; null when none. */
+export function sharesOnOrBefore(
+  points: readonly { value: number | null; asOf: string }[],
+  date: string,
+): number | null {
+  return sharePointOnOrBefore(points, date)?.value ?? null;
+}
+
+/** The vendor income-statement fields whose split basis is checked (and withheld when unestablished). */
+export const VENDOR_SHARE_FIELDS = ["eps", "epsDiluted", "weightedAverageShsOut", "weightedAverageShsOutDil"] as const;
+
+/** A vendor share count or EPS agrees with the filer's when within this relative tolerance. */
+const VENDOR_SHARES_TOLERANCE = 0.03;
+
+/** How each checked field is named in a reason. */
+const VENDOR_SHARE_FIELD_LABELS: Record<(typeof VENDOR_SHARE_FIELDS)[number], string> = {
+  weightedAverageShsOutDil: "diluted count",
+  weightedAverageShsOut: "basic count",
+  epsDiluted: "epsDiluted",
+  eps: "eps",
+};
+
+/**
+ * Keep a vendor income row's share and per-share fields only where their split
+ * basis on `basisDay` is established. A row that no split the report knows of
+ * postdates needs nothing. For a row for a period before such a split (or
+ * before an unresolved one) EACH field is tested on its own against the
+ * filer's same field for the same period — put on the `basisDay` basis by
+ * src/edgar/statements.ts — within `VENDOR_SHARES_TOLERANCE`: a matching diluted
+ * count says nothing about the basic count or EPS beside it, which vendors
+ * adjust separately. A field the
+ * filer does not state, or states differently, is withheld; nothing is rebuilt
+ * from net income. There is no absolute EPS allowance: a sub-cent difference
+ * can still be a manyfold split-basis error. Zero must match exactly.
+ * EDGAR rows already carried in the member
+ * (`source: "edgar"`) were built on that basis and are left alone.
+ */
+export function guardVendorShareFields<TRow extends FmpRawRow>(
+  rows: readonly TRow[],
+  edgarRows: readonly FmpRawRow[],
+  splits: StockSplits,
+  basisDay: string,
+): { rows: TRow[]; withheld: { date: string; field: (typeof VENDOR_SHARE_FIELDS)[number]; reason: string }[] } {
+  const filed = new Map<string, FmpRawRow>();
+  for (const r of edgarRows) {
+    const day = isoDay(r["date"]);
+    if (day !== null) filed.set(day, r);
+  }
+  const withheld: { date: string; field: (typeof VENDOR_SHARE_FIELDS)[number]; reason: string }[] = [];
+  const out = rows.map((row) => {
+    const date = isoDay(row["date"]);
+    if (date === null || row["source"] === "edgar") return row;
+    const present = VENDOR_SHARE_FIELDS.filter((f) => row[f] !== undefined && row[f] !== null);
+    if (present.length === 0) return row;
+    const later = splits.events.find((e) => date < e.sessionWindow.to && e.sessionWindow.from <= basisDay);
+    const open = splits.unresolved.find((u) => date < u.to && u.from <= basisDay);
+    if (later === undefined && open === undefined) return row;
+    const against = later !== undefined ? `the ${describeSplits({ ...splits, events: [later] })}` : `an unresolved split (${open!.reason})`;
+    const filer = filed.get(date);
+    let copy: Record<string, unknown> | null = null;
+    for (const field of present) {
+      const label = VENDOR_SHARE_FIELD_LABELS[field];
+      const isEps = field === "eps" || field === "epsDiluted";
+      const vendorValue = row[field];
+      const filerValue = filer?.[field];
+      let reason: string | null = null;
+      if (!isFiniteNumber(vendorValue) || (!isEps && vendorValue <= 0)) {
+        reason = `the vendor's ${label} for ${date} (${String(vendorValue)}) is not a usable figure to test against ${against}`;
+      } else if (!isFiniteNumber(filerValue) || (!isEps && filerValue <= 0)) {
+        reason = `no filed ${label} for ${date} on the ${basisDay} basis to test the vendor's ${vendorValue} against ${against}`;
+      } else {
+        const diff = Math.abs(vendorValue - filerValue);
+        const agrees = vendorValue === filerValue || diff <= Math.abs(filerValue) * VENDOR_SHARES_TOLERANCE;
+        if (!agrees) {
+          reason = `the vendor's ${label} for ${date} (${vendorValue}) differs from the filer's (${filerValue}) on the ${basisDay} basis, across ${against}`;
+        }
+      }
+      if (reason === null) continue;
+      withheld.push({ date, field, reason });
+      copy ??= { ...row };
+      delete copy[field];
+    }
+    return copy === null ? row : (copy as TRow);
+  });
+  return { rows: out, withheld };
 }
 
 /** True for a two-letter US state, DC or territory code (EDGAR's stateOfIncorporation). */
@@ -330,13 +431,14 @@ function sharesUnitPoints(facts: CompanyFacts, namespaceName: string, tag: strin
 }
 
 /**
- * Carry one share count to the current share basis with the splits dated after
- * its own filing (`factorFor`), the same rule `src/edgar/statements.ts` applies:
- * a cover count filed before a 4-for-1 split is a quarter of today's share
- * count, and the daily market-cap history would be a quarter short.
+ * One series observation on the share basis of the session `day`, the same
+ * rule `src/edgar/statements.ts` applies: a cover count filed before a 4-for-1
+ * split is a quarter of the post-split count, and a market value priced on a
+ * post-split close would be a quarter short. A count whose basis on `day`
+ * cannot be established is withheld, never guessed.
  */
-function splitAdjusted(value: number, filed: string, factorFor: (filed: string) => number): number {
-  return Math.round(value * factorFor(filed));
+export function seriesCountOn(splits: StockSplits, point: SharePoint, day: string): { value: number } | { withheld: string } {
+  return shareCountOnBasis(splits, point.value, point.filed, point.pointInTime ? point.asOf : null, day);
 }
 
 /**
@@ -344,16 +446,15 @@ function splitAdjusted(value: number, filed: string, factorFor: (filed: string) 
  * It is the all-classes total in ONE fact, so same-`end` duplicates are
  * refilings and the max(`filed`) winner is the right one — never summed.
  */
-function balanceSheetSharePoints(
-  facts: CompanyFacts,
-  factorFor: (filed: string) => number,
-): { value: number; asOf: string }[] {
+function balanceSheetSharePoints(facts: CompanyFacts): SharePoint[] {
   return dedupFactPoints(sharesUnitPoints(facts, "us-gaap", BALANCE_SHEET_SHARES_TAG))
     .flatMap((point) => {
       if (point.start !== undefined) return [];
       const day = isoDay(point.end);
+      // A balance-sheet count filed after a split is restated to it (SAB Topic
+      // 4C), so its filing date alone fixes its basis.
       return day !== null && isFiniteNumber(point.val) && point.val > 0
-        ? [{ value: splitAdjusted(point.val, point.filed, factorFor), asOf: day }]
+        ? [{ value: point.val, asOf: day, filed: point.filed, pointInTime: false }]
         : [];
     })
     .sort((a, b) => (a.asOf < b.asOf ? -1 : a.asOf > b.asOf ? 1 : 0));
@@ -370,14 +471,13 @@ function balanceSheetSharePoints(
  * the same day's history point 250M, and every enterprise value in the series
  * carried the same error.
  */
-function coverSharePoints(
-  facts: CompanyFacts,
-  factorFor: (filed: string) => number,
-): { value: number; asOf: string }[] {
+function coverSharePoints(facts: CompanyFacts): SharePoint[] {
   return coverShareCountsByPeriod(sharesUnitPoints(facts, "dei", DEI_SHARES_TAG)).flatMap((count) => {
     const day = isoDay(count.asOf);
+    // The cover count is a point-in-time count as of its own date, so a split
+    // between that date and the filing leaves its basis open.
     return day !== null && isFiniteNumber(count.value) && count.value > 0
-      ? [{ value: splitAdjusted(count.value, count.filing.filed, factorFor), asOf: day }]
+      ? [{ value: count.value, asOf: day, filed: count.filing.filed, pointInTime: true }]
       : [];
   });
 }
@@ -398,20 +498,20 @@ function coverSharePoints(
  * summed (`coverShareCountsByPeriod`); ACROSS filings a repeated period is a
  * refiling and stays deduped by max(`filed`). The us-gaap fallback is a single
  * all-classes fact, so it is only ever deduped.
+ *
+ * The points are AS FILED, with their filing and measurement dates;
+ * `seriesCountOn` puts one on the share basis of the price it meets.
  */
 export function sharesOutstandingSeries(facts: CompanyFacts): {
-  points: { value: number; asOf: string }[];
+  points: SharePoint[];
   basis: SharesBasis | null;
-  /** The stock splits the pre-split points were carried across, oldest first. */
-  splits: SplitEvent[];
 } {
-  const splits = discoverStockSplits(facts);
-  const cover = coverSharePoints(facts, splits.factorFor);
-  if (cover.length > 0) return { points: cover, basis: "dei cover page", splits: splits.events };
-  const balanceSheet = balanceSheetSharePoints(facts, splits.factorFor);
+  const cover = coverSharePoints(facts);
+  if (cover.length > 0) return { points: cover, basis: "dei cover page" };
+  const balanceSheet = balanceSheetSharePoints(facts);
   return balanceSheet.length > 0
-    ? { points: balanceSheet, basis: "balance sheet CommonStockSharesOutstanding", splits: splits.events }
-    : { points: [], basis: null, splits: splits.events };
+    ? { points: balanceSheet, basis: "balance sheet CommonStockSharesOutstanding" }
+    : { points: [], basis: null };
 }
 
 /**
@@ -486,7 +586,7 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     notes.push(
       `keyless fallbacks skipped: EDGAR did not resolve ${inputs.symbol} to a registrant`,
     );
-    return { members, sectorEtfSymbol: inputs.sectorEtfSymbol, gaps, notes, replaced };
+    return { members, sectorEtfSymbol: inputs.sectorEtfSymbol, gaps, notes, replaced, shareBasis: null };
   }
 
   const fetchedAt = inputs.now().toISOString();
@@ -624,6 +724,79 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
 
   const attemptedOf = (gap: ManifestEntry): string[] => [gap.field, ...(gap.attemptedSources ?? [])];
 
+  // --- Yahoo: every needed series, the quote and the split list, in one round --
+  //
+  // Fetched BEFORE the statements are built: the statements put every share
+  // count on the share basis of the quote's session, and the vendor's split
+  // events decide what that basis is.
+
+  const classification = sectorIndustryForSic(registrant?.sic ?? null);
+  const sectorEtfSymbol = inputs.sectorEtfSymbol ?? inputs.resolveSectorEtf(classification.sector);
+
+  const wantHistory = needs("eodPrices");
+  const wantSpy = needs("spy");
+  const wantSectorEtf = needs("sectorEtf") && sectorEtfSymbol !== null;
+  const wantProfile = needs("profile");
+  const wantQuote = needs("quote");
+  // Every EDGAR share count and per-share figure is put on a price's split
+  // basis, which needs the vendor's list of splits over the whole span from the
+  // oldest filing to the price's session. The daily history covers only the
+  // price window and the quote only its last five sessions, so the full list
+  // is asked for whenever EDGAR figures will be used. It is issuer-bound: the
+  // same gate as the statements.
+  const wantSplitList = inputs.edgarConfirmedIssuer && inputs.edgar.companyFacts.ok;
+
+  const [history, spy, sectorEtf, metaResult, splitList] = await Promise.all([
+    wantHistory
+      ? attempt(`yahoo.dailyHistory(${inputs.symbol})`, () => inputs.yahoo.dailyHistory(inputs.symbol, inputs.eodFrom, inputs.today))
+      : null,
+    wantSpy
+      ? attempt("yahoo.dailyHistory(SPY)", () => inputs.yahoo.dailyHistory("SPY", inputs.eodFrom, inputs.today))
+      : null,
+    wantSectorEtf && sectorEtfSymbol !== null
+      ? attempt(`yahoo.dailyHistory(${sectorEtfSymbol})`, () => inputs.yahoo.dailyHistory(sectorEtfSymbol, inputs.eodFrom, inputs.today))
+      : null,
+    wantProfile ? attempt(`yahoo.meta(${inputs.symbol})`, () => inputs.yahoo.meta(inputs.symbol)) : null,
+    wantSplitList ? attempt(`yahoo.splitHistory(${inputs.symbol})`, () => inputs.yahoo.splitHistory(inputs.symbol)) : null,
+  ]);
+  // `quote()` is `meta()` plus a row mapping: both read the SAME chart request
+  // (range=5d&interval=1d), so issuing them together would race two identical
+  // requests to an unofficial endpoint. Sequencing the quote AFTER the meta
+  // lets it resolve from the durable cache the first one just populated. The
+  // three history series stay concurrent above — they are distinct requests.
+  const quoteResult = wantQuote
+    ? await attempt(`yahoo.quote(${inputs.symbol})`, () => inputs.yahoo.quote(inputs.symbol))
+    : null;
+
+  // The vendor's split events: the full list, the daily history's and the
+  // quote's, merged. A request that failed or was never made contributes an
+  // `unavailable` answer, never an empty list.
+  const unanswered = (source: string, result: { ok: false; gap: ManifestEntry } | null): VendorSplitEvidence =>
+    unavailableSplitEvidence(source, result === null ? "not requested" : result.gap.reason);
+  const splitEvidence: VendorSplitEvidence = mergeSplitEvidence([
+    splitList !== null && splitList.ok ? splitList.value.data : unanswered("yahoo:chart(range=max)", splitList),
+    ...(history === null
+      ? []
+      : [history.ok ? (history.value.data.splitEvents ?? unanswered("yahoo:chart(interval=1d)", null)) : unanswered("yahoo:chart(interval=1d)", history)]),
+    ...(metaResult !== null && metaResult.ok
+      ? [metaResult.value.data.splitEvents ?? unanswered("yahoo:chart(range=5d)", null)]
+      : []),
+    ...(quoteResult !== null && quoteResult.ok && quoteResult.value.data.splitEvents !== undefined
+      ? [quoteResult.value.data.splitEvents]
+      : []),
+  ]);
+  // The session whose share basis every EDGAR share count and per-share figure
+  // is stated on: the session of the quote the report will price them
+  // against, Yahoo's when the keyless quote is used, else FMP's.
+  const quoteSession = wantQuote
+    ? quoteResult !== null && quoteResult.ok
+      ? quoteResult.value.asOf
+      : null
+    : inputs.fmp.quote.ok
+      ? isoDay(inputs.fmp.quote.value.asOf)
+      : null;
+  const basisDay = quoteSession ?? inputs.today;
+
   // --- Statements: one companyfacts build feeds all six members -------------
 
   // Every consumer of `built` (the six statements, the profile, the derived
@@ -641,6 +814,9 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     cik,
     annualPeriods: inputs.annualPeriods,
     quarterlyPeriods: inputs.quarterlyPeriods,
+    asOf: inputs.today,
+    vendorSplits: splitEvidence,
+    basisDay,
     ...(bankStatementRouting(registrant) ? { bankRevenue: true } : {}),
   });
   const built: BuiltStatements | null = inputs.edgar.companyFacts.ok && inputs.edgarConfirmedIssuer
@@ -657,8 +833,19 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         field: `keyless.stockSplits(${note.date})`,
         reason: note.text,
         severity: note.severity,
-        attemptedSources: [`edgar:companyfacts us-gaap/${SPLIT_RATIO_TAG}`],
+        attemptedSources: [`edgar:companyfacts us-gaap/${SPLIT_RATIO_TAG}`, built.splits.vendor.source],
         expected: note.severity === "info",
+      });
+    }
+    // The share and per-share facts left out of the statements are named in
+    // the manifest: an empty EPS is a withheld figure, not a missing one.
+    const withheldText = describeShareBasisWithheld(built.shareBasisWithheld, built.basisDay);
+    if (withheldText !== null) {
+      gaps.push({
+        field: "keyless.statements.shareBasis",
+        reason: withheldText,
+        severity: "warn",
+        attemptedSources: [`edgar:companyfacts us-gaap/${SPLIT_RATIO_TAG}`, built.splits.vendor.source],
       });
     }
   }
@@ -1067,37 +1254,39 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     }
   }
 
-  // --- Yahoo: every needed series and the quote in one concurrent round ------
 
-  const classification = sectorIndustryForSic(registrant?.sic ?? null);
-  const sectorEtfSymbol = inputs.sectorEtfSymbol ?? inputs.resolveSectorEtf(classification.sector);
-
-  const wantHistory = needs("eodPrices");
-  const wantSpy = needs("spy");
-  const wantSectorEtf = needs("sectorEtf") && sectorEtfSymbol !== null;
-  const wantProfile = needs("profile");
-  const wantQuote = needs("quote");
-
-  const [history, spy, sectorEtf, metaResult] = await Promise.all([
-    wantHistory
-      ? attempt(`yahoo.dailyHistory(${inputs.symbol})`, () => inputs.yahoo.dailyHistory(inputs.symbol, inputs.eodFrom, inputs.today))
-      : null,
-    wantSpy
-      ? attempt("yahoo.dailyHistory(SPY)", () => inputs.yahoo.dailyHistory("SPY", inputs.eodFrom, inputs.today))
-      : null,
-    wantSectorEtf && sectorEtfSymbol !== null
-      ? attempt(`yahoo.dailyHistory(${sectorEtfSymbol})`, () => inputs.yahoo.dailyHistory(sectorEtfSymbol, inputs.eodFrom, inputs.today))
-      : null,
-    wantProfile ? attempt(`yahoo.meta(${inputs.symbol})`, () => inputs.yahoo.meta(inputs.symbol)) : null,
-  ]);
-  // `quote()` is `meta()` plus a row mapping: both read the SAME chart request
-  // (range=5d&interval=1d), so issuing them together would race two identical
-  // requests to an unofficial endpoint. Sequencing the quote AFTER the meta
-  // lets it resolve from the durable cache the first one just populated. The
-  // three history series stay concurrent above — they are distinct requests.
-  const quoteResult = wantQuote
-    ? await attempt(`yahoo.quote(${inputs.symbol})`, () => inputs.yahoo.quote(inputs.symbol))
-    : null;
+  // --- Vendor statement rows across a known split ---------------------------
+  //
+  // FMP's FAQ documents that historical prices and shares outstanding are
+  // split-adjusted; it says nothing specific about the income statement's
+  // weighted-average share counts and EPS. A vendor row for a period before a
+  // split the report knows of keeps each share or per-share field only where
+  // the filer's same field for that period, on the same basis, agrees with it.
+  // Other fields stand, and the manifest says which were withheld and why.
+  if (built !== null) {
+    for (const [member, edgarRows] of [
+      ["incomeAnnual", built.incomeAnnual.rows],
+      ["incomeQuarterly", built.incomeQuarterly.rows],
+    ] as const) {
+      const current = members[member];
+      if (!current.ok || current.value.source === "edgar") continue;
+      const guarded = guardVendorShareFields(current.value.data.rows, edgarRows, built.splits, basisDay);
+      if (guarded.withheld.length === 0) continue;
+      members[member] = { ok: true, value: { ...current.value, data: { ...current.value.data, rows: guarded.rows } } };
+      const dates = [...new Set(guarded.withheld.map((w) => w.date))].sort();
+      const fields = VENDOR_SHARE_FIELDS.filter((f) => guarded.withheld.some((w) => w.field === f));
+      const reasons = [...new Set(guarded.withheld.map((w) => w.reason))];
+      gaps.push({
+        field: `keyless.${member}.shareBasis`,
+        reason:
+          `${guarded.withheld.length} field(s) in ${dates.length} vendor row(s) (${dates[0]} … ${dates[dates.length - 1]}; ${fields.join(", ")}) withheld: ` +
+          `each period precedes a split the report knows of, and its split basis on ${basisDay} could not be established — ${reasons.slice(0, 3).join("; ")}` +
+          (reasons.length > 3 ? `; and ${reasons.length - 3} more reason(s)` : ""),
+        severity: "warn",
+        attemptedSources: [current.value.endpoint, `edgar:companyfacts us-gaap/${SPLIT_RATIO_TAG}`, built.splits.vendor.source],
+      });
+    }
+  }
 
   const takeHistory = (
     member: "eodPrices" | "spy" | "sectorEtf",
@@ -1142,19 +1331,69 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     quoteResult !== null && quoteResult.ok && isFiniteNumber(quoteResult.value.data.rows[0]?.price)
       ? quoteResult.value.data.rows[0].price
       : null;
-  const price = meta?.regularMarketPrice ?? quotePrice ?? lastCloseOnOrBefore(eodRows, inputs.today);
-  const outstanding = built?.shares.outstanding ?? null;
-  const marketCap = price !== null && outstanding !== null ? price * outstanding.value : null;
+  const metaPrice = meta?.regularMarketPrice ?? null;
+  const price = metaPrice ?? quotePrice ?? lastCloseOnOrBefore(eodRows, inputs.today);
   const shareSeries = inputs.edgar.companyFacts.ok
     ? sharesOutstandingSeries(inputs.edgar.companyFacts.value.data)
-    : { points: [], basis: null, splits: [] };
+    : { points: [], basis: null };
   const deiShares = shareSeries.points;
-  if (shareSeries.splits.length > 0 && deiShares.length > 0) {
-    notes.push(
-      `keyless share counts: points filed before the ${shareSeries.splits
-        .map((e) => `${describeSplitRatio(e.ratio)} split of ${e.date}`)
-        .join(" and the ")} are restated to the current share basis`,
-    );
+
+  // --- Share basis ----------------------------------------------------------
+  //
+  // A price is on the share basis of the session its vendor adjusted it for:
+  // a live quote on its own session's, a close from a split-adjusted history
+  // (FMP documents its `close` as split-adjusted; Yahoo lists the splits its
+  // closes are adjusted for) on the last session the history was adjusted
+  // through — a cached series predates any split since. The statements are
+  // on the basis of the quote's session (`basisDay`); a share count from the
+  // series is put on the basis of the price it meets. A market value is
+  // price × shares only when both sides are on one basis; otherwise it is
+  // withheld and the reason filed, never rescaled on a guess.
+  const splits: StockSplits | null = built?.splits ?? null;
+  const eodEvidence = members.eodPrices.ok ? members.eodPrices.value.data.splitEvents : undefined;
+  const eodBasisDay = !members.eodPrices.ok
+    ? null
+    : eodEvidence !== undefined && eodEvidence.status === "retrieved"
+      ? (eodEvidence.coverage[eodEvidence.coverage.length - 1]?.to ?? null)
+      : isoDay(members.eodPrices.value.fetchedAt);
+  const metaAsOf = metaResult !== null && metaResult.ok ? metaResult.value.asOf : null;
+  const quoteAsOf = quoteResult !== null && quoteResult.ok ? quoteResult.value.asOf : null;
+  const priceBasisDay = metaPrice !== null ? metaAsOf : quotePrice !== null ? quoteAsOf : eodBasisDay;
+  const NO_SESSION = "the session the price is adjusted for is unknown";
+  /** Why figures on the bases of sessions `a` and `b` cannot be combined; null when they can. */
+  const basisGap = (a: string | null, b: string | null): string | null =>
+    splits === null ? null : a === null || b === null ? NO_SESSION : sameShareBasis(splits, a, b);
+  /** A series share count on the basis of the session `day`, or why not. */
+  const countOn = (point: SharePoint, day: string | null): { value: number } | { withheld: string } =>
+    splits === null
+      ? { withheld: "no EDGAR split resolution was made for this issuer" }
+      : day === null
+        ? { withheld: NO_SESSION }
+        : seriesCountOn(splits, point, day);
+  /** Figures withheld for their share basis: one `warn` per member, naming each distinct reason. */
+  const withheldForBasis = (field: string, what: string, days: string[], reasons: ReadonlySet<string>): void => {
+    if (days.length === 0) return;
+    const sorted = [...days].sort();
+    const span = sorted.length === 1 ? sorted[0] : `${sorted[0]} … ${sorted[sorted.length - 1]}`;
+    const reason = `${sorted.length} ${what} withheld (${span}) because price and share count could not be put on one share basis: ${[...reasons].join("; ")}`;
+    gaps.push({ field, reason, severity: "warn", attemptedSources: [`edgar:companyfacts us-gaap/${SPLIT_RATIO_TAG}`, splitEvidence.source] });
+    notes.push(`${field}: ${reason}`);
+  };
+
+  // The statements' latest count, already on the basis of `basisDay` (a count
+  // whose basis could not be established was left out of the statements).
+  const outstanding = built?.shares.outstanding ?? null;
+  /** Why the statements carry no share count, when one was filed but its basis could not be established. */
+  const outstandingWithheld =
+    outstanding !== null
+      ? null
+      : (built?.shareBasisWithheld.find(
+          (w) => w.concept === `dei:${DEI_SHARES_TAG}` || w.concept === BALANCE_SHEET_SHARES_TAG,
+        )?.reason ?? null);
+  const spotIssue = price === null || outstanding === null ? null : basisGap(priceBasisDay, basisDay);
+  const marketCap = price !== null && outstanding !== null && spotIssue === null ? price * outstanding.value : null;
+  if (splits !== null && splits.events.length > 0 && deiShares.length > 0) {
+    notes.push(`keyless share counts: each is put on the share basis of the price it meets, across ${describeSplits(splits)}`);
   }
   /** Which share-count concept a derived figure rests on, for the notes. */
   const seriesBasis: SharesBasis | "no share-count concept" =
@@ -1184,7 +1423,11 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       notes.push(
         `profile: ${beta.note}${beta.rSquared !== null ? ` (R² ${beta.rSquared.toFixed(2)})` : ""}`,
       );
-      if (outstanding !== null) {
+      if (outstanding === null && outstandingWithheld !== null) {
+        withheldForBasis("keyless.profile.marketCap", "market cap", [basisDay], new Set([`every filed share count was withheld: ${outstandingWithheld}`]));
+      } else if (outstanding !== null && spotIssue !== null) {
+        withheldForBasis("keyless.profile.marketCap", "market cap", [priceBasisDay ?? inputs.today], new Set([spotIssue]));
+      } else if (outstanding !== null) {
         notes.push(
           `profile: market cap from the ${outstanding.basis} share count (${outstanding.value} at ${outstanding.asOf})`,
         );
@@ -1256,11 +1499,15 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   if (quoteResult !== null) {
     if (quoteResult.ok) {
       // Yahoo's chart meta has no share count, so the market cap is EDGAR's.
+      const quoteIssue = outstanding === null ? null : basisGap(quoteResult.value.asOf, basisDay);
       const rows = quoteResult.value.data.rows.map((quoteRow) =>
-        outstanding !== null && isFiniteNumber(quoteRow.price)
+        outstanding !== null && quoteIssue === null && isFiniteNumber(quoteRow.price)
           ? { ...quoteRow, marketCap: quoteRow.price * outstanding.value }
           : quoteRow,
       );
+      if (quoteIssue !== null) {
+        withheldForBasis("keyless.quote.marketCap", "quote market cap", [quoteResult.value.asOf], new Set([quoteIssue]));
+      }
       members.quote = {
         ok: true,
         value: { ...quoteResult.value, data: { ...quoteResult.value.data, rows } },
@@ -1276,20 +1523,42 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
   if (needs("enterpriseValues")) {
     const balanceRows = members.balanceQuarterly.ok ? members.balanceQuarterly.value.data.rows : [];
     const incomeRows = members.incomeQuarterly.ok ? members.incomeQuarterly.value.data.rows : [];
+    // Every income row's diluted count is on the basis of `basisDay` (EDGAR's
+    // were built on it; a vendor's pre-split row that could not be shown to be
+    // on it had its share fields withheld above). The closes are on the basis
+    // of `eodBasisDay`.
+    const rowBasisGap = basisGap(eodBasisDay, basisDay);
     const dilutedByDate = new Map<string, unknown>();
     for (const incomeRow of incomeRows) {
       const day = isoDay(incomeRow.date);
       if (day !== null) dilutedByDate.set(day, incomeRow.weightedAverageShsOutDil);
     }
     const rows: FmpEnterpriseValuesRow[] = [];
+    const withheldDates: string[] = [];
+    const withheldReasons = new Set<string>();
     for (const balanceRow of balanceRows) {
       const date = isoDay(balanceRow.date);
       if (date === null) continue;
       const stockPrice = lastCloseOnOrBefore(eodRows, date);
       const diluted = dilutedByDate.get(date);
-      const numberOfShares = isFiniteNumber(diluted) && diluted > 0
-        ? diluted
-        : sharesOnOrBefore(deiShares, addDays(date, DEI_COVER_LAG_DAYS));
+      let numberOfShares: number | null = null;
+      let shareIssue: string | null = null;
+      if (isFiniteNumber(diluted) && diluted > 0) {
+        numberOfShares = diluted;
+        shareIssue = rowBasisGap;
+      } else {
+        const point = sharePointOnOrBefore(deiShares, addDays(date, DEI_COVER_LAG_DAYS));
+        if (point !== null) {
+          const onBasis = countOn(point, eodBasisDay);
+          if ("withheld" in onBasis) shareIssue = onBasis.withheld;
+          else numberOfShares = onBasis.value;
+        }
+      }
+      if (shareIssue !== null) {
+        withheldDates.push(date);
+        withheldReasons.add(shareIssue);
+        continue;
+      }
       const addTotalDebt = isFiniteNumber(balanceRow.totalDebt) ? balanceRow.totalDebt : null;
       const minusCash = isFiniteNumber(balanceRow.cashAndCashEquivalents)
         ? balanceRow.cashAndCashEquivalents
@@ -1315,10 +1584,11 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         enterpriseValue: marketCapitalization + addTotalDebt - minusCash,
       });
     }
+    withheldForBasis("keyless.enterpriseValues.shareBasis", "quarterly enterprise value(s)", withheldDates, withheldReasons);
     if (rows.length === 0) {
       failKeyless(
         "enterpriseValues",
-        `no quarterly period had all of price, shares, totalDebt and cash (${balanceRows.length} balance-sheet period${balanceRows.length === 1 ? "" : "s"} considered)`,
+        `no quarterly period had all of price, shares, totalDebt and cash (${balanceRows.length} balance-sheet period${balanceRows.length === 1 ? "" : "s"} considered${withheldDates.length > 0 ? `, ${withheldDates.length} withheld for their share basis` : ""})`,
         ["computed:enterprise-values"],
       );
     } else {
@@ -1330,19 +1600,40 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
 
   // --- Market-cap history ---------------------------------------------------
 
-  if (needs("marketCapHistory")) {
-    const rows: FmpMarketCapRow[] = [];
+  /**
+   * close × the share count in force, every count put on the share basis of
+   * the session the closes are adjusted through; a day whose count cannot be
+   * is withheld.
+   */
+  let marketCapDaysWithheld = 0;
+  const deriveMarketCaps = (keep: (date: string) => boolean, extra: Partial<FmpMarketCapRow>): FmpMarketCapRow[] => {
+    const derived: FmpMarketCapRow[] = [];
+    const withheldDays: string[] = [];
+    const withheldReasons = new Set<string>();
     for (const bar of eodRows) {
       const date = isoDay(bar.date);
-      if (date === null || !isFiniteNumber(bar.close)) continue;
-      const shares = sharesOnOrBefore(deiShares, date);
-      if (shares === null) continue;
-      rows.push({ symbol: inputs.symbol, date, marketCap: bar.close * shares });
+      if (date === null || !keep(date) || !isFiniteNumber(bar.close)) continue;
+      const point = sharePointOnOrBefore(deiShares, date);
+      if (point === null) continue;
+      const onBasis = countOn(point, eodBasisDay);
+      if ("withheld" in onBasis) {
+        withheldDays.push(date);
+        withheldReasons.add(onBasis.withheld);
+        continue;
+      }
+      derived.push({ symbol: inputs.symbol, date, marketCap: bar.close * onBasis.value, ...extra });
     }
+    marketCapDaysWithheld += withheldDays.length;
+    withheldForBasis("keyless.marketCapHistory.shareBasis", "market-cap day(s)", withheldDays, withheldReasons);
+    return derived;
+  };
+
+  if (needs("marketCapHistory")) {
+    const rows = deriveMarketCaps(() => true, {});
     if (rows.length === 0) {
       failKeyless(
         "marketCapHistory",
-        `no market-cap history: ${eodRows.length} price bar${eodRows.length === 1 ? "" : "s"} and ${deiShares.length} share observation${deiShares.length === 1 ? "" : "s"} (${seriesBasis})`,
+        `no market-cap history: ${eodRows.length} price bar${eodRows.length === 1 ? "" : "s"} and ${deiShares.length} share observation${deiShares.length === 1 ? "" : "s"} (${seriesBasis})${marketCapDaysWithheld > 0 ? `; ${marketCapDaysWithheld} day(s) withheld because their share count could not be put on the closes' split basis` : ""}`,
         ["computed:market-cap"],
       );
     } else {
@@ -1372,16 +1663,8 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
       .filter((day): day is string => day !== null)
       .sort();
     const oldestVendor = vendorDates[0];
-    const derived: FmpMarketCapRow[] = [];
-    if (oldestVendor !== undefined) {
-      for (const bar of eodRows) {
-        const date = isoDay(bar.date);
-        if (date === null || date >= oldestVendor || !isFiniteNumber(bar.close)) continue;
-        const shares = sharesOnOrBefore(deiShares, date);
-        if (shares === null) continue;
-        derived.push({ symbol: inputs.symbol, date, marketCap: bar.close * shares, source: "computed" });
-      }
-    }
+    const derived: FmpMarketCapRow[] =
+      oldestVendor === undefined ? [] : deriveMarketCaps((date) => date < oldestVendor, { source: "computed" });
     if (oldestVendor !== undefined && derived.length > 0 && planLimit !== null) {
       derived.sort((left, right) => (left.date! < right.date! ? 1 : left.date! > right.date! ? -1 : 0));
       const marketCapEp = marketCapEndpoint(shareSeries.basis);
@@ -1419,7 +1702,9 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     if (outstanding === null) {
       failKeyless(
         "sharesFloat",
-        `no share count in companyfacts: neither dei:${DEI_SHARES_TAG} nor us-gaap:${BALANCE_SHEET_SHARES_TAG}`,
+        outstandingWithheld !== null
+          ? `the filed share counts were withheld because their split basis on ${basisDay} could not be established: ${outstandingWithheld}`
+          : `no share count in companyfacts: neither dei:${DEI_SHARES_TAG} nor us-gaap:${BALANCE_SHEET_SHARES_TAG}`,
         ["edgar:companyfacts"],
       );
     } else {
@@ -1445,10 +1730,17 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
           : floatPriceOnDate !== null
             ? "measurement date"
             : "latest quote";
+      // Dollars ÷ price is a share count on the PRICE's split basis; it sits in
+      // one row with the outstanding count (on the basis of `basisDay`) and
+      // the free float divides one by the other, so both must be on one basis.
+      const floatIssue =
+        floatPriceBasis === "none" ? null : basisGap(floatPriceOnDate !== null ? eodBasisDay : priceBasisDay, basisDay);
       const floatShares =
-        publicFloat !== null && floatPrice !== null && floatPrice > 0 ? publicFloat.value / floatPrice : null;
+        publicFloat !== null && floatPrice !== null && floatPrice > 0 && floatIssue === null
+          ? publicFloat.value / floatPrice
+          : null;
       const freeFloat = floatShares !== null && outstanding.value > 0 ? (floatShares / outstanding.value) * 100 : null;
-      const floatAge = describePublicFloatAge(publicFloat, floatPrice, floatPriceBasis, inputs.today);
+      const floatAge = describePublicFloatAge(publicFloat, floatPrice, floatPriceBasis, inputs.today, floatIssue);
       gaps.push(floatAge.gap);
       if (floatAge.note !== null) notes.push(`keyless shares float: ${floatAge.note}`);
       const row: Record<string, unknown> = {
@@ -1481,7 +1773,14 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
     }
   }
 
-  return { members, sectorEtfSymbol, gaps, notes, replaced };
+  return {
+    members,
+    sectorEtfSymbol,
+    gaps,
+    notes,
+    replaced,
+    shareBasis: built === null ? null : { splits: built.splits, basisDay: built.basisDay },
+  };
 }
 
 /** Whole months from an ISO day to the analysis date, floored at 0. */
@@ -1517,6 +1816,7 @@ function describePublicFloatAge(
   price: number | null,
   priceBasis: PublicFloatPriceBasis,
   today: string,
+  basisIssue: string | null,
 ): { gap: ManifestEntry; note: string | null; stale: boolean } {
   const field = "keyless.sharesFloat.publicFloat";
   const attemptedSources = ["edgar:companyfacts(dei:EntityPublicFloat)"];
@@ -1538,6 +1838,18 @@ function describePublicFloatAge(
       gap: {
         field,
         reason: `dei:EntityPublicFloat is a dollar amount measured ${publicFloat.asOf} and no price was available to convert it, so the float share count and free-float percentage are absent`,
+        severity: "warn",
+        attemptedSources,
+      },
+      note: null,
+      stale: false,
+    };
+  }
+  if (basisIssue !== null) {
+    return {
+      gap: {
+        field,
+        reason: `dei:EntityPublicFloat is a dollar amount measured ${publicFloat.asOf}; the float share count and free-float percentage are withheld because the price that would convert it is not on the share counts' basis: ${basisIssue}`,
         severity: "warn",
         attemptedSources,
       },

@@ -30,6 +30,9 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { captureAiSelection, selectionIsConnected } from "@/ai/connections";
+import { parseSubscriptionModel, subscriptionModel } from "@/ai/contracts";
+import { bindAiFingerprint } from "@/ai/fingerprint";
 import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { getDb, type ThesisDb } from "@/db";
 import { costLog, jobPassArtifacts, jobs, reports, type JobRow } from "@/db/schema";
@@ -260,6 +263,8 @@ export interface PassUsageLike {
  */
 export interface PassDeps<TPayload = unknown> {
   analysisModel: string;
+  /** Captured once for this job; never re-read global selection inside a pass. */
+  connectionId?: string;
   /**
    * Per-request cost admission for a pass (DECISIONS D-10). The Stage C
    * adapter threads the returned object into every provider request the pass
@@ -975,6 +980,9 @@ function passReservationUsd(
   pass: DurablePass,
   verifyCapability?: VerifyReservationCapability,
 ): number {
+  // Subscription allowance is managed by the provider. This route cannot send
+  // API-key requests and reserves no USD; it retains durable launch gates.
+  if (parseSubscriptionModel(model)) return 0;
   if (pass === "verify" && verifyCapability?.billable !== true) {
     return maximumPassCostUsd(model, pass, verifyCapability);
   }
@@ -2617,7 +2625,9 @@ export async function runJob<TPayload = unknown>(
       );
       return finishRun(state, { reportId, verificationRate, dataOnly: false });
     }
-    const hasKey = opts.hasAnthropicKey ?? getConfig().hasAnthropicKey;
+    const aiSelection = opts.hasAnthropicKey === undefined
+      ? captureAiSelection() : { provider: "anthropic" as const };
+    const hasKey = opts.hasAnthropicKey ?? selectionIsConnected(aiSelection);
 
     // -- fetch ----------------------------------------------------------------
     startStep(state, "fetch");
@@ -2717,9 +2727,11 @@ export async function runJob<TPayload = unknown>(
     if (!hasKey && reusableSynthesize === null) {
       for (const step of LLM_STEPS) {
         startStep(state, step);
-        finishStep(state, step, "skipped", NO_KEY_SKIP_REASON);
+        finishStep(state, step, "skipped", aiSelection.provider === "anthropic" ? NO_KEY_SKIP_REASON : "AI is off or the selected connection needs sign-in");
       }
-      return persistDataOnly(state, bundle, validation, computed, now, hasKey);
+      return persistDataOnly(state, bundle, validation, computed, now, hasKey, {
+        reason: aiSelection.provider === "anthropic" ? NO_KEY_SKIP_REASON : "AI is off or the selected connection needs sign-in. Open Settings → AI connections. No paid fallback was attempted.",
+      });
     }
 
     // Legacy or injected Stage C adapters must not be trusted to launch paid
@@ -2751,7 +2763,9 @@ export async function runJob<TPayload = unknown>(
     } else {
       try {
         const analysisResolved = await awaitJobStage(
-          resolveModel(capturedSettings.state.analysisModel),
+          "connectionId" in aiSelection
+            ? Promise.resolve({ model: subscriptionModel(aiSelection.provider, aiSelection.model) })
+            : resolveModel(capturedSettings.state.analysisModel),
           jobSignal,
           jobController,
           "model resolution",
@@ -2797,6 +2811,7 @@ export async function runJob<TPayload = unknown>(
     const passAdmissions = new Map<DurablePass, RequestAdmission>();
     const deps: PassDeps<TPayload> = {
       analysisModel,
+      ...("connectionId" in aiSelection ? { connectionId: aiSelection.connectionId } : {}),
       effort: analysisEffort,
       payload,
       jobSeed: jobId, // WS7 (D-20): seeds the judge's case order
@@ -2805,7 +2820,7 @@ export async function runJob<TPayload = unknown>(
         ? { admissionFor: (pass: DurablePass) => passAdmissions.get(pass) }
         : {}),
     };
-    const fingerprint = passes.fingerprintPayload?.(payload) ?? null;
+    const fingerprint = bindAiFingerprint(passes.fingerprintPayload?.(payload) ?? null, aiSelection);
     if (preparedResume !== null && fingerprint !== preparedResume.payloadFingerprint) {
       throw new Error(
         "runJob: resume payload fingerprint mismatch; stored pass artifacts are incompatible — start a fresh job",
@@ -3492,7 +3507,7 @@ export async function runJob<TPayload = unknown>(
           field: `llm.${side}`,
           reason: `repair attempt after schema-invalid output also failed: ${errMessage(repairErr)}`,
           severity: "critical",
-          attemptedSources: ["anthropic"],
+          attemptedSources: [parseSubscriptionModel(analysisModel)?.provider ?? "anthropic"],
         });
         markSkipped(state, "synthesize", "upstream bull/bear pass failed");
         markSkipped(state, "verify", "upstream bull/bear pass failed");
@@ -3903,7 +3918,8 @@ function persistDataOnly(
   }
 
   const generatedAt = now().toISOString();
-  const model = hasKey ? "unavailable" : "none (no ANTHROPIC_API_KEY)";
+  const model = hasKey ? "unavailable" : disclosure.reason && disclosure.reason !== NO_KEY_SKIP_REASON
+    ? "none (AI connection unavailable)" : "none (no ANTHROPIC_API_KEY)";
   const dataOnlyInput: DataOnlyInput = {
     symbol: state.symbol,
     companyName: companyNameOf(bundle, state.symbol),
@@ -3917,7 +3933,7 @@ function persistDataOnly(
     presumed: presumedSpendDisclosure(state.jobId),
     execution: disclosure.execution,
     gaps: disclosure.gaps,
-    reason: hasKey ? (disclosure.reason ?? LLM_FAILURE_DATA_ONLY_REASON) : NO_KEY_SKIP_REASON,
+    reason: disclosure.reason ?? (hasKey ? LLM_FAILURE_DATA_ONLY_REASON : NO_KEY_SKIP_REASON),
   };
   const report = buildDataOnlyReport(dataOnlyInput);
   const validated = ReportSchema.safeParse(report);

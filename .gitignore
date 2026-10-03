@@ -1,7 +1,9 @@
 # Secrets — never commit
-.env
-.env.local
-.env*.local
+.env*
+connections.v1.json
+connections.v1.json.*.tmp
+connections.lock
+!.env.example
 
 # Dependencies / build
 node_modules/

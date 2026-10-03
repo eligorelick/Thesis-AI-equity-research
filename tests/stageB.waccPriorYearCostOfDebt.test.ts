@@ -162,9 +162,9 @@ describe("priorYearCostOfDebt from annual statements", () => {
     expect(result?.interestExpense).toBe(3_933_000_000);
     expect(result?.totalDebtAvg).toBeCloseTo((111_088_000_000 + 120_069_000_000) / 2, 0);
     expect(result?.pct).toBeCloseTo((3_933_000_000 / ((111_088_000_000 + 120_069_000_000) / 2)) * 100, 6);
-    // EBIT for the coverage ratio comes from the same fiscal year, preferring
-    // the reported ebit field over operating income.
-    expect(result?.ebit).toBe(117_669_000_000);
+    // Coverage uses the same fiscal year's operating income, matching the
+    // current coverage leg and DCF. Broad vendor EBIT can include non-operating items.
+    expect(result?.ebit).toBe(114_301_000_000);
   });
 
   it("never reads the latest row itself, and returns null when nothing recent disclosed interest", () => {

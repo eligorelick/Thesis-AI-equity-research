@@ -32,6 +32,7 @@
  */
 
 import type { ManifestEntry } from "@/types/core";
+import { parseSubscriptionModel } from "@/ai/contracts";
 import { sourceManifestEntries, type DataBundle } from "@/pipeline/types";
 import { routeMetricsBlock, type ComputedMetrics } from "@/pipeline/compute";
 import { computeDcfDisplay } from "@/pipeline/stageB/fairValue";
@@ -629,6 +630,7 @@ function finishStructuredPass<T>(
     };
   }
   const data = outcome.value.data;
+  const attemptedSources = [parseSubscriptionModel(data.model)?.provider ?? "anthropic"];
   const text = extractText(data.message);
   const billedAttempt = {
     usage: data.usage,
@@ -644,7 +646,7 @@ function finishStructuredPass<T>(
     const reason = `pass output was not valid JSON: ${(e as Error).message}`;
     return {
       ok: false,
-      gap: { field, reason, severity: "critical", attemptedSources: ["anthropic"] },
+      gap: { field, reason, severity: "critical", attemptedSources },
       error: { kind: "parse", message: `unparseable structured output for ${field}` },
       validationError: reason,
       rawText: text,
@@ -656,7 +658,7 @@ function finishStructuredPass<T>(
     const reason = `pass output failed schema validation: ${parsed.error}`;
     return {
       ok: false,
-      gap: { field, reason, severity: "critical", attemptedSources: ["anthropic"] },
+      gap: { field, reason, severity: "critical", attemptedSources },
       error: { kind: "schema", message: `schema-invalid structured output for ${field}` },
       validationError: parsed.error,
       rawText: text,
@@ -845,7 +847,7 @@ function telemetryFromPassRun<T>(
     webSearches: run.ok ? run.result.webSearches : (run.webSearches ?? 0),
     costUsd: run.ok ? run.result.costUsd : (run.costUsd ?? 0),
     fallbackUsed: run.ok ? run.result.fallbackUsed : (run.fallbackUsed ?? false),
-    billable: run.ok || run.costUsd !== undefined,
+    billable: !parseSubscriptionModel(requestedModel) && (run.ok || run.costUsd !== undefined),
     fetchedUrls,
   };
 }
@@ -3072,7 +3074,7 @@ export async function runJudgeVerifyAssemble(
       field: "llm.judge",
       reason: `judge output failed report-schema validation after ${MAX_JUDGE_RETRIES + 1} attempts: ${lastZodError ?? "unknown"}`,
       severity: "critical",
-      attemptedSources: ["anthropic"],
+      attemptedSources: [parseSubscriptionModel(deps.model)?.provider ?? "anthropic"],
     },
     error: { kind: "validation", message: lastZodError ?? "validation failed" },
     attempts: MAX_JUDGE_RETRIES + 1,

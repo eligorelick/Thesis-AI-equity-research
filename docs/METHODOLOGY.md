@@ -270,6 +270,87 @@ is available, the report says the figure may lag recent buybacks or issuance.
 
 ---
 
+## Stock splits and the share basis
+
+A share count or per-share figure is used only on the share basis of the price
+it meets, and withheld when that basis cannot be established (decision D-30 in
+[`docs/audit/DECISIONS.md`](audit/DECISIONS.md); code in `src/edgar/splits.ts`).
+
+**Dates.** A split has an announcement (the earliest filing that tags it), a
+record date, a legal-effective moment, and a first split-adjusted trading
+session; the filer's XBRL context date for
+`us-gaap:StockholdersEquityNoteStockSplitConversionRatio1` may be any of them
+and is treated as accounting context only. NVIDIA's 10-for-1 of 2024 is the
+reference case: legally effective 2024-06-07 at 4:01 p.m. Eastern (Form 8-K,
+accession 0001045810-24-000144), first split-adjusted session 2024-06-10,
+tagged in companyfacts for both dates.
+
+- The **first split-adjusted session** comes only from the price vendor's split
+  event. A quote is on the basis of its own session; a split-adjusted history is
+  on the basis of the last session it was adjusted through.
+- Without a vendor event, the first session is bounded to 7 days before the
+  earliest context date through 60 days after the latest one (narrowed by the
+  sessions the vendor covered without listing it); a price dated or a count
+  filed inside the bound is withheld.
+- **Legal effectiveness** decides a filing's side: a statement figure filed
+  after it is restated to the split (ASC 260, SAB Topic 4C). It is taken to fall
+  no earlier than the earliest context date or 7 days before the first
+  split-adjusted session (NVIDIA: 3 days); a figure filed between that bound and
+  the first session is withheld. A cover-page count is a count as of its own
+  date, so one measured before the split and filed after it is withheld.
+- A split both sources describe is applied once. A split only the vendor lists
+  (companyfacts carries the ratio only from the next periodic report) is applied
+  from the vendor's event. A tagged split the vendor's covering list does not
+  contain, or lists with another ratio, is unresolved, and every figure filed
+  before it is withheld.
+- Vendor events within 7 days of each other describe one split. When they
+  disagree on the ratio or the session (Yahoo's daily history says 4-for-1 and
+  its full list 5-for-1), the split is unresolved and its figures are withheld;
+  the descriptions are never compounded. Identical descriptions are one event.
+- Each retrieved answer retains its own source, events and coverage. If one
+  answer lists a split that another covering answer omits or describes with a
+  different ratio, the event is unresolved regardless of how far apart the
+  reported dates are. A merged list cannot turn contradictory answers into
+  multiple splits. A request that does not cover the event, or failed, does
+  not contradict it. Warnings name the individual answers that disagree.
+  A count measured before an unresolved event remains withheld even if its
+  filing came afterward; the later filing alone does not establish its basis.
+- A vendor list that was not retrieved establishes nothing: without one, and for
+  any day it does not cover, no filed share count is put on a price's basis.
+  Coverage spans join only where they overlap or touch; a gap of any length,
+  weekend or not, is uncovered, and a session after the coverage ends is too.
+- A Yahoo split event whose numerator or denominator is zero, negative or equal
+  to the other makes that answer's split list unavailable (its prices stand).
+
+**What is withheld, and what stands.** Withheld figures are left empty at the
+source — EPS and share counts on the statement rows, the keyless market cap,
+market-cap history, enterprise values and free float — so no downstream
+calculation can rebuild them: EPS growth, P/E from EPS, DCF and excess-return
+per share, the reverse DCF, REIT price × shares (P/FFO, P/AFFO), the share-count
+trend, dilution, the grades built on them, and the AI payload all read the empty
+value. Figures that need no share count (revenue, margins, free cash flow,
+capex, EV/sales on a vendor market cap) are unaffected.
+
+**Provider conventions, mapped to the fields used.** "Documented" means stated
+by the provider; "tested" means exercised by a test in this repository. No test
+here calls a live provider: every tested behaviour is on synthetic responses.
+
+| Source and field | Adjustment basis | Documented | Tested here |
+| --- | --- | --- | --- |
+| FMP `historical-price-eod/full` `close` | split-adjusted, as of the day served | yes — FMP FAQ (site.financialmodelingprep.com/faqs, as read by the reviewer on 2026-09-30; not fetchable from the build environment): "close is split-adjusted" | synthetic rows: a series served before a split is priced on that day's basis (`tests/keyless.splitBasis.test.ts`) |
+| FMP `adjClose` | splits and dividends | yes — same FAQ | not used by this code |
+| FMP `quote`/`profile` `price`, `marketCap` | the quote's own session | current values; the FAQ's history statement does not apply | vendor market cap used as served (P/E fallback), unverified |
+| FMP `shares-float` `outstandingShares`, `enterprise-values` `numberOfShares` | "historical prices and shares outstanding are adjusted for splits" | by the FAQ's wording, which names no endpoint or field | not tested |
+| FMP `income-statement` `eps`, `epsDiluted`, `weightedAverageShsOut`, `weightedAverageShsOutDil` | not stated by the FAQ | **no** | for a row for a period before a known split, each field is kept only when it matches the filer's same field on the same basis (±3% relative to the filer's magnitude; zero must match exactly); no absolute EPS allowance can approve a large proportional difference in a small amount. A field that does not match, or that the filer does not state, is withheld on its own, and EPS is never rebuilt from net income (`guardVendorShareFields`) |
+| FMP `key-metrics`, `ratios` (own-history multiples) | ratios of price to per-share figures; basis-invariant only if both sides share one | not stated | not tested |
+| FMP `analyst-estimates` `epsAvg` | not stated | **no** | not tested; shown as "currency unknown" and not registered (D-28) |
+| Yahoo chart `close` | adjusted for the splits the same answer lists | no published contract (unofficial endpoint) | synthetic responses only |
+| Yahoo chart `adjclose` | splits and dividends | no published contract | synthetic responses only (beta) |
+| Yahoo chart `events.splits` | dated by the first split-adjusted session; `numerator`/`denominator` post:pre | no published contract | synthetic responses only (`tests/yahoo.client.test.ts`) |
+| SEC companyfacts share and per-share facts | as filed, each with its own filing date | SEC | `tests/edgar.splits.test.ts`, `tests/edgar.statements.test.ts` |
+
+---
+
 ## EV bridge
 
 Enterprise value is computed the same way everywhere it is used:
@@ -698,7 +779,7 @@ missing; a one-legged figure would misstate it.
 
 ### FFO and AFFO (NAREIT)
 
-FFO follows the NAREIT white-paper definition:
+The app reconstructs the following components of NAREIT FFO:
 
 ```
 FFO = net income (GAAP)
@@ -707,9 +788,13 @@ FFO = net income (GAAP)
     + impairments of depreciable real estate
 ```
 
-Applied exactly where the filer tags the components. Two stand-ins exist, and
-both err in the same direction — FFO sits at or **above** the definition — so
-both are labeled **approximate** with the direction stated:
+The result is always **approximate**: affiliate/joint-venture adjustments are
+not fully reconciled, nor is consolidated income reconciled to the common,
+noncontrolling and preferred interests needed for a common-equity valuation.
+NAREIT requires the affiliate adjustments but does not prescribe one ownership
+attribution for every presentation. The app cannot claim equality with a
+filer's FFO, or a guaranteed direction of error. Two component stand-ins can
+individually increase the reconstruction:
 
 - Where **real-estate** depreciation is not tagged separately, total
   depreciation and amortization is added back; NAREIT adds back only the
@@ -730,16 +815,22 @@ disposition gain the filer did not tag leaves FFO overstated by that gain.
 
 AFFO subtracts recurring (maintenance) capital expenditure and straight-line
 rent where the filer tags them. Where it does not, AFFO falls back to
-`FFO − all capital expenditure` and is disclosed as a **conservative floor**,
-since development spending is subtracted too.
+`FFO − all capital expenditure`, which also subtracts development spending.
+AFFO inherits FFO's approximation and omits some issuer-specific adjustments;
+neither fallback is a guaranteed bound on the issuer's AFFO.
+
+For example, Realty Income's [2025 reconciliation](https://www.sec.gov/Archives/edgar/data/726728/000072672826000009/realtyincomeq42025supple.htm)
+contains unconsolidated-entity and noncontrolling-interest adjustments. Even
+using its real-estate-only components, the app's unreconciled formula is
+USD 12.105 million below common FFO, disproving an unconditional upper bound.
 
 The implied cap rate divides NOI by the **house enterprise value** — market
 capitalisation + net debt + preferred + minority interest, less the
 operating-lease slice by default — the same definition the multiples and the
 DCF bridge use, so a report carries one EV. The own-history P/FFO and P/AFFO
 bands are built from net income + D&A per rolling four quarters, the only
-construction quarterly statements support; when the current FFO is the NAREIT
-figure (a property-sale gain, an impairment or real-estate-only depreciation
+construction quarterly statements support; when the current FFO adjusts
+additional NAREIT components (a property-sale gain, an impairment or real-estate-only depreciation
 netted) the bands are withheld with `valuation.multiples.ownHistory.ffoBasis`
 rather than rank one definition inside another.
 

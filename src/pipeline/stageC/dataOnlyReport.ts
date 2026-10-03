@@ -38,6 +38,7 @@ import type { ForensicFlag } from "@/pipeline/stageB/forensics";
 import { scoreToBand } from "@/pipeline/stageB/grading";
 import { CORE_SERIES, fredFigureUnit, type FredUnits } from "@/providers/fred";
 import { calculateCoverage } from "@/pipeline/stageC/provenance";
+import { establishedCurrency } from "@/report/format";
 import {
   applyDcfDisplay,
   applyFairValue,
@@ -773,7 +774,9 @@ function synthesis(
   const quote = quotePrice(bundle);
   if (fv.status === "available" && fv.perShare !== null) {
     // The model's own currency; unknown is said, not filled from elsewhere.
-    const fvCurrency = fv.perShare.currency ?? "(currency unknown)";
+    const fvCurrency = (fv.perShare.currency === null
+      ? null
+      : establishedCurrency(fv.perShare.unit, fv.perShare.currency)) ?? "(currency unknown)";
     const upside = isNum(fv.upsidePct) ? ` (${fmtSignedPp(fv.upsidePct).replace("pp", "%")} versus the quote)` : "";
     parts.push(
       `Deterministic ${fv.method ?? "fair-value"} model: ${fmtNum(fv.perShare.value, 2)} ${fvCurrency} per share${quote ? ` against a ${fmtNum(quote.price, 2)} quote` : ""}${upside}.`,

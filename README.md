@@ -58,13 +58,17 @@ also be switched off for data-only reports.
 | Connection | Authorization | Usage |
 | --- | --- | --- |
 | ChatGPT | Official browser OAuth for local open-source apps; eligible Plus/Pro account | Your ChatGPT plan allowance and account credit settings |
-| Gemini | Official Gemini CLI 0.36 or newer, installed separately; Google browser sign-in | Your Google CLI allowance and account settings |
+| Gemini | Official Gemini CLI 0.36.x, installed separately; Google browser sign-in | Your Google CLI allowance and account settings |
 | Claude | Optional `ANTHROPIC_API_KEY` | Separately billed Anthropic API usage |
 
 ChatGPT sign-in opens normal Chrome, with a fallback link. Gemini's own CLI
 opens the system browser; use Chrome as the default browser for its saved
 sign-in/autofill. Thesis gives Gemini an isolated local home and disables
-tools, extensions, hooks, MCP and inherited API keys. Its Google connection
+tools, extensions, hooks, MCP and inherited API keys. CLI support is restricted
+to the reviewed 0.36 minor line; newer minor releases need compatibility review.
+Only one running Thesis server per OS user can manage or use AI connections;
+stop that server before moving these connections to another local instance.
+Its Google connection
 is separate from an existing personal CLI login. See Google's
 [installation guide](https://geminicli.com/docs/get-started/installation/).
 

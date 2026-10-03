@@ -29,7 +29,8 @@ export async function consumeChatGptStream(response: Response): Promise<{ text: 
       if (chunk.done) break;
       bytes += chunk.value.byteLength;
       if (bytes > MAX_RESPONSE_BYTES) throw new Error("ChatGPT response exceeded the local size limit");
-      buffer += decoder.decode(chunk.value, { stream: true }).replace(/\r\n/g, "\n");
+      // Normalize after appending: a CR/LF pair can straddle network chunks.
+      buffer = (buffer + decoder.decode(chunk.value, { stream: true })).replace(/\r\n/g, "\n");
       let boundary: number;
       while ((boundary = buffer.indexOf("\n\n")) >= 0) {
         const frame = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
@@ -56,13 +57,18 @@ export async function consumeChatGptStream(response: Response): Promise<{ text: 
 }
 
 export async function listChatGptModels(id: string): Promise<{ id: string; name: string }[]> {
-  const access = await chatGptAccess(id);
-  const response = await fetch("https://api.openai.com/v1/models", { headers: { Authorization: `Bearer ${access}` }, redirect: "error", signal: AbortSignal.timeout(20_000) });
-  if (!response.ok) throw new Error("ChatGPT model catalog is unavailable; reconnect or retry later");
-  const data = await response.json();
-  if (!Array.isArray(data.models)) throw new Error("Unexpected ChatGPT model catalog");
-  return data.models.filter((m: { slug: string; visibility: string }) => m.visibility === "list" && validModelId(m.slug))
-    .map((m: { slug: string; display_name?: string }) => ({ id: m.slug, name: m.display_name ?? m.slug }));
+  const tracked = trackChatGptRequest(id);
+  try {
+    const access = await chatGptAccess(id);
+    tracked.signal.throwIfAborted();
+    if (!chatGptConnected(id)) throw new Error("ChatGPT connection is signed out");
+    const response = await fetch("https://api.openai.com/v1/models", { headers: { Authorization: `Bearer ${access}` }, redirect: "error", signal: AbortSignal.any([tracked.signal, AbortSignal.timeout(20_000)]) });
+    if (!response.ok) throw new Error("ChatGPT model catalog is unavailable; reconnect or retry later");
+    const data = await response.json();
+    if (!Array.isArray(data.models)) throw new Error("Unexpected ChatGPT model catalog");
+    return data.models.filter((m: { slug: string; visibility: string }) => m.visibility === "list" && validModelId(m.slug))
+      .map((m: { slug: string; display_name?: string }) => ({ id: m.slug, name: m.display_name ?? m.slug }));
+  } finally { tracked.release(); }
 }
 
 export async function runSubscriptionPass(args: RunPassArgs, connectionId: string): Promise<RunPassOutcome> {

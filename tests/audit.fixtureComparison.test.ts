@@ -185,7 +185,7 @@ describe("Task 32 provider-free historical fixture comparison", () => {
         basePackageLockBlob: "66f7242846b6d20cfe99e21400d2dada27bbfbfd",
         // @next/env is now a direct, exact dependency for maintenance CLIs.
         // The audited base lock and projection remain byte-for-byte pinned.
-        comparisonPackageLockBlob: "e2a116b516b33815d4c92645575b9c9d45fb9991",
+        comparisonPackageLockBlob: "07d10784cdf4da6db1504066087eea89f76fb4a0",
         generationNode: "v24.11.1",
         generationNpm: "11.6.2",
         command:

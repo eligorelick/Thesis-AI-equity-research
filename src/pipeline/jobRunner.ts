@@ -3507,7 +3507,7 @@ export async function runJob<TPayload = unknown>(
           field: `llm.${side}`,
           reason: `repair attempt after schema-invalid output also failed: ${errMessage(repairErr)}`,
           severity: "critical",
-          attemptedSources: ["anthropic"],
+          attemptedSources: [parseSubscriptionModel(analysisModel)?.provider ?? "anthropic"],
         });
         markSkipped(state, "synthesize", "upstream bull/bear pass failed");
         markSkipped(state, "verify", "upstream bull/bear pass failed");

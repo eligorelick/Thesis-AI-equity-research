@@ -45,7 +45,7 @@ export function AiConnections() {
   return <Panel title="AI connections">
     <div className="space-y-3 text-sm">
       <p>Choose how Thesis runs its AI research. Financial calculations and citation checks stay in Thesis.</p>
-      <p className="text-faint">Sign-in opens your normal Chrome browser. Signing in does not run a report. Thesis never switches a failed connection to paid API usage.</p>
+      <p className="text-faint">ChatGPT sign-in opens your normal Chrome browser. Gemini opens your default browser; choose Chrome as your default to use its saved sign-in. Signing in does not run a report. Thesis never switches a failed connection to paid API usage.</p>
       {view && <>
         <p><strong>Active:</strong> {active?.provider === "none" ? "AI off — data-only reports" : active?.provider === "anthropic" ? "Claude API — separately billed" : `${active?.provider === "chatgpt" ? "ChatGPT plan" : "Google Gemini CLI allowance"} · ${active && "model" in active ? active.model : ""} · ${view.connections.find((c) => c.id === (active && "connectionId" in active ? active.connectionId : ""))?.label ?? "connection unavailable"}`}</p>
         <div className="flex flex-wrap gap-2">
@@ -53,7 +53,7 @@ export function AiConnections() {
           <button className={button} disabled={busy || !view.geminiInstalled || view.pending?.status === "waiting"} onClick={() => void act({ action: "connect-gemini" })}>Connect Gemini with Google</button>
         </div>
         <p className="text-xs text-faint">ChatGPT requires an eligible plan. Gemini uses the official local Gemini CLI and its Google allowance. Claude remains available through a separately billed API key; third-party Claude subscription sign-in is not enabled.</p>
-        {!view.geminiInstalled && <p>Gemini CLI is missing or too old. Install it using <a className="underline" href="https://geminicli.com/docs/get-started/installation/" target="_blank" rel="noreferrer">Google’s instructions</a>, then restart Thesis. Version 0.36 or newer is required.</p>}
+        {!view.geminiInstalled && <p>Gemini CLI is missing or unsupported. Install version 0.36.x using <a className="underline" href="https://geminicli.com/docs/get-started/installation/" target="_blank" rel="noreferrer">Google’s instructions</a>, then restart Thesis.</p>}
         {view.pending && <div role="status" className="border border-edge p-2"><p>{view.pending.message}</p>{view.pending.url && <a className="underline" href={view.pending.url} target="_blank" rel="noreferrer">Open ChatGPT sign-in</a>}</div>}
         {view.connections.map((c) => <div key={c.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-edge py-2">
           <span>{c.label} — {c.connected ? c.planEnabled ? "connected" : "plan access not granted" : "signed out"}</span>

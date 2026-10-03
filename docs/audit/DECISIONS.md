@@ -21,6 +21,15 @@ Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
   origin guard. Tokens never cross into the UI, reports or logs. A run captures
   its connection and binds the provider/account/model to durable payload
   fingerprints. Existing deterministic calculations and verification are shared.
+- **Lifecycle and CLI isolation**: pending sign-ins are cancelable before any
+  storage wait. One live Thesis process owns connections under the serialized
+  store lock. Gemini 0.36.x runs without its wrapper relaunch; disconnect waits
+  for exit before deleting its directory. An empty work `.env` stops ancestor
+  discovery. The official CLI's post-admin MCP allowlist admits only a fresh
+  unconfigured name; `--extensions none`, disabled skills/agents, and deny-tool
+  policy prevent external capabilities. Local `admin` flags are deliberately
+  not used: this CLI overwrites them during remote admin merging. The storage
+  override isolates CLI state while preserving the real browser profile.
 - **Usage**: subscription adapters cannot accept API keys. Their zero API cost
   does not claim zero subscription usage. Provider allowance/credit settings
   apply; Thesis cannot read remaining quota or impose its API USD cap on it.
@@ -54,6 +63,8 @@ Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
   Unsupported APIs, options and complex patterns throw actionable errors.
   The repository uses default project roots, and retains every existing lint
   rule. No vulnerable source is renamed or copied into the adapter.
+  An explicit root development link, referenced by the scoped override,
+  keeps `npm ci` resolution consistent across npm 10/11 and both CI hosts.
 - **Why**: this removes the vulnerable dependency chain without downgrading
   the framework, claiming full glob compatibility, or suppressing the audit.
   Tests must exercise the real internal-link lint rule: an empty root match

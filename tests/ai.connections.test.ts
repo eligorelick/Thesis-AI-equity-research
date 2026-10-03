@@ -29,6 +29,13 @@ describe("subscription transport boundaries", () => {
     } });
     expect((await consumeChatGptStream(new Response(stream))).text).toBe('{"ok":true}');
   });
+  it("accepts CRLF frames even when every CR/LF pair straddles a chunk", async () => {
+    const bytes = new TextEncoder().encode(`data: ${JSON.stringify(completed)}\r\n\r\n`);
+    const stream = new ReadableStream<Uint8Array>({ start(controller) {
+      for (const byte of bytes) controller.enqueue(Uint8Array.of(byte)); controller.close();
+    } });
+    expect((await consumeChatGptStream(new Response(stream))).text).toBe('{"ok":true}');
+  });
   it("sends developer rules and schema, without inventing observed web sources", () => {
     const input = subscriptionMessages({ model: "chatgpt/example", system: "Research rules", messages: [{ role: "user", content: [{ type: "text", text: "evidence", cache_control: { type: "ephemeral" } }] }], outputSchema: { type: "object" }, maxTokens: 100 });
     expect(input[0].role).toBe("developer");
@@ -67,6 +74,7 @@ describe("account binding and billing disclosures", () => {
     const env = geminiEnvironment("isolated-home", false);
     expect(Object.values(env)).not.toContain("private-test-value");
     expect(env.GEMINI_CLI_HOME).toBe("isolated-home");
+    expect(env.GEMINI_CLI_NO_RELAUNCH).toBe("true");
     expect(env.GOOGLE_GENAI_USE_GCA).toBe("true");
     expect(env.NO_BROWSER).toBe("1");
     expect(env.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toContain("isolated-home");

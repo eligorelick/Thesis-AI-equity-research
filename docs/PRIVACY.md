@@ -94,7 +94,12 @@ owned by Thesis. Thesis does not read another app's Google credentials. CLI
 telemetry, extensions, hooks, MCP and tools are disabled; prompts are passed
 on standard input rather than command-line arguments. The CLI may retain its
 own session files inside this directory. Disconnect stops local child
-processes and removes that directory. Remove the CLI's remote authorization
+processes, waits for exit, and removes that directory. The official CLI storage
+override preserves your normal browser profile. An empty environment file in
+its work directory prevents loading credentials from ancestor directories.
+AI connections are owned by one live Thesis server per OS user; another server
+cannot connect, refresh, or disconnect them until the owning server stops.
+Remove the CLI's remote authorization
 from Google Account connections if needed. ChatGPT disconnect clears local
 tokens and attempts to revoke the renewable session; an unconfirmed remote
 revocation is reported. Account registrations remain for later reconnection.

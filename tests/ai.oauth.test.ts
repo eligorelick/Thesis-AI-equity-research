@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiStore } from "@/ai/store";
 const fake = vi.hoisted(() => ({ store: null as AiStore | null, queue: Promise.resolve() as Promise<unknown>, nonce: "" }));
 vi.mock("@/ai/store", () => ({
+  claimAiRuntime: () => {},
   readAiStore: () => fake.store,
   withAiStore: <T>(fn: (store: AiStore) => Promise<T> | T): Promise<T> => {
     const result = fake.queue.then(() => fn(fake.store!)); fake.queue = result.catch(() => {}); return result;
@@ -79,5 +80,19 @@ describe("ChatGPT OAuth account boundaries", () => {
     expect(await disconnectChatGpt(profile.id)).toContain("revoked");
     expect(profile.tokens).toBeUndefined(); expect(profile.clientId).toBe("oaiapp_testregistration");
     await expect(chatGptAccess(profile.id)).rejects.toThrow("signed out");
+  });
+  it("cancels a reconnect that is still waiting for the credential lock", async () => {
+    const { target } = await authorize(); await callback(target.href);
+    const profile = fake.store!.profiles[0];
+    let unlock!: () => void;
+    fake.queue = new Promise<void>((resolve) => { unlock = resolve; });
+    const reconnect = beginChatGpt(profile.id);
+    const rejected = expect(reconnect).rejects.toThrow("Sign-in canceled");
+    const disconnect = disconnectChatGpt(profile.id);
+    unlock();
+    await rejected; await disconnect;
+    expect(chatGptPending()?.status).toBe("error");
+    expect(chatGptPending()?.url).toBeUndefined();
+    expect(profile.tokens).toBeUndefined();
   });
 });

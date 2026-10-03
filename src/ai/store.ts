@@ -19,6 +19,19 @@ export interface AiStore {
   profiles: ChatGptProfile[];
   gemini: { id: string; connected: boolean } | null;
   selection: AiSelection;
+  runtimeOwnerPid?: number;
+}
+
+/** Call under withAiStore: one local server owns connection lifecycles at a time. */
+export function claimAiRuntime(store: AiStore): void {
+  const owner = store.runtimeOwnerPid;
+  if (owner && owner !== process.pid) {
+    let alive = true;
+    try { process.kill(owner, 0); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") alive = false; }
+    if (alive) throw new Error("AI connections are active in another Thesis server. Use that server or stop it before connecting here.");
+  }
+  store.runtimeOwnerPid = process.pid;
 }
 
 /** Credentials deliberately ignore database/repository paths and live under the OS user profile. */

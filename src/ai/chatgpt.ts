@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, createHash, timingSafeEqual } from "node:crypt
 import { createServer } from "node:http";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { openChrome } from "./browser";
-import { readAiStore, withAiStore, type ChatGptProfile } from "./store";
+import { claimAiRuntime, readAiStore, withAiStore, type ChatGptProfile } from "./store";
 
 const ISSUER = "https://auth.openai.com";
 const TOKEN_URL = `${ISSUER}/api/accounts/oauth/token`;
@@ -56,17 +56,27 @@ function tokenRecord(data: TokenResponse, previous?: ChatGptProfile["tokens"]): 
 
 export async function beginChatGpt(profileId?: string): Promise<void> {
   runtime().pending?.cancel();
+  // Publish cancellation before storage can wait behind a refresh. Disconnect
+  // must also cancel a sign-in that has not yet opened its callback listener.
+  let cleanup = () => {};
+  const pending: Pending = { status: "waiting", message: "Preparing sign-in in Chrome.", cancel: () => {
+    if (pending.status === "waiting") { pending.status = "error"; pending.message = "Sign-in canceled or timed out. Connect again when ready."; }
+    delete pending.url; cleanup();
+  } };
+  runtime().pending = pending;
+  const stillWaiting = () => { if (pending.status !== "waiting") throw new Error("Sign-in canceled"); };
   const registration = await withAiStore((store) => {
+    stillWaiting();
+    claimAiRuntime(store);
     const profile = profileId ? store.profiles.find((p) => p.id === profileId) : undefined;
     if (profileId && !profile) throw new Error("Unknown ChatGPT connection");
     if (!profile && store.profiles.length >= 20) throw new Error("Too many saved ChatGPT registrations");
     return { hostId: store.hostId, profile: profile ? structuredClone(profile) : undefined };
-  });
+  }).catch((error) => { pending.cancel(); throw error; });
+  stillWaiting();
   const state = randomBytes(32).toString("base64url");
   const nonce = randomBytes(32).toString("base64url");
   const verifier = randomBytes(32).toString("base64url");
-  const pending: Pending = { status: "waiting", message: "Complete sign-in in Chrome.", cancel: () => {} };
-  runtime().pending = pending;
   let consumed = false;
   const server = createServer(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -123,26 +133,28 @@ export async function beginChatGpt(profileId?: string): Promise<void> {
       res.writeHead(400).end(pending.message);
     } finally { clearTimeout(timer); server.close(); }
   });
-  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  cleanup = () => server.close();
+  try {
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+    stillWaiting();
+  } catch (error) { pending.cancel(); throw error; }
   const port = (server.address() as { port: number }).port;
   const redirect = `http://127.0.0.1:${port}/auth/callback`;
   const timer = setTimeout(() => pending.cancel(), 5 * 60_000);
   timer.unref();
-  pending.cancel = () => {
-    if (pending.status === "waiting") { pending.status = "error"; pending.message = "Sign-in canceled or timed out. Connect again when ready."; }
-    delete pending.url; clearTimeout(timer); server.close();
-  };
+  cleanup = () => { clearTimeout(timer); server.close(); };
   const query = new URLSearchParams({ client_id: registration.profile?.clientId ?? "dynamic_agent_client",
     ext_agent_host_id: registration.hostId, response_type: "code", redirect_uri: redirect, scope: SCOPES, resource: RESOURCE,
     state, nonce, code_challenge_method: "S256", code_challenge: createHash("sha256").update(verifier).digest("base64url") });
   if (!registration.profile) query.set("agent_name_hint", "Thesis");
   // Optional identity hints are intentionally omitted from browser-visible URLs.
   pending.url = `${ISSUER}/api/accounts/authorize?${query}`;
-  if (!await openChrome(pending.url)) pending.message = "Open the sign-in link in your normal Chrome browser.";
+  if (!await openChrome(pending.url) && pending.status === "waiting") pending.message = "Open the sign-in link in your normal Chrome browser.";
 }
 
 export async function chatGptAccess(profileId: string): Promise<string> {
   return withAiStore(async (store) => {
+    claimAiRuntime(store);
     const profile = store.profiles.find((p) => p.id === profileId);
     if (!profile?.tokens) throw new Error("ChatGPT connection is signed out");
     if (profile.tokens.expiresAt < Date.now() + 60_000) {
@@ -168,6 +180,7 @@ export async function disconnectChatGpt(id: string): Promise<string> {
   runtime().pending?.cancel();
   for (const controller of runtime().requests.get(id) ?? []) controller.abort();
   const registration = await withAiStore((store) => {
+    claimAiRuntime(store);
     const profile = store.profiles.find((p) => p.id === id);
     if (!profile) throw new Error("Unknown ChatGPT connection");
     const saved = structuredClone(profile);

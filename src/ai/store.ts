@@ -54,10 +54,14 @@ function windowsProtect(input: string, decrypt: boolean): string {
   const script = `Add-Type -AssemblyName System.Security; $b=[Convert]::FromBase64String([Console]::In.ReadToEnd()); $r=[Security.Cryptography.ProtectedData]::${operation}($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser); [Console]::Out.Write([Convert]::ToBase64String($r))`;
   try {
     return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-      input, encoding: "utf8", windowsHide: true, timeout: 15_000, maxBuffer: 2_000_000,
+      // First PowerShell startup on a cold Windows host can exceed 15 seconds.
+      input, encoding: "utf8", windowsHide: true, timeout: 30_000, maxBuffer: 2_000_000,
       stdio: ["pipe", "pipe", "ignore"],
     }).trim();
-  } catch { throw new Error("Unable to access Windows protected AI credentials"); }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ETIMEDOUT") throw new Error("AI credentials: Windows protection timed out; retry shortly.");
+    throw new Error("Unable to access Windows protected AI credentials");
+  }
 }
 
 function filePath(): string { return path.join(aiDirectory(), "connections.v1.json"); }

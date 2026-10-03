@@ -62,6 +62,7 @@ import {
   selectInterimFiling,
 } from "@/pipeline/dataBundle";
 import { pipelinePasses } from "@/pipeline/stageC";
+import * as subscriptionTransport from "@/ai/transport";
 import type { ContextPayload, PayloadSection } from "@/pipeline/stageC/payload";
 import type { AnalystCase } from "@/report/schema";
 import type { PassDeps } from "@/pipeline/jobRunner";
@@ -1288,6 +1289,30 @@ function streamingClient(outputs: unknown[]): Anthropic {
 }
 
 describe("Stage C provider adapter branches", () => {
+  it("keeps subscription preflight account-bound and rejects oversized judge retries", () => {
+    const deps: PassDeps<ContextPayload> = { analysisModel: "chatgpt/example", connectionId: "captured-account", payload: emptyPayload() };
+    const preflight = pipelinePasses.preflightPass!;
+    expect(() => preflight({ ...deps, connectionId: undefined }, { pass: "bull" })).toThrow("captured account");
+    expect(() => preflight(deps, { pass: "bull" })).not.toThrow();
+    const result = { data: analystCase(), model: deps.analysisModel, costUsd: 0, fallbackUsed: false, usage: { input_tokens: 1, output_tokens: 1 } };
+    expect(() => preflight(deps, { pass: "synthesize", bull: result, bear: result })).not.toThrow();
+    expect(() => preflight(deps, { pass: "synthesize", bull: result, bear: result, validationFeedback: "x".repeat(2_000_001) })).toThrow("input size limit");
+  });
+
+  it("dispatches the analyst through its captured subscription without web tools or API billing", async () => {
+    const model = "gemini/example";
+    const provider = vi.spyOn(subscriptionTransport, "runSubscriptionPass").mockResolvedValue({
+      ok: true, value: { data: {
+        model, costUsd: 0, fallbackUsed: false, fetchedUrls: [], usage: { input_tokens: 10, output_tokens: 5 },
+        message: { model, content: [{ type: "text", text: JSON.stringify(analystCase()) }], usage: { input_tokens: 10, output_tokens: 5 }, stop_reason: "end_turn" },
+      } },
+    });
+    const result = await pipelinePasses.runAnalystPass!({ analysisModel: model, connectionId: "google-account", payload: emptyPayload() }, "bull");
+    expect(result).toMatchObject({ model, costUsd: 0, data: { priceTarget: { value: 100 } } });
+    expect(provider).toHaveBeenCalledWith(expect.objectContaining({ model }), "google-account");
+    expect(provider.mock.calls[0][0].tools).toBeUndefined();
+  });
+
   it("preflights deterministic, analyst, and synthesis requests without launching a provider", async () => {
     const deps: PassDeps<ContextPayload> = {
       analysisModel: "claude-opus-4-8",

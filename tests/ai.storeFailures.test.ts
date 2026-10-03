@@ -44,6 +44,13 @@ describe("credential protection and lock failures", () => {
     await expect(withAiStore(() => { throw new Error("mutation failed"); })).rejects.toThrow("mutation failed");
     expect(fs.existsSync(lock)).toBe(false);
   });
+  it("reports a Windows startup timeout without persisting partial credentials", async () => {
+    system("win32");
+    fake.protect.mockImplementation(() => { throw Object.assign(new Error("private diagnostic"), { code: "ETIMEDOUT" }); });
+    await expect(withAiStore(() => {})).rejects.toThrow("Windows protection timed out");
+    expect(fs.existsSync(path.join(aiDirectory(), "connections.v1.json"))).toBe(false);
+    expect(fs.existsSync(path.join(aiDirectory(), "connections.lock"))).toBe(false);
+  });
   it("times out behind a live writer instead of overwriting its lock", async () => {
     ensurePrivateDirectory(aiDirectory()); const lock = path.join(aiDirectory(), "connections.lock");
     fs.writeFileSync(lock, String(process.pid));

@@ -50,7 +50,7 @@ export async function POST(request: Request) {
     }
     return response({ ...connectionsView(), ...(message ? { message } : {}) });
   } catch (error) {
-    const message = error instanceof Error && /^(Choose |Connect |Install |Unknown ChatGPT|ChatGPT |Gemini |AI credentials|Too many|Invalid AI)/.test(error.message)
+    const message = error instanceof Error && /^(Choose |Connect |Install |Unknown ChatGPT|ChatGPT |Gemini |AI credentials|AI connections|Too many|Invalid AI)/.test(error.message)
       ? error.message : "The connection action could not be completed. No paid request was sent.";
     return response({ error: message }, 400);
   }

@@ -26,13 +26,14 @@ describe.skipIf(process.platform === "darwin")("protected connection storage", (
     }
   }, 60_000);
   it("does not overwrite an unreadable credential file with an empty account list", async () => {
+    await withAiStore(() => {});
     const file = path.join(aiDirectory(), "connections.v1.json");
     const saved = fs.readFileSync(file, "utf8");
     fs.writeFileSync(file, "corrupt-data");
     await expect(withAiStore(() => {})).rejects.toThrow("credentials were not replaced");
     expect(fs.readFileSync(file, "utf8")).toBe("corrupt-data");
     fs.writeFileSync(file, saved);
-  });
+  }, 60_000);
   it("refuses a second live server but lets a new server recover a stopped owner", () => {
     const store = { runtimeOwnerPid: process.pid + 1 } as AiStore;
     const probe = vi.spyOn(process, "kill").mockImplementation(() => true);

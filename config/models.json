@@ -1,16 +1,22 @@
 {
-  "snapshotDate": "2026-09-02",
+  "snapshotDate": "2026-10-03",
   "sources": {
-    "modelIds": "GET https://api.anthropic.com/v1/models and https://docs.anthropic.com/en/docs/about-claude/models/overview",
-    "pricing": "https://docs.anthropic.com/en/docs/about-claude/pricing",
-    "effort": "https://docs.anthropic.com/en/docs/build-with-claude/effort",
-    "deprecations": "https://docs.anthropic.com/en/docs/about-claude/model-deprecations"
+    "modelIds": "https://platform.claude.com/docs/en/models/overview",
+    "pricing": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "effort": "https://platform.claude.com/docs/en/build-with-claude/effort",
+    "deprecations": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+    "opus55": "https://platform.claude.com/docs/en/models/opus-5-5/overview",
+    "sonnet55": "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
+    "opus55Compatibility": "https://platform.claude.com/docs/en/models/opus-5-5/whats-new-opus-5-5",
+    "fable51Compatibility": "https://platform.claude.com/docs/en/models/fable-5-1/whats-new-fable-5-1"
   },
   "webSearchUsdPerThousand": 10,
-  "judgeFloorModelId": "claude-sonnet-5",
+  "judgeFloorModelId": "claude-sonnet-5-5",
   "autoPreference": [
+    "claude-opus-5-5",
     "claude-opus-5",
     "claude-opus-4-8",
+    "claude-sonnet-5-5",
     "claude-sonnet-5",
     "claude-fable-5-1",
     "claude-fable-5"
@@ -41,7 +47,8 @@
       "notes": [
         "Dateless id is the pinned snapshot; dated variants do not exist for this family.",
         "Cache read is $0.25/MTok (0.025x input), not the 0.1x ratio of older models.",
-        "Server-side refusal fallback and always-on thinking follow the Fable 5 entry; review on the next models:refresh."
+        "Thinking is always on; omission and thinking: adaptive are valid. Disabled/manual thinking is rejected; Thesis omits the parameter.",
+        "Retains the existing bounded server-side refusal fallback to Opus 4.8."
       ]
     },
     {
@@ -67,8 +74,37 @@
         "cacheReadPerMTok": 1
       },
       "notes": [
-        "Thinking is always on; sending a thinking param is a 400.",
+        "Thinking is always on; Thesis omits the thinking parameter.",
         "Safety classifiers can decline finance-adjacent tickers; the server-side fallback beta routes those to Opus 4.8."
+      ]
+    },
+    {
+      "id": "claude-opus-5-5",
+      "family": "opus",
+      "generation": "5.5",
+      "displayName": "Claude Opus 5.5",
+      "lifecycle": "active",
+      "releasedOn": "2026-09-22",
+      "datedSnapshotIds": [],
+      "contextWindowTokens": 1000000,
+      "maxOutputTokens": 128000,
+      "effort": { "supported": true, "levels": ["low", "medium", "high", "xhigh", "max"] },
+      "sampling": { "temperature": false, "topP": false, "topK": false },
+      "thinking": { "mode": "always-on", "sendParam": false },
+      "serverSideFallback": null,
+      "webSearchToolType": "web_search_20260318",
+      "pricing": {
+        "inputPerMTok": 4,
+        "outputPerMTok": 20,
+        "cacheWrite5mPerMTok": 5,
+        "cacheWrite1hPerMTok": 8,
+        "cacheReadPerMTok": 0.2
+      },
+      "notes": [
+        "Adaptive thinking is always on: omit thinking or send adaptive; disabled and manual thinking are rejected.",
+        "Provider effort defaults to medium; Thesis sends the configured effort explicitly. Recalibrate effort when migrating.",
+        "Non-default sampling and forced tool choice are rejected; Thesis uses structured output without either.",
+        "Prices are standard Claude API rates; Fast mode is not enabled by this adapter."
       ]
     },
     {
@@ -125,6 +161,34 @@
       ]
     },
     {
+      "id": "claude-sonnet-5-5",
+      "family": "sonnet",
+      "generation": "5.5",
+      "displayName": "Claude Sonnet 5.5",
+      "lifecycle": "active",
+      "releasedOn": "2026-09-28",
+      "datedSnapshotIds": [],
+      "contextWindowTokens": 1000000,
+      "maxOutputTokens": 128000,
+      "effort": { "supported": true, "levels": ["low", "medium", "high", "xhigh", "max"] },
+      "sampling": { "temperature": false, "topP": false, "topK": false },
+      "thinking": { "mode": "adaptive", "sendParam": false },
+      "serverSideFallback": null,
+      "webSearchToolType": "web_search_20260318",
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 10,
+        "cacheWrite5mPerMTok": 2.5,
+        "cacheWrite1hPerMTok": 4,
+        "cacheReadPerMTok": 0.2
+      },
+      "notes": [
+        "Adaptive thinking is the default when thinking is omitted; Thesis does not send disabled/manual thinking.",
+        "Provider effort defaults to high; effort levels are recalibrated from Sonnet 5, so re-evaluate them when migrating.",
+        "Non-default sampling and forced tool choice are rejected; Thesis uses structured output without either."
+      ]
+    },
+    {
       "id": "claude-sonnet-5",
       "family": "sonnet",
       "generation": "5",
@@ -176,7 +240,7 @@
       "notes": [
         "Rejects output_config.effort with a 400; the analyst passes ignore ANALYSIS_EFFORT on this model.",
         "Rejects web_search_20260318; the basic web_search_20250305 variant is used.",
-        "The judge pass never runs on Haiku: it is raised to claude-sonnet-5 (model-floor)."
+        "The judge pass never runs on Haiku: it is raised to claude-sonnet-5-5 (model-floor)."
       ]
     }
   ]

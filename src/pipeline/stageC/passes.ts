@@ -367,7 +367,7 @@ export const ANALYST_MAX_TOKENS = 64_000;
  * output tokens on average (max seen 51.8K — 81% of the old cap), of which
  * ~25–30K is the 1.1.0 report JSON itself; a section-heavy ticker plus a long
  * adjudication would clip 64K and burn the whole pass. Same free-ceiling
- * reasoning as ANALYST_MAX_TOKENS; the judge floor (Sonnet 5) and every other
+ * reasoning as ANALYST_MAX_TOKENS; the judge floor (Sonnet 5.5) and every other
  * eligible judge model support 128K output.
  */
 export const JUDGE_MAX_TOKENS = 96_000;

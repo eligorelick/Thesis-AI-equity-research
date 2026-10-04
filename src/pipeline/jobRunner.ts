@@ -4352,8 +4352,8 @@ function presumedSpendDisclosure(jobId: string): PresumedSpendDisclosure | null 
       field: "cost.presumed",
       reason:
         `$${totalUsd.toFixed(4)} of the reported cost is a presumed upper bound, not a measured ` +
-        `charge: ${rows.length} authorized provider request(s) (${passes}) never reported what ` +
-        "they billed, so the whole reservation is counted until it is reconciled downward " +
+        `charge: ${rows.length} authorized provider request(s) (${passes}) did not provide ` +
+        "enough evidence to verify billing; a conservative upper bound is counted until reconciled " +
         "(npm run costs:reconcile).",
       severity: "warn",
       attemptedSources: ["anthropic"],

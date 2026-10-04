@@ -2547,7 +2547,7 @@ describe("mock-driven bull/bear/judge passes", () => {
     }
   });
 
-  it("floors the judge model to sonnet-5 when analysis runs on haiku (schema fidelity)", async () => {
+  it("floors the judge model to sonnet-5-5 when analysis runs on haiku (schema fidelity)", async () => {
     const { payload } = buildInputs();
     const mock = new MockRunPass();
     mock.onJson("llm.judge", judgeOutput());

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — OAuth execution and limited FMP access
+## Unreleased — AI execution, current Claude models and limited FMP access
 
 - Refresh ChatGPT account models automatically, preserve saved selections, and
   offer GPT-6.1 Sol explicitly with an access-unconfirmed label when absent.
@@ -14,6 +14,14 @@
   keeping other keys, endpoints and symbols eligible.
 - Show SEC contact readiness and explain why unconfirmed issuer identity blocks
   fallback data. An FMP key alone does not establish paid endpoint access.
+- Add Claude Opus 5.5 and Sonnet 5.5 with current prices, cache rates and request
+  capabilities. Auto prefers Opus 5.5; Haiku's judge floor is Sonnet 5.5.
+  Preserve explicit saved selections and update model/effort usage guidance.
+- Account for Claude fallback attempts separately, include server-tool sampling
+  inputs and configured fallback exposure in spending limits, and label incomplete billing evidence as presumed.
+  Preserve model changes in streams and valid content during continuation.
+- Stop retrying an enforced Claude spend cap and respect Retry-After during
+  temporary throttling.
 
 ## 0.1.0 — 2026-10-03
 

@@ -22,7 +22,7 @@ import { loadMaintenanceEnv } from "./lib/load-env.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REGISTRY_PATH = path.join(HERE, "..", "config", "models.json");
 export const MODELS_URL = "https://api.anthropic.com/v1/models";
-export const PRICING_URL = "https://docs.anthropic.com/en/docs/about-claude/pricing";
+export const PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing";
 export const ANTHROPIC_VERSION = "2023-06-01";
 
 /** Registry price fields; HTML table headers determine their column positions. */

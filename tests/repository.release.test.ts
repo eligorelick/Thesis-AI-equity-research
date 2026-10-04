@@ -63,6 +63,7 @@ const ALLOWED_MARKDOWN = new Set([
   "docs/audit/DECISIONS.md",
   "docs/audit/REMEDIATION-REPORT.md",
   "docs/PRIVACY.md",
+  "docs/CLAUDE-USAGE.md",
   "docs/DATA-RIGHTS.md",
   "docs/METHODOLOGY.md",
   // The evidence base the forensic code cites by section. `research §N` was

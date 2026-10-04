@@ -63,13 +63,13 @@ describe("per-step execution metadata", () => {
       buildExecutionMetadataEntry({
         step: "synthesize",
         requestedModel: "claude-haiku-4-5",
-        effectiveModel: "claude-sonnet-5",
+        effectiveModel: "claude-sonnet-5-5",
         requestedEffort: "low",
         fallbackUsed: false,
       }),
     ).toMatchObject({
       requestedModel: "claude-haiku-4-5",
-      effectiveModel: "claude-sonnet-5",
+      effectiveModel: "claude-sonnet-5-5",
       requestedEffort: "low",
       effectiveEffort: "low",
       adjustments: ["model-floor"],
@@ -86,7 +86,7 @@ describe("per-step execution metadata", () => {
       buildExecutionMetadataEntry({
         step: "bull",
         requestedModel: "claude-haiku-4-5",
-        effectiveModel: "claude-sonnet-5",
+        effectiveModel: "claude-sonnet-5-5",
         requestedEffort: null,
         fallbackUsed: false,
       }),

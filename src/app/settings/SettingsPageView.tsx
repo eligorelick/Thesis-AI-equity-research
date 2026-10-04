@@ -24,7 +24,7 @@ import { AiConnections } from "./AiConnections";
  * two newest choices rendered without a label at all.
  */
 const MODEL_LABELS: Record<string, string> = {
-  auto: "auto — best available [recommended]",
+  auto: "auto — preferred model available to your API key",
   ...Object.fromEntries(
     activeModels().map((entry) => [entry.id, `${entry.id} — ${entry.displayName}`]),
   ),
@@ -33,7 +33,7 @@ const MODEL_LABELS: Record<string, string> = {
 const EFFORT_LABELS: Record<string, string> = {
   low: "low — fastest/cheapest, shallow reasoning",
   medium: "medium — balanced cost/quality",
-  high: "high — thorough reasoning [recommended]",
+  high: "high — thorough reasoning",
   xhigh: "xhigh — extra-deep reasoning, higher cost",
   max: "max — deepest reasoning, highest cost",
 };
@@ -169,9 +169,17 @@ export function SettingsPageView({
                 ))}
               </fieldset>
               <p className="pt-2 text-[11px] leading-snug text-faint">
-                Controls how much the model reasons per pass. Reasoning tokens
-                are billed as output and are the largest cost component of a
-                report, so lower effort trades analytical depth for cost.
+                Reasoning tokens are billed as output. Anthropic recommends starting
+                Opus 5.5 at medium; Sonnet 5.5 and Fable 5.1 default to high.
+                Thesis sends your saved effort explicitly, so changing models does
+                not reset it. Start lower and raise effort when the results need it;
+                xhigh and max can consume substantially more tokens.
+              </p>
+              <p className="pt-2 text-[11px] leading-snug text-faint">
+                Opus 5.5 is the general starting choice; Sonnet 5.5 costs less,
+                while Fable 5.1 targets the most demanding research. Claude runs at
+                standard API speed here; the Fast control above applies to ChatGPT.
+                {" "}<a className="underline" href="https://platform.claude.com/docs/en/about-claude/models/choosing-a-model" target="_blank" rel="noreferrer">Anthropic’s model guidance</a>.
               </p>
             </>
           ) : null}

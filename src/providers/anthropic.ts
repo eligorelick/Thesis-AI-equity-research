@@ -1916,7 +1916,7 @@ function trackStreamedUsage(
     if (event.type === "message_start") {
       snapshot.model = event.message.model;
       snapshot.usage = { ...event.message.usage };
-      snapshot.content = event.message.content.filter((block) => block.type === "fallback");
+      snapshot.content = (event.message.content ?? []).filter((block) => block.type === "fallback");
       snapshot.stopReason = event.message.stop_reason;
       snapshot.stopDetails = event.message.stop_details;
       return;

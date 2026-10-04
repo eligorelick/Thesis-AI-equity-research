@@ -11,10 +11,12 @@ import {
   ANALYST_CASE_SCHEMA,
   JUDGE_OUTPUT_SCHEMA,
   ReportSchema,
+  ProviderExecutionSchema,
   type AnalystCase,
   type JudgeOutput,
   type Report,
 } from "@/report/schema";
+import type { ProviderExecution } from "@/report/execution";
 import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
 import { mutateJobSnapshotInTransaction } from "@/pipeline/jobState";
 
@@ -25,6 +27,7 @@ export const DURABLE_PASSES = ["bull", "bear", "synthesize", "verify"] as const;
 export type DurablePass = (typeof DURABLE_PASSES)[number];
 
 export interface PassTelemetry {
+  execution?: ProviderExecution;
   model: string;
   inputTokens: number;
   outputTokens: number;
@@ -105,6 +108,7 @@ export interface CurrentGenerationPassArtifact<T = unknown>
 
 /** Structural result shared by reusable durable and legacy pass outputs. */
 export interface ReusablePassResult<T> {
+  execution?: ProviderExecution;
   data: T;
   model: string;
   costUsd: number;
@@ -296,6 +300,8 @@ export function parseLegacyAnalystSnapshot(json: string | null): ReusableAnalyst
   }
   if (!isRecord(raw)) return null;
   const parsedData = ANALYST_CASE_SCHEMA.safeParse(raw.data);
+  const execution = raw.execution === undefined ? undefined : ProviderExecutionSchema.safeParse(raw.execution);
+  if (execution !== undefined && !execution.success) return null;
   if (
     !parsedData.success ||
     typeof raw.model !== "string" ||
@@ -340,6 +346,7 @@ export function parseLegacyAnalystSnapshot(json: string | null): ReusableAnalyst
     ...(usage === undefined ? {} : { usage }),
     ...(typeof raw.webSearches === "number" ? { webSearches: raw.webSearches } : {}),
     fetchedUrls,
+    ...(execution === undefined ? {} : { execution: execution.data }),
   };
 }
 
@@ -368,6 +375,7 @@ function reusableResultFromArtifact<T>(
     },
     webSearches: artifact.telemetry.webSearches,
     fetchedUrls: artifact.telemetry.fetchedUrls,
+    ...(artifact.telemetry.execution === undefined ? {} : { execution: artifact.telemetry.execution }),
   };
 }
 
@@ -613,6 +621,7 @@ export function normalizePassTelemetry(value: PassTelemetry): PassTelemetry {
     "fallbackUsed",
     "billable",
     "fetchedUrls",
+    ...(value.execution === undefined ? [] : ["execution"]),
   ])) {
     throw new Error("jobArtifacts: unexpected telemetry fields");
   }
@@ -647,6 +656,7 @@ export function normalizePassTelemetry(value: PassTelemetry): PassTelemetry {
     fallbackUsed: value.fallbackUsed,
     billable: value.billable,
     fetchedUrls,
+    ...(value.execution === undefined ? {} : { execution: ProviderExecutionSchema.parse(value.execution) }),
   };
 }
 
@@ -901,6 +911,7 @@ export function serializeLegacyAnalystProjection<T>(data: T, telemetry: PassTele
     },
     webSearches: telemetry.webSearches,
     fetchedUrls: telemetry.fetchedUrls,
+    ...(telemetry.execution === undefined ? {} : { execution: telemetry.execution }),
   });
 }
 

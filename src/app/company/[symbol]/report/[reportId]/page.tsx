@@ -27,6 +27,7 @@ import { isDataOnlyReport } from "@/components/report/ReportView";
 import { ExportButtons } from "@/components/report/ExportButtons";
 import { getReportByIdForSymbol, parseReportId } from "@/report/history";
 import { normalizeRouteSymbol } from "@/symbol";
+import { subscriptionExecutionModels } from "@/report/execution";
 
 // Reads persisted rows at request time — never statically pre-render.
 export const dynamic = "force-dynamic";
@@ -85,6 +86,7 @@ export default async function RunReportPage({
   const statusTone =
     row.status === "done" ? "pos" : row.status === "error" ? "neg" : "muted";
   const dataOnly = isDataOnlyReport(report);
+  const actualModels = subscriptionExecutionModels(report.meta.execution);
 
   return (
     <AppShell sidebar={<WatchlistSidebar activeSymbol={symbol} />}>
@@ -95,8 +97,8 @@ export default async function RunReportPage({
             <h1 className="mono text-[15px] font-semibold tracking-[0.08em] text-fg">
               {symbol} <span className="text-faint">· run #{row.id}</span>
             </h1>
-            <span className="mono text-[11px] text-faint">
-              {date} {time} · {shortModel(row.model)}
+            <span className="mono text-[11px] text-faint" title={`Requested model: ${row.model}`}>
+              {date} {time} · {(actualModels.length > 0 ? actualModels : [row.model]).map(shortModel).join(" · ")}
             </span>
             <Badge tone={statusTone}>{row.status}</Badge>
             {dataOnly ? <Badge tone="warn">data-only</Badge> : null}

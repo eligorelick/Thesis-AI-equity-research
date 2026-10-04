@@ -92,6 +92,8 @@ export interface SettingsCapabilities {
   hasFinnhubKey: boolean;
   hasFredKey: boolean;
   hasAnthropicKey: boolean;
+  /** SEC identity passes the server's contact validator; the contact is never serialized. */
+  hasEdgarContact: boolean;
   fixtureMode: boolean;
   /**
    * `THESIS_RESUME_ON_START` as the server resolved it. False means startup

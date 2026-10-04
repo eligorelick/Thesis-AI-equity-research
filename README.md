@@ -54,8 +54,19 @@ no inference, and failed connections never switch to paid API usage.
 ChatGPT opens normal Chrome; make Chrome the default browser for Gemini.
 Only one running Thesis server per OS user can use these account connections.
 Plan allowances and provider credit settings apply; API dollar caps do not
-measure subscription usage. Live OAuth sign-in/inference remains unverified.
+measure subscription usage. Live inference remains unverified.
 See [connection setup, privacy and limits](docs/PRIVACY.md#ai-connection-setup).
+
+ChatGPT model choices refresh for the selected account. GPT-6.1 Sol can also
+be requested explicitly if the account catalog has not listed it yet; that
+choice is marked as access unconfirmed and can still be rejected by OpenAI.
+ChatGPT reasoning and Standard/Fast speed are saved with the connection.
+Fast is opt-in and consumes more allowance; see [OpenAI's current speed
+rules](https://learn.chatgpt.com/docs/agent-configuration/speed).
+Reports, exports and history retain actual provider model and usage evidence;
+the requested speed is shown separately from the returned tier. Missing
+provider evidence stays unknown. Gemini reports every observed model when its
+CLI uses several, without guessing which wrote the final response.
 
 ## Configuration
 
@@ -107,6 +118,15 @@ Thesis reads the cap from FMP's own rejection, retries within it, and fills the
 rest from keyless sources. Five fiscal years still support the growth, returns,
 forensic, DCF and scoring modules; the own-history multiple rank needs eight
 quarters and waits for them.
+
+A configured key does not establish paid access. Thesis learns explicit FMP
+endpoint and symbol restrictions from responses, suppresses repeat refused
+requests for 15 minutes, then rechecks. Restrictions are scoped to the key and
+endpoint; a symbol refusal never blocks other symbols. Successful cached data
+keeps its original freshness labels. The first request is still necessary to
+discover access, and source outages or unavailable endpoints remain disclosed
+gaps. Configure a real `EDGAR_CONTACT` even with a free FMP key so SEC statement
+fallbacks can run.
 
 With no key at all, set `EDGAR_CONTACT` and real US filers still produce a full
 report: statements, share counts and public float from SEC EDGAR XBRL company

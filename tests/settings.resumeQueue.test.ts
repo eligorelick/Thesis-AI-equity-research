@@ -48,6 +48,7 @@ function payload(resumeOnStart: boolean): SettingsPayload {
       hasFinnhubKey: false,
       hasFredKey: false,
       hasAnthropicKey: false,
+      hasEdgarContact: false,
       fixtureMode: false,
       resumeOnStart,
     },

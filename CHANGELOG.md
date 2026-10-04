@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — OAuth execution and limited FMP access
+
+- Refresh ChatGPT account models automatically, preserve saved selections, and
+  offer GPT-6.1 Sol explicitly with an access-unconfirmed label when absent.
+- Add separate ChatGPT reasoning and Standard/Fast controls. Preserve requested
+  and provider-reported settings, model IDs and tokens through saved reports,
+  recovery, history and exports; do not infer missing provider evidence.
+- Keep Gemini multi-model usage explicit, include reported cached input and
+  reasoning tokens, and reject missing or invalid usage records.
+- Learn explicit FMP endpoint/symbol subscription refusals for 15 minutes to
+  avoid repeated unavailable requests, while preserving cached successes and
+  keeping other keys, endpoints and symbols eligible.
+- Show SEC contact readiness and explain why unconfirmed issuer identity blocks
+  fallback data. An FMP key alone does not establish paid endpoint access.
+
 ## 0.1.0 — 2026-10-03
 
 First tagged open-source release of the local, single-user application. The

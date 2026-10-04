@@ -81,7 +81,7 @@ export function SettingsPageView({
       <div className="pt-2">
         <SectionHeading>settings</SectionHeading>
         <p className="pt-1 text-[11px] leading-snug text-faint">
-          Model choices persist to the local database. API keys are configured
+          Model choices persist to the local database. API keys and the SEC contact are configured
           in <span className="mono">.env</span> only.
         </p>
       </div>
@@ -189,7 +189,7 @@ export function SettingsPageView({
           </p>
         </Panel>
 
-        <Panel title="api keys (read-only)">
+        <Panel title="provider access (read-only)">
           {settings !== null ? (
             <div className="flex flex-col">
               {settings.capabilities.fixtureMode && (
@@ -204,10 +204,24 @@ export function SettingsPageView({
               <CapabilityRow name="FINNHUB_API_KEY" ok={settings.capabilities.hasFinnhubKey} />
               <CapabilityRow name="FRED_API_KEY" ok={settings.capabilities.hasFredKey} />
               <CapabilityRow name="ANTHROPIC_API_KEY" ok={settings.capabilities.hasAnthropicKey} />
+              <CapabilityRow name="EDGAR_CONTACT" ok={settings.capabilities.hasEdgarContact} />
               <p className="pt-2 text-[11px] leading-snug text-faint">
-                Keys are read from <span className="mono">.env</span> at server
-                start and never enter the browser. Server-side requests send
-                each key only to its configured provider. Restart after editing.
+                An FMP key does not confirm subscription entitlement. Free or lower-tier
+                keys can return HTTP 402 for restricted endpoints or symbols. SEC and
+                Yahoo fallbacks can fill supported data after issuer verification;
+                some FMP datasets remain unavailable on those plans.
+              </p>
+              <p className="pt-2 text-[11px] leading-snug text-faint">
+                SEC EDGAR needs no paid key. Set <span className="mono">EDGAR_CONTACT</span>{" "}
+                to your name or organization and a reachable email to enable SEC filings,
+                issuer verification, and eligible fallback data. A placeholder contact
+                leaves SEC access disabled. Configured status checks the contact format,
+                not whether SEC is currently reachable.
+              </p>
+              <p className="pt-2 text-[11px] leading-snug text-faint">
+                Keys and the SEC contact are read from <span className="mono">.env</span>{" "}
+                and never enter the browser. Server-side requests send each key only to
+                its provider and the contact only to SEC. Restart after editing.
               </p>
             </div>
           ) : state.status === "loading" ? (

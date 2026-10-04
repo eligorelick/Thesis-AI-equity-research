@@ -499,6 +499,73 @@ describe("judge case order (THESIS_JUDGE_ORDER)", () => {
  * ------------------------------------------------------------------------ */
 
 describe("THESIS_JUDGE_ORDER=both", () => {
+  it.each([true, false])("settles combined ChatGPT usage with truthful actual controls (matching: %s)", async (matching) => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    const execution = { requestedEffort: "high", effectiveEffort: "high", requestedServiceTier: "fast", effectiveServiceTier: "fast" } as const;
+    mock.onJson("llm.judge", fakeJudgeOutput(), { model: "chatgpt/gpt-6.1-sol", execution });
+    mock.onJson("llm.judge", fakeJudgeOutput(), { model: "chatgpt/gpt-6.1-sol", execution: {
+      ...execution, effectiveEffort: matching ? "high" : "medium", effectiveServiceTier: matching ? "fast" : "default",
+    } });
+    let settled: unknown;
+    const run = await runJudgePass(
+      makeDeps(mock, { model: "chatgpt/gpt-6.1-sol", judgeOrder: "both" }), payload,
+      analystCase("bull"), analystCase("bear"), undefined,
+      (settlement) => { settled = settlement.telemetry; },
+    );
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.usage.input_tokens).toBe(2000);
+    expect(settled).toMatchObject({
+      model: "chatgpt/gpt-6.1-sol", inputTokens: 2000, outputTokens: 2000, billable: false,
+      execution: { requestedEffort: "high", requestedServiceTier: "fast", observedModels: ["gpt-6.1-sol"],
+        effectiveEffort: matching ? "high" : null, effectiveServiceTier: matching ? "fast" : null },
+    });
+  });
+
+  it.each([true, false])("retains both Gemini models even when the mirrored output is rejected (valid: %s)", async (valid) => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { model: "gemini/gemini-pro", execution: {
+      requestedEffort: null, effectiveEffort: null, observedModels: ["gemini-pro"],
+    } });
+    const mirrored = { model: "gemini/gemini-fast", execution: {
+      requestedEffort: null, effectiveEffort: null, observedModels: ["gemini-fast"],
+    } };
+    if (valid) mock.onJson("llm.judge", fakeJudgeOutput(), mirrored);
+    else mock.onText("llm.judge", "not valid JSON", mirrored);
+    let settled: unknown;
+    const run = await runJudgePass(
+      makeDeps(mock, { model: "gemini/auto", judgeOrder: "both" }), payload,
+      analystCase("bull"), analystCase("bear"), undefined,
+      (settlement) => { settled = settlement.telemetry; },
+    );
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(settled).toMatchObject({
+      model: "gemini/multiple-models", inputTokens: 2000, outputTokens: 2000,
+      execution: { requestedModel: "gemini/auto", requestedEffort: null, effectiveEffort: null,
+        observedModels: ["gemini-pro", "gemini-fast"] },
+    });
+    expect(run.result.execution?.requestedServiceTier).toBeUndefined();
+  });
+
+  it("does not treat a failed mirror's requested automatic model as an observed model", async () => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { model: "gemini/gemini-pro", execution: {
+      requestedEffort: null, effectiveEffort: null, observedModels: ["gemini-pro"],
+    } });
+    mock.on("llm.judge", { kind: "error", error: { kind: "transport", message: "no response", model: "gemini/auto", costUsd: 0,
+      execution: { requestedEffort: null, effectiveEffort: null } } });
+    const run = await runJudgePass(makeDeps(mock, { model: "gemini/auto", judgeOrder: "both" }), payload, analystCase("bull"), analystCase("bear"));
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.model).toBe("gemini/gemini-pro");
+    expect(run.result.usage.input_tokens).toBe(1000);
+    expect(run.result.execution?.observedModels).toEqual(["gemini-pro"]);
+  });
+
   it("declares its cost as two judge passes and every other setting as one", () => {
     expect(JUDGE_PASSES_PER_SETTING.both).toBe(2);
     for (const setting of JUDGE_ORDER_SETTINGS.filter((s) => s !== "both")) {

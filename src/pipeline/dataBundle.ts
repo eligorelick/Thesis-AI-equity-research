@@ -1776,6 +1776,24 @@ export async function buildDataBundle(
     edgarBundle.cik.ok &&
     (edgarBundle.cik.value.source === "edgar" ||
       edgarBundle.registrant?.tickers.some((t) => t.trim().toUpperCase() === sym) === true);
+  // Disclose the identity gate even when the layer is wholly skipped or only
+  // the benchmarks run. A log note alone leaves the report unable to explain
+  // why SEC/Yahoo did not replace refused FMP data. Reserved fixtures retain
+  // their network-free, synthetic manifests.
+  if (opts.keyless !== false && !reserved && !edgarConfirmedIssuer) {
+    const identityReason = !edgarBundle.cik.ok
+      ? `CIK resolution failed: ${edgarBundle.cik.gap.reason}`
+      : edgarBundle.registrant === null && !edgarBundle.companyFacts.ok
+        ? `SEC could not confirm the FMP-supplied CIK: ${edgarBundle.companyFacts.gap.reason}`
+        : "SEC did not independently associate the requested ticker with the FMP-supplied CIK";
+    keylessGaps.push({
+      field: "keyless.issuerIdentity",
+      reason: `Issuer-specific SEC/Yahoo fallbacks were withheld for ${sym} because ${identityReason}. ` +
+        "Check SEC EDGAR readiness in Settings and retry after restoring access; if SEC is available, verify the ticker-to-registrant mapping. Existing FMP results were retained.",
+      severity: "warn",
+      attemptedSources: ["edgar"],
+    });
+  }
   const runKeyless =
     opts.keyless !== false &&
     // A reserved symbol has no EDGAR bundle to confirm an issuer with, so this

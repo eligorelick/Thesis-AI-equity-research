@@ -19,6 +19,7 @@
  * user-controlled markup is ever injected.
  */
 
+import { formatExecutionMetadata } from "@/report/execution";
 import type {
   Appendix,
   BalanceSheet,
@@ -971,7 +972,7 @@ function headerBlock(
       ...(m.execution
         ? [[
             "Pass execution",
-            m.execution.map((entry) => `${entry.step}: requested ${entry.requestedModel}/${entry.requestedEffort ?? "n/a"}; effective ${entry.effectiveModel}/${entry.effectiveEffort ?? "n/a"}${entry.adjustments.length > 0 ? ` (${entry.adjustments.join(", ")})` : ""}`).join(" | "),
+            m.execution.map(formatExecutionMetadata).join(" | "),
           ]]
         : []),
       // Legacy reports carry a verifyModel label (removed setting) — keep it.

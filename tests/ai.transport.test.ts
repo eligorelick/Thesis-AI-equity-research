@@ -20,9 +20,28 @@ describe("provider dispatch and catalog lifecycle", () => {
     const result = await runSubscriptionPass(args, "account");
     expect(result.ok).toBe(true);
     const [, options] = remote.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(options.body as string)).toEqual({ model: "example", input: subscriptionMessages(args), store: false, stream: true });
+    expect(JSON.parse(options.body as string)).toEqual({ model: "example", input: subscriptionMessages(args), store: false, stream: true, service_tier: "default" });
     expect(options.headers).toEqual({ Authorization: "Bearer fake-access", "Content-Type": "application/json" });
     expect(fake.release).toHaveBeenCalled();
+  });
+  it("sends captured reasoning and Fast settings, retaining the actual returned controls", async () => {
+    remote.mockResolvedValueOnce(event({ ...completed, response: { ...completed.response, model: "gpt-6.1-sol", reasoning: { effort: "high" }, service_tier: "default" } }));
+    const result = await runSubscriptionPass({ ...args, model: "chatgpt/gpt-6.1-sol", effort: "low" }, "account", { effort: "high", serviceTier: "fast" });
+    const [, options] = remote.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(options.body as string)).toMatchObject({ model: "gpt-6.1-sol", reasoning: { effort: "high" }, service_tier: "fast" });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.data.execution).toMatchObject({ requestedEffort: "high", effectiveEffort: "high", requestedServiceTier: "fast", effectiveServiceTier: "default" });
+  });
+  it("does not infer actual effort or speed when the provider omitted them", async () => {
+    const result = await runSubscriptionPass(args, "account", { effort: "max", serviceTier: "fast" });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.data.execution).toMatchObject({ requestedEffort: "max", effectiveEffort: null, requestedServiceTier: "fast", effectiveServiceTier: null });
+  });
+  it("preserves GPT-6.1 Sol and valid reasoning choices in a refreshed account catalog", async () => {
+    remote.mockResolvedValueOnce(Response.json({ models: [null, { slug: "gpt-6.1-sol", visibility: "list", display_name: "GPT-6.1 Sol", supported_reasoning_levels: [{ effort: "high" }, { effort: "max" }, { effort: "invalid" }] }, { slug: "gpt-6.1-sol", visibility: "list" }] }));
+    expect(await listChatGptModels("account")).toEqual([{ id: "gpt-6.1-sol", name: "GPT-6.1 Sol", efforts: ["high", "max"] }]);
+    const [, options] = remote.mock.calls[0] as unknown as [string, RequestInit];
+    expect(options.cache).toBe("no-store");
   });
   it("normalizes the official Gemini result without recording API spend or fetched URLs", async () => {
     fake.gemini.mockResolvedValue({ text: '```json\n{"ok":true}\n```', model: "gemini-example", input: 4, output: 5 });
@@ -62,6 +81,8 @@ describe("response validation boundaries", () => {
     { ...completed.response, output: [] }, { ...completed.response, model: "bad/model" },
     { ...completed.response, usage: { input_tokens: -1, output_tokens: 1 } },
     { ...completed.response, usage: { input_tokens: 1, output_tokens: -1 } },
+    { ...completed.response, usage: { input_tokens: 1.5, output_tokens: 1 } },
+    { ...completed.response, usage: { input_tokens: 1, output_tokens: Number.MAX_SAFE_INTEGER + 1 } },
   ])("rejects a malformed terminal result %j", async (response) => {
     await expect(consumeChatGptStream(event({ type: "response.completed", response }))).rejects.toThrow();
   });

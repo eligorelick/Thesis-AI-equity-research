@@ -329,6 +329,7 @@ describe("risk runtime behavior coverage", () => {
         hasFinnhubKey: false,
         hasFredKey: false,
         hasAnthropicKey: false,
+        hasEdgarContact: false,
         fixtureMode: true,
         resumeOnStart: true,
       },

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { aiDirectory, claimAiRuntime, ensurePrivateDirectory, withAiStore } from "./store";
 import { chromeExecutable } from "./browser";
+import { validModelId } from "./contracts";
 
 const KEY = Symbol.for("thesis.gemini.runtime.v1");
 type Runtime = { pending: { status: "waiting" | "connected" | "error"; message: string } | null; children: Set<ChildProcessWithoutNullStreams>; disconnecting: boolean; generation: number };
@@ -161,7 +162,7 @@ export async function beginGemini(): Promise<void> {
   send(1, "initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: "thesis", version: "0.1.0" } });
 }
 
-export async function runGemini(id: string, model: string, prompt: string, signal?: AbortSignal): Promise<{ text: string; model: string; input: number; output: number }> {
+export async function runGemini(id: string, model: string, prompt: string, signal?: AbortSignal): Promise<{ text: string; model: string; input: number; output: number; observedModels: string[] }> {
   if (runtime().disconnecting) throw new Error("Gemini is disconnecting");
   const generation = runtime().generation;
   await withAiStore((store) => {
@@ -178,7 +179,7 @@ export async function runGemini(id: string, model: string, prompt: string, signa
     let canceled = false;
     const abort = () => { canceled = true; void stopGeminiChild(child).then(() => reject(new Error("Gemini request canceled")), reject); };
     signal?.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(abort, 180_000); timer.unref();
+    const timer = setTimeout(abort, 45 * 60_000); timer.unref();
     child.stdout.on("data", (data: Buffer) => { output += data.toString("utf8"); if (output.length > 4_000_000) abort(); });
     child.on("error", () => reject(new Error("Gemini CLI could not start")));
     child.on("close", (code) => {
@@ -187,9 +188,19 @@ export async function runGemini(id: string, model: string, prompt: string, signa
         if (canceled || code !== 0) throw new Error();
         const data = JSON.parse(output);
         if (data.error || typeof data.response !== "string" || !data.response.trim()) throw new Error();
-        const entries = Object.entries(data.stats?.models ?? {}) as [string, { tokens?: { input?: number; candidates?: number } }][];
-        const tokens = entries.reduce((sum, [, entry]) => ({ input: sum.input + (entry.tokens?.input ?? 0), output: sum.output + (entry.tokens?.candidates ?? 0) }), { input: 0, output: 0 });
-        resolve({ text: data.response, model: entries.at(-1)?.[0] ?? model, ...tokens });
+        if (!data.stats?.models || typeof data.stats.models !== "object" || Array.isArray(data.stats.models)) throw new Error();
+        const entries = Object.entries(data.stats.models) as [string, { tokens?: { input?: number; prompt?: number; candidates?: number; thoughts?: number } }][];
+        const count = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+        if (!entries.length || entries.some(([id, entry]) => !validModelId(id) || !entry || !count(entry.tokens?.input) || !count(entry.tokens?.candidates) ||
+          (entry.tokens?.prompt !== undefined && !count(entry.tokens.prompt)) || (entry.tokens?.thoughts !== undefined && !count(entry.tokens.thoughts)))) throw new Error();
+        // CLI 0.36's input excludes cached tokens; prompt includes them. Its
+        // candidate count excludes reasoning tokens, recorded under thoughts.
+        const tokens = entries.reduce((sum, [, entry]) => ({ input: sum.input + (entry.tokens!.prompt ?? entry.tokens!.input!), output: sum.output + entry.tokens!.candidates! + (entry.tokens!.thoughts ?? 0) }), { input: 0, output: 0 });
+        if (!count(tokens.input) || !count(tokens.output)) throw new Error();
+        const observedModels = entries.map(([id]) => id);
+        // Multiple entries may include the router or fallback. Object order
+        // cannot identify which model wrote the final response.
+        resolve({ text: data.response, model: observedModels.length === 1 ? observedModels[0] : "multiple-models", observedModels, ...tokens });
       } catch { reject(new Error("Gemini could not complete this pass. Check your connection or Google usage allowance. No paid fallback was attempted.")); }
     });
     if (signal?.aborted) { abort(); return; }

@@ -36,6 +36,7 @@ import { fetchWithPolicy, HttpTransportError, type FetchPolicy, type TokenBucket
 import { canonicalEntitySymbol, isValidSymbol, sameEntitySymbol } from "@/symbol";
 // WS4 (D-11): DEMO and DBNK are reserved fixture symbols and never reach the vendor.
 import { anyReservedFixtureSymbol, isReservedFixtureSymbol } from "@/providers/reservedSymbols";
+import { FmpAccessError, fmpAccessKey, parseFmpRestriction, resetFmpAccess, withFmpAccess } from "@/providers/fmpAccess";
 
 // ---------------------------------------------------------------------------
 // Cache contract (implemented by @/cache/apiCache — injected to keep this
@@ -915,6 +916,7 @@ export function resetFmpPlanLimits(): void {
   planLimitCaps.clear();
   planLimitProven.clear();
   planLimitProbes.clear();
+  resetFmpAccess();
 }
 
 export function isFmpErrorBody(body: unknown): body is { "Error Message": string } {
@@ -1339,7 +1341,14 @@ export class FmpClient {
 
     let exchange: CachedFetchResult<LiveExchange>;
     try {
-      exchange = await this.cachedFetch<LiveExchange>(cacheKey, ttlMs, async () => {
+      exchange = await this.cachedFetch<LiveExchange>(cacheKey, ttlMs, () => withFmpAccess({
+        key: fmpAccessKey(apiKey, this.baseUrl),
+        endpoint: spec.endpoint,
+        symbols: typeof params.symbol === "string" ? params.symbol
+          : typeof params.symbols === "string" ? params.symbols : undefined,
+        now: () => this.now().getTime(),
+        signal: this.signal,
+      }, async () => {
         // The loader runs only when the cache could not answer: this is the
         // one place that knows the vendor was asked, and at what limit.
         if (observed !== undefined) {
@@ -1366,6 +1375,13 @@ export class FmpClient {
           const cap = parseFmpLimitCap(res.bodyText);
           if (cap !== null && appliedLimit > cap) throw new FmpPlanLimitError(cap);
         }
+        // FMP's explicit subscription refusals often arrive as plain text.
+        // Classify them before JSON parsing; generic auth, rate-limit, server,
+        // and malformed-body errors must not teach an entitlement restriction.
+        if (res.status === 402 || res.status === 403) {
+          const restriction = parseFmpRestriction(res.bodyText);
+          if (restriction !== null) throw new FmpAccessError(restriction, res.status);
+        }
         let body: unknown;
         try {
           body = res.bodyText.length > 0 ? (JSON.parse(res.bodyText) as unknown) : null;
@@ -1376,6 +1392,10 @@ export class FmpClient {
         }
         if (isFmpErrorBody(body)) {
           // thrown (not returned) so error bodies are never cached as data
+          if (res.status === 200 || res.status === 402 || res.status === 403) {
+            const restriction = parseFmpRestriction(fmpErrorMessage(body));
+            if (restriction !== null) throw new FmpAccessError(restriction, res.status);
+          }
           throw new FmpApiError(fmpErrorMessage(body), res.status);
         }
         if (!res.ok) {
@@ -1419,7 +1439,7 @@ export class FmpClient {
           fetchedAt: this.now().toISOString(),
           ...(expectedEntityScope === undefined ? {} : { entityScope: expectedEntityScope }),
         };
-      });
+      }));
     } catch (err) {
       if (err instanceof FmpPlanLimitError) {
         planLimitCaps.set(apiKey, err.cap);
@@ -1427,6 +1447,9 @@ export class FmpClient {
       }
       if (err instanceof FmpEntityIdentityError) {
         return gap(spec.gapField, err.message, "critical", [endpointPath]);
+      }
+      if (err instanceof FmpAccessError) {
+        return gap(spec.gapField, err.message, "warn", [endpointPath], true);
       }
       if (err instanceof FmpApiError) {
         return gap(spec.gapField, `FMP error (HTTP ${err.status}): ${err.message}`, "warn", [endpointPath]);
@@ -2054,6 +2077,7 @@ export class FmpClient {
         `all ${chunks.length} EOD chunk(s) failed: ${failures[0]?.gap.reason ?? "unknown"}`,
         "warn",
         attempted,
+        failures.length > 0 && failures.every((result) => result.gap.expected === true),
       );
     }
 
@@ -2125,6 +2149,7 @@ export class FmpClient {
         `partial EOD history refused: the newest chunk failed — ${failures.length}/${chunks.length} chunk(s) failed (${failed})`,
         "warn",
         attempted,
+        failures.every((result) => result.gap.expected === true),
       );
     }
 
@@ -2371,8 +2396,9 @@ function gap(
   reason: string,
   severity: ManifestEntry["severity"],
   attemptedSources: string[],
+  expected = false,
 ): { ok: false; gap: ManifestEntry } {
-  return { ok: false, gap: { field, reason, severity, attemptedSources } };
+  return { ok: false, gap: { field, reason, severity, attemptedSources, ...(expected ? { expected: true } : {}) } };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

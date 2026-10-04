@@ -72,6 +72,7 @@ import {
   annotateSharedModelFamily,
   buildExecutionMetadataEntry,
   sharedModelFamilyOf,
+  type ProviderExecution,
 } from "@/report/execution";
 // WS7 (D-20): the judgement-protocol block the passes store is completed with
 // the model families only the runner's settled execution list knows. This is a
@@ -151,6 +152,7 @@ import {
  * cost-related is optional so a mock or a degraded pass can omit it.
  */
 export interface PassResultLike<T> {
+  execution?: ProviderExecution;
   /** The parsed structured output for this pass. */
   data: T;
   /** Model that actually served the response (fallback model when one served). */
@@ -169,6 +171,7 @@ export interface PassResultLike<T> {
 
 /** Billed telemetry from a pass attempt that did not produce valid output. */
 export interface BilledPassAttempt {
+  execution?: ProviderExecution;
   model: string;
   costUsd: number;
   fallbackUsed: boolean;
@@ -265,6 +268,7 @@ export interface PassDeps<TPayload = unknown> {
   analysisModel: string;
   /** Captured once for this job; never re-read global selection inside a pass. */
   connectionId?: string;
+  subscriptionOptions?: { effort?: EffortLevel; serviceTier?: "default" | "fast" };
   /**
    * Per-request cost admission for a pass (DECISIONS D-10). The Stage C
    * adapter threads the returned object into every provider request the pass
@@ -841,6 +845,7 @@ function telemetryFromPassResult<T>(
     fallbackUsed: pass.fallbackUsed,
     billable,
     fetchedUrls: canonicalFetchedUrls(pass.fetchedUrls),
+    ...(pass.execution === undefined ? {} : { execution: pass.execution }),
   };
 }
 
@@ -859,6 +864,7 @@ function telemetryFromAttempt(
     fallbackUsed: attempt?.fallbackUsed ?? false,
     billable: attempt !== null,
     fetchedUrls: [],
+    ...(attempt?.execution === undefined ? {} : { execution: attempt.execution }),
   };
 }
 
@@ -2627,6 +2633,7 @@ export async function runJob<TPayload = unknown>(
     }
     const aiSelection = opts.hasAnthropicKey === undefined
       ? captureAiSelection() : { provider: "anthropic" as const };
+    const capturedSettings = getWritableSettingsAuthority();
     const hasKey = opts.hasAnthropicKey ?? selectionIsConnected(aiSelection);
 
     // -- fetch ----------------------------------------------------------------
@@ -2754,7 +2761,6 @@ export async function runJob<TPayload = unknown>(
     // "skipped" with the resolution error and still persist a data-only report
     // Only genuinely unexpected
     // failures downstream still reach the outer catch and 'error'.
-    const capturedSettings = getWritableSettingsAuthority();
     let analysisModel: string;
     let analysisEffort: EffortLevel;
     if (reusableSynthesize !== null) {
@@ -2812,6 +2818,10 @@ export async function runJob<TPayload = unknown>(
     const deps: PassDeps<TPayload> = {
       analysisModel,
       ...("connectionId" in aiSelection ? { connectionId: aiSelection.connectionId } : {}),
+      ...(aiSelection.provider === "chatgpt" ? { subscriptionOptions: {
+        ...(aiSelection.effort === undefined ? {} : { effort: aiSelection.effort }),
+        ...(aiSelection.serviceTier === undefined ? {} : { serviceTier: aiSelection.serviceTier }),
+      } } : {}),
       effort: analysisEffort,
       payload,
       jobSeed: jobId, // WS7 (D-20): seeds the judge's case order
@@ -2865,6 +2875,8 @@ export async function runJob<TPayload = unknown>(
         runId: state.jobId,
         startedAt: state.startedAt,
         execution: [
+          ...readSuccessfulExecutions(state.jobId, analysisModel).filter((entry) =>
+            (entry.step === "bull" && bull === null) || (entry.step === "bear" && bear === null)),
           ...(bull === null
             ? []
             : [buildExecutionMetadataEntry({
@@ -2873,6 +2885,8 @@ export async function runJob<TPayload = unknown>(
                 effectiveModel: bull.model,
                 requestedEffort: analysisEffort,
                 fallbackUsed: bull.fallbackUsed,
+                execution: bull.execution,
+                usage: bull.usage,
               })]),
           ...(bear === null
             ? []
@@ -2882,6 +2896,8 @@ export async function runJob<TPayload = unknown>(
                 effectiveModel: bear.model,
                 requestedEffort: analysisEffort,
                 fallbackUsed: bear.fallbackUsed,
+                execution: bear.execution,
+                usage: bear.usage,
               })]),
           buildExecutionMetadataEntry({
             step: "synthesize",
@@ -2889,6 +2905,8 @@ export async function runJob<TPayload = unknown>(
             effectiveModel: judge.model,
             requestedEffort: analysisEffort,
             fallbackUsed: judge.fallbackUsed,
+            execution: judge.execution,
+            usage: judge.usage,
           }),
           buildExecutionMetadataEntry({
             step: "verify",
@@ -3931,7 +3949,7 @@ function persistDataOnly(
     computed,
     costBreakdown: buildCostBreakdown(state),
     presumed: presumedSpendDisclosure(state.jobId),
-    execution: disclosure.execution,
+    execution: disclosure.execution ?? readSuccessfulExecutions(state.jobId, model),
     gaps: disclosure.gaps,
     reason: disclosure.reason ?? (hasKey ? LLM_FAILURE_DATA_ONLY_REASON : NO_KEY_SKIP_REASON),
   };
@@ -4145,6 +4163,8 @@ interface DiscardedAttempt {
   pass: string;
   attemptId: string;
   reason: string;
+  model: string;
+  billable: boolean;
 }
 
 /**
@@ -4190,6 +4210,8 @@ function readDiscardedAttempts(jobId: string): DiscardedAttempt[] {
         pass: artifact.pass,
         attemptId: artifact.attemptId,
         reason: readerSafeFailureText(artifact.envelope.failure),
+        model: artifact.telemetry.model,
+        billable: artifact.telemetry.billable,
       }];
     });
   } catch {
@@ -4225,13 +4247,15 @@ function discardedAttemptGaps(state: RunState): ManifestEntry[] {
     return {
       field: `llm.${attempt.pass}.discardedAttempt`,
       reason:
-        `the ${attempt.pass} pass was run more than once: an earlier attempt was billed and its output thrown ` +
+        parseSubscriptionModel(attempt.model) && !attempt.billable
+          ? `A ${attempt.pass} attempt did not produce usable output because ${attempt.reason}. It used the connected provider allowance and recorded $0 in API charges. The rejected output is excluded from this report; usage and failure details remain saved with the run.`
+          : `the ${attempt.pass} pass was run more than once: an earlier attempt was billed and its output thrown ` +
         `away because ${attempt.reason}. That attempt cost $${wasted.toFixed(4)}, which is included in the ` +
         "reported total and appears in the cost breakdown marked `discarded`. The analysis itself comes from the " +
         "attempt that succeeded; nothing from the rejected one reached this report, and the failure itself is " +
         "recorded against the run rather than quoted here.",
       severity: "info",
-      attemptedSources: ["anthropic"],
+      attemptedSources: [parseSubscriptionModel(attempt.model)?.provider ?? "anthropic"],
       expected: false,
     };
   });
@@ -4259,6 +4283,29 @@ function readCostLedger(jobId: string): CostLedgerRow[] {
     .where(eq(costLog.jobId, jobId))
     .orderBy(costLog.id)
     .all();
+}
+
+/** OAuth passes have no API-charge row; their durable artifacts retain execution evidence. */
+function readSuccessfulExecutions(jobId: string, requestedModel: string): ExecutionMetadataEntry[] {
+  // Reuse resume's authoritative fold: a newer failed/corrupt pass supersedes
+  // an older success, and newer upstream work invalidates old downstream work.
+  const cohort = getDb().transaction((db) => readStoredJobResumeInTransaction(db, jobId)?.artifacts);
+  if (cohort === undefined) return [];
+  return ["bull", "bear", "synthesize"].flatMap((step) => {
+    const artifacts = cohort.currentArtifacts.filter((artifact) =>
+      artifact.pass === step && artifact.envelope.outcome === "success");
+    if (artifacts.length !== 1 || cohort.corruptPasses.some((pass) => pass === step)) return [];
+    const artifact = artifacts[0]!;
+    return [buildExecutionMetadataEntry({
+      step,
+      requestedModel: artifact.telemetry.execution?.requestedModel ?? requestedModel,
+      effectiveModel: artifact.telemetry.model,
+      requestedEffort: null,
+      fallbackUsed: artifact.telemetry.fallbackUsed,
+      execution: artifact.telemetry.execution,
+      usage: { input_tokens: artifact.telemetry.inputTokens, output_tokens: artifact.telemetry.outputTokens },
+    })];
+  });
 }
 
 /** Sum of every cost_log row already recorded for a job (resume rehydration). */
@@ -4458,8 +4505,14 @@ function reconcileRecoveredVerifyReport(
       effectiveByStep.set(row.step, row);
     }
   }
+  const savedExecution = readSuccessfulExecutions(state.jobId, requestedModel);
   const execution: ExecutionMetadataEntry[] = [];
   for (const step of ["bull", "bear", "synthesize"] as const) {
+    const saved = savedExecution.find((entry) => entry.step === step);
+    if (saved !== undefined) {
+      execution.push(saved);
+      continue;
+    }
     const row = effectiveByStep.get(step);
     if (row === undefined) continue;
     execution.push(buildExecutionMetadataEntry({

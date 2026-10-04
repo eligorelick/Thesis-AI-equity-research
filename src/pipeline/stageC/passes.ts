@@ -32,7 +32,7 @@
  */
 
 import type { ManifestEntry } from "@/types/core";
-import { parseSubscriptionModel } from "@/ai/contracts";
+import { parseSubscriptionModel, subscriptionModel } from "@/ai/contracts";
 import { sourceManifestEntries, type DataBundle } from "@/pipeline/types";
 import { routeMetricsBlock, type ComputedMetrics } from "@/pipeline/compute";
 import { computeDcfDisplay } from "@/pipeline/stageB/fairValue";
@@ -92,7 +92,7 @@ import {
   type EntityIssue,
 } from "@/pipeline/stageC/entityValidation";
 import { buildDataCompleteness } from "@/report/completeness";
-import { buildExecutionMetadataEntry } from "@/report/execution";
+import { buildExecutionMetadataEntry, type ProviderExecution } from "@/report/execution";
 import { judgeFloorModelId, resolveRegistryModel } from "@/models/registry";
 import {
   SHARED_RULES_BLOCK,
@@ -162,6 +162,7 @@ export interface PassMessage {
 
 /** The success branch of the provider's Sourced<PassOutcome>. */
 export interface PassOutcomeLike {
+  execution?: ProviderExecution;
   message: PassMessage;
   fetchedUrls?: string[];
   usage: PassUsage;
@@ -173,6 +174,7 @@ export interface PassOutcomeLike {
 /** Structural mirror of the provider's typed PassError (kinds incl. the
  * Stage-C-fabricated parse/schema/transport — see PassErrorKind docs). */
 export interface PassErrorLike {
+  execution?: ProviderExecution;
   kind:
     | "no_key"
     | "refusal"
@@ -292,6 +294,7 @@ export interface PassDeps {
 
 /** Successful pass output plus its usage/cost provenance. */
 export interface PassResult<T> {
+  execution?: ProviderExecution;
   output: T;
   usage: PassUsage;
   costUsd: number;
@@ -333,6 +336,7 @@ export type PassRun<T> =
        * between converging and re-rolling the dice on weaker models.
        */
       rawText?: string;
+      execution?: ProviderExecution;
       usage?: PassUsage;
       costUsd?: number;
       fallbackUsed?: boolean;
@@ -623,6 +627,7 @@ function finishStructuredPass<T>(
       gap: outcome.gap,
       error: outcome.error,
       usage,
+      ...(outcome.error.execution === undefined ? {} : { execution: { requestedModel, ...outcome.error.execution } }),
       costUsd: outcome.error.costUsd,
       fallbackUsed: outcome.error.fallbackUsed,
       model: outcome.error.model ?? (outcome.error.costUsd !== undefined ? requestedModel : undefined),
@@ -633,6 +638,7 @@ function finishStructuredPass<T>(
   const attemptedSources = [parseSubscriptionModel(data.model)?.provider ?? "anthropic"];
   const text = extractText(data.message);
   const billedAttempt = {
+    ...(data.execution === undefined ? {} : { execution: { requestedModel, ...data.execution } }),
     usage: data.usage,
     costUsd: data.costUsd,
     fallbackUsed: data.fallbackUsed,
@@ -675,6 +681,7 @@ function finishStructuredPass<T>(
       model: data.model,
       webSearches: webSearchesOf(data.usage),
       fetchedUrls: data.fetchedUrls ?? [],
+      ...(data.execution === undefined ? {} : { execution: { requestedModel, ...data.execution } }),
     },
   };
 }
@@ -848,6 +855,7 @@ function telemetryFromPassRun<T>(
     costUsd: run.ok ? run.result.costUsd : (run.costUsd ?? 0),
     fallbackUsed: run.ok ? run.result.fallbackUsed : (run.fallbackUsed ?? false),
     billable: !parseSubscriptionModel(requestedModel) && (run.ok || run.costUsd !== undefined),
+    ...((run.ok ? run.result.execution : run.execution) === undefined ? {} : { execution: run.ok ? run.result.execution : run.execution }),
     fetchedUrls,
   };
 }
@@ -1572,6 +1580,7 @@ function entityConflictFailure(
     fallbackUsed: successful.fallbackUsed,
     model: successful.model,
     webSearches: successful.webSearches,
+    ...(successful.execution === undefined ? {} : { execution: successful.execution }),
   };
 }
 
@@ -1841,7 +1850,7 @@ export async function runJudgePass(
 /**
  * WS7 (D-20): fold a mirrored `both`-mode attempt's billing into the primary
  * result so the pass settles ONE cost entry covering both requests. The primary
- * output is the report; only usage, cost, searches and fetched URLs are merged.
+ * output is the report; usage and execution evidence cover both requests.
  * A mirrored attempt that failed still contributes whatever it billed — an
  * unsettled paid request is exactly the thing the spend controls exist to catch.
  */
@@ -1868,10 +1877,43 @@ function mergeJudgeBilling(
   const costUsd = mirrored.ok ? mirrored.result.costUsd : (mirrored.costUsd ?? 0);
   const webSearches = mirrored.ok ? mirrored.result.webSearches : (mirrored.webSearches ?? 0);
   const fetchedUrls = mirrored.ok ? mirrored.result.fetchedUrls : [];
+  const mirroredModel = mirrored.ok ? mirrored.result.model : mirrored.model;
+  const mirroredExecution = mirrored.ok ? mirrored.result.execution : mirrored.execution;
+  const provider = parseSubscriptionModel(primary.model)?.provider;
+  let execution = primary.execution;
+  let model = primary.model;
+  // A transport failure's model is merely the requested model. Only a
+  // received response with usage can add evidence about actual execution.
+  if (provider !== undefined && usage !== undefined) {
+    const observed = (effectiveModel: string | undefined, evidence: ProviderExecution | undefined): string[] => {
+      if (evidence?.observedModels !== undefined) return evidence.observedModels;
+      const parsed = effectiveModel === undefined ? null : parseSubscriptionModel(effectiveModel);
+      return parsed === null || parsed.model === "multiple-models" ? [] : [parsed.model];
+    };
+    const observedModels = [...new Set([
+      ...observed(primary.model, primary.execution),
+      ...observed(mirroredModel, mirroredExecution),
+    ])];
+    if (primary.model !== mirroredModel || observedModels.length > 1) model = subscriptionModel(provider, "multiple-models");
+    execution = {
+      ...(primary.execution?.requestedModel === undefined ? {} : { requestedModel: primary.execution.requestedModel }),
+      requestedEffort: primary.execution?.requestedEffort === mirroredExecution?.requestedEffort
+        ? primary.execution?.requestedEffort ?? null : null,
+      effectiveEffort: primary.execution?.effectiveEffort === mirroredExecution?.effectiveEffort
+        ? primary.execution?.effectiveEffort ?? null : null,
+      ...(primary.execution?.requestedServiceTier !== undefined && primary.execution.requestedServiceTier === mirroredExecution?.requestedServiceTier
+        ? { requestedServiceTier: primary.execution.requestedServiceTier } : {}),
+      ...(provider === "chatgpt" ? { effectiveServiceTier: primary.execution?.effectiveServiceTier === mirroredExecution?.effectiveServiceTier
+        ? primary.execution?.effectiveServiceTier ?? null : null } : {}),
+      observedModels,
+    };
+  }
   const add = (a: number | null | undefined, b: number | null | undefined): number =>
     (a ?? 0) + (b ?? 0);
   return {
     ...primary,
+    model,
+    ...(execution === undefined ? {} : { execution }),
     usage: {
       input_tokens: add(primary.usage.input_tokens, usage?.input_tokens),
       output_tokens: add(primary.usage.output_tokens, usage?.output_tokens),
@@ -3093,8 +3135,8 @@ export { assembleContextPayload, serializePayloadForPrompt, payloadFingerprint }
 
 /** A queued mock response: a structured JSON output, RAW text, or a typed failure. */
 export type MockResponse =
-  | { kind: "json"; value: unknown; costUsd?: number; webSearches?: number; fetchedUrls?: string[]; model?: string; fallbackUsed?: boolean }
-  | { kind: "text"; text: string; costUsd?: number; webSearches?: number; fetchedUrls?: string[]; model?: string; fallbackUsed?: boolean }
+  | { kind: "json"; value: unknown; costUsd?: number; webSearches?: number; fetchedUrls?: string[]; model?: string; fallbackUsed?: boolean; execution?: ProviderExecution }
+  | { kind: "text"; text: string; costUsd?: number; webSearches?: number; fetchedUrls?: string[]; model?: string; fallbackUsed?: boolean; execution?: ProviderExecution }
   | { kind: "error"; error: PassErrorLike; gap?: ManifestEntry };
 
 /**
@@ -3177,6 +3219,7 @@ export class MockRunPass {
           costUsd: resp.costUsd ?? 0,
           fallbackUsed: resp.fallbackUsed ?? false,
           model: resp.model ?? args.model,
+          ...(resp.execution === undefined ? {} : { execution: resp.execution }),
         },
       },
     };

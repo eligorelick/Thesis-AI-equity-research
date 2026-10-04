@@ -1,7 +1,16 @@
 import { judgeFloorModelId, resolveRegistryModel } from "@/models/registry";
-import { parseSubscriptionModel } from "@/ai/contracts";
+import { parseSubscriptionModel, subscriptionModel, validModelId } from "@/ai/contracts";
 
 export type ExecutionEffort = "low" | "medium" | "high" | "xhigh" | "max";
+/** Provider evidence, retained on durable artifacts independently of API charges. */
+export interface ProviderExecution {
+  requestedModel?: string;
+  requestedEffort?: ExecutionEffort | null;
+  effectiveEffort?: ExecutionEffort | null;
+  requestedServiceTier?: "default" | "fast";
+  effectiveServiceTier?: string | null;
+  observedModels?: string[];
+}
 export type ExecutionAdjustment =
   | "model-floor"
   | "fallback"
@@ -20,6 +29,11 @@ export interface ExecutionMetadataEntry {
   effectiveModel: string;
   requestedEffort: ExecutionEffort | null;
   effectiveEffort: ExecutionEffort | null;
+  requestedServiceTier?: "default" | "fast";
+  effectiveServiceTier?: string | null;
+  inputTokens?: number;
+  outputTokens?: number;
+  observedModels?: string[];
   fallbackUsed: boolean;
   adjustments: ExecutionAdjustment[];
   /**
@@ -41,6 +55,8 @@ export function buildExecutionMetadataEntry(input: {
   effectiveModel: string;
   requestedEffort: ExecutionEffort | null;
   fallbackUsed: boolean;
+  execution?: ProviderExecution;
+  usage?: { input_tokens?: number | null; output_tokens?: number | null };
   /**
    * Why the requested model was refused before any request was sent (D-02).
    * When present the entry is a `model-rejected` disclosure: no model ran, so
@@ -60,13 +76,20 @@ export function buildExecutionMetadataEntry(input: {
       note: `${input.step}: ${input.rejectedReason}`,
     };
   }
-  const effectiveEffort = input.requestedEffort !== null && modelSupportsEffort(input.effectiveModel)
-    ? input.requestedEffort
+  const requestedEffort = input.execution?.requestedEffort !== undefined
+    ? input.execution.requestedEffort : input.requestedEffort;
+  const effectiveEffort = input.execution?.effectiveEffort !== undefined
+    ? input.execution.effectiveEffort
+    : requestedEffort !== null && modelSupportsEffort(input.effectiveModel)
+    ? requestedEffort
     : null;
   const adjustments: ExecutionAdjustment[] = [];
   const notes: string[] = [];
   const subscription = parseSubscriptionModel(input.effectiveModel);
   if (subscription) notes.push(`${input.step}: ${subscription.provider === "chatgpt" ? "ChatGPT plan" : "Google Gemini CLI"} allowance was used. $0 records API charges only, not free or unlimited usage. Provider limits and account credit settings apply. This pass used the supplied evidence without additional web search.`);
+  if (subscription && input.execution?.observedModels && input.execution.observedModels.length > 1) {
+    notes.push(`${input.step}: provider reported usage for ${input.execution.observedModels.join(", ")}; the combined usage is not attributed to a single model.`);
+  }
   const requestedFamily = resolveRegistryModel(input.requestedModel)?.entry.family;
   const effectiveFamily = resolveRegistryModel(input.effectiveModel)?.entry.family;
   // The floor is applied by the provider to the synthesize pass only, and to
@@ -97,7 +120,10 @@ export function buildExecutionMetadataEntry(input: {
           : `; ${input.requestedModel} does not accept an effort setting, so the analyst passes on it ignore ANALYSIS_EFFORT.`),
     );
   }
-  if (input.requestedEffort !== null && effectiveEffort === null) {
+  if (input.execution !== undefined && subscription) {
+    if (requestedEffort !== null) notes.push(`${input.step}: requested reasoning ${requestedEffort}; ${effectiveEffort === null ? "the applied reasoning effort could not be established for the whole pass" : `provider reported ${effectiveEffort}`}.`);
+    if (input.execution.requestedServiceTier !== undefined) notes.push(`${input.step}: requested ${input.execution.requestedServiceTier} speed; ${input.execution.effectiveServiceTier == null ? "the applied service tier could not be established for the whole pass" : `provider reported service tier ${input.execution.effectiveServiceTier}`}.`);
+  } else if (requestedEffort !== null && effectiveEffort === null) {
     adjustments.push("effort-stripped");
     notes.push(
       subscription
@@ -107,14 +133,40 @@ export function buildExecutionMetadataEntry(input: {
   }
   return {
     step: input.step,
-    requestedModel: input.requestedModel,
+    requestedModel: input.execution?.requestedModel ?? input.requestedModel,
     effectiveModel: input.effectiveModel,
-    requestedEffort: input.requestedEffort,
+    requestedEffort,
     fallbackUsed: input.fallbackUsed,
     effectiveEffort,
+    ...(input.execution?.requestedServiceTier === undefined ? {} : { requestedServiceTier: input.execution.requestedServiceTier }),
+    ...(input.execution?.effectiveServiceTier === undefined ? {} : { effectiveServiceTier: input.execution.effectiveServiceTier }),
+    ...(input.usage?.input_tokens == null ? {} : { inputTokens: input.usage.input_tokens }),
+    ...(input.usage?.output_tokens == null ? {} : { outputTokens: input.usage.output_tokens }),
+    ...(input.execution?.observedModels === undefined ? {} : { observedModels: input.execution.observedModels }),
     adjustments,
     ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
   };
+}
+
+/** Shared display text for the live report and both export formats. */
+export function formatExecutionMetadata(entry: ExecutionMetadataEntry): string {
+  const speed = entry.requestedServiceTier === undefined ? ""
+    : `; speed requested ${entry.requestedServiceTier}, provider ${entry.effectiveServiceTier ?? "unknown"}`;
+  const usage = entry.inputTokens === undefined && entry.outputTokens === undefined ? ""
+    : `; tokens ${entry.inputTokens ?? "unknown"} input, ${entry.outputTokens ?? "unknown"} output`;
+  return `${entry.step}: requested ${entry.requestedModel}/${entry.requestedEffort ?? "n/a"}; effective ${entry.effectiveModel}/${entry.effectiveEffort ?? "n/a"}${speed}${usage}${entry.adjustments.length ? ` (${entry.adjustments.join(", ")})` : ""}${entry.note ? `. ${entry.note}` : ""}`;
+}
+
+/** Actual subscription models, including a Gemini automatic selection's resolved model. */
+export function subscriptionExecutionModels(entries: readonly ExecutionMetadataEntry[] | undefined): string[] {
+  return [...new Set((entries ?? []).flatMap((entry) => {
+    const subscription = parseSubscriptionModel(entry.effectiveModel);
+    if (!subscription) return [];
+    const observed = entry.observedModels?.filter(validModelId) ?? [];
+    return subscription.model === "multiple-models" && observed.length
+      ? observed.map((model) => subscriptionModel(subscription.provider, model))
+      : [entry.effectiveModel];
+  }))];
 }
 
 /* ------------------------------------------------------------------------ *
@@ -135,7 +187,9 @@ const ANALYST_STEPS = new Set(["bull", "bear"]);
 const JUDGE_STEP = "synthesize";
 
 function familyOf(model: string): string | null {
-  return resolveRegistryModel(model)?.entry.family ?? (parseSubscriptionModel(model) ? model : null);
+  const subscription = parseSubscriptionModel(model);
+  if (subscription?.model === "multiple-models") return null;
+  return resolveRegistryModel(model)?.entry.family ?? (subscription ? model : null);
 }
 
 export interface SharedModelFamily {

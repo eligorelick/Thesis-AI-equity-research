@@ -79,6 +79,7 @@ function payload(
       hasFinnhubKey: false,
       hasFredKey: false,
       hasAnthropicKey: false,
+      hasEdgarContact: false,
       fixtureMode: true,
       resumeOnStart: true,
     },
@@ -500,6 +501,20 @@ describe("settings page controller", () => {
     );
     expect(viewSource).toContain("settingsModelOptionsForDisplay(");
     expect(viewSource).toContain('status === "recovering"');
+  });
+
+  it.each([false, true])("shows SEC contact readiness and explains FMP entitlement limits (%s)", (configured) => {
+    const current = payload(INITIAL, 0);
+    current.capabilities.hasEdgarContact = configured;
+    const html = renderToStaticMarkup(createElement(SettingsPageView, {
+      state: { status: "ready", payload: current, writer: null, error: null },
+      onAnalysisModel: vi.fn(),
+      onAnalysisEffort: vi.fn(),
+    }));
+    expect(html).toMatch(new RegExp(`EDGAR_CONTACT</span><span[^>]*>${configured ? "configured" : "missing"}</span>`));
+    expect(html).toContain("subscription entitlement");
+    expect(html).toContain("HTTP 402");
+    expect(html).toContain("reachable email");
   });
 
   it("the route-used view renders optimistic desired values and honest saving/recovery states", () => {

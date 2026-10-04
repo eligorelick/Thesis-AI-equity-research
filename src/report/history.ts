@@ -23,6 +23,7 @@ import { getDb } from "@/db";
 import { reports, type ReportRow } from "@/db/schema";
 import { parseStoredReportWithSafety } from "@/report/legacyEntitySafety";
 import type { Report } from "@/report/schema";
+import { subscriptionExecutionModels } from "@/report/execution";
 import {
   GRADE_SURFACE_ORDER,
   gradeSurfaceEntries,
@@ -78,6 +79,7 @@ export interface ReportSummary {
   symbol: string;
   createdAt: string;
   model: string;
+  actualModels?: string[];
   status: string;
   /** Fraction of numeric claims traced (0..1), or null when unrun/unavailable. */
   verificationRate: number | null;
@@ -114,11 +116,13 @@ function toSummary(row: ReportRow): ReportSummary {
   const parsed = parseStoredReport(row.reportJson);
   const report =
     parsed !== null && rowMatchesEmbeddedReport(row, parsed) ? parsed : null;
+  const actualModels = subscriptionExecutionModels(report?.meta.execution);
   return {
     id: row.id,
     symbol: row.symbol,
     createdAt: row.createdAt,
     model: row.model,
+    ...(actualModels.length === 0 ? {} : { actualModels }),
     status: row.status,
     verificationRate: row.verificationRate,
     costUsd: row.costUsd,

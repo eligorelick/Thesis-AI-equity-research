@@ -247,7 +247,7 @@ function toPassDeps(deps: RunnerPassDeps<ContextPayload>): PassDeps {
     if (!connectionId) throw new Error("Subscription pass is missing its captured account connection");
     return {
       model: deps.analysisModel, signal: deps.signal, jobSeed: deps.jobSeed,
-      runPass: (args) => runSubscriptionPass(args, connectionId),
+      runPass: (args) => runSubscriptionPass(args, connectionId, deps.subscriptionOptions),
       validateRunPass: (args) => {
         if (args.model !== deps.analysisModel || JSON.stringify(args.messages).length > 2_000_000) {
           throw new Error("Subscription pass changed model or exceeded the local input size limit");
@@ -307,6 +307,7 @@ function toPassResultLike<T>(r: PassResult<T>): PassResultLike<T> {
     },
     webSearches: r.webSearches,
     fetchedUrls: r.fetchedUrls,
+    ...(r.execution === undefined ? {} : { execution: r.execution }),
   };
 }
 
@@ -338,6 +339,7 @@ function billedAttemptFromRun<T>(run: PassRun<T>): BilledPassAttempt | undefined
         }
       : undefined,
     webSearches: run.webSearches,
+    ...(run.execution === undefined ? {} : { execution: run.execution }),
   };
 }
 

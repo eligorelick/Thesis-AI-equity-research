@@ -154,8 +154,7 @@ describe("Gemini lifecycle without authentication or inference", () => {
   });
   it.each([
     { response: "{}", stats: { models: { first: { tokens: { input: 3, candidates: 1 } }, second: { tokens: { input: 5, candidates: 2 } } } } },
-    { response: "{}", stats: { models: { first: {} } } },
-    { response: "{}" },
+    { response: "{}", stats: { models: { first: { tokens: { input: 3, prompt: 5, candidates: 1, thoughts: 2 } } } } },
   ])("reads completed CLI JSON and combines usage %#", async (output) => {
     fake.store!.gemini = { id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", connected: true };
     const result = runGemini(fake.store!.gemini.id, "example-model", "evidence");
@@ -163,9 +162,10 @@ describe("Gemini lifecycle without authentication or inference", () => {
     expect(fake.spawn.mock.calls[0][1]).toContain("--model");
     child.stdout.emit("data", Buffer.from(JSON.stringify(output))); Object.assign(child, { exitCode: 0 }); child.emit("close", 0);
     const value = await result; expect(value.text).toBe("{}");
-    if ("stats" in output && output.stats?.models && "second" in output.stats.models) expect(value).toEqual({ text: "{}", model: "second", input: 8, output: 3 });
+    if ("second" in output.stats.models) expect(value).toEqual({ text: "{}", model: "multiple-models", observedModels: ["first", "second"], input: 8, output: 3 });
+    else expect(value).toEqual({ text: "{}", model: "first", observedModels: ["first"], input: 5, output: 3 });
   });
-  it.each(["invalid-json", '{"error":"quota"}', '{"response":""}', '{"response":2}'])("rejects failed CLI results %s", async (output) => {
+  it.each(["invalid-json", '{"error":"quota"}', '{"response":""}', '{"response":2}', '{"response":"{}"}', '{"response":"{}","stats":{"models":{"first":{}}}}', '{"response":"{}","stats":{"models":{"first":{"tokens":{"input":-1,"candidates":2}}}}}'])("rejects failed CLI results %s", async (output) => {
     fake.store!.gemini = { id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", connected: true };
     const result = runGemini(fake.store!.gemini.id, "auto", "evidence"); const rejected = expect(result).rejects.toThrow("could not complete");
     await vi.waitFor(() => expect(fake.spawn).toHaveBeenCalled());

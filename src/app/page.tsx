@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getConfig } from "@/config/env";
+import { hasConfiguredEdgarIdentity } from "@/providers/edgar";
 import { AppShell } from "@/components/shell";
 import { Badge, GradeChip, Panel } from "@/components/ui";
 import { WatchlistSidebar } from "@/components/watchlist/Sidebar";
@@ -28,7 +29,7 @@ function KeyRow({
     <div className="flex items-center justify-between gap-3 border-b border-edge py-1.5 last:border-b-0">
       <div className="min-w-0">
         <div className="mono text-[12px] text-fg">{name}</div>
-        <div className="truncate text-[11px] text-faint">{detail}</div>
+        <div className="text-[11px] text-faint">{detail}</div>
       </div>
       {configured ? (
         <Badge tone="pos">configured</Badge>
@@ -44,9 +45,9 @@ function KeylessRow({ name, detail }: { name: string; detail: string }) {
     <div className="flex items-center justify-between gap-3 border-b border-edge py-1.5 last:border-b-0">
       <div className="min-w-0">
         <div className="mono text-[12px] text-fg">{name}</div>
-        <div className="truncate text-[11px] text-faint">{detail}</div>
+        <div className="text-[11px] text-faint">{detail}</div>
       </div>
-      <Badge tone="accent">live · keyless</Badge>
+      <Badge tone="accent">keyless</Badge>
     </div>
   );
 }
@@ -161,6 +162,7 @@ async function HomeWatchlistPanel({ fixtureMode }: { fixtureMode: boolean }) {
 
 export default async function Home() {
   const config = getConfig();
+  const hasEdgarContact = hasConfiguredEdgarIdentity();
 
   return (
     <AppShell sidebar={<WatchlistSidebar />}>
@@ -198,7 +200,7 @@ export default async function Home() {
             <KeyRow
               name="FMP_API_KEY"
               configured={config.hasFmpKey}
-              detail="primary fundamentals + market data (any FMP plan; lower tiers cap history at 5 periods)"
+              detail="primary fundamentals + market data; a configured key does not confirm subscription entitlement (restricted endpoints or symbols may return HTTP 402)"
             />
             <KeyRow
               name="FINNHUB_API_KEY"
@@ -220,9 +222,12 @@ export default async function Home() {
 
         <Panel title="keyless sources">
           <div className="flex flex-col">
-            <KeylessRow
+            <KeyRow
               name="SEC EDGAR"
-              detail="filings, XBRL cross-check, 10-K/10-Q extraction"
+              configured={hasEdgarContact}
+              detail={hasEdgarContact
+                ? "contact configured for filings, issuer verification and eligible fallback data; service availability is checked during a run"
+                : "set EDGAR_CONTACT in .env to your name or organization and a reachable email, then restart to enable SEC access and eligible fallback data"}
             />
             <KeylessRow
               name="FINRA"

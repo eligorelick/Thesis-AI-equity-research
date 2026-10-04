@@ -636,6 +636,15 @@ export const DataCompletenessSchema = z
   .strict();
 export type DataCompleteness = z.infer<typeof DataCompletenessSchema>;
 
+export const ProviderExecutionSchema = z.object({
+  requestedModel: z.string().min(1).max(256).optional(),
+  requestedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
+  effectiveEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
+  requestedServiceTier: z.enum(["default", "fast"]).optional(),
+  effectiveServiceTier: z.string().min(1).max(128).nullable().optional(),
+  observedModels: z.array(z.string().min(1).max(256)).max(64).optional(),
+}).strict();
+
 export const ExecutionMetadataEntrySchema = z
   .object({
     step: z.string(),
@@ -643,6 +652,11 @@ export const ExecutionMetadataEntrySchema = z
     effectiveModel: z.string(),
     requestedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable(),
     effectiveEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable(),
+    requestedServiceTier: z.enum(["default", "fast"]).optional(),
+    effectiveServiceTier: z.string().nullable().optional(),
+    inputTokens: z.number().int().nonnegative().optional(),
+    outputTokens: z.number().int().nonnegative().optional(),
+    observedModels: z.array(z.string().min(1).max(256)).max(64).optional(),
     fallbackUsed: z.boolean(),
     adjustments: z.array(z.enum(["model-floor", "fallback", "effort-stripped", "model-rejected"])),
     /** Sentence(s) naming what each adjustment changed and why; absent when none. */

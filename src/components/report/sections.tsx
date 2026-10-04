@@ -14,6 +14,7 @@
  */
 
 import type { ReactNode } from "react";
+import { formatExecutionMetadata } from "@/report/execution";
 
 import {
   Badge,
@@ -2159,7 +2160,7 @@ export function ReportMetaStrip({
           model <span className="mono text-muted">{m.model}</span>
         </span>
         {m.execution && (
-          <span title={m.execution.map((entry) => `${entry.step}: requested ${entry.requestedModel}/${entry.requestedEffort ?? "n/a"}; effective ${entry.effectiveModel}/${entry.effectiveEffort ?? "n/a"}${entry.adjustments.length ? ` (${entry.adjustments.join(", ")})` : ""}`).join("\n")}>
+          <span title={m.execution.map(formatExecutionMetadata).join("\n")}>
             passes <span className="mono text-muted">{m.execution.map((entry) => `${entry.step}:${entry.effectiveModel.replace(/^claude-/, "")}`).join(" · ")}</span>
           </span>
         )}
@@ -2212,6 +2213,14 @@ export function ReportMetaStrip({
           seven letter grades and three price targets — the Markdown and print
           exports already printed it; the live view did not (audit 2026-09-06,
           F207). */}
+      {m.execution && m.execution.length > 0 && (
+        <details className="basis-full text-[10px] leading-snug text-faint">
+          <summary>Model, reasoning, and speed details</summary>
+          <ul className="mt-1 space-y-1">
+            {m.execution.map((entry, index) => <li key={`${entry.step}-${index}`}>{formatExecutionMetadata(entry)}</li>)}
+          </ul>
+        </details>
+      )}
       <p className="basis-full text-[10px] leading-snug text-faint">{m.disclaimer}</p>
     </div>
   );

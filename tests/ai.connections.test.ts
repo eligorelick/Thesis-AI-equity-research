@@ -61,6 +61,11 @@ describe("account binding and billing disclosures", () => {
     expect(parseSubscriptionModel("https://evil.example/model")).toBeNull();
     expect(() => subscriptionModel("gemini", "model; command")).toThrow();
   });
+  it("does not reuse passes across captured reasoning or speed settings", () => {
+    const selection = { provider: "chatgpt" as const, connectionId: "account", model: "gpt-6.1-sol" };
+    const variants = [selection, { ...selection, effort: "high" as const }, { ...selection, effort: "max" as const }, { ...selection, effort: "high" as const, serviceTier: "fast" as const }];
+    expect(new Set(variants.map((item) => bindAiFingerprint("payload", item))).size).toBe(4);
+  });
   it("reports plan usage and the same serving model for all three passes", () => {
     const model = "chatgpt/example-model";
     const entry = buildExecutionMetadataEntry({ step: "bull", requestedModel: model, effectiveModel: model, requestedEffort: "high", fallbackUsed: false });

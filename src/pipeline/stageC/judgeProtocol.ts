@@ -10,10 +10,10 @@
  *     same side on every report ever generated. The order is now drawn from a
  *     per-job seed, so it varies across reports and is reproducible within one.
  *  2. VOLUME. Nothing bounded either case, so the side that wrote more got more
- *     of the judge's attention for free. Both sides are now capped at the same
- *     character budget, the cap is stated in the analyst prompt, it is enforced
- *     here (truncated WITH a disclosure, never silently dropped), and the judge
- *     is told both lengths so it can see that they are comparable.
+ *     of the judge's attention for free. Both sides share a character target,
+ *     stated in the analyst prompt. Shortening is disclosed here; protected
+ *     claim text, sources and price targets can leave a case over the target.
+ *     The judge is told both actual lengths and any remaining excess.
  *  3. SELF-ASSESSMENT. Neither analyst had a way to say "my side is thin", so
  *     the judge could not tell a genuinely strong case from a well-written weak
  *     one. `case_strength` (1-5, rubric in the prompt) is now carried into the
@@ -148,7 +148,7 @@ export function oppositeOrder(order: JudgeOrder): JudgeOrder {
  * own measurement note). At the ~4 chars/token ratio this codebase already uses
  * for its text budgets (payload.ts PAYLOAD_BUDGETS), 6K tokens is ~24,000
  * characters. So 24,000 is the TOP of the measured band: a normal case is never
- * touched, and a runaway one is bounded at parity with the other side.
+ * touched. Protected structure can exceed this target; excess is disclosed.
  *
  * The cap is stated verbatim in the analyst prompt (prompts.ts), so a case that
  * gets truncated here was told the limit first.
@@ -200,7 +200,7 @@ function claimTexts(value: AnalystCase): { text: string }[] {
 }
 
 /**
- * Enforce {@link ANALYST_CASE_CHAR_CAP} on one side.
+ * Shorten one side toward {@link ANALYST_CASE_CHAR_CAP}, preserving protected content.
  *
  * Truncation is DISCLOSED, never silent: the returned presentation carries the
  * original and final lengths and the number of dropped entries, the returned
@@ -282,7 +282,9 @@ export function capAnalystCase(
           return;
         }
         claim.text = truncateWithDisclosure(original, budgetPerText).text;
-        shortened.add(index);
+        // Serialized escapes can exceed the budget while raw text still fits.
+        // Count an actual change, not merely an attempted shortening.
+        if (claim.text !== original) shortened.add(index);
       });
       const over = serializedLength(value) - capChars;
       if (over <= 0 || budgetPerText <= MIN_CLAIM_TEXT_CHARS) break;
@@ -320,7 +322,7 @@ export function capAnalystCase(
       chars,
       originalChars,
       capChars,
-      truncated: true,
+      truncated: droppedItems > 0 || textsTruncated > 0,
       droppedItems,
       caseStrength: strength,
     },
@@ -383,8 +385,9 @@ export function caseLengthBanner(presentation: JudgePresentation): string {
       ? "self-assessed strength: not supplied"
       : `self-assessed strength ${p.caseStrength}/5`;
     return (
-      `- ${side.toUpperCase()}: ${p.chars} characters of the ${p.capChars}-character cap` +
+      `- ${side.toUpperCase()}: ${p.chars} characters against the ${p.capChars}-character target` +
       `${p.truncated ? ` (TRUNCATED from ${p.originalChars}; ${p.droppedItems} entries dropped)` : ""}` +
+      `${p.chars > p.capChars ? ` (${p.chars - p.capChars} characters over target; protected content retained)` : ""}` +
       `; ${strength}.`
     );
   };
@@ -392,8 +395,8 @@ export function caseLengthBanner(presentation: JudgePresentation): string {
     "CASE LENGTHS AND SELF-ASSESSMENTS (both sides, before you read either case):",
     line("bull", presentation.bull),
     line("bear", presentation.bear),
-    "Length is not evidence. A longer case is not a stronger case; both sides were held to the",
-    "same character cap and told so. `case_strength` is each analyst's own 1-5 score for its own",
+    "Length is not evidence. A longer case is not a stronger case; both sides share the same",
+    "character target, with any remaining excess disclosed above. `case_strength` is each analyst's own 1-5 score for its own",
     "side against a stated rubric — it is a self-report, not a measurement. You MAY discount a",
     "side that scored itself low, or one whose cited evidence does not support the score it",
     "claimed. You MUST NOT prefer a side for being longer, for being first, or for being second.",
@@ -558,10 +561,10 @@ export function buildJudgeProtocolDraft(
   const disclosures: ManifestEntry[] = [];
   for (const side of ["bull", "bear"] as const) {
     const capped = presentation[side];
-    if (capped.presentation.truncated) {
+    if (capped.presentation.truncated || capped.presentation.chars > capped.presentation.capChars) {
       disclosures.push({
         field: `llm.${side}.length-cap`,
-        reason: `The ${side} case was truncated before the judge saw it: ${capped.disclosure} Both sides share the same cap so neither can win on volume.`,
+        reason: `The ${side} case ${capped.presentation.truncated ? "was truncated" : "could not be shortened without removing protected content"} before the judge saw it: ${capped.disclosure} Both sides share the same cap target; actual lengths and any remaining excess are disclosed to the judge.`,
         severity: "warn",
         attemptedSources: [],
       });
@@ -686,7 +689,7 @@ export function buildJudgeProtocolNote(
     ? `${JUDGE_ORDER_ENV_KEY}=${protocol.setting} pins that order, so first position was fixed to the ${first} side by configuration; seed ${judgeSeedFingerprint(protocol.seed)} is recorded but was not drawn`
     : `${JUDGE_ORDER_ENV_KEY}=${protocol.setting}, drawn from seed ${judgeSeedFingerprint(protocol.seed)}, so first position was not fixed to one side`;
   const sentences =
-    bull === null || bear === null
+    bull === null && bear === null
       ? [
           // A RECOVERED protocol: reconstructed, not recorded. Saying "the judge
           // read X first" outright would assert something this process did not
@@ -696,11 +699,27 @@ export function buildJudgeProtocolNote(
             : `The judge output was replayed from a durable artifact, so this protocol was reconstructed rather than recorded: with ${JUDGE_ORDER_ENV_KEY}=${protocol.setting} and seed ${judgeSeedFingerprint(protocol.seed)} the ${first} case is drawn to be read first and the ${second} case second.`,
           "Neither case's length against the shared cap, whether either was truncated, nor either analyst's self-assessed case strength was recoverable, so none of them is reported here.",
         ]
-      : [
+      : bull === null || bear === null
+        ? [
+            // Partial historical metadata does not establish why one side is
+            // missing. Preserve the recorded side without asserting a replay.
+            `The protocol records the ${first} case first and the ${second} case second (${orderOrigin}).`,
+            ...([["bull", bull], ["bear", bear]] as const).map(([side, details]) =>
+              details === null
+                ? `The ${side} case's length, truncation and self-assessed case strength are unavailable, so none of that side's values is inferred.`
+                : `The ${side} case presentation records ${details.chars} characters against a ${details.capChars}-character target (${details.truncated ? `truncated from ${details.originalChars}; ${details.droppedItems} entries dropped` : "not truncated"}); self-assessed case strength ${details.caseStrength === null ? "not supplied" : `${details.caseStrength}/5`}.`,
+            ),
+          ]
+        : [
           `The judge read the ${first} case first and the ${second} case second (${orderOrigin}).`,
-          `Both cases were capped at ${bull.capChars} characters: the bull case ran ${bull.chars}${bull.truncated ? " after truncation" : ""} and the bear case ${bear.chars}${bear.truncated ? " after truncation" : ""}, and the judge was told both lengths.`,
+          `Both cases used a ${bull.capChars}-character target: the bull case ran ${bull.chars}${bull.truncated ? " after truncation" : ""} and the bear case ${bear.chars}${bear.truncated ? " after truncation" : ""}, and the judge was told both lengths.`,
           `Self-assessed case strength (1-5, the analyst's own score for its own side): bull ${bull.caseStrength ?? "not supplied"}, bear ${bear.caseStrength ?? "not supplied"}.`,
         ];
+  for (const [side, details] of [["bull", bull], ["bear", bear]] as const) {
+    if (details !== null && details.chars > details.capChars) {
+      sentences.push(`The ${side} case remains ${details.chars - details.capChars} characters over its target because protected content was retained.`);
+    }
+  }
   if (protocol.sharedModelFamily.shared) {
     sentences.push(
       `The judge ran on the ${protocol.sharedModelFamily.judgeFamily} model family — the same family that wrote both analyst cases — so it is grading output from its own family.`,

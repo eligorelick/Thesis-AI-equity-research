@@ -100,6 +100,16 @@ It contains a stable installation ID, separate account registrations and
 tokens, and the selected report connection. Only account labels and status
 reach the browser. Tokens are excluded from reports, source control and logs.
 
+The v1 credential reader validates the fields connection code consumes before
+allowing a mutation. Malformed records produce a storage error and are left
+unchanged; they are never silently reset. Expired/signed-out registrations,
+historical valid model identifiers and unknown metadata remain compatible.
+Acquisition failures close newly opened lock descriptors and attempt to remove
+only the newly acquired lock, preserving the original error if cleanup fails.
+Concurrent recovery of a dead owner's lock remains a known race (see the
+[audit follow-up](audit/2026-10-03-repository-audit.md#follow-up--2026-10-04));
+the ordinary single-server ownership guard does not prove atomic stale recovery.
+
 Gemini stores its own OAuth state under an isolated `gemini-<id>` subdirectory
 owned by Thesis. Thesis does not read another app's Google credentials. CLI
 telemetry, extensions, hooks, MCP and tools are disabled; prompts are passed

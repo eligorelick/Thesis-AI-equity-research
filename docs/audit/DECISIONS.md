@@ -12,6 +12,30 @@ reversibility, the choice, and why. Reversible and disclosed beats clever.
 
 Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
 
+## D-37 (audit follow-up 2026-10-04) Validate evidence before presenting or rewriting it
+
+- **Financial evidence**: the acceleration diagnostic requires an actual
+  three-year benchmark (±0.05-year fiscal-calendar tolerance). Other disclosed
+  CAGR windows remain available. Invalid full observation timestamps fail
+  freshness checks; future/invalid IPO dates do not establish a recent listing.
+  Preserve the existing written-calendar-day age basis and balance/runway parser.
+- **Compatibility**: report 1.8.0 and payload 1.9.0 distinguish these conventions.
+  Stored report bytes and the immutable audit baseline remain unchanged. The
+  intended-delta group records DEMO's withheld acceleration and new gap; other
+  manifest entries merely shift positions, confirmed by comparing their fields.
+- **Credentials**: reject malformed fields consumed by v1 connection code before
+  callbacks can rewrite them. Preserve unknown metadata, historical valid model
+  identifiers and signed-out/expired registrations. No migration or silent reset.
+  Clean acquired descriptors and owned locks on PID write/close failures;
+  secondary cleanup errors must not replace the primary failure.
+- **Disclosure**: judge metadata records actual shortening, not just an attempt.
+  Show exact remaining excess while preserving protected content. Partially
+  recorded historical metadata retains the known side and identifies the missing
+  side. UI target provenance and catalyst/risk labels show only recorded evidence.
+- **Deferred**: a reproduced stale-recovery race requires an atomic cross-process
+  locking design; a stat/PID recheck alone cannot fix it. No cache decompression
+  cap is imposed without evidence for a compatible serialized-payload limit.
+
 ## D-36 (UI selection 2026-10-03) Keep current default; offer Research workspace
 
 - **Options**: replace the default with one of the two interactive concepts,

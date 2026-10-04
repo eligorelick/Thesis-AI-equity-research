@@ -30,7 +30,7 @@ import { validateBundle } from "@/pipeline/stageA/validate";
 import { parseEnv } from "@/config/env";
 import type { DataBundle } from "@/pipeline/types";
 import type { AnalystCase, JudgeOutput, Report } from "@/report/schema";
-import { ANALYST_CASE_SCHEMA, analystCaseToJsonSchema } from "@/report/schema";
+import { ANALYST_CASE_SCHEMA, JudgeProtocolSchema, analystCaseToJsonSchema } from "@/report/schema";
 import {
   annotateSharedModelFamily,
   attributeJudgeProtocolDisclosures,
@@ -41,12 +41,16 @@ import {
   ANALYST_CASE_CHAR_CAP,
   buildJudgePresentation,
   buildJudgeProtocolDraft,
+  completeJudgeProtocol,
+  caseLengthBanner,
   capAnalystCase,
   DEFAULT_JUDGE_ORDER_SETTING,
   JUDGE_ORDER_ENV_KEY,
   JUDGE_ORDER_SETTINGS,
   JUDGE_PASSES_PER_SETTING,
   judgeSeedFingerprint,
+  recoveredJudgeProtocolDraft,
+  restampSharedModelFamily,
   reconcileJudgeOutputs,
   reconciliationFields,
   resolveJudgeOrder,
@@ -992,12 +996,89 @@ describe("analyst case length cap", () => {
       evidence: [{ value: 1, unit: "%", source: `computed.${"s".repeat(30_000)}`, asOf: "2025-09-27", verified: null }],
     });
     const capped = capAnalystCase(oversized);
-    expect(capped.presentation.truncated).toBe(true);
+    expect(capped.presentation.truncated).toBe(false);
     expect(capped.presentation.chars).toBeGreaterThan(ANALYST_CASE_CHAR_CAP);
+    expect(capped.value).toEqual(oversized);
     expect(capped.value.thesis[0].text).toBe("bull thesis marker");
     expect(capped.disclosure).toContain("still");
     expect(capped.disclosure).toContain("over the cap");
     expect(capped.disclosure).toContain("outside the claim texts");
+  });
+
+  it.each(["bull", "bear"] as const)("discloses protected %s content above the target to both judge and reader", (side) => {
+    const oversized = analystCase(side, {
+      evidence: [{ value: 1, unit: "%", source: `computed.${"s".repeat(30_000)}`, asOf: "2025-09-27", verified: null }],
+    });
+    const presentation = buildJudgePresentation({
+      setting: "bull-first", seed: "protected-structure",
+      bull: side === "bull" ? oversized : analystCase("bull"),
+      bear: side === "bear" ? oversized : analystCase("bear"),
+    });
+    const measured = presentation[side].presentation;
+    const excess = measured.chars - measured.capChars;
+    expect(excess).toBeGreaterThan(0);
+    expect(measured.truncated).toBe(false); // Protected content was not actually removed.
+    const protocol = completeJudgeProtocol(buildJudgeProtocolDraft(presentation), {
+      shared: false, analystFamily: null, judgeFamily: null,
+    });
+    expect(protocol.note).not.toContain("Both cases were capped at");
+    expect(protocol.note).toContain(`${side} case remains ${excess} characters over its target`);
+    expect(caseLengthBanner(presentation)).toContain(`${excess} characters over target`);
+    expect(caseLengthBanner(presentation)).not.toContain("both sides were held to the");
+    expect(caseLengthBanner(presentation)).not.toContain("TRUNCATED");
+    expect(buildJudgeProtocolDraft(presentation).disclosures[0]?.reason).toContain("could not be shortened");
+    expect(presentation[side].value.evidence).toEqual(oversized.evidence);
+  });
+
+  it("does not claim truncation when serialized escape overhead exceeds the floor but raw text is unchanged", () => {
+    const oversized = analystCase("bull", {
+      thesis: [{ text: '"'.repeat(100), label: "JUDGMENT", source: "payload", asOf: null }],
+      evidence: [{ value: 1, unit: "%", source: `computed.${"s".repeat(30_000)}`, asOf: "2025-09-27", verified: null }],
+    });
+    const capped = capAnalystCase(oversized);
+    expect(capped.value).toEqual(oversized);
+    expect(capped.presentation.truncated).toBe(false);
+    expect(capped.presentation.droppedItems).toBe(0);
+    expect(capped.presentation.chars).toBe(capped.presentation.originalChars);
+    expect(capped.disclosure).not.toContain("claim text was shortened");
+    expect(capped.disclosure).toContain("still");
+  });
+
+  it.each(["bull", "bear"] as const)("restamps partial historical metadata without claiming both cases are unknown (%s known)", (knownSide) => {
+    const draft = buildJudgeProtocolDraft(buildJudgePresentation({ setting: "random", seed: "partial-metadata",
+      bull: analystCase("bull"), bear: analystCase("bear") }));
+    const complete = completeJudgeProtocol(draft, { shared: false, analystFamily: null, judgeFamily: null });
+    const unknownSide = knownSide === "bull" ? "bear" : "bull";
+    for (const truncated of [false, true]) {
+      const recorded = { chars: 30000, originalChars: truncated ? 31000 : 30000, capChars: 24000,
+        truncated, droppedItems: truncated ? 2 : 0, caseStrength: 4 };
+      const protocol = JudgeProtocolSchema.parse({ ...complete, [knownSide]: recorded, [unknownSide]: null });
+      const restamped = restampSharedModelFamily(protocol, protocol.sharedModelFamily);
+      expect(restamped[knownSide]).toEqual(recorded);
+      expect(restamped[unknownSide]).toBeNull();
+      expect(restamped.note).not.toContain("Neither case");
+      expect(restamped.note).not.toContain("replayed from a durable artifact");
+      expect(restamped.note).toContain(`${unknownSide} case`);
+      expect(restamped.note).toContain("unavailable");
+      expect(restamped.note).toContain("30000 characters against a 24000-character target");
+      expect(restamped.note).toContain(truncated ? "truncated from 31000" : "not truncated");
+      expect(restamped.note).toContain("4/5");
+      expect(restamped.note.split("6000 characters over its target")).toHaveLength(2);
+    }
+  });
+
+  it("keeps both-null recovered disclosure and complete recorded metadata distinct", () => {
+    const family = { shared: false, analystFamily: null, judgeFamily: null };
+    const recovered = completeJudgeProtocol(recoveredJudgeProtocolDraft({ setting: "random", seed: "replayed" }), family);
+    expect(restampSharedModelFamily(recovered, family).note).toBe(recovered.note);
+    expect(recovered.note).toContain("Neither case");
+    expect(recovered.note).toContain("replayed from a durable artifact");
+    expect(recovered.note).not.toContain("characters over its target");
+    const complete = completeJudgeProtocol(buildJudgeProtocolDraft(buildJudgePresentation({ setting: "bull-first", seed: "recorded",
+      bull: analystCase("bull"), bear: analystCase("bear") })), family);
+    expect(restampSharedModelFamily(complete, family).note).toBe(complete.note);
+    expect(complete.note).toContain("Both cases used a 24000-character target");
+    expect(complete.note).not.toContain("unavailable");
   });
 
   it("caps both sides identically and tells the judge both lengths", () => {

@@ -304,6 +304,31 @@ const SCENARIO_META: Record<
   bear: { tone: "neg", label: "bear" },
 };
 
+/** Keyboard-accessible recorded target metadata; never infer an observation date. */
+function TargetSourceDetails({ n }: { n: TracedNumber }) {
+  const fields = [
+    ["source id", n.sourceId],
+    ["source", n.source],
+    ["as of", n.asOf],
+    ["period", n.period],
+  ] as const;
+  return (
+    <div className="border-b border-edge px-2.5 py-1.5">
+      <Disclosure trigger={<span className="text-[10px] text-faint hover:text-accent">Target provenance</span>}>
+        <dl className="mono mt-1.5 flex flex-col gap-1 text-[10px] text-faint">
+          {fields.map(([label, value]) => (
+            <div key={label} className="break-words">
+              <dt className="inline text-muted">{label}</dt>{" "}
+              <dd className="inline">{value?.trim() ? value : "not recorded"}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-1 text-[10px] text-faint">Citation status describes traceability, not correctness.</p>
+      </Disclosure>
+    </div>
+  );
+}
+
 export function ScenarioCard({
   name,
   probability,
@@ -344,6 +369,7 @@ export function ScenarioCard({
         )}
         <span className="mono text-[10px] text-faint">{horizon}</span>
       </div>
+      {priceTarget && <TargetSourceDetails n={priceTarget} />}
       {probability === null ? (
         <div className="border-b border-edge px-2.5 py-1 text-[10px] text-faint">
           scenario probability unavailable

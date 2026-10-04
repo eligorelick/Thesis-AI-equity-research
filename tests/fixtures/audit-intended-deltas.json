@@ -14,6 +14,7 @@
         "edgar.cik(DEMO)",
         "edgar.companyFacts(DEMO)",
         "fixture.reserved(DEMO)",
+        "growth.revenueAcceleration.threeYearCagr",
         "macro.BAMLH0A0HYM2",
         "macro.CPIAUCSL",
         "macro.CPILFESL",
@@ -85,6 +86,7 @@
         "edgar.cik(DEMO)",
         "edgar.companyFacts(DEMO)",
         "fixture.reserved(DEMO)",
+        "growth.revenueAcceleration.threeYearCagr",
         "macro.BAMLH0A0HYM2",
         "macro.CPIAUCSL",
         "macro.CPILFESL",
@@ -822,41 +824,9 @@
           "after": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7"
         },
         {
-          "path": "report.appendix.missingData.25.attemptedSources",
-          "beforeMissing": true,
-          "after": [
-            "finnhub"
-          ]
-        },
-        {
-          "path": "report.appendix.missingData.25.expected",
-          "beforeMissing": true,
-          "after": true
-        },
-        {
-          "path": "report.appendix.missingData.25.field",
-          "before": "forensics.piotroski",
-          "after": "insiderSentiment.DEMO"
-        },
-        {
-          "path": "report.appendix.missingData.25.reason",
-          "before": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7",
-          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
-        },
-        {
-          "path": "report.appendix.missingData.26.attemptedSources.0",
-          "before": "fixture",
-          "after": "fred"
-        },
-        {
           "path": "report.appendix.missingData.26.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "report.appendix.missingData.26.field",
-          "before": "fred.BAMLH0A0HYM2",
-          "after": "macro.BAMLH0A0HYM2"
         },
         {
           "path": "report.appendix.missingData.26.reason",
@@ -874,11 +844,6 @@
           "after": true
         },
         {
-          "path": "report.appendix.missingData.27.field",
-          "before": "fred.CPIAUCSL",
-          "after": "macro.CPIAUCSL"
-        },
-        {
           "path": "report.appendix.missingData.27.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
@@ -892,11 +857,6 @@
           "path": "report.appendix.missingData.28.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "report.appendix.missingData.28.field",
-          "before": "fred.CPILFESL",
-          "after": "macro.CPILFESL"
         },
         {
           "path": "report.appendix.missingData.28.reason",
@@ -914,11 +874,6 @@
           "after": true
         },
         {
-          "path": "report.appendix.missingData.29.field",
-          "before": "fred.DFII10",
-          "after": "macro.DFII10"
-        },
-        {
           "path": "report.appendix.missingData.29.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
@@ -932,11 +887,6 @@
           "path": "report.appendix.missingData.30.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "report.appendix.missingData.30.field",
-          "before": "fred.DGS10",
-          "after": "macro.DGS10"
         },
         {
           "path": "report.appendix.missingData.30.reason",
@@ -954,11 +904,6 @@
           "after": true
         },
         {
-          "path": "report.appendix.missingData.31.field",
-          "before": "fred.DGS2",
-          "after": "macro.DGS2"
-        },
-        {
           "path": "report.appendix.missingData.31.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
@@ -972,11 +917,6 @@
           "path": "report.appendix.missingData.32.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "report.appendix.missingData.32.field",
-          "before": "fred.EFFR",
-          "after": "macro.EFFR"
         },
         {
           "path": "report.appendix.missingData.32.reason",
@@ -994,11 +934,6 @@
           "after": true
         },
         {
-          "path": "report.appendix.missingData.33.field",
-          "before": "fred.NASDAQCOM",
-          "after": "macro.NASDAQCOM"
-        },
-        {
           "path": "report.appendix.missingData.33.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
@@ -1012,11 +947,6 @@
           "path": "report.appendix.missingData.34.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "report.appendix.missingData.34.field",
-          "before": "fred.PAYEMS",
-          "after": "macro.PAYEMS"
         },
         {
           "path": "report.appendix.missingData.34.reason",
@@ -1034,11 +964,6 @@
           "after": true
         },
         {
-          "path": "report.appendix.missingData.35.field",
-          "before": "fred.T10Y2Y",
-          "after": "macro.T10Y2Y"
-        },
-        {
           "path": "report.appendix.missingData.35.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
@@ -1052,11 +977,6 @@
           "path": "report.appendix.missingData.36.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "report.appendix.missingData.36.field",
-          "before": "fred.T10Y3M",
-          "after": "macro.T10Y3M"
         },
         {
           "path": "report.appendix.missingData.36.reason",
@@ -1074,11 +994,6 @@
           "after": true
         },
         {
-          "path": "report.appendix.missingData.37.field",
-          "before": "fred.T10YIE",
-          "after": "macro.T10YIE"
-        },
-        {
           "path": "report.appendix.missingData.37.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
@@ -1092,11 +1007,6 @@
           "path": "report.appendix.missingData.38.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "report.appendix.missingData.38.field",
-          "before": "fred.UNRATE",
-          "after": "macro.UNRATE"
         },
         {
           "path": "report.appendix.missingData.38.reason",
@@ -1114,86 +1024,9 @@
           "after": true
         },
         {
-          "path": "report.appendix.missingData.39.field",
-          "before": "fred.VIXCLS",
-          "after": "macro.VIXCLS"
-        },
-        {
           "path": "report.appendix.missingData.39.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
-        },
-        {
-          "path": "report.appendix.missingData.41.attemptedSources",
-          "beforeMissing": true,
-          "after": [
-            "fmp:/stable/income-statement?period=quarter",
-            "fmp:/stable/profile.ipoDate"
-          ]
-        },
-        {
-          "path": "report.appendix.missingData.41.field",
-          "before": "technicals.drawdown.3y",
-          "after": "route.insufficientHistory"
-        },
-        {
-          "path": "report.appendix.missingData.41.reason",
-          "before": "history does not span the full 3-year window — drawdown computed over available rows only",
-          "after": "only 3 quarterly statement(s) available (< 8); verified ipoDate 2015-01-02 is older than 24 months — insufficient historical coverage, not a recent IPO"
-        },
-        {
-          "path": "report.appendix.missingData.42.attemptedSources",
-          "beforeMissing": true,
-          "after": [
-            "finra"
-          ]
-        },
-        {
-          "path": "report.appendix.missingData.42.field",
-          "before": "technicals.drawdown.5y",
-          "after": "shortInterest.DEMO"
-        },
-        {
-          "path": "report.appendix.missingData.42.reason",
-          "before": "history does not span the full 5-year window — drawdown computed over available rows only",
-          "after": "latest FINRA short interest unavailable because trend fetch failed: DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
-        },
-        {
-          "path": "report.appendix.missingData.43.field",
-          "before": "technicals.relativeStrength.sector",
-          "after": "shortInterest.trend.DEMO"
-        },
-        {
-          "path": "report.appendix.missingData.43.reason",
-          "before": "no XLK history supplied",
-          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
-        },
-        {
-          "path": "report.appendix.missingData.44",
-          "beforeMissing": true,
-          "after": {
-            "field": "technicals.drawdown.3y",
-            "reason": "history does not span the full 3-year window — drawdown computed over available rows only",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "report.appendix.missingData.45",
-          "beforeMissing": true,
-          "after": {
-            "field": "technicals.drawdown.5y",
-            "reason": "history does not span the full 5-year window — drawdown computed over available rows only",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "report.appendix.missingData.46",
-          "beforeMissing": true,
-          "after": {
-            "field": "technicals.relativeStrength.sector",
-            "reason": "no XLK history supplied",
-            "severity": "info"
-          }
         },
         {
           "path": "report.meta.asOfMap.edgar\\.cik",
@@ -1862,41 +1695,9 @@
           "after": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7"
         },
         {
-          "path": "stageB.gaps.24.attemptedSources",
-          "beforeMissing": true,
-          "after": [
-            "finnhub"
-          ]
-        },
-        {
-          "path": "stageB.gaps.24.expected",
-          "beforeMissing": true,
-          "after": true
-        },
-        {
-          "path": "stageB.gaps.24.field",
-          "before": "forensics.piotroski",
-          "after": "insiderSentiment.DEMO"
-        },
-        {
-          "path": "stageB.gaps.24.reason",
-          "before": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7",
-          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
-        },
-        {
-          "path": "stageB.gaps.25.attemptedSources.0",
-          "before": "fixture",
-          "after": "fred"
-        },
-        {
           "path": "stageB.gaps.25.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "stageB.gaps.25.field",
-          "before": "fred.BAMLH0A0HYM2",
-          "after": "macro.BAMLH0A0HYM2"
         },
         {
           "path": "stageB.gaps.25.reason",
@@ -1914,11 +1715,6 @@
           "after": true
         },
         {
-          "path": "stageB.gaps.26.field",
-          "before": "fred.CPIAUCSL",
-          "after": "macro.CPIAUCSL"
-        },
-        {
           "path": "stageB.gaps.26.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
@@ -1932,11 +1728,6 @@
           "path": "stageB.gaps.27.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "stageB.gaps.27.field",
-          "before": "fred.CPILFESL",
-          "after": "macro.CPILFESL"
         },
         {
           "path": "stageB.gaps.27.reason",
@@ -1954,11 +1745,6 @@
           "after": true
         },
         {
-          "path": "stageB.gaps.28.field",
-          "before": "fred.DFII10",
-          "after": "macro.DFII10"
-        },
-        {
           "path": "stageB.gaps.28.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
@@ -1972,11 +1758,6 @@
           "path": "stageB.gaps.29.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "stageB.gaps.29.field",
-          "before": "fred.DGS10",
-          "after": "macro.DGS10"
         },
         {
           "path": "stageB.gaps.29.reason",
@@ -1994,11 +1775,6 @@
           "after": true
         },
         {
-          "path": "stageB.gaps.30.field",
-          "before": "fred.DGS2",
-          "after": "macro.DGS2"
-        },
-        {
           "path": "stageB.gaps.30.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
@@ -2012,11 +1788,6 @@
           "path": "stageB.gaps.31.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "stageB.gaps.31.field",
-          "before": "fred.EFFR",
-          "after": "macro.EFFR"
         },
         {
           "path": "stageB.gaps.31.reason",
@@ -2034,11 +1805,6 @@
           "after": true
         },
         {
-          "path": "stageB.gaps.32.field",
-          "before": "fred.NASDAQCOM",
-          "after": "macro.NASDAQCOM"
-        },
-        {
           "path": "stageB.gaps.32.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
@@ -2052,11 +1818,6 @@
           "path": "stageB.gaps.33.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "stageB.gaps.33.field",
-          "before": "fred.PAYEMS",
-          "after": "macro.PAYEMS"
         },
         {
           "path": "stageB.gaps.33.reason",
@@ -2074,11 +1835,6 @@
           "after": true
         },
         {
-          "path": "stageB.gaps.34.field",
-          "before": "fred.T10Y2Y",
-          "after": "macro.T10Y2Y"
-        },
-        {
           "path": "stageB.gaps.34.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
@@ -2092,11 +1848,6 @@
           "path": "stageB.gaps.35.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "stageB.gaps.35.field",
-          "before": "fred.T10Y3M",
-          "after": "macro.T10Y3M"
         },
         {
           "path": "stageB.gaps.35.reason",
@@ -2114,11 +1865,6 @@
           "after": true
         },
         {
-          "path": "stageB.gaps.36.field",
-          "before": "fred.T10YIE",
-          "after": "macro.T10YIE"
-        },
-        {
           "path": "stageB.gaps.36.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
@@ -2132,11 +1878,6 @@
           "path": "stageB.gaps.37.expected",
           "beforeMissing": true,
           "after": true
-        },
-        {
-          "path": "stageB.gaps.37.field",
-          "before": "fred.UNRATE",
-          "after": "macro.UNRATE"
         },
         {
           "path": "stageB.gaps.37.reason",
@@ -2154,86 +1895,9 @@
           "after": true
         },
         {
-          "path": "stageB.gaps.38.field",
-          "before": "fred.VIXCLS",
-          "after": "macro.VIXCLS"
-        },
-        {
           "path": "stageB.gaps.38.reason",
           "before": "offline fixture",
           "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
-        },
-        {
-          "path": "stageB.gaps.40.attemptedSources",
-          "beforeMissing": true,
-          "after": [
-            "fmp:/stable/income-statement?period=quarter",
-            "fmp:/stable/profile.ipoDate"
-          ]
-        },
-        {
-          "path": "stageB.gaps.40.field",
-          "before": "technicals.drawdown.3y",
-          "after": "route.insufficientHistory"
-        },
-        {
-          "path": "stageB.gaps.40.reason",
-          "before": "history does not span the full 3-year window — drawdown computed over available rows only",
-          "after": "only 3 quarterly statement(s) available (< 8); verified ipoDate 2015-01-02 is older than 24 months — insufficient historical coverage, not a recent IPO"
-        },
-        {
-          "path": "stageB.gaps.41.attemptedSources",
-          "beforeMissing": true,
-          "after": [
-            "finra"
-          ]
-        },
-        {
-          "path": "stageB.gaps.41.field",
-          "before": "technicals.drawdown.5y",
-          "after": "shortInterest.DEMO"
-        },
-        {
-          "path": "stageB.gaps.41.reason",
-          "before": "history does not span the full 5-year window — drawdown computed over available rows only",
-          "after": "latest FINRA short interest unavailable because trend fetch failed: DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
-        },
-        {
-          "path": "stageB.gaps.42.field",
-          "before": "technicals.relativeStrength.sector",
-          "after": "shortInterest.trend.DEMO"
-        },
-        {
-          "path": "stageB.gaps.42.reason",
-          "before": "no XLK history supplied",
-          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
-        },
-        {
-          "path": "stageB.gaps.43",
-          "beforeMissing": true,
-          "after": {
-            "field": "technicals.drawdown.3y",
-            "reason": "history does not span the full 3-year window — drawdown computed over available rows only",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "stageB.gaps.44",
-          "beforeMissing": true,
-          "after": {
-            "field": "technicals.drawdown.5y",
-            "reason": "history does not span the full 5-year window — drawdown computed over available rows only",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "stageB.gaps.45",
-          "beforeMissing": true,
-          "after": {
-            "field": "technicals.relativeStrength.sector",
-            "reason": "no XLK history supplied",
-            "severity": "info"
-          }
         }
       ]
     },
@@ -3095,24 +2759,9 @@
       "reason": "Repairs the fresh-context review of D-18 and D-19 asked for. The graded free-cash-flow conversion returns to the before-stock-compensation ratio its band was calibrated on, so the expense is charged to the score once rather than twice; the price-to-free-cash-flow multiple says which definition it uses; the number of observations behind an own-history rank is published beside it; the per-year WACC shortfall reaches the missing-data manifest; the terminal-growth cap calls itself a house convention like the terminal ROIC rule beside it; and the enterprise-value bridge stops removing a lease liability it cannot split into its operating and finance halves. Twelve leaves left this list in the same change, returning to the audited values, which is what those last two repairs were for.",
       "deltas": [
         {
-          "path": "report.appendix.missingData.40.attemptedSources.0",
-          "before": "fmp:/stable/income-statement?period=quarter",
-          "after": "fred:DGS10"
-        },
-        {
           "path": "report.appendix.missingData.40.attemptedSources.1",
           "before": "fmp:/stable/profile.ipoDate",
           "afterMissing": true
-        },
-        {
-          "path": "report.appendix.missingData.40.field",
-          "before": "route.insufficientHistory",
-          "after": "returns.wacc.history"
-        },
-        {
-          "path": "report.appendix.missingData.40.reason",
-          "before": "only 3 quarterly statement(s) available (< 8); verified ipoDate 2015-01-02 is older than 24 months — insufficient historical coverage, not a recent IPO",
-          "after": "no fred:DGS10 observations supplied — ROIC-vs-WACC history compares every fiscal year to the current WACC"
         },
         {
           "path": "report.appendix.missingData.43.attemptedSources",
@@ -3120,11 +2769,6 @@
           "after": [
             "finra"
           ]
-        },
-        {
-          "path": "report.appendix.missingData.43.expected",
-          "beforeMissing": true,
-          "after": true
         },
         {
           "path": "report.scores.aspects.balanceSheet.drivers.2.source",
@@ -3192,24 +2836,9 @@
           "after": 1.0285714285714285
         },
         {
-          "path": "stageB.gaps.39.attemptedSources.0",
-          "before": "fmp:/stable/income-statement?period=quarter",
-          "after": "fred:DGS10"
-        },
-        {
           "path": "stageB.gaps.39.attemptedSources.1",
           "before": "fmp:/stable/profile.ipoDate",
           "afterMissing": true
-        },
-        {
-          "path": "stageB.gaps.39.field",
-          "before": "route.insufficientHistory",
-          "after": "returns.wacc.history"
-        },
-        {
-          "path": "stageB.gaps.39.reason",
-          "before": "only 3 quarterly statement(s) available (< 8); verified ipoDate 2015-01-02 is older than 24 months — insufficient historical coverage, not a recent IPO",
-          "after": "no fred:DGS10 observations supplied — ROIC-vs-WACC history compares every fiscal year to the current WACC"
         },
         {
           "path": "stageB.gaps.42.attemptedSources",
@@ -3217,11 +2846,6 @@
           "after": [
             "finra"
           ]
-        },
-        {
-          "path": "stageB.gaps.42.expected",
-          "beforeMissing": true,
-          "after": true
         },
         {
           "path": "stageB.returns.gaps.0",
@@ -3708,11 +3332,6 @@
       "reason": "The 2026-09-06 audit (D-27): report-facing text no longer cites section numbers of design documents that are not in the repository. Two Stage B notes carried such a citation — the revenue-acceleration framing note (\"the application contract §4\") and the sensitivity grid's Gordon-guard note (\"spec §3\") — and now cite docs/METHODOLOGY.md by heading or nothing. No number changed.",
       "deltas": [
         {
-          "path": "stageB.growth.revenueAcceleration.note",
-          "before": "revenue acceleration = latest YoY minus 3y CAGR (house framing per the application contract §4)",
-          "after": "revenue acceleration = latest YoY minus 3y CAGR (house framing)"
-        },
-        {
           "path": "stageB.valuation.sensitivity.notes.0",
           "before": "grid cells with WACC - gTerm < 1.5pp rendered null (Gordon TV guard, spec §3)",
           "after": "grid cells with WACC - gTerm < 1.5pp rendered null (Gordon TV guard; docs/METHODOLOGY.md, Fade and horizon)"
@@ -3726,72 +3345,6 @@
       ],
       "reason": "The 2026-09-30 currency-integrity rule for analyst estimates (D-28): an estimate is money only in the currency its own row states or a documented provider convention, and a listing currency that matches the statements is not evidence. The DEMO analyst-estimate rows carry no currency, as FMP's do not, so the DCF growth anchor no longer takes the analyst-consensus case built from the FY2026 and FY2027 revenue estimates; its point estimate is the median of the three remaining methods (the log-linear revenue regression and the 3- and 5-year CAGRs, 9.1089%). The near-term growth path, every DCF year row, the terminal and present values, the sensitivity grid, the DCF per share and the fair value (146.23 to 152.09) and the valuation aspect's DCF-upside driver (265.58 to 280.23) move with it; the assumption block no longer carries the estimates' as-of date. Three disclosures are added (valuation.analystEstimates.currency, valuation.dcf.analystGrowth, valuation.dcf.growthAnchor), so the later Stage B gaps and report manifest entries shift by index without changing.",
       "deltas": [
-        {
-          "path": "report.appendix.missingData.47",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.analystEstimates.currency",
-            "reason": "analyst estimates carry no currency of their own and the provider documents no convention for them while the model runs in USD — a matching listing currency is not evidence, so the analyst-consensus growth case is not used (no FX conversion is attempted)",
-            "severity": "info",
-            "attemptedSources": [
-              "fmp:/stable/analyst-estimates"
-            ]
-          }
-        },
-        {
-          "path": "report.appendix.missingData.48",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.dcf.analystGrowth",
-            "reason": "no usable analyst revenue estimates — the consensus-anchored method was excluded from the median",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "report.appendix.missingData.49",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.dcf.growthAnchor",
-            "reason": "growth-anchor method(s) unavailable: analyst-consensus case — the point estimate is the median of the 3 that were computable",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "report.appendix.missingData.50",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.dcf.terminalRoic.waccBasis",
-            "reason": "no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "report.appendix.missingData.51",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.multiples.enterpriseValue.leases",
-            "reason": "lease liabilities of 100000000 are disclosed only as a combined operating + finance figure (the FMP route publishes no split) — only the OPERATING slice may be netted out of EV, so enterprise value is reported as-is rather than removing an unknown mix",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "report.appendix.missingData.52",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.multiples.ownHistory",
-            "reason": "insufficient history (need ≥8 quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "report.appendix.missingData.53",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.multiples.peers",
-            "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)",
-            "severity": "info"
-          }
-        },
         {
           "path": "report.fairValue.perShare.value",
           "before": 146.23,
@@ -3966,72 +3519,6 @@
           "path": "stageB.fairValue.upsidePct",
           "before": 265.575,
           "after": 280.22499999999997
-        },
-        {
-          "path": "stageB.gaps.46",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.analystEstimates.currency",
-            "reason": "analyst estimates carry no currency of their own and the provider documents no convention for them while the model runs in USD — a matching listing currency is not evidence, so the analyst-consensus growth case is not used (no FX conversion is attempted)",
-            "severity": "info",
-            "attemptedSources": [
-              "fmp:/stable/analyst-estimates"
-            ]
-          }
-        },
-        {
-          "path": "stageB.gaps.47",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.dcf.analystGrowth",
-            "reason": "no usable analyst revenue estimates — the consensus-anchored method was excluded from the median",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "stageB.gaps.48",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.dcf.growthAnchor",
-            "reason": "growth-anchor method(s) unavailable: analyst-consensus case — the point estimate is the median of the 3 that were computable",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "stageB.gaps.49",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.dcf.terminalRoic.waccBasis",
-            "reason": "no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "stageB.gaps.50",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.multiples.enterpriseValue.leases",
-            "reason": "lease liabilities of 100000000 are disclosed only as a combined operating + finance figure (the FMP route publishes no split) — only the OPERATING slice may be netted out of EV, so enterprise value is reported as-is rather than removing an unknown mix",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "stageB.gaps.51",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.multiples.ownHistory",
-            "reason": "insufficient history (need ≥8 quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)",
-            "severity": "info"
-          }
-        },
-        {
-          "path": "stageB.gaps.52",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.multiples.peers",
-            "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)",
-            "severity": "info"
-          }
         },
         {
           "path": "stageB.scores.aspects.valuation.drivers.0.value",
@@ -4735,11 +4222,6 @@
       "reason": "Repository audit D-35: spec 1.7.0 distinguishes corrected beta calendar windows, FRED missing-period lags, annual-capital continuity and inclusive reverse-DCF roots. The four valuation paths correct finance-lease prose: amortisation is within EBIT and added back in EBITDA; interest is below EBIT. DEMO numerical outputs are unchanged from the pre-audit tree. The immutable historical financial projection is preserved.",
       "deltas": [
         {
-          "path": "report.meta.specVersion",
-          "before": "1.2.0",
-          "after": "1.7.0"
-        },
-        {
           "path": "stageB.valuation.multiples.enterpriseValue",
           "beforeMissing": true,
           "after": {
@@ -4767,6 +4249,561 @@
           "path": "stageB.valuation.multiples.notes.0",
           "before": "income-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
           "after": "Enterprise value EXCLUDES the OPERATING-lease liability (house default; set THESIS_EV_INCLUDE_LEASES=1 to keep it). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments; a total lease liability of 100000000 is disclosed but its operating slice is not, so no lease adjustment was made and EV is reported as-is. EV/EBITDA uses this same EV. Under US GAAP (ASC 842) operating-lease cost stays in operating expenses, so EBIT and EBITDA are already AFTER it, so removing the operating-lease liability keeps numerator and denominator on the same basis. Finance-lease right-of-use amortisation is included in EBIT and added back in EBITDA; finance-lease interest is below EBIT. The finance-lease liability remains financing debt in both frames and is never removed. EV excluding the operating-lease liability 6700000000; EV as reported 6700000000."
+        }
+      ]
+    },
+    {
+      "name": "audit-followup-evidence-2026-10-04",
+      "decisions": [
+        "D-37"
+      ],
+      "reason": "Audit follow-up D-37: DEMO has only a 2.00-year revenue history (2023-12-31 to 2025-12-31), so its supposed three-year acceleration benchmark 9.108945117996182%, delta -0.4132929440831443pp and accelerating=false become null. The underlying degraded CAGR series is retained. One new growth.revenueAcceleration.threeYearCagr info entry explains the withholding and shifts later Stage B/report manifest array positions; comparison by field confirms all other entries are unchanged from the previous branch head. Report spec 1.8.0 distinguishes the new calculation/date-evidence rules. Historical baseline source/fixture/projection hashes remain immutable.",
+      "deltas": [
+        {
+          "path": "report.appendix.missingData.25.field",
+          "before": "forensics.piotroski",
+          "after": "growth.revenueAcceleration.threeYearCagr"
+        },
+        {
+          "path": "report.appendix.missingData.25.reason",
+          "before": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7",
+          "after": "3y revenue acceleration benchmark withheld: actual span is 2.00 years, outside the 3y horizon (±0.05y fiscal-calendar tolerance)"
+        },
+        {
+          "path": "report.appendix.missingData.26.attemptedSources.0",
+          "before": "fixture",
+          "after": "finnhub"
+        },
+        {
+          "path": "report.appendix.missingData.26.field",
+          "before": "fred.BAMLH0A0HYM2",
+          "after": "insiderSentiment.DEMO"
+        },
+        {
+          "path": "report.appendix.missingData.27.field",
+          "before": "fred.CPIAUCSL",
+          "after": "macro.BAMLH0A0HYM2"
+        },
+        {
+          "path": "report.appendix.missingData.28.field",
+          "before": "fred.CPILFESL",
+          "after": "macro.CPIAUCSL"
+        },
+        {
+          "path": "report.appendix.missingData.29.field",
+          "before": "fred.DFII10",
+          "after": "macro.CPILFESL"
+        },
+        {
+          "path": "report.appendix.missingData.30.field",
+          "before": "fred.DGS10",
+          "after": "macro.DFII10"
+        },
+        {
+          "path": "report.appendix.missingData.31.field",
+          "before": "fred.DGS2",
+          "after": "macro.DGS10"
+        },
+        {
+          "path": "report.appendix.missingData.32.field",
+          "before": "fred.EFFR",
+          "after": "macro.DGS2"
+        },
+        {
+          "path": "report.appendix.missingData.33.field",
+          "before": "fred.NASDAQCOM",
+          "after": "macro.EFFR"
+        },
+        {
+          "path": "report.appendix.missingData.34.field",
+          "before": "fred.PAYEMS",
+          "after": "macro.NASDAQCOM"
+        },
+        {
+          "path": "report.appendix.missingData.35.field",
+          "before": "fred.T10Y2Y",
+          "after": "macro.PAYEMS"
+        },
+        {
+          "path": "report.appendix.missingData.36.field",
+          "before": "fred.T10Y3M",
+          "after": "macro.T10Y2Y"
+        },
+        {
+          "path": "report.appendix.missingData.37.field",
+          "before": "fred.T10YIE",
+          "after": "macro.T10Y3M"
+        },
+        {
+          "path": "report.appendix.missingData.38.field",
+          "before": "fred.UNRATE",
+          "after": "macro.T10YIE"
+        },
+        {
+          "path": "report.appendix.missingData.39.field",
+          "before": "fred.VIXCLS",
+          "after": "macro.UNRATE"
+        },
+        {
+          "path": "report.appendix.missingData.40.attemptedSources.0",
+          "before": "fmp:/stable/income-statement?period=quarter",
+          "after": "fred"
+        },
+        {
+          "path": "report.appendix.missingData.40.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "report.appendix.missingData.40.field",
+          "before": "route.insufficientHistory",
+          "after": "macro.VIXCLS"
+        },
+        {
+          "path": "report.appendix.missingData.40.reason",
+          "before": "only 3 quarterly statement(s) available (< 8); verified ipoDate 2015-01-02 is older than 24 months — insufficient historical coverage, not a recent IPO",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.41.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "fred:DGS10"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.41.field",
+          "before": "technicals.drawdown.3y",
+          "after": "returns.wacc.history"
+        },
+        {
+          "path": "report.appendix.missingData.41.reason",
+          "before": "history does not span the full 3-year window — drawdown computed over available rows only",
+          "after": "no fred:DGS10 observations supplied — ROIC-vs-WACC history compares every fiscal year to the current WACC"
+        },
+        {
+          "path": "report.appendix.missingData.42.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "fmp:/stable/income-statement?period=quarter",
+            "fmp:/stable/profile.ipoDate"
+          ]
+        },
+        {
+          "path": "report.appendix.missingData.42.field",
+          "before": "technicals.drawdown.5y",
+          "after": "route.insufficientHistory"
+        },
+        {
+          "path": "report.appendix.missingData.42.reason",
+          "before": "history does not span the full 5-year window — drawdown computed over available rows only",
+          "after": "only 3 quarterly statement(s) available (< 8); verified ipoDate 2015-01-02 is older than 24 months — insufficient historical coverage, not a recent IPO"
+        },
+        {
+          "path": "report.appendix.missingData.43.field",
+          "before": "technicals.relativeStrength.sector",
+          "after": "shortInterest.DEMO"
+        },
+        {
+          "path": "report.appendix.missingData.43.reason",
+          "before": "no XLK history supplied",
+          "after": "latest FINRA short interest unavailable because trend fetch failed: DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "report.appendix.missingData.44",
+          "beforeMissing": true,
+          "after": {
+            "field": "shortInterest.trend.DEMO",
+            "reason": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent",
+            "severity": "info",
+            "attemptedSources": [
+              "finra"
+            ],
+            "expected": true
+          }
+        },
+        {
+          "path": "report.appendix.missingData.45",
+          "beforeMissing": true,
+          "after": {
+            "field": "technicals.drawdown.3y",
+            "reason": "history does not span the full 3-year window — drawdown computed over available rows only",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.appendix.missingData.46",
+          "beforeMissing": true,
+          "after": {
+            "field": "technicals.drawdown.5y",
+            "reason": "history does not span the full 5-year window — drawdown computed over available rows only",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.appendix.missingData.47",
+          "beforeMissing": true,
+          "after": {
+            "field": "technicals.relativeStrength.sector",
+            "reason": "no XLK history supplied",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.appendix.missingData.48",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.analystEstimates.currency",
+            "reason": "analyst estimates carry no currency of their own and the provider documents no convention for them while the model runs in USD — a matching listing currency is not evidence, so the analyst-consensus growth case is not used (no FX conversion is attempted)",
+            "severity": "info",
+            "attemptedSources": [
+              "fmp:/stable/analyst-estimates"
+            ]
+          }
+        },
+        {
+          "path": "report.appendix.missingData.49",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.dcf.analystGrowth",
+            "reason": "no usable analyst revenue estimates — the consensus-anchored method was excluded from the median",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.appendix.missingData.50",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.dcf.growthAnchor",
+            "reason": "growth-anchor method(s) unavailable: analyst-consensus case — the point estimate is the median of the 3 that were computable",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.appendix.missingData.51",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.dcf.terminalRoic.waccBasis",
+            "reason": "no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.appendix.missingData.52",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.enterpriseValue.leases",
+            "reason": "lease liabilities of 100000000 are disclosed only as a combined operating + finance figure (the FMP route publishes no split) — only the OPERATING slice may be netted out of EV, so enterprise value is reported as-is rather than removing an unknown mix",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.appendix.missingData.53",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.ownHistory",
+            "reason": "insufficient history (need ≥8 quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.appendix.missingData.54",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.peers",
+            "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.meta.specVersion",
+          "before": "1.2.0",
+          "after": "1.8.0"
+        },
+        {
+          "path": "stageB.gaps.24.field",
+          "before": "forensics.piotroski",
+          "after": "growth.revenueAcceleration.threeYearCagr"
+        },
+        {
+          "path": "stageB.gaps.24.reason",
+          "before": "signals not evaluable: roaImproved, turnoverUp — score reported out of 7",
+          "after": "3y revenue acceleration benchmark withheld: actual span is 2.00 years, outside the 3y horizon (±0.05y fiscal-calendar tolerance)"
+        },
+        {
+          "path": "stageB.gaps.25.attemptedSources.0",
+          "before": "fixture",
+          "after": "finnhub"
+        },
+        {
+          "path": "stageB.gaps.25.field",
+          "before": "fred.BAMLH0A0HYM2",
+          "after": "insiderSentiment.DEMO"
+        },
+        {
+          "path": "stageB.gaps.26.field",
+          "before": "fred.CPIAUCSL",
+          "after": "macro.BAMLH0A0HYM2"
+        },
+        {
+          "path": "stageB.gaps.27.field",
+          "before": "fred.CPILFESL",
+          "after": "macro.CPIAUCSL"
+        },
+        {
+          "path": "stageB.gaps.28.field",
+          "before": "fred.DFII10",
+          "after": "macro.CPILFESL"
+        },
+        {
+          "path": "stageB.gaps.29.field",
+          "before": "fred.DGS10",
+          "after": "macro.DFII10"
+        },
+        {
+          "path": "stageB.gaps.30.field",
+          "before": "fred.DGS2",
+          "after": "macro.DGS10"
+        },
+        {
+          "path": "stageB.gaps.31.field",
+          "before": "fred.EFFR",
+          "after": "macro.DGS2"
+        },
+        {
+          "path": "stageB.gaps.32.field",
+          "before": "fred.NASDAQCOM",
+          "after": "macro.EFFR"
+        },
+        {
+          "path": "stageB.gaps.33.field",
+          "before": "fred.PAYEMS",
+          "after": "macro.NASDAQCOM"
+        },
+        {
+          "path": "stageB.gaps.34.field",
+          "before": "fred.T10Y2Y",
+          "after": "macro.PAYEMS"
+        },
+        {
+          "path": "stageB.gaps.35.field",
+          "before": "fred.T10Y3M",
+          "after": "macro.T10Y2Y"
+        },
+        {
+          "path": "stageB.gaps.36.field",
+          "before": "fred.T10YIE",
+          "after": "macro.T10Y3M"
+        },
+        {
+          "path": "stageB.gaps.37.field",
+          "before": "fred.UNRATE",
+          "after": "macro.T10YIE"
+        },
+        {
+          "path": "stageB.gaps.38.field",
+          "before": "fred.VIXCLS",
+          "after": "macro.UNRATE"
+        },
+        {
+          "path": "stageB.gaps.39.attemptedSources.0",
+          "before": "fmp:/stable/income-statement?period=quarter",
+          "after": "fred"
+        },
+        {
+          "path": "stageB.gaps.39.expected",
+          "beforeMissing": true,
+          "after": true
+        },
+        {
+          "path": "stageB.gaps.39.field",
+          "before": "route.insufficientHistory",
+          "after": "macro.VIXCLS"
+        },
+        {
+          "path": "stageB.gaps.39.reason",
+          "before": "only 3 quarterly statement(s) available (< 8); verified ipoDate 2015-01-02 is older than 24 months — insufficient historical coverage, not a recent IPO",
+          "after": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.40.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "fred:DGS10"
+          ]
+        },
+        {
+          "path": "stageB.gaps.40.field",
+          "before": "technicals.drawdown.3y",
+          "after": "returns.wacc.history"
+        },
+        {
+          "path": "stageB.gaps.40.reason",
+          "before": "history does not span the full 3-year window — drawdown computed over available rows only",
+          "after": "no fred:DGS10 observations supplied — ROIC-vs-WACC history compares every fiscal year to the current WACC"
+        },
+        {
+          "path": "stageB.gaps.41.attemptedSources",
+          "beforeMissing": true,
+          "after": [
+            "fmp:/stable/income-statement?period=quarter",
+            "fmp:/stable/profile.ipoDate"
+          ]
+        },
+        {
+          "path": "stageB.gaps.41.field",
+          "before": "technicals.drawdown.5y",
+          "after": "route.insufficientHistory"
+        },
+        {
+          "path": "stageB.gaps.41.reason",
+          "before": "history does not span the full 5-year window — drawdown computed over available rows only",
+          "after": "only 3 quarterly statement(s) available (< 8); verified ipoDate 2015-01-02 is older than 24 months — insufficient historical coverage, not a recent IPO"
+        },
+        {
+          "path": "stageB.gaps.42.field",
+          "before": "technicals.relativeStrength.sector",
+          "after": "shortInterest.DEMO"
+        },
+        {
+          "path": "stageB.gaps.42.reason",
+          "before": "no XLK history supplied",
+          "after": "latest FINRA short interest unavailable because trend fetch failed: DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent"
+        },
+        {
+          "path": "stageB.gaps.43",
+          "beforeMissing": true,
+          "after": {
+            "field": "shortInterest.trend.DEMO",
+            "reason": "DEMO is a reserved fixture symbol — no provider request was made (D-11); this member has no fixture, so it is disclosed absent",
+            "severity": "info",
+            "expected": true,
+            "attemptedSources": [
+              "finra"
+            ]
+          }
+        },
+        {
+          "path": "stageB.gaps.44",
+          "beforeMissing": true,
+          "after": {
+            "field": "technicals.drawdown.3y",
+            "reason": "history does not span the full 3-year window — drawdown computed over available rows only",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.gaps.45",
+          "beforeMissing": true,
+          "after": {
+            "field": "technicals.drawdown.5y",
+            "reason": "history does not span the full 5-year window — drawdown computed over available rows only",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.gaps.46",
+          "beforeMissing": true,
+          "after": {
+            "field": "technicals.relativeStrength.sector",
+            "reason": "no XLK history supplied",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.gaps.47",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.analystEstimates.currency",
+            "reason": "analyst estimates carry no currency of their own and the provider documents no convention for them while the model runs in USD — a matching listing currency is not evidence, so the analyst-consensus growth case is not used (no FX conversion is attempted)",
+            "severity": "info",
+            "attemptedSources": [
+              "fmp:/stable/analyst-estimates"
+            ]
+          }
+        },
+        {
+          "path": "stageB.gaps.48",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.dcf.analystGrowth",
+            "reason": "no usable analyst revenue estimates — the consensus-anchored method was excluded from the median",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.gaps.49",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.dcf.growthAnchor",
+            "reason": "growth-anchor method(s) unavailable: analyst-consensus case — the point estimate is the median of the 3 that were computable",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.gaps.50",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.dcf.terminalRoic.waccBasis",
+            "reason": "no per-fiscal-year risk-free observation was available, so the ROIC-vs-WACC evidence behind the terminal excess-return house convention compares every fiscal year to the CURRENT WACC",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.gaps.51",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.enterpriseValue.leases",
+            "reason": "lease liabilities of 100000000 are disclosed only as a combined operating + finance figure (the FMP route publishes no split) — only the OPERATING slice may be netted out of EV, so enterprise value is reported as-is rather than removing an unknown mix",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.gaps.52",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.ownHistory",
+            "reason": "insufficient history (need ≥8 quarters) to rank the current multiple among the issuer's own quarters (window up to 5y)",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.gaps.53",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.multiples.peers",
+            "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.growth.gaps.0",
+          "beforeMissing": true,
+          "after": {
+            "field": "growth.revenueAcceleration.threeYearCagr",
+            "reason": "3y revenue acceleration benchmark withheld: actual span is 2.00 years, outside the 3y horizon (±0.05y fiscal-calendar tolerance)",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.growth.revenueAcceleration.accelerating",
+          "before": false,
+          "after": null
+        },
+        {
+          "path": "stageB.growth.revenueAcceleration.deltaPctPts",
+          "before": -0.4132929440831443,
+          "after": null
+        },
+        {
+          "path": "stageB.growth.revenueAcceleration.note",
+          "before": "revenue acceleration = latest YoY minus 3y CAGR (house framing per the application contract §4)",
+          "after": "revenue acceleration = latest YoY minus 3y CAGR (house framing); 3y revenue acceleration benchmark withheld: actual span is 2.00 years, outside the 3y horizon (±0.05y fiscal-calendar tolerance); 3y revenue CAGR unavailable"
+        },
+        {
+          "path": "stageB.growth.revenueAcceleration.threeYearCagrPct",
+          "before": 9.108945117996182,
+          "after": null
         }
       ]
     }

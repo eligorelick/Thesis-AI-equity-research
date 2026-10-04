@@ -241,7 +241,9 @@ export interface ContextPayload {
 // financial-route metric applicability. Older analyst work must be regenerated.
 // Calendar-bounded beta and inclusive reverse-DCF roots change financial evidence.
 // Partial analyst work from the prior conventions must not be reused.
-export const PAYLOAD_VERSION = "1.8.0" as const;
+// 1.9.0 (audit follow-up 2026-10-04): acceleration horizons and date validity
+// change financial evidence; do not resume partial passes under prior rules.
+export const PAYLOAD_VERSION = "1.9.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Small pure helpers

@@ -631,7 +631,10 @@ describe("payload determinism + provenance", () => {
       // 2026-10-03 (D-35): payload 1.8.0 invalidates changed beta/FRED/reverse-DCF
       // semantics. The finance hash changes only for corrected finance-lease
       // accounting prose; this DEMO case has no numeric or registry delta.
-      fingerprint: "1.8.0:b60770aa",
+      // 2026-10-04 (D-37): payload 1.9.0 separates acceleration-horizon and
+      // date-validity rules. The pre-manifest prompt and numeric registry stay
+      // unchanged here; only the fingerprint's version-bearing data changes.
+      fingerprint: "1.9.0:1ae5cb51",
       promptBytes: 94_365,
       provenanceCount: 365,
       provenanceHash: "323c9887",
@@ -771,7 +774,7 @@ describe("payload determinism + provenance", () => {
     const second = buildInputs().payload;
     const ids = first.provenanceRegistry!.map((entry) => entry.id);
 
-    expect(first.payloadVersion).toBe("1.8.0");
+    expect(first.payloadVersion).toBe("1.9.0");
     expect(first.provenanceRegistry).toEqual(second.provenanceRegistry);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toContain("payload.quote.price");
@@ -1908,7 +1911,7 @@ describe("assembleReport", () => {
     expect(report.meta.disclaimer).toBe(
       "Informational only — not investment advice. This report contains A-F letter grades and scenario price targets; both are model outputs derived from the data and assumptions disclosed here, and neither is a recommendation to buy, sell, or hold any security.",
     );
-    expect(report.meta.specVersion).toBe("1.7.0");
+    expect(report.meta.specVersion).toBe("1.8.0");
     // verifyModel is no longer stamped (deterministic verification, no model);
     // the schema keeps it OPTIONAL so legacy persisted reports still parse.
     expect(report.meta.verifyModel).toBeUndefined();

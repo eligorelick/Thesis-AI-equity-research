@@ -558,11 +558,20 @@ export function computeGrowth(
     yoyPoint.cagrPct !== null && yoyPoint.actualYears !== null && yoyPoint.actualYears <= 1.5
       ? yoyPoint.cagrPct
       : null;
-  const threeYearCagrPct = threeYearPoint.cagrPct;
+  // Preserve degraded CAGR windows above, but a differently sized window
+  // cannot serve as the explicitly named three-year acceleration benchmark.
+  const threeYearSpanMatches = threeYearPoint.actualYears !== null &&
+    Math.abs(threeYearPoint.actualYears - 3) <= 0.05;
+  const threeYearCagrPct = threeYearSpanMatches ? threeYearPoint.cagrPct : null;
   const accelNotes: string[] = [
     "revenue acceleration = latest YoY minus 3y CAGR (house framing)",
   ];
   if (latestYoyPct === null) accelNotes.push("latest YoY unavailable");
+  if (!threeYearSpanMatches && threeYearPoint.cagrPct !== null) {
+    const reason = `3y revenue acceleration benchmark withheld: actual span is ${threeYearPoint.actualYears?.toFixed(2) ?? "unknown"} years, outside the 3y horizon (±0.05y fiscal-calendar tolerance)`;
+    accelNotes.push(reason);
+    gaps.push({ field: "growth.revenueAcceleration.threeYearCagr", reason, severity: "info" });
+  }
   if (threeYearCagrPct === null) accelNotes.push("3y revenue CAGR unavailable");
   const deltaPctPts =
     latestYoyPct !== null && threeYearCagrPct !== null ? latestYoyPct - threeYearCagrPct : null;

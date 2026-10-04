@@ -75,6 +75,13 @@ so roughly five fiscal years can carry their own rate.
 
 ## Growth anchor
 
+The separate **revenue acceleration** diagnostic is latest YoY growth minus
+the three-year revenue CAGR. Its benchmark must span three actual years within
+±0.05 years for fiscal-calendar variation. A degraded two-year CAGR or a four-year
+span cannot serve as that benchmark: the benchmark, difference and direction
+are withheld with a manifest explanation. The underlying CAGR series still
+discloses its available span; the valuation methods below keep their own rules.
+
 Near-term revenue growth is the **median of every method the data supports**,
 with the full range shown and each method's value named:
 

@@ -59,6 +59,33 @@ function annualIncomeRows(
 // ===========================================================================
 
 describe("computeGrowth — CAGR exactness and windows", () => {
+  it.each([
+    ["two", [{ date: "2026-12-31", revenue: 144 }, { date: "2025-12-31", revenue: 110 }, { date: "2024-12-31", revenue: 100 }], 2],
+    ["four", [{ date: "2026-12-31", revenue: 144 }, { date: "2025-12-31", revenue: 110 }, { date: "2024-12-31", revenue: 105 }, { date: "2022-12-31", revenue: 100 }], 4],
+  ] as const)("withholds the 3-year acceleration benchmark when its requested window spans %s years", (_label, income, years) => {
+    const result = computeGrowth(income, [], { period: "annual" });
+    const degraded = result.revenueCagrs.find((point) => point.windowYears === 3)!;
+    expect(degraded.actualYears).toBeCloseTo(years, 2);
+    expect(degraded.cagrPct).toBeCloseTo((Math.pow(144 / 100, 1 / degraded.actualYears!) - 1) * 100, 10);
+    expect(result.revenueAcceleration.latestYoyPct).toBeCloseTo((144 / 110 - 1) * 100, 10);
+    expect(result.revenueAcceleration.threeYearCagrPct).toBeNull();
+    expect(result.revenueAcceleration.deltaPctPts).toBeNull();
+    expect(result.revenueAcceleration.accelerating).toBeNull();
+    expect(result.revenueAcceleration.note).toMatch(/actual.*span|spans/i);
+  });
+
+  it("retains the proper 3-year acceleration calculation across a 52/53-week calendar", () => {
+    const income = [
+      { date: "2025-12-27", revenue: 144 }, { date: "2024-12-28", revenue: 110 },
+      { date: "2023-12-30", revenue: 105 }, { date: "2022-12-31", revenue: 100 },
+    ];
+    const result = computeGrowth(income, [], { period: "annual" });
+    const expectedCagr = (Math.pow(144 / 100, 1 / 3) - 1) * 100;
+    const expectedYoy = (144 / 110 - 1) * 100;
+    expect(result.revenueAcceleration.threeYearCagrPct).toBeCloseTo(expectedCagr, 10);
+    expect(result.revenueAcceleration.deltaPctPts).toBeCloseTo(expectedYoy - expectedCagr, 10);
+  });
+
   it("computes exact CAGRs across all windows for clean 10% compounding", () => {
     const values = Array.from({ length: 11 }, (_, k) => ({ revenue: 100 * Math.pow(1.1, k) }));
     const income = annualIncomeRows(values);

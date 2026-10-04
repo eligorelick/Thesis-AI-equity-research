@@ -4,6 +4,23 @@ Entries below the current repository audit record earlier development batches.
 Their model defaults, prices and migration advice describe those dates; use
 README and the current usage/methodology documents for present guidance.
 
+## Unreleased — audit follow-up (2026-10-04)
+
+- Withhold three-year revenue acceleration when the observed history spans a
+  different horizon; preserve the separately disclosed degraded CAGR series.
+- Reject invalid freshness dates and prevent future/invalid IPO dates from
+  triggering recent-IPO treatment. Report 1.8.0 and payload 1.9.0 distinguish
+  these conventions; saved reports retain their original bytes.
+- Validate consumed credential-store fields before mutation and clean owned
+  locks/descriptors after acquisition I/O failures. Preserve historical valid
+  selections and unknown metadata. Concurrent stale-lock recovery remains open.
+- Report exact judge-case excess and actual shortening, including escaped text
+  and partially recorded historical metadata. Protected citations remain intact.
+- Expose scenario target provenance and clearer catalyst/risk dates, direction,
+  severity, probability and source labels in both existing designs.
+- Full evidence and remaining limits are recorded in the
+  [audit follow-up](docs/audit/2026-10-03-repository-audit.md#follow-up--2026-10-04).
+
 ## Unreleased — repository audit (2026-10-03)
 
 - Count only adjacent monthly observations within five calendar years for beta;

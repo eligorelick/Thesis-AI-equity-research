@@ -200,7 +200,14 @@ function byDateDesc<T extends { date?: string }>(rows: readonly T[]): T[] {
 }
 
 function parseDateMs(d: string): number {
-  return Date.parse(`${d.slice(0, 10)}T00:00:00Z`);
+  // Keep the existing calendar-day age basis, but validate the full stamp:
+  // Date.parse alone rolls impossible dates, and slicing hid invalid offsets.
+  const match = /^(\d{4}-\d{2}-\d{2})(?:T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/.exec(d);
+  if (match === null || !Number.isFinite(Date.parse(d))) return Number.NaN;
+  const midnight = Date.parse(`${match[1]}T00:00:00Z`);
+  return Number.isFinite(midnight) && new Date(midnight).toISOString().slice(0, 10) === match[1]
+    ? midnight
+    : Number.NaN;
 }
 
 // ---------------------------------------------------------------------------
@@ -661,7 +668,7 @@ function newestStatementEnd(bundle: ValidatableBundle): string | null {
     if (!res.ok) continue;
     for (const row of res.value.data.rows) {
       if (typeof row.date === "string") {
-        const d = row.date.slice(0, 10);
+        const d = row.date;
         if (newest === null || d > newest) newest = d;
       }
     }
@@ -674,7 +681,12 @@ function checkStaleness(bundle: ValidatableBundle, now: Date, c: Collector): voi
   const newest = newestStatementEnd(bundle);
   const profileRow = bundle.profile?.ok ? bundle.profile.value.data.rows[0] : undefined;
   const foreignPrivateIssuer = profileRow?.isAdr === true;
-  if (newest !== null && foreignPrivateIssuer) {
+  if (newest !== null && !Number.isFinite(parseDateMs(newest))) {
+    const reason = `invalid newest statement period end ${JSON.stringify(newest)} — fundamentals cadence cannot be established`;
+    c.checks.push({ id: "staleness.fundamentals", name: "Fundamentals filing cadence", status: "fail", detail: reason, asOf: newest });
+    c.flags.push(reason);
+    c.gaps.push(gapEntry("validation.staleness.fundamentalsDate", reason, "warn"));
+  } else if (newest !== null && foreignPrivateIssuer) {
     const limitDays = FOREIGN_PRIVATE_ISSUER_HALF_YEAR_DAYS + FUNDAMENTALS_STALE_LAG_DAYS + FISCAL_CALENDAR_SLACK_DAYS;
     addFlag(
       c,
@@ -796,18 +808,25 @@ function checkStaleness(bundle: ValidatableBundle, now: Date, c: Collector): voi
   if (bundle.quote.ok) {
     const q = bundle.quote.value;
     const asOfMs = parseDateMs(q.asOf);
+    const invalidDate = !Number.isFinite(asOfMs);
     const tooOld = Number.isFinite(asOfMs) && now.getTime() - asOfMs > QUOTE_STALE_DAYS * DAY_MS;
     const servedStale = q.stale === true;
     c.checks.push({
       id: "staleness.quote",
       name: "Quote freshness",
-      status: servedStale || tooOld ? "fail" : "pass",
+      status: invalidDate || servedStale || tooOld ? "fail" : "pass",
       detail:
         `quote asOf ${q.asOf}, fetchedAt ${q.fetchedAt}` +
+        (invalidDate ? " (invalid asOf date or timestamp — freshness cannot be established)" : "") +
         (servedStale ? " (served past TTL — stale-while-revalidate)" : "") +
         (tooOld ? ` (asOf older than ${QUOTE_STALE_DAYS} days)` : ""),
       asOf: q.asOf,
     });
+    if (invalidDate) {
+      const reason = `quote asOf ${JSON.stringify(q.asOf)} is invalid — quote freshness cannot be established`;
+      c.flags.push(reason);
+      c.gaps.push(gapEntry("validation.staleness.quoteDate", reason, "warn"));
+    }
     if (servedStale || tooOld) {
       c.flags.push(
         `STALE QUOTE: ${bundle.symbol} quote asOf ${q.asOf}${servedStale ? " was served past its TTL" : ""} — render with its as-of date.`,

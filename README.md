@@ -143,8 +143,8 @@ other's output, and the bear prompt forbids assuming a bull case exists. A
 judge pass then reads both and writes the report. Which case it reads first is
 drawn from the job id rather than fixed, so first position is not a standing
 advantage, and the order is printed in the report header. Both cases share one
-character cap and the judge is told both lengths, so a longer case cannot win
-on volume; each analyst scores its own side 1-5 against a stated rubric, and
+character target; actual lengths and protected-content excess are disclosed.
+Each analyst scores its own side 1-5 against a stated rubric, and
 the judge may discount a side that scored itself low.
 `THESIS_JUDGE_ORDER=both` runs the judge twice with the cases swapped and
 reconciles every grade and probability, for two judge passes.
@@ -260,9 +260,9 @@ Contributions should preserve source tracing, add regressions and pass `npm run 
   narrative can be wrong even when its citations resolve.
 - Verification traces numbers against the registry only: a figure lifted from
   filing prose stays unverified, and each consistency check judges only the
-  claims whose figure it can locate. An analyst case over the length cap is
-  truncated before the judge sees it — what went is named in the manifest, but
-  the judge read less of it.
+  claims whose figure it can locate. Oversized analyst cases are shortened
+  before judging where possible; protected content may exceed the target.
+  The manifest names removed material and any excess that remains.
 
 ## License and data rights
 

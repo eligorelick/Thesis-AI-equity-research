@@ -4,7 +4,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { AiSelection } from "./contracts";
+import { z } from "zod";
+import { CHATGPT_EFFORTS, validModelId, type AiSelection } from "./contracts";
 
 export interface ChatGptProfile {
   id: string;
@@ -21,6 +22,35 @@ export interface AiStore {
   selection: AiSelection;
   runtimeOwnerPid?: number;
 }
+
+// Validate the v1 fields consumed by connection/runtime code before any
+// callback can rewrite the file. Unknown metadata is retained, and signed-out
+// registrations/selections and historical model IDs remain valid.
+const aiStoreSchema = z.object({
+  version: z.literal(1),
+  hostId: z.string().startsWith("urn:uuid:"),
+  profiles: z.array(z.object({
+    id: z.string().min(1),
+    clientId: z.string().min(1),
+    subject: z.string().optional(),
+    email: z.string().optional(),
+    tokens: z.object({
+      access: z.string().min(1), refresh: z.string().min(1), id: z.string().min(1),
+      expiresAt: z.number(), scopes: z.array(z.string()),
+    }).passthrough().optional(),
+  }).passthrough()),
+  gemini: z.object({ id: z.string().min(1), connected: z.boolean() }).passthrough().nullable(),
+  selection: z.union([
+    z.object({ provider: z.enum(["none", "anthropic"]) }).passthrough(),
+    z.object({
+      provider: z.enum(["chatgpt", "gemini"]),
+      connectionId: z.string().min(1), model: z.string().refine(validModelId),
+      effort: z.enum(CHATGPT_EFFORTS).optional(),
+      serviceTier: z.enum(["default", "fast"]).optional(),
+    }).passthrough(),
+  ]),
+  runtimeOwnerPid: z.number().int().positive().optional(),
+}).passthrough();
 
 /** Call under withAiStore: one local server owns connection lifecycles at a time. */
 export function claimAiRuntime(store: AiStore): void {
@@ -74,9 +104,9 @@ export function readAiStore(): AiStore | null {
       ? Buffer.from(windowsProtect(envelope.data, true), "base64").toString("utf8")
       : process.platform !== "win32" && envelope.protection === "owner-only" ? envelope.data : null;
     if (decoded === null) throw new Error();
-    const value = JSON.parse(decoded) as AiStore;
-    if (value.version !== 1 || !value.hostId.startsWith("urn:uuid:") || !Array.isArray(value.profiles)) throw new Error();
-    return value;
+    const value: unknown = JSON.parse(decoded);
+    if (!aiStoreSchema.safeParse(value).success) throw new Error();
+    return value as AiStore;
   } catch { throw new Error("AI connection storage cannot be read; credentials were not replaced"); }
 }
 
@@ -99,11 +129,19 @@ export async function withAiStore<T>(fn: (store: AiStore) => Promise<T> | T): Pr
   const lock = path.join(aiDirectory(), "connections.lock");
   const started = Date.now();
   for (;;) {
+    let acquiredFd: number | undefined;
     try {
-      const fd = fs.openSync(lock, "wx", 0o600);
-      fs.writeFileSync(fd, String(process.pid)); fs.closeSync(fd);
+      acquiredFd = fs.openSync(lock, "wx", 0o600);
+      fs.writeFileSync(acquiredFd, String(process.pid)); fs.closeSync(acquiredFd);
       break;
     } catch (error) {
+      if (acquiredFd !== undefined) {
+        // Opening succeeded, so a PID write/close failure is ours to clean up.
+        // Preserve the original failure even if best-effort cleanup also fails.
+        try { fs.closeSync(acquiredFd); } catch { /* already closed or unavailable */ }
+        try { fs.rmSync(lock, { force: true }); } catch { /* filesystem failure */ }
+        throw error;
+      }
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       try {
         const pid = Number(fs.readFileSync(lock, "utf8"));

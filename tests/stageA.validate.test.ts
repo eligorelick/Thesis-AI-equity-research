@@ -778,6 +778,37 @@ describe("FMP↔XBRL cross-check", () => {
 // ---------------------------------------------------------------------------
 
 describe("staleness", () => {
+  it.each([
+    { asOf: "2024-02-29", now: "2024-03-02T00:00:00Z", status: "pass" },
+    { asOf: "2025-02-29", now: "2025-03-02T00:00:00Z", status: "fail" },
+  ])("validates February leap-day freshness for $asOf", ({ asOf, now, status }) => {
+    const report = validateBundle(makeBundle({ quote: ok({ rows: [] }, asOf) }), { now: new Date(now) });
+    const result = report.checks.find((entry) => entry.id === "staleness.quote");
+    expect(result?.status).toBe(status);
+    if (status === "fail") expect(result?.detail).toMatch(/invalid.*asOf|asOf.*invalid/i);
+  });
+
+  it.each(["not-a-date", "", "2026-06-31", "2026-07-05T00:00:00+25:00", "2026-07-05T24:00:00Z"])("does not certify quote freshness from invalid asOf %s", (asOf) => {
+    const { report, check: result } = check(makeBundle({ quote: ok({ rows: [] }, asOf) }), "staleness.quote");
+    expect(result.status).toBe("fail");
+    expect(result.detail).toMatch(/invalid.*asOf|asOf.*invalid/i);
+    expect(report.gaps).toContainEqual(expect.objectContaining({ field: "validation.staleness.quoteDate", severity: "warn" }));
+  });
+
+  it.each(["2026-07-03T23:45:00-07:00", "2026-07-04T06:45:00Z", "2026-07-04T20:45:00+14:00"])("accepts valid ISO quote timestamps with explicit offsets: %s", (asOf) => {
+    const { check: result } = check(makeBundle({ quote: ok({ rows: [] }, asOf) }), "staleness.quote");
+    expect(result.status).toBe("pass");
+  });
+
+  it.each(["not-a-date", "2026-06-31"])("does not certify fundamentals cadence from invalid newest date %s", (date) => {
+    const { report, check: result } = check(makeBundle({
+      incomeQuarterly: ok({ rows: [{ date, revenue: 1e9 }] }, date),
+    }), "staleness.fundamentals");
+    expect(result.status).toBe("fail");
+    expect(result.detail).toMatch(/invalid/i);
+    expect(report.gaps).toContainEqual(expect.objectContaining({ field: "validation.staleness.fundamentalsDate", severity: "warn" }));
+  });
+
   it("passes fundamentals cadence when the newest statement covers the expected quarter", () => {
     const { check: c } = check(makeBundle(), "staleness.fundamentals");
     expect(c.status).toBe("pass");

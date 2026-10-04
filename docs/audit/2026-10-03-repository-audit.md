@@ -1,8 +1,8 @@
 # Repository audit — 2026-10-03
 
-Status: repository review, repairs and required local verification complete;
-the owner's choice is implemented: current design by default with an optional
-Research workspace in Settings. Isolated browser follow-up passed. Earlier dated
+Status: initial repository audit, UI selection and verified 2026-10-04 fixes
+complete; F08 stale-lock recovery remains unresolved below. Current remains the default
+with optional Research workspace in Settings. Earlier dated
 audits and decisions remain historical evidence. No merge or deployment is authorized.
 
 ## Scope and baseline
@@ -89,7 +89,8 @@ cases independently count 23 and 58 valid adjacent return pairs. The standard
 DEMO fixture's numeric output is unchanged: five repinned historical-comparison
 paths contain the spec version and four corrected lease disclosures only;
 the former EDGAR-available delta is removed because reserved fixtures have no
-EDGAR evidence. Numeric outputs remain unchanged.
+EDGAR evidence. Numeric outputs remained unchanged in the initial audit; the
+2026-10-04 follow-up below deliberately withholds an unsupported acceleration.
 Report 1.7.0 and payload 1.8.0 separate prior calculation conventions; old saved
 reports retain their bytes and remain readable under compatibility rules.
 
@@ -261,16 +262,15 @@ Deferred recommendations and limits:
   absent FRED rows merit calendar-aware follow-up; no new failure case beyond
   the repaired explicit-gap inputs is claimed here.
 - Additional targeted cases for invalid as-of strings, irregular growth labels
-  and incomplete statement components are recommended. Credential-file shape
-  validation, multi-process stale-lock stress and malicious local cache
-  decompression limits are hardening hypotheses, not reproduced exploits.
-  Standalone forensic restatement alignment and future IPO dates also remain
-  hypotheses pending integrated issuer cases; historic coefficients/static ADR
+  and incomplete statement components were recommended. The follow-up addresses
+  invalid dates, acceleration horizons, credential shape and future IPO dates;
+  it confirms a separate stale-recovery race. Malicious local cache decompression
+  limits and standalone forensic restatement alignment remain deferred;
+  historic coefficients/static ADR
   assumptions were not all independently refreshed from primary sources.
-- Lower-priority presentation follow-ups: the judge note says cases were
-  "capped" even when protected structure exceeds its target (the detailed cap
-  disclosure records that excess); scenario-card observation dates and some
-  catalyst/risk citation metadata could be exposed more fully. Duplicate
+- Lower-priority presentation follow-ups at the initial audit: the judge note
+  overstated its cap and scenario/catalyst/risk metadata was partly hidden;
+  both are addressed in the follow-up below. Duplicate
   scenario names remain schema-permitted and explicitly diagnosed by comparison.
 - No live provider entitlement/invoice reconciliation, OAuth approval, Gemini
   inference, broad cross-issuer reconciliation or empirical financial-model
@@ -284,7 +284,7 @@ Deferred recommendations and limits:
   quality, screen-reader usability and every browser/OS combination remain
   unverified. No paid API inference, merge or deployment occurred.
 
-## Final local verification
+## Initial audit and UI verification
 
 `npm run verify` exited 0 on the repaired code after the integrated run exposed
 four test-contract failures. Two were stale version assertions; two export
@@ -308,3 +308,91 @@ and the reviewer `tmp/audit-*.md` records. The final production build occurred
 after the workspace status-color correction. This tracked document preserves
 the reviewable summary and limitations; remote CI is separate from local results.
 No guaranteed accuracy or absence of regressions is claimed.
+
+## Follow-up — 2026-10-04
+
+The owner requested another pass for fixes supported by evidence. Starting point:
+clean `0003d64`, with 4,522 product tests, four integration tests and final
+Linux/Windows CI passing. Current remains the default; Research workspace stays
+optional. No private data inspection, paid inference, merge or deployment.
+
+Plan: reproduce candidate date-validation and credential-store failures using
+synthetic/temp inputs; repair only demonstrated boundaries. Correct the judge
+length-limit disclosure and expose already-recorded scenario/catalyst evidence
+where the UI drops it. Each change gets a focused regression or rendering check,
+independent review and the required full verification. Retain unconfirmed
+calendar, parser, model-calibration and platform hypotheses as explicit limits.
+
+| ID | Evidence and disposition |
+| --- | --- |
+| F01 | Confirmed disclosure defect; repaired. A protected 30,000-character citation left a 30,313-character case against a 24,000 target, but the reader note claimed both cases were capped and metadata claimed truncation with no content change. Bull/bear regressions preceded actual-change counting, over-target manifest entries and exact excess disclosures. Independent review added escaped-text and mixed-null historical metadata cases: retain known facts, identify the missing side and do not fabricate replay. Protected citations and request admission stay intact. |
+| F02 | Confirmed routing defect; repaired. IPO dates after the observation date, or with garbage suffixes, triggered recent-IPO treatment. Require a calendar-valid date on/before the observation date; future/invalid inputs produce a gap and ordinary insufficient-history handling. Preserve the 24-month threshold and shared timestamp parser used for balance/runway evidence. |
+| F03 | Confirmed validation defect; repaired. NaN comparisons let invalid quote/newest-statement dates pass freshness; date coercion also accepted impossible calendar days. Validate full stamps and calendar dates, fail with a specific diagnostic, and retain the existing calendar-day age basis for valid offsets. Leap-day, hour, suffix and offset cases are covered; this does not introduce price suppression or UTC-age policy changes. |
+| F04 | Confirmed financial-label defect; repaired. A requested 3y CAGR with actual span 2y or 4y was used as a three-year acceleration benchmark. Withhold benchmark/delta/direction unless the span is within ±0.05y of three years. Keep degraded CAGR series; 52/53-week cases remain supported. |
+| F05 | Confirmed persistence defect; repaired. Valid JSON with malformed consumed token/profile/selection fields reached callbacks and could be rewritten. Thirteen failing cases preceded v1 shape validation before mutation. Preserve signed-out/expired registrations, historical valid model IDs and unknown fields; malformed bytes remain untouched and errors reveal no credential content. |
+| F06 | Confirmed lock-acquisition defect; repaired. PID write/close I/O failures leaked the descriptor/lock before the normal finally block. Close and remove the acquired lock on failure, preserve the original error if cleanup is denied, and prove retry succeeds. An unremovable filesystem remnant can still remain. |
+| F07 | Demonstrable provenance improvement; implemented. Native target disclosures expose source identity, observation date and period in both designs; legacy missing metadata is explicit. Catalyst expected dates/direction/significance and risk source/severity/probability are labeled separately from reasoning citations. Ten failing rendering cases preceded the change; escaped source strings remain text. |
+| F08 | Confirmed concurrency race; unresolved. A stale-recovery contender can read a dead PID, another contender replace that lock, then the first unlink the new live owner's lock and enter concurrently. A controlled filesystem-interleaving test reproduces it; no real multi-process stress run or observed user incident is claimed. A safe atomic ownership protocol needs separate cross-platform design and verification; a stat/PID recheck would only narrow the race. Ordinary single-server ownership and live-lock timeout remain, but do not prove atomic recovery. |
+
+Independent growth calculation: 100→144 revenue gives a two-year CAGR of 20%,
+a four-year CAGR of 9.5445115010%, or a three-year CAGR of 12.9243234657%.
+With latest 110→144 growth of 30.9090909091%, the valid three-year acceleration
+is 17.9847674434 percentage points. The other horizons are unavailable as that
+benchmark, rather than producing an incorrectly labeled comparison.
+
+Report 1.8.0 and payload 1.9.0 separate these financial/date-evidence conventions.
+DEMO's actual history is two years (2023-12-31→2025-12-31); its former benchmark
+9.1089451180%, difference −0.4132929441pp and `accelerating=false` become null.
+The new intended-delta group has 86 positional changes, largely the insertion
+of one gap into two sorted manifests. Reconstructing the previous and current
+projections from the immutable baseline and comparing manifests by field proves
+only `growth.revenueAcceleration.threeYearCagr` was added. Other numeric outputs
+and underlying CAGR series are unchanged; baseline hashes remain pinned.
+
+References: [RFC 3339 §§5.6–5.7](https://www.rfc-editor.org/rfc/rfc3339#section-5.6)
+supports Gregorian date and qualified timestamp validation (not a claim of full
+RFC extension/leap-second support); [Node 24 closeSync](https://nodejs.org/docs/latest-v24.x/api/fs.html#fsclosesyncfd)
+supports explicit descriptor cleanup. House financial thresholds are unchanged.
+
+Cross-review covered the finance date-parser callers, fiscal-horizon handling,
+credential compatibility/unknown metadata, actual shortening and partly recorded
+protocols. Focused groups passed: 419 finance tests; 80 runtime/cache tests,
+including three real OS temporary-store checks; 199 UI/render/export tests and
+217 judge/export tests (these groups overlap). Browser spot checks in the isolated
+app verified keyboard target disclosures and visible catalyst/risk labels in
+Current and Research workspace. No private data, live inference or PDF print job.
+
+Remaining work is F08 plus the explicitly deferred hypotheses above. A universal
+decompression cap was not imposed: the 64 MiB HTTP policy does not cover every
+provider or bound serialized cache JSON, so historical compatibility is unproven.
+F08 reproduction uses a temporary owner-only store and an existing lock with a
+dead PID. During the contender's liveness probe, replace that lock's content with
+a live writer's PID, then return `ESRCH` for the original PID. The contender
+removes the replaced path and enters its callback; the expected assertion that
+it remains excluded fails. This deterministically simulates the interleaving;
+it does not run two real concurrent processes. A future repair must preserve
+exclusion across stale-owner replacement, PID reuse and interrupted acquisition
+on each supported OS, without deleting a live writer's lock.
+Detailed local evidence is retained in ignored `tmp/audit-followup-*.md` and logs;
+the intentionally failing stale-interleaving reproduction remains in ignored tmp.
+
+Final follow-up `npm run verify` exited 0. The first full run exposed two stale
+version assertions in the job persistence and Stage C fingerprint tests; exact
+expectations were updated to the new report/payload versions. Their 220 tests
+passed before the full rerun. No gate, assertion scope or coverage floor was
+weakened. Local detail: `tmp/audit-followup-verify2.log`.
+
+| Gate | Follow-up evidence | Comparison to `0003d64` |
+| --- | --- | --- |
+| Dependency shape, TypeScript, ESLint | Passed | Same gates |
+| Product | 201 files; 4,580 passed, two opt-in live checks skipped; 26.82s | +58 passing tests, one new test file |
+| Integration | Four passed; 2.42s | Same checks |
+| Core coverage | 96.48% statements, 90.68% branches, 99.10% functions, 97.55% lines | Same or higher |
+| Risk coverage | 94.24% statements, 87.25% branches, 96.90% functions, 96.17% lines | Same or higher; per-file floors passed |
+| Production build | Passed; compiled in 2.7s | Single observation; no performance claim |
+| Dependency security audit | Zero reported vulnerabilities, including dev dependencies | Point-in-time advisory check |
+
+Affected maintained guidance was reconciled in README, CHANGELOG, METHODOLOGY,
+PRIVACY, DECISIONS and this audit. The full run includes documentation, release
+inventory and immutable-baseline contracts. Linux/Windows CI results for the
+delivered commit are recorded on pull request #5 separately from this local run.

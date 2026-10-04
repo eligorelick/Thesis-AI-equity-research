@@ -12,6 +12,18 @@ reversibility, the choice, and why. Reversible and disclosed beats clever.
 
 Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
 
+## D-38 (recommendation review 2026-10-04) Evidence-qualified improvements
+
+Follow-up to the merged repository audit: assess all seven recommendations,
+implement independently justified changes sequentially, and retain explicit
+deferrals where outcome evidence or an end-to-end contract is missing. The
+[critical review and verification ledger](2026-10-04-recommendations.md) records
+alternatives, acceptance evidence and limitations. Completed-session beta and
+calendar-aligned monthly/quarterly/annual FRED lags require report 1.9.0 and
+payload 1.10.0; saved reports remain unchanged and older partial AI passes do
+not resume under the new financial conventions. No forecast probability or AI
+accuracy gain is inferred merely from passing regression tests.
+
 ## D-37 (audit follow-up 2026-10-04) Validate evidence before presenting or rewriting it
 
 - **Financial evidence**: the acceleration diagnostic requires an actual

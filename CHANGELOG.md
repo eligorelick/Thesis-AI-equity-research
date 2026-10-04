@@ -4,6 +4,16 @@ Entries below the current repository audit record earlier development batches.
 Their model defaults, prices and migration advice describe those dates; use
 README and the current usage/methodology documents for present guidance.
 
+## Unreleased — evidence-qualified recommendations (2026-10-04)
+
+- Use completed regular US month-end sessions for beta and calendar lag periods
+  for monthly, quarterly and annual keyless FRED transformations. Missing periods
+  withhold affected changes; holiday and sparse-frequency limits are disclosed.
+- Stamp report 1.9.0 / payload 1.10.0 to separate the financial conventions while
+  preserving saved reports and their original values.
+- Record the critical review of all seven recommendations, evidence, alternatives
+  and justified deferrals in the [recommendations ledger](docs/audit/2026-10-04-recommendations.md).
+
 ## Unreleased — audit follow-up (2026-10-04)
 
 - Withhold three-year revenue acceleration when the observed history spans a

@@ -243,7 +243,9 @@ export interface ContextPayload {
 // Partial analyst work from the prior conventions must not be reused.
 // 1.9.0 (audit follow-up 2026-10-04): acceleration horizons and date validity
 // change financial evidence; do not resume partial passes under prior rules.
-export const PAYLOAD_VERSION = "1.9.0" as const;
+// 1.10.0 (recommendation review 2026-10-04): completed-session beta and
+// calendar-aligned FRED lags change evidence; prior partial passes cannot resume.
+export const PAYLOAD_VERSION = "1.10.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Small pure helpers

@@ -8,6 +8,18 @@ date. Where a rule is a house convention rather than an established method, it
 says so in the same breath as the number it produces — in the DCF assumption
 block, in the report's missing-data manifest, or both.
 
+Calendar conventions (report 1.9.0 / payload 1.10.0): keyless beta uses adjacent
+completed regular US month-end sessions for both the issuer and SPY within the
+60-month window. Weekends, month-end Memorial Day and Good Friday are accounted
+for; early closes count as sessions. A missing final session withholds that
+month rather than filling its price. Exceptional exchange closures and non-US
+calendars are not modeled. Keyless FRED monthly, quarterly and annual changes
+look up the required calendar period, so a wholly absent row cannot shift the
+denominator. Daily/weekly/biweekly transformations retain observation-count lags;
+frequency inference is approximate for sparse or irregular data. Neither this
+alignment nor a report's as-of stamp provides historical publication cutoffs or
+ALFRED vintages; current reports use the latest available data.
+
 Sources referred to by name throughout:
 
 - **Damodaran**, *Investment Valuation* and the annual implied-ERP dataset

@@ -94,15 +94,49 @@ export function blumeAdjust(beta: number): number {
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
+/** Gregorian Easter; Good Friday is two calendar days before this Sunday. */
+function easterUtc(year: number): Date {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = (h + l - 7 * m + 114) % 31 + 1;
+  return new Date(`${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T00:00:00Z`);
+}
+
 /**
- * True when an observation date can be a calendar month's last trading day:
- * on or after the 26th. No month's final US session falls earlier (a
- * weekend plus a holiday at most pushes it to the 27th–28th), so anything
- * before that is a month still in progress.
+ * Regular NYSE month-end session: weekends, Memorial Day and Good Friday
+ * are the only regular closures that can move the last weekday of a month.
+ * Early closes remain sessions. NYSE does not observe a Saturday January 1
+ * on December 31. Exceptional closures and other exchanges are not modelled.
+ * https://www.nyse.com/trade/hours-calendars
  */
 export function isMonthComplete(isoDate: string): boolean {
-  const day = Number(isoDate.slice(8, 10));
-  return Number.isFinite(day) && day >= 26;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return false;
+  const observed = new Date(`${isoDate}T00:00:00Z`);
+  if (!Number.isFinite(observed.getTime()) || observed.toISOString().slice(0, 10) !== isoDate) return false;
+  const year = observed.getUTCFullYear();
+  const month = observed.getUTCMonth();
+  const end = new Date(observed);
+  end.setUTCMonth(month + 1, 0);
+  const goodFriday = easterUtc(year);
+  goodFriday.setUTCDate(goodFriday.getUTCDate() - 2);
+  for (;;) {
+    const weekday = end.getUTCDay();
+    const memorialDay = month === 4 && weekday === 1 && end.getUTCDate() >= 25;
+    if (weekday !== 0 && weekday !== 6 && !memorialDay && end.getTime() !== goodFriday.getTime()) break;
+    end.setUTCDate(end.getUTCDate() - 1);
+  }
+  return observed.getTime() === end.getTime();
 }
 
 /** Last observation of each calendar month, newest first. */
@@ -136,15 +170,12 @@ export function estimateBeta(
   const minMonths = opts.minMonths ?? BETA_MIN_MONTHS;
   const symbolEndsAll = monthEndCloses(symbolCloses);
   const benchEndsAll = monthEndCloses(benchmarkCloses);
-  // The month in progress is not a monthly observation. A history that ends
-  // on the fetch date closes with a stub of a few sessions, and one earnings
-  // day regressed at the weight of a full month moved the slope by a tenth in
-  // the probe. The newest month of EITHER series is dropped unless its last
-  // observation falls in the month's closing days (the last trading day of a
-  // US month is never earlier than the 26th).
+  // Neither a partial current month nor an older month missing its final
+  // session is a completed monthly observation. Require the actual same
+  // regular US month-end session on both sides; never fill missing closes.
   const partialMonths = new Set<string>();
-  for (const newest of [symbolEndsAll[0], benchEndsAll[0]]) {
-    if (newest !== undefined && !isMonthComplete(newest.date)) partialMonths.add(newest.date.slice(0, 7));
+  for (const point of [...symbolEndsAll, ...benchEndsAll]) {
+    if (!isMonthComplete(point.date)) partialMonths.add(point.date.slice(0, 7));
   }
   const symbolEnds = symbolEndsAll.filter((p) => !partialMonths.has(p.date.slice(0, 7)));
   const benchByMonth = new Map(
@@ -153,7 +184,8 @@ export function estimateBeta(
   const partialMonthNote =
     partialMonths.size === 0
       ? ""
-      : `; the partial month ${[...partialMonths].sort().join(", ")} in progress is excluded`;
+      : `; partial or incomplete month ${[...partialMonths].sort().join(", ")} excluded (regular NYSE final-session close required)`;
+  const calendarNote = "; regular NYSE month-end session calendar (exceptional closures and other exchanges not modelled)";
   // A missing level must neither extend the calendar window nor turn a
   // multi-month change into a monthly observation.
   const sharedEnds = symbolEnds.filter((p) => benchByMonth.has(p.date.slice(0, 7)));
@@ -203,7 +235,7 @@ export function estimateBeta(
     standardError: null,
     betaBlume: null,
     basis,
-    note: `beta not estimated: ${reason}${missingMonthNote}${partialMonthNote}`,
+    note: `beta not estimated: ${reason}${missingMonthNote}${partialMonthNote}${calendarNote}`,
     gap: { field: "profile.beta", reason: `${reason}${missingMonthNote}`, severity: "warn", attemptedSources: ["computed:beta(monthly OLS vs SPY)"] },
     disclosure: null,
   });
@@ -236,7 +268,7 @@ export function estimateBeta(
     `beta ${beta.toFixed(3)}` +
     (standardError === null ? "" : ` ± ${standardError.toFixed(3)} (OLS standard error)`) +
     `, Blume-adjusted ${betaBlume.toFixed(3)}, from ${months} monthly log returns of ${priceNote} vs the benchmark ` +
-    `(${windowStart} → ${windowEnd}); a ${maxMonths}-calendar-month window convention${missingMonthNote}${partialMonthNote}`;
+    `(${windowStart} → ${windowEnd}); a ${maxMonths}-calendar-month window convention${missingMonthNote}${partialMonthNote}${calendarNote}`;
   return {
     beta,
     months,

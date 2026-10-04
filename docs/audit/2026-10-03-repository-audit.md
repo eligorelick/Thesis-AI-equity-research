@@ -3,7 +3,9 @@
 Status: initial repository audit, UI selection and verified 2026-10-04 fixes
 complete; F08 stale-lock recovery remains unresolved below. Current remains the default
 with optional Research workspace in Settings. Earlier dated
-audits and decisions remain historical evidence. No merge or deployment is authorized.
+audits and decisions remain historical evidence. The owner authorized merging
+pull request #5 into `main` on 2026-10-04 after verification. Deployment remains
+outside this authorization; the PR records the merge outcome and commit.
 
 ## Scope and baseline
 
@@ -396,3 +398,43 @@ Affected maintained guidance was reconciled in README, CHANGELOG, METHODOLOGY,
 PRIVACY, DECISIONS and this audit. The full run includes documentation, release
 inventory and immutable-baseline contracts. Linux/Windows CI results for the
 delivered commit are recorded on pull request #5 separately from this local run.
+
+## Merge verification — 2026-10-04
+
+The owner authorized merging after verification. The production changes at
+`5b5cca4` passed [PR CI](https://github.com/eligorelick/Thesis-AI-equity-research/actions/runs/37183970733)
+on Linux (full checks) and Windows (product/integration). The unchanged
+[push CI](https://github.com/eligorelick/Thesis-AI-equity-research/actions/runs/37183968106)
+also passed after one Windows retry. Its first attempt timed out at 8,376ms in
+the export-cleanup test's existing 5,000ms limit, with no assertion mismatch.
+The same case took 438ms in PR CI, 294ms in a passing local 13-test export
+recheck and 515ms on retry. Export code, fixture and test were unchanged by the
+follow-up. Investigation found no unbounded loop or causal link to that patch;
+the exact source of the temporary delay remains unverified. No timeout,
+assertion or coverage threshold was relaxed.
+
+Pre-merge local verification reran all 4,580 product tests (two opt-in live
+checks skipped) and four integration tests. The first parallel product run hit
+another existing 5,000ms limit while a Next ESLint regression launched its real
+lint subprocess (5,879ms, no assertion mismatch). All 28 tests in that unchanged
+file then passed, with the affected case taking 342ms. The full product rerun
+used Windows CI's `--maxWorkers=1` setting and passed in 169.06s. The precise
+source of the timing variation was not established; no test limit was changed.
+Logs: ignored `tmp/audit-merge-product*.log`, `tmp/audit-merge-eslint-recheck.log`
+and `tmp/audit-merge-integration.log`.
+
+A fresh isolated browser check used source matching the proposed production
+code (apart from the documented preview-only build configuration). Research
+workspace persisted across reload; DEMO report #5 completed with all AI passes
+skipped, zero cost, spec 1.8.0 and the corrected two-year-history acceleration
+gap. Its saved view and actual Markdown download retained these disclosures.
+History kept report #4 (spec 1.7.0) readable and labeled its comparison with #5
+not comparable because the spec versions differ. Current was restored after
+testing. No private data or live provider inference was used; actual PDF
+printing and comprehensive accessibility/platform testing remain unverified.
+
+The merge-readiness documentation update preserves the confirmed F08 race and
+all deferred recommendations above. `Unreleased` changelog headings remain
+appropriate: merging source does not publish a packaged release or deploy it.
+Final branch checks and the merge commit are linked from
+[pull request #5](https://github.com/eligorelick/Thesis-AI-equity-research/pull/5).

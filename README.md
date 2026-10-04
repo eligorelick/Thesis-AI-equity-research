@@ -1,7 +1,7 @@
 # Thesis
 
 Thesis is a local-first equity research app with financial calculations and optional AI.
-Saved reports expose source paths, observation dates and missing evidence. **Settings → Appearance** switches between the default Current design and optional Research workspace; the choice is saved in this browser.
+Saved reports expose expandable number provenance and optional, paginated price/relative-strength data tables, including missing evidence. **Settings → Appearance** switches between the default Current design and optional Research workspace; the choice is saved in this browser.
 
 > **Informational only — not investment advice.** Grades and price targets are
 > model outputs from disclosed data and assumptions, not human recommendations.
@@ -53,7 +53,7 @@ reasoning choices and opt-in Fast speed. Reports retain actual execution details
 Sign-in runs no inference; failures never switch to paid API usage. Claude API
 remains separately billed. Plan allowances and credit settings apply; API dollar
 caps do not measure them. See [setup, controls and limits](docs/PRIVACY.md#ai-connection-setup).
-Live inference remains unverified.
+Live inference remains unverified. Stop all Thesis servers before changing credential-lock versions; see [upgrade/downgrade guidance](docs/PRIVACY.md).
 
 ## Configuration
 

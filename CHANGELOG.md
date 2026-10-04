@@ -18,6 +18,9 @@ README and the current usage/methodology documents for present guidance.
 - Add independent normalized statement references for six issuers across twelve
   annual periods, with source/basis notes, absolute-unit anchors and sector-policy
   checks. These strengthen regression detection, not forecasts or parser coverage.
+- Add keyboard-accessible recorded grade/DCF provenance and optional 30-row
+  price/relative-strength tables in both designs. Tables and canvases share exact
+  prepared values; zero, missing observations and individual baselines stay distinct.
 - Stamp report 1.9.0 / payload 1.10.0 to separate the financial conventions while
   preserving saved reports and their original values.
 - Record the critical review of all seven recommendations, evidence, alternatives

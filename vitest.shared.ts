@@ -29,6 +29,7 @@ export const RISK_SOURCE_MANIFEST = [
   "src/ai/fingerprint.ts",
   "src/ai/gemini.ts",
   "src/ai/mutex.ts",
+  "src/components/charts/plotData.ts",
   "src/ai/store.ts",
   "src/ai/transport.ts",
   "src/app/api/ai/connections/route.ts",

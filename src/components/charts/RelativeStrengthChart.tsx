@@ -4,9 +4,9 @@
  * RelativeStrengthChart — normalized (rebased-to-100) multi-line comparison of
  * the stock vs SPY vs its sector ETF over the available window.
  *
- * Each series is rebased to 100 at its own first finite/positive close
- * (rebaseTo100 in ./format), so the lines share a common baseline and the chart
- * reads as relative performance rather than absolute price. The stock draws in
+ * Each series is rebased to 100 at its first finite/positive close within the
+ * shared comparison window. Sparse histories can have different baseline
+ * dates, disclosed in the data alternative. The stock draws in
  * the accent color; benchmarks in muted greys.
  *
  * lightweight-charts v5: `chart.addSeries(LineSeries, options)`. Client
@@ -14,7 +14,7 @@
  * on unmount.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useId, useMemo, useRef } from "react";
 import {
   ColorType,
   CrosshairMode,
@@ -28,7 +28,9 @@ import {
   type Time,
 } from "lightweight-charts";
 
-import { rebaseTo100, type DatedClose } from "./format";
+import { prepareRelativeStrengthPlotData } from "./plotData";
+import { ChartDataDisclosure } from "./ChartDataDisclosure";
+export { commonStartDate, rebasedLineData } from "./plotData";
 import { useUiDesign } from "@/appearance/UiDesignProvider";
 import { chartPalette, type ChartPalette } from "./palette";
 
@@ -76,78 +78,6 @@ const BENCHMARK_COLORS = ["#8494a8", "#7f8fa4", "#e8b339"] as const;
 // ---------------------------------------------------------------------------
 // Pure helpers
 // ---------------------------------------------------------------------------
-
-function normDate(d: string): string {
-  return d.length > 10 ? d.slice(0, 10) : d;
-}
-
-function sortedUnique(rows: readonly RsRow[]): DatedClose[] {
-  const clean: DatedClose[] = [];
-  for (const r of rows) {
-    const d = normDate(r.date);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
-    clean.push({ date: d, close: r.close });
-  }
-  clean.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-  const out: DatedClose[] = [];
-  for (const r of clean) {
-    if (out.length > 0 && out[out.length - 1].date === r.date) {
-      out[out.length - 1] = r;
-    } else {
-      out.push(r);
-    }
-  }
-  return out;
-}
-
-/** First date at which a series has a usable (finite, positive) close. */
-function firstUsableDate(rows: readonly RsRow[]): string | null {
-  for (const r of sortedUnique(rows)) {
-    if (Number.isFinite(r.close) && r.close > 0) return r.date;
-  }
-  return null;
-}
-
-/**
- * The latest first-usable date across every series — the earliest date on which
- * they can all be compared.
- *
- * Rebasing each series at its OWN first bar makes the chart lie whenever the
- * histories differ in length: a stock with 3 years of data and a benchmark with
- * 10 would both start at 100, but on different dates, so their divergence is
- * measured from unrelated origins. Returns null when no series has data.
- */
-export function commonStartDate(series: readonly { rows: readonly RsRow[] }[]): string | null {
-  let latest: string | null = null;
-  for (const s of series) {
-    const first = firstUsableDate(s.rows);
-    if (first === null) continue;
-    if (latest === null || first > latest) latest = first;
-  }
-  return latest;
-}
-
-/**
- * Rebased LineData for one series, dropping null-valued points. When
- * `startDate` is given the series is trimmed to it first, so every line is
- * indexed to 100 on the same date.
- */
-export function rebasedLineData(
-  rows: readonly RsRow[],
-  startDate?: string | null,
-): LineData<Time>[] {
-  const sorted = sortedUnique(rows);
-  const scoped =
-    startDate === undefined || startDate === null
-      ? sorted
-      : sorted.filter((r) => r.date >= startDate);
-  const rebased = rebaseTo100(scoped);
-  const out: LineData<Time>[] = [];
-  for (const p of rebased) {
-    if (p.value !== null) out.push({ time: p.date as Time, value: p.value });
-  }
-  return out;
-}
 
 interface ResolvedSeries extends RsSeries {
   color: string;
@@ -200,6 +130,11 @@ export function RelativeStrengthChart({ series, height = 300 }: RelativeStrength
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const resolved = useMemo(() => resolveSeriesColors(series, THEME), [series, THEME]);
+  const model = useMemo(() => prepareRelativeStrengthPlotData(series), [series]);
+  const descriptionId = useId();
+  const basis = `Comparison window starts ${model.startDate ?? "not available"}; each series is indexed to 100 at its first usable close within that window. `
+    + model.series.map((item) => `${item.label}: baseline ${item.baseDate ?? "unavailable"}`).join("; ")
+    + ". Unavailable cells contain no plotted observation; lines may span omitted observations. Values are not rounded.";
 
   useEffect(() => {
     const container = containerRef.current;
@@ -211,12 +146,10 @@ export function RelativeStrengthChart({ series, height = 300 }: RelativeStrength
     });
     chartRef.current = chart;
 
-    // One shared origin for every line, so the chart shows relative
-    // performance over a comparable window rather than each series' own
-    // history-length artifact.
-    const startDate = commonStartDate(resolved);
-    for (const s of resolved) {
-      const data = rebasedLineData(s.rows, startDate);
+    // Preserve the shared comparison-window cutoff and each line's actual
+    // first usable observation; those individual bases are disclosed below.
+    for (const [index, s] of resolved.entries()) {
+      const data = model.series[index]!.data;
       if (data.length === 0) continue;
       const line = chart.addSeries(LineSeries, {
         color: s.color,
@@ -225,7 +158,7 @@ export function RelativeStrengthChart({ series, height = 300 }: RelativeStrength
         lastValueVisible: true,
         title: s.label,
       });
-      line.setData(data);
+      line.setData(data as LineData<Time>[]);
     }
 
     // Baseline at 100 on the first series' scale would clutter; instead a light
@@ -245,7 +178,7 @@ export function RelativeStrengthChart({ series, height = 300 }: RelativeStrength
       chart.remove();
       chartRef.current = null;
     };
-  }, [resolved, height, THEME]);
+  }, [resolved, model, height, THEME]);
 
   const anyData = resolved.some((s) => s.rows.length > 0);
 
@@ -257,6 +190,7 @@ export function RelativeStrengthChart({ series, height = 300 }: RelativeStrength
         style={{ height }}
         role="img"
         aria-label="Relative strength chart, rebased to 100"
+        aria-describedby={descriptionId}
       />
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[10px] text-faint">
         {resolved.map((s) => (
@@ -267,6 +201,9 @@ export function RelativeStrengthChart({ series, height = 300 }: RelativeStrength
         ))}
         <span className="ml-auto text-faint">rebased to 100 · close-to-close</span>
       </div>
+      <p id={descriptionId} className="px-1 text-[10px] text-faint">Open Relative-strength data for exact index values, dates and individual baselines.</p>
+      <ChartDataDisclosure label="Relative-strength data" columns={model.series.map((item) => item.label)} rows={model.rows}
+        caption="Relative strength · index values (100 at each recorded baseline)" basis={basis} />
       {!anyData ? (
         <div className="px-1 text-[10px] text-faint">no price history available for comparison.</div>
       ) : null}

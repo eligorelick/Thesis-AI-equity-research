@@ -69,7 +69,7 @@ interface SnapshotEvent {
 
 interface GradeStripCell {
   key: GradeSurfaceKey;
-  grade: string;
+  grade: string | null;
   oneLineWhy: string;
 }
 interface ReportSummary {
@@ -396,7 +396,7 @@ function decodeReportSummary(
       !hasExactKeys(grade, ["key", "grade", "oneLineWhy"]) ||
       typeof grade.key !== "string" ||
       !Object.prototype.hasOwnProperty.call(GRADE_SURFACE_BY_KEY, grade.key) ||
-      typeof grade.grade !== "string" ||
+      !(grade.grade === null || (typeof grade.grade === "string" && ["A", "B", "C", "D", "F"].includes(grade.grade))) ||
       typeof grade.oneLineWhy !== "string"
     ) return null;
     gradeKeys.push(grade.key);
@@ -627,8 +627,8 @@ function fmtUsd(v: number | null | undefined): string {
 }
 
 const GRADE_SET = new Set(["A", "B", "C", "D", "F"]);
-function asGrade(g: string): Grade | null {
-  return GRADE_SET.has(g) ? (g as Grade) : null;
+function asGrade(g: string | null): Grade | null {
+  return g !== null && GRADE_SET.has(g) ? (g as Grade) : null;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -1077,7 +1077,7 @@ export function ReportReadyPanel({
                           backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
                         }}
                       >
-                        {g.grade}
+                        {g.grade ?? "n/a"}
                       </span>
                     </div>
                     <div className="line-clamp-2 text-[10px] leading-snug text-faint">

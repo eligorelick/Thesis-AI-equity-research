@@ -52,6 +52,28 @@ const SYNTHETIC_ENTITY_REGISTRY: EntityRegistry = {
 };
 
 describe("read-only legacy export safety", () => {
+  it("corrects stored ChatGPT judge attribution on read while preserving the original JSON", () => {
+    const report = fixtureReport("DEMO");
+    report.meta.model = "chatgpt/gpt-6-astra";
+    report.meta.execution = ["bull", "bear", "synthesize"].map((step) => ({
+      step, requestedModel: "chatgpt/gpt-6-astra", effectiveModel: "chatgpt/gpt-6-astra",
+      requestedEffort: null, effectiveEffort: null, fallbackUsed: false, adjustments: [],
+    }));
+    const fields = ["llm.judge.case-order", "llm.judge.model-family"];
+    report.appendix.missingData.push(...fields.map((field) => ({
+      field, reason: "Recorded judge protocol", severity: "info" as const, attemptedSources: ["anthropic"],
+    })));
+    const stored = JSON.stringify(report);
+    const result = parseStoredReportWithSafety(stored);
+    expect(result).not.toBeNull();
+    for (const field of fields) {
+      expect(result?.report.appendix.missingData.find((gap) => gap.field === field)?.attemptedSources).toEqual(["chatgpt"]);
+      expect(JSON.parse(stored).appendix.missingData.find((gap: { field: string }) => gap.field === field).attemptedSources).toEqual(["anthropic"]);
+    }
+    expect(JSON.stringify(report)).toBe(stored);
+    expect(parseStoredReportWithSafety(stored)?.report).toEqual(result?.report);
+  });
+
   it("withholds whole unsupported statements and records the conflict", () => {
     const report = ReportSchema.parse(
       JSON.parse(readFileSync(path.join(process.cwd(), "fixtures", "report", "DEMO-sample.json"), "utf8")),

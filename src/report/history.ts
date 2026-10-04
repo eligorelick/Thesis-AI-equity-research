@@ -23,6 +23,7 @@ import { getDb } from "@/db";
 import { reports, type ReportRow } from "@/db/schema";
 import { parseStoredReportWithSafety } from "@/report/legacyEntitySafety";
 import type { Report } from "@/report/schema";
+import { subscriptionExecutionModels } from "@/report/execution";
 import {
   GRADE_SURFACE_ORDER,
   gradeSurfaceEntries,
@@ -34,6 +35,7 @@ import {
   sameEntitySymbol,
 } from "@/symbol";
 import type { Grade } from "@/types/core";
+import { gradeForDisplay } from "@/report/assessment";
 
 /* ------------------------------------------------------------------------ *
  * Grade extraction — one compact strip summary per graded section.
@@ -46,7 +48,7 @@ export type GradeStripKey = GradeSurfaceKey;
 /** One cell of the compact grade strip shown in the history table. */
 export interface GradeStripCell {
   key: GradeStripKey;
-  grade: Grade;
+  grade: Grade | null;
 }
 
 /**
@@ -56,7 +58,7 @@ export interface GradeStripCell {
 export function extractGradeStrip(report: Report): GradeStripCell[] {
   return gradeSurfaceEntries(report.verdict.gradeStrip).map(({ descriptor, block }) => ({
     key: descriptor.key,
-    grade: block.grade,
+    grade: gradeForDisplay(block),
   }));
 }
 
@@ -78,6 +80,7 @@ export interface ReportSummary {
   symbol: string;
   createdAt: string;
   model: string;
+  actualModels?: string[];
   status: string;
   /** Fraction of numeric claims traced (0..1), or null when unrun/unavailable. */
   verificationRate: number | null;
@@ -114,11 +117,13 @@ function toSummary(row: ReportRow): ReportSummary {
   const parsed = parseStoredReport(row.reportJson);
   const report =
     parsed !== null && rowMatchesEmbeddedReport(row, parsed) ? parsed : null;
+  const actualModels = subscriptionExecutionModels(report?.meta.execution);
   return {
     id: row.id,
     symbol: row.symbol,
     createdAt: row.createdAt,
     model: row.model,
+    ...(actualModels.length === 0 ? {} : { actualModels }),
     status: row.status,
     verificationRate: row.verificationRate,
     costUsd: row.costUsd,

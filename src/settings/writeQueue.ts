@@ -392,6 +392,7 @@ function decodeCapabilities(value: unknown): SettingsCapabilities | null {
     "hasFinnhubKey",
     "hasFredKey",
     "hasAnthropicKey",
+    "hasEdgarContact",
     "fixtureMode",
     "resumeOnStart",
   ] as const;
@@ -404,6 +405,7 @@ function decodeCapabilities(value: unknown): SettingsCapabilities | null {
     hasFinnhubKey: value.hasFinnhubKey as boolean,
     hasFredKey: value.hasFredKey as boolean,
     hasAnthropicKey: value.hasAnthropicKey as boolean,
+    hasEdgarContact: value.hasEdgarContact as boolean,
     fixtureMode: value.fixtureMode as boolean,
     resumeOnStart: value.resumeOnStart as boolean,
   };

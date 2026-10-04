@@ -1,10 +1,73 @@
 import { describe, expect, it } from "vitest";
 
-import { buildExecutionMetadataEntry } from "@/report/execution";
-import { ExecutionMetadataEntrySchema } from "@/report/schema";
+import { buildExecutionMetadataEntry, formatExecutionMetadata, sharedModelFamilyOf, subscriptionExecutionModels } from "@/report/execution";
+import { ExecutionMetadataEntrySchema, ProviderExecutionSchema } from "@/report/schema";
 import { explainAnalysisModel } from "@/settings/contracts";
 
 describe("per-step execution metadata", () => {
+  it("keeps requested subscription controls but does not turn unreported model and usage into observed execution", () => {
+    const entry = buildExecutionMetadataEntry({ step: "bull", requestedModel: "chatgpt/gpt-6.1-sol", effectiveModel: "chatgpt/gpt-6.1-sol",
+      requestedEffort: null, fallbackUsed: false, usage: { input_tokens: 0, output_tokens: 0 },
+      execution: { requestedModel: "chatgpt/gpt-6.1-sol", requestedEffort: "high", effectiveEffort: null,
+        requestedServiceTier: "fast", effectiveServiceTier: null, modelObserved: false, usageReported: false } });
+    expect(entry.effectiveModel).toBe("unknown");
+    expect(entry).not.toHaveProperty("inputTokens");
+    expect(entry).not.toHaveProperty("outputTokens");
+    expect(entry.note).toContain("ChatGPT plan");
+    expect(entry.note).toContain("usage was not reported");
+    expect(entry.note).not.toContain("allowance was used");
+    expect(formatExecutionMetadata(entry)).toContain("effective unknown");
+    expect(formatExecutionMetadata(entry)).not.toContain("tokens 0");
+    expect(subscriptionExecutionModels([entry])).toEqual([]);
+    expect(ProviderExecutionSchema.parse({ modelObserved: false, usageReported: false })).toEqual({ modelObserved: false, usageReported: false });
+    expect(ExecutionMetadataEntrySchema.parse(entry).effectiveModel).toBe("unknown");
+  });
+
+  it("preserves an observed model even when usage was not reported", () => {
+    const entry = buildExecutionMetadataEntry({ step: "bull", requestedModel: "gemini/auto-gemini-3", effectiveModel: "gemini/gemini-3-pro",
+      requestedEffort: null, fallbackUsed: false, usage: { input_tokens: 0, output_tokens: 0 },
+      execution: { modelObserved: true, usageReported: false } });
+    expect(entry.effectiveModel).toBe("gemini/gemini-3-pro");
+    expect(entry.inputTokens).toBeUndefined();
+    expect(entry.note).not.toContain("allowance was used");
+  });
+  it("retains ChatGPT requested and reported reasoning, speed, and usage through stored report validation", () => {
+    const entry = buildExecutionMetadataEntry({
+      step: "bull", requestedModel: "chatgpt/gpt-6.1-sol", effectiveModel: "chatgpt/gpt-6.1-sol",
+      requestedEffort: "low", fallbackUsed: false,
+      execution: { requestedEffort: "xhigh", effectiveEffort: "high", requestedServiceTier: "fast", effectiveServiceTier: "priority" },
+      usage: { input_tokens: 123, output_tokens: 456 },
+    });
+    const persisted = ExecutionMetadataEntrySchema.parse(JSON.parse(JSON.stringify(entry)));
+    expect(persisted).toMatchObject({ requestedEffort: "xhigh", effectiveEffort: "high", requestedServiceTier: "fast", effectiveServiceTier: "priority", inputTokens: 123, outputTokens: 456, adjustments: [] });
+    expect(formatExecutionMetadata(persisted)).toContain("speed requested fast, provider priority");
+  });
+
+  it("does not infer an applied OAuth setting when the provider omitted it", () => {
+    const entry = buildExecutionMetadataEntry({
+      step: "synthesize", requestedModel: "chatgpt/gpt-6.1-sol", effectiveModel: "chatgpt/gpt-6.1-sol",
+      requestedEffort: "low", fallbackUsed: false,
+      execution: { requestedEffort: "high", effectiveEffort: null, requestedServiceTier: "fast", effectiveServiceTier: null },
+    });
+    expect(entry.effectiveEffort).toBeNull();
+    expect(entry.effectiveServiceTier).toBeNull();
+    expect(entry.adjustments).not.toContain("effort-stripped");
+    expect(formatExecutionMetadata(entry)).toContain("provider unknown");
+  });
+
+  it("discloses Gemini's observed models without treating an aggregate as the final-response model", () => {
+    const entry = buildExecutionMetadataEntry({
+      step: "bull", requestedModel: "gemini/auto", effectiveModel: "gemini/multiple-models",
+      requestedEffort: "high", fallbackUsed: false,
+      execution: { requestedEffort: null, effectiveEffort: null, observedModels: ["gemini-fast", "gemini-pro"] },
+    });
+    expect(ExecutionMetadataEntrySchema.parse(entry).observedModels).toEqual(["gemini-fast", "gemini-pro"]);
+    expect(entry.note).toContain("combined usage is not attributed to a single model");
+    expect(subscriptionExecutionModels([entry])).toEqual(["gemini/gemini-fast", "gemini/gemini-pro"]);
+    expect(entry.requestedEffort).toBeNull();
+    expect(sharedModelFamilyOf(["bull", "bear", "synthesize"].map((step) => ({ step, effectiveModel: "gemini/multiple-models" }))).shared).toBe(false);
+  });
+
   it("records Haiku effort stripping instead of claiming the requested effort ran", () => {
     expect(
       buildExecutionMetadataEntry({
@@ -26,13 +89,13 @@ describe("per-step execution metadata", () => {
       buildExecutionMetadataEntry({
         step: "synthesize",
         requestedModel: "claude-haiku-4-5",
-        effectiveModel: "claude-sonnet-5",
+        effectiveModel: "claude-sonnet-5-5",
         requestedEffort: "low",
         fallbackUsed: false,
       }),
     ).toMatchObject({
       requestedModel: "claude-haiku-4-5",
-      effectiveModel: "claude-sonnet-5",
+      effectiveModel: "claude-sonnet-5-5",
       requestedEffort: "low",
       effectiveEffort: "low",
       adjustments: ["model-floor"],
@@ -49,7 +112,7 @@ describe("per-step execution metadata", () => {
       buildExecutionMetadataEntry({
         step: "bull",
         requestedModel: "claude-haiku-4-5",
-        effectiveModel: "claude-sonnet-5",
+        effectiveModel: "claude-sonnet-5-5",
         requestedEffort: null,
         fallbackUsed: false,
       }),

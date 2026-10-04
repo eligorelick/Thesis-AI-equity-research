@@ -327,6 +327,27 @@ describe("buildDataBundle without an FMP key", () => {
     expect(withKeyless.gaps.some((g) => g.field.startsWith("keyless."))).toBe(false);
   });
 
+  it("discloses why a real issuer's fallbacks are blocked when CIK resolution fails", async () => {
+    const edgarUnavailable: EdgarTransport = {
+      fetchText: () => Promise.reject(new Error("EDGAR_CONTACT is missing or invalid")),
+    };
+    const bundle = await buildDataBundle("AAPL", {
+      now: () => NOW,
+      fmp: createFmpClient({ apiKey: "", fixturesDir: "fixtures/fmp" }),
+      edgar: createEdgarClient({ transport: edgarUnavailable }),
+      yahoo: explodingYahoo(),
+      ...noNetworkConfigs(),
+    });
+    expect(bundle.edgar.cik.ok).toBe(false);
+    expect(bundle.statements.incomeAnnual.ok).toBe(false);
+    expect(bundle.eodPrices.ok).toBe(false);
+    expect(bundle.gaps.find((gap) => gap.field === "keyless.issuerIdentity")).toMatchObject({
+      severity: "warn",
+      reason: expect.stringMatching(/EDGAR_CONTACT.*Settings/),
+    });
+    expect(bundle.gaps.some((gap) => gap.field === "keyless")).toBe(false);
+  });
+
   it("still builds, and discloses a warn gap, when the keyless layer throws", async () => {
     const bundle = await buildDataBundle("AAPL", {
       now: () => NOW,
@@ -378,10 +399,11 @@ describe("buildDataBundle without an FMP key", () => {
     expect(bundle.benchmarkPrices.spy.ok && bundle.benchmarkPrices.spy.value.source).toBe("yahoo");
     expect(bundle.benchmarkPrices.sectorEtf.ok && bundle.benchmarkPrices.sectorEtf.value.source).toBe("yahoo");
     expect(bundle.gaps.find((g) => g.field === "keyless.sectorEtf")?.reason).toMatch(/HTTP 402/);
-    // Nothing issuer-bound was substituted, and nothing claims it was tried.
+    // Nothing issuer-bound was substituted; the blocked fallback is disclosed.
     expect(bundle.statements.incomeAnnual.ok).toBe(false);
     expect(bundle.enterpriseValues.ok).toBe(false);
     expect(bundle.gaps.filter((g) => g.field.startsWith("keyless.")).map((g) => g.field).sort()).toEqual([
+      "keyless.issuerIdentity",
       "keyless.sectorEtf",
       "keyless.spy",
     ]);
@@ -433,8 +455,9 @@ describe("buildDataBundle without an FMP key", () => {
       expect(bundle.edgar.cik.ok && bundle.edgar.cik.value.source).toBe("fmp");
       expect(bundle.edgar.registrant?.tickers).toEqual(["OTHER"]);
       expect(bundle.edgar.companyFacts.ok).toBe(true);
-      // Only the two index instruments, which assert no issuer identity.
+      // Only the two index instruments are substituted; the issuer gate is disclosed.
       expect(bundle.gaps.filter((g) => g.field.startsWith("keyless.")).map((g) => g.field).sort()).toEqual([
+        "keyless.issuerIdentity",
         "keyless.sectorEtf",
         "keyless.spy",
       ]);

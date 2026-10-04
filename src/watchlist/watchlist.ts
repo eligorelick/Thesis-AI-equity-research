@@ -32,6 +32,7 @@ import { makeFmpCachedFetch } from "@/pipeline/dataBundle";
 import { createFmpClient, type FmpClient } from "@/providers/fmp";
 import { getLatestDoneReport } from "@/report/query";
 import { listRunRefsForSymbol, type RunRef } from "@/report/history";
+import { gradeForDisplay } from "@/report/assessment";
 import {
   gradeSurfaceEntries,
   type GradeSurfaceKey,
@@ -46,15 +47,15 @@ import type { Grade } from "@/types/core";
 
 export type WatchlistEntry = WatchlistRow;
 
-/** The graded sections of the verdict strip . */
+/** Display grades from the verdict strip; null means the section was not assessed. */
 export interface WatchlistGrades {
-  fundamentals: Grade;
-  valuation: Grade;
-  technicals: Grade;
-  balanceSheet?: Grade;
-  quality: Grade;
-  leadership: Grade;
-  moat: Grade;
+  fundamentals: Grade | null;
+  valuation: Grade | null;
+  technicals: Grade | null;
+  balanceSheet?: Grade | null;
+  quality: Grade | null;
+  leadership: Grade | null;
+  moat: Grade | null;
 }
 
 /**
@@ -316,9 +317,9 @@ function loadReport(symbol: string, gaps: string[]): ReportEnrichment {
 
 /** Pull the present section grades out of a validated report's grade strip. */
 function extractGrades(strip: GradeStrip): WatchlistGrades {
-  const grades: Partial<Record<GradeSurfaceKey, Grade>> = {};
+  const grades: Partial<Record<GradeSurfaceKey, Grade | null>> = {};
   for (const { descriptor, block } of gradeSurfaceEntries(strip)) {
-    grades[descriptor.key] = block.grade;
+    grades[descriptor.key] = gradeForDisplay(block);
   }
   return grades as WatchlistGrades;
 }

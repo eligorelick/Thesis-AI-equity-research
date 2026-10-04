@@ -32,7 +32,7 @@
  */
 
 import type { ManifestEntry } from "@/types/core";
-import { parseSubscriptionModel } from "@/ai/contracts";
+import { parseSubscriptionModel, subscriptionModel } from "@/ai/contracts";
 import { sourceManifestEntries, type DataBundle } from "@/pipeline/types";
 import { routeMetricsBlock, type ComputedMetrics } from "@/pipeline/compute";
 import { computeDcfDisplay } from "@/pipeline/stageB/fairValue";
@@ -92,7 +92,8 @@ import {
   type EntityIssue,
 } from "@/pipeline/stageC/entityValidation";
 import { buildDataCompleteness } from "@/report/completeness";
-import { buildExecutionMetadataEntry } from "@/report/execution";
+import { applyReportAssessmentStatus } from "@/report/assessment";
+import { attributeJudgeProtocolDisclosures, buildExecutionMetadataEntry, type ProviderExecution } from "@/report/execution";
 import { judgeFloorModelId, resolveRegistryModel } from "@/models/registry";
 import {
   SHARED_RULES_BLOCK,
@@ -162,6 +163,8 @@ export interface PassMessage {
 
 /** The success branch of the provider's Sourced<PassOutcome>. */
 export interface PassOutcomeLike {
+  presumed?: boolean;
+  execution?: ProviderExecution;
   message: PassMessage;
   fetchedUrls?: string[];
   usage: PassUsage;
@@ -173,6 +176,8 @@ export interface PassOutcomeLike {
 /** Structural mirror of the provider's typed PassError (kinds incl. the
  * Stage-C-fabricated parse/schema/transport — see PassErrorKind docs). */
 export interface PassErrorLike {
+  presumed?: boolean;
+  execution?: ProviderExecution;
   kind:
     | "no_key"
     | "refusal"
@@ -292,6 +297,8 @@ export interface PassDeps {
 
 /** Successful pass output plus its usage/cost provenance. */
 export interface PassResult<T> {
+  presumed?: boolean;
+  execution?: ProviderExecution;
   output: T;
   usage: PassUsage;
   costUsd: number;
@@ -333,6 +340,8 @@ export type PassRun<T> =
        * between converging and re-rolling the dice on weaker models.
        */
       rawText?: string;
+      presumed?: boolean;
+      execution?: ProviderExecution;
       usage?: PassUsage;
       costUsd?: number;
       fallbackUsed?: boolean;
@@ -363,7 +372,7 @@ export const ANALYST_MAX_TOKENS = 64_000;
  * output tokens on average (max seen 51.8K — 81% of the old cap), of which
  * ~25–30K is the 1.1.0 report JSON itself; a section-heavy ticker plus a long
  * adjudication would clip 64K and burn the whole pass. Same free-ceiling
- * reasoning as ANALYST_MAX_TOKENS; the judge floor (Sonnet 5) and every other
+ * reasoning as ANALYST_MAX_TOKENS; the judge floor (Sonnet 5.5) and every other
  * eligible judge model support 128K output.
  */
 export const JUDGE_MAX_TOKENS = 96_000;
@@ -623,7 +632,9 @@ function finishStructuredPass<T>(
       gap: outcome.gap,
       error: outcome.error,
       usage,
+      ...(outcome.error.execution === undefined ? {} : { execution: { requestedModel, ...outcome.error.execution } }),
       costUsd: outcome.error.costUsd,
+      ...(outcome.error.presumed === undefined ? {} : { presumed: outcome.error.presumed }),
       fallbackUsed: outcome.error.fallbackUsed,
       model: outcome.error.model ?? (outcome.error.costUsd !== undefined ? requestedModel : undefined),
       webSearches: outcome.error.webSearches ?? (usage ? webSearchesOf(usage) : undefined),
@@ -633,6 +644,8 @@ function finishStructuredPass<T>(
   const attemptedSources = [parseSubscriptionModel(data.model)?.provider ?? "anthropic"];
   const text = extractText(data.message);
   const billedAttempt = {
+    ...(data.presumed === undefined ? {} : { presumed: data.presumed }),
+    ...(data.execution === undefined ? {} : { execution: { requestedModel, ...data.execution } }),
     usage: data.usage,
     costUsd: data.costUsd,
     fallbackUsed: data.fallbackUsed,
@@ -669,12 +682,14 @@ function finishStructuredPass<T>(
     ok: true,
     result: {
       output: parsed.value,
+      ...(data.presumed === undefined ? {} : { presumed: data.presumed }),
       usage: data.usage,
       costUsd: data.costUsd,
       fallbackUsed: data.fallbackUsed,
       model: data.model,
       webSearches: webSearchesOf(data.usage),
       fetchedUrls: data.fetchedUrls ?? [],
+      ...(data.execution === undefined ? {} : { execution: { requestedModel, ...data.execution } }),
     },
   };
 }
@@ -848,6 +863,8 @@ function telemetryFromPassRun<T>(
     costUsd: run.ok ? run.result.costUsd : (run.costUsd ?? 0),
     fallbackUsed: run.ok ? run.result.fallbackUsed : (run.fallbackUsed ?? false),
     billable: !parseSubscriptionModel(requestedModel) && (run.ok || run.costUsd !== undefined),
+    ...((run.ok ? run.result.presumed : run.presumed) === undefined ? {} : { presumed: run.ok ? run.result.presumed : run.presumed }),
+    ...((run.ok ? run.result.execution : run.execution) === undefined ? {} : { execution: run.ok ? run.result.execution : run.execution }),
     fetchedUrls,
   };
 }
@@ -1064,11 +1081,11 @@ function failureMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function hardFailure(field: string, err: unknown): PassRun<AnalystCase> {
+function hardFailure(field: string, err: unknown, model: string): PassRun<AnalystCase> {
   const reason = failureMessage(err);
   return {
     ok: false,
-    gap: { field, reason, severity: "critical", attemptedSources: ["anthropic"] },
+    gap: { field, reason, severity: "critical", attemptedSources: [parseSubscriptionModel(model)?.provider ?? "anthropic"] },
     error: { kind: "transport", message: reason },
   };
 }
@@ -1162,7 +1179,7 @@ function bearNotLaunched(reason: string): PassRun<AnalystCase> {
   const message = `bear pass not launched because bull stream did not reach a first token (${reason})`;
   return {
     ok: false,
-    gap: { field: "llm.bear", reason: message, severity: "critical", attemptedSources: ["anthropic"] },
+    gap: { field: "llm.bear", reason: message, severity: "critical", attemptedSources: [] },
     error: { kind: "transport", message, notLaunched: true },
   };
 }
@@ -1231,7 +1248,7 @@ export async function runBullThenBear(
     });
     const bullRun = tapFinish(bullHandle.result, hooks, "bull").then(
       (outcome) => finishStructuredPass(outcome, parseAnalystCase, "llm.bull", deps.model),
-      (error: unknown) => hardFailure("llm.bull", error),
+      (error: unknown) => hardFailure("llm.bull", error, deps.model),
     );
     // Attached before bear is launched, so an already-doomed bull hands bear a
     // signal that is aborted the moment its request is created.
@@ -1328,7 +1345,7 @@ export async function runBullThenBear(
     }
     const bearRun = tapFinish(bearHandle.result, hooks, "bear").then(
       (outcome) => finishStructuredPass(outcome, parseAnalystCase, "llm.bear", deps.model),
-      (error: unknown) => hardFailure("llm.bear", error),
+      (error: unknown) => hardFailure("llm.bear", error, deps.model),
     );
     void bearRun.then(
       (run) => {
@@ -1572,6 +1589,7 @@ function entityConflictFailure(
     fallbackUsed: successful.fallbackUsed,
     model: successful.model,
     webSearches: successful.webSearches,
+    ...(successful.execution === undefined ? {} : { execution: successful.execution }),
   };
 }
 
@@ -1763,7 +1781,13 @@ export async function runJudgePass(
     const request = buildJudgeRunPassArgs(deps, payload, bull, bear, validationFeedback, order);
     deps.validateRunPass?.(request);
     const outcome = await deps.runPass(request);
-    return finishStructuredPass(outcome, parseJudgeOutput, "llm.judge", judgeModel);
+    const finished = finishStructuredPass(outcome, parseJudgeOutput, "llm.judge", judgeModel);
+    if (judgeModel === deps.model) return finished;
+    // The provider sees the internally floored request. Keep the original
+    // selection in durable evidence so a resumed run still discloses the floor.
+    return finished.ok
+      ? { ...finished, result: { ...finished.result, execution: { ...finished.result.execution, requestedModel: deps.model } } }
+      : { ...finished, execution: { ...finished.execution, requestedModel: deps.model } };
   };
 
   await beforeProviderLaunch?.();
@@ -1841,7 +1865,7 @@ export async function runJudgePass(
 /**
  * WS7 (D-20): fold a mirrored `both`-mode attempt's billing into the primary
  * result so the pass settles ONE cost entry covering both requests. The primary
- * output is the report; only usage, cost, searches and fetched URLs are merged.
+ * output is the report; usage and execution evidence cover both requests.
  * A mirrored attempt that failed still contributes whatever it billed — an
  * unsettled paid request is exactly the thing the spend controls exist to catch.
  */
@@ -1868,10 +1892,50 @@ function mergeJudgeBilling(
   const costUsd = mirrored.ok ? mirrored.result.costUsd : (mirrored.costUsd ?? 0);
   const webSearches = mirrored.ok ? mirrored.result.webSearches : (mirrored.webSearches ?? 0);
   const fetchedUrls = mirrored.ok ? mirrored.result.fetchedUrls : [];
+  const mirroredModel = mirrored.ok ? mirrored.result.model : mirrored.model;
+  const mirroredExecution = mirrored.ok ? mirrored.result.execution : mirrored.execution;
+  const provider = parseSubscriptionModel(primary.model)?.provider;
+  let execution = primary.execution;
+  let model = primary.model;
+  // Missing usage is itself relevant when the transport explicitly reports
+  // that absence. Legacy failures without evidence retain the primary record.
+  if (provider !== undefined && (usage !== undefined || mirroredExecution?.modelObserved !== undefined || mirroredExecution?.usageReported !== undefined)) {
+    const observed = (effectiveModel: string | undefined, evidence: ProviderExecution | undefined): string[] => {
+      if (evidence?.modelObserved === false) return [];
+      if (evidence?.observedModels !== undefined) return evidence.observedModels;
+      const parsed = effectiveModel === undefined ? null : parseSubscriptionModel(effectiveModel);
+      return parsed === null || parsed.model === "multiple-models" ? [] : [parsed.model];
+    };
+    const observedModels = [...new Set([
+      ...observed(primary.model, primary.execution),
+      ...observed(mirroredModel, mirroredExecution),
+    ])];
+    if (primary.model !== mirroredModel || observedModels.length > 1) model = subscriptionModel(provider, "multiple-models");
+    execution = {
+      ...(primary.execution?.requestedModel === undefined ? {} : { requestedModel: primary.execution.requestedModel }),
+      ...(primary.execution?.modelObserved !== undefined || mirroredExecution?.modelObserved !== undefined
+        ? { modelObserved: primary.execution?.modelObserved !== false && mirroredExecution?.modelObserved !== false } : {}),
+      ...(primary.execution?.usageReported !== undefined || mirroredExecution?.usageReported !== undefined
+        ? { usageReported: primary.execution?.usageReported !== false && mirroredExecution?.usageReported !== false } : {}),
+      requestedEffort: primary.execution?.requestedEffort === mirroredExecution?.requestedEffort
+        ? primary.execution?.requestedEffort ?? null : null,
+      effectiveEffort: primary.execution?.effectiveEffort === mirroredExecution?.effectiveEffort
+        ? primary.execution?.effectiveEffort ?? null : null,
+      ...(primary.execution?.requestedServiceTier !== undefined && primary.execution.requestedServiceTier === mirroredExecution?.requestedServiceTier
+        ? { requestedServiceTier: primary.execution.requestedServiceTier } : {}),
+      ...(provider === "chatgpt" ? { effectiveServiceTier: primary.execution?.effectiveServiceTier === mirroredExecution?.effectiveServiceTier
+        ? primary.execution?.effectiveServiceTier ?? null : null } : {}),
+      observedModels,
+    };
+  }
   const add = (a: number | null | undefined, b: number | null | undefined): number =>
     (a ?? 0) + (b ?? 0);
   return {
     ...primary,
+    model,
+    ...(primary.presumed === true || (mirrored.ok ? mirrored.result.presumed : mirrored.presumed) === true
+      ? { presumed: true } : {}),
+    ...(execution === undefined ? {} : { execution }),
     usage: {
       input_tokens: add(primary.usage.input_tokens, usage?.input_tokens),
       output_tokens: add(primary.usage.output_tokens, usage?.output_tokens),
@@ -2765,7 +2829,7 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
       ? undefined
       : completeJudgeProtocol(args.judgeProtocol, sharedModelFamilyOf(execution));
 
-  const missingData = dedupManifest([
+  const missingData = attributeJudgeProtocolDisclosures(dedupManifest([
     ...args.bundle.gaps,
     ...args.computed.gaps,
     ...(args.validationGaps ?? []),
@@ -2773,7 +2837,7 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
     ...(args.judgeProtocol?.disclosures ?? []),
     ...(judgeProtocol === undefined ? [] : judgeProtocolManifestEntries(judgeProtocol)),
     ...(args.verify.checks === undefined ? [] : consistencyManifestEntries(args.verify.checks)),
-  ]);
+  ]), { execution, model: args.model });
 
   const meta: ReportMeta = {
     symbol: args.symbol,
@@ -2875,7 +2939,7 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
       parsed.error.message,
     );
   }
-  return parsed.data;
+  return applyReportAssessmentStatus(parsed.data);
 }
 
 function firstProfileName(bundle: DataBundle): string | null {
@@ -3093,8 +3157,8 @@ export { assembleContextPayload, serializePayloadForPrompt, payloadFingerprint }
 
 /** A queued mock response: a structured JSON output, RAW text, or a typed failure. */
 export type MockResponse =
-  | { kind: "json"; value: unknown; costUsd?: number; webSearches?: number; fetchedUrls?: string[]; model?: string; fallbackUsed?: boolean }
-  | { kind: "text"; text: string; costUsd?: number; webSearches?: number; fetchedUrls?: string[]; model?: string; fallbackUsed?: boolean }
+  | { kind: "json"; value: unknown; costUsd?: number; webSearches?: number; fetchedUrls?: string[]; model?: string; fallbackUsed?: boolean; execution?: ProviderExecution }
+  | { kind: "text"; text: string; costUsd?: number; webSearches?: number; fetchedUrls?: string[]; model?: string; fallbackUsed?: boolean; execution?: ProviderExecution }
   | { kind: "error"; error: PassErrorLike; gap?: ManifestEntry };
 
 /**
@@ -3177,6 +3241,7 @@ export class MockRunPass {
           costUsd: resp.costUsd ?? 0,
           fallbackUsed: resp.fallbackUsed ?? false,
           model: resp.model ?? args.model,
+          ...(resp.execution === undefined ? {} : { execution: resp.execution }),
         },
       },
     };

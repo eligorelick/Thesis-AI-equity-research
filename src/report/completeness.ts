@@ -28,12 +28,12 @@ export function buildDataCompleteness(
   // companyfacts — the best possible EDGAR outcome — reported `edgar: "missing"`
   // and downgraded forensics to "provisional". When EDGAR really is unavailable
   // its own `edgar.*` member gaps are in this same manifest and still classify.
-  const isKeylessEntry = (gap: ManifestEntry): boolean =>
-    gap.field === "keyless" || gap.field.startsWith("keyless.");
   const edgarGaps = actionableGaps.filter(
-    (gap) => !isKeylessEntry(gap) && /edgar|company.?facts/i.test(`${gap.field} ${gap.reason}`),
+    (gap) => /^(?:legacy\.audit\.)?(?:edgar(?:[.:(]|$)|company.?facts(?:[.:(]|$))/i.test(gap.field),
   );
-  const xbrlGaps = actionableGaps.filter((gap) => /xbrl/i.test(`${gap.field} ${gap.reason}`));
+  // Routing evidence and financial-method disclosures may mention successful
+  // XBRL reads. Only cross-check namespaces describe the cross-check outcome.
+  const xbrlGaps = actionableGaps.filter((gap) => /^(?:(?:validation|edgar|legacy\.audit)\.)?xbrl(?:CrossCheck)?(?:[.:(]|$)/i.test(gap.field));
   // "failed" must mean the cross-check RAN and disagreed — not that it could
   // not be performed. Stage A already encodes that distinction in severity: a
   // not-checkable period (no XBRL fact resolved, mixed currency) files an

@@ -324,7 +324,7 @@ describe("reportToMarkdown", () => {
     ];
     const md = reportToMarkdown(r);
     expect(md).toContain(
-      "| Pass execution | synthesize: requested claude-haiku-4-5/high; effective claude-sonnet-5/high (model-floor) |",
+      "| Pass execution | synthesize: requested claude-haiku-4-5/high; effective claude-sonnet-5/high (model-floor). synthesize: raised from claude-haiku-4-5 to claude-sonnet-5 (model-floor). |",
     );
   });
 

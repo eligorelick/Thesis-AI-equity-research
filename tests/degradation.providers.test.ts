@@ -336,16 +336,15 @@ describe("degradation: FMP entirely down", () => {
 });
 
 /* ------------------------------------------------------------------------ *
- * Scenario 2 — Finnhub down (insider sentiment) — single disclosed gap
+ * Scenario 2 — Finnhub down — insider sentiment and attempted fallbacks disclosed
  * ------------------------------------------------------------------------ */
 
 describe("degradation: Finnhub insider sentiment down", () => {
-  it("files a single disclosed insiderSentiment gap while FMP/EDGAR/FRED/FINRA stay intact", async () => {
+  it("discloses insider sentiment and attempted news/calendar fallbacks while other providers stay intact", async () => {
     const bundle = await buildDataBundle("AAPL", {
       now,
       eodYears: 1,
-      // FMP up enough to not add noise: return empty arrays (info gaps) for everything
-      // except keep it distinct — we only assert on the Finnhub gap here.
+      // Empty primary responses also exercise the configured Finnhub fallbacks.
       fmp: makeFmp((url) => {
         // A live "empty array" body is a benign info gap; keeps FMP from dominating the manifest.
         void fmpEndpoint(url);
@@ -358,10 +357,15 @@ describe("degradation: Finnhub insider sentiment down", () => {
     });
 
     expect(bundle.insiderSentiment.ok).toBe(false);
-    // Exactly one Finnhub gap, sourced to finnhub, disclosed in the manifest.
+    // Each failed Finnhub capability remains visible without replacing the
+    // primary missing-data result with an invented fallback value.
     const finnhubGaps = bundle.gaps.filter((g) => (g.attemptedSources ?? []).includes("finnhub"));
-    expect(finnhubGaps.length).toBe(1);
-    expect(finnhubGaps[0].field).toMatch(/insiderSentiment/i);
+    expect(finnhubGaps).toHaveLength(3);
+    expect(finnhubGaps.filter((gap) => /insiderSentiment/i.test(gap.field))).toHaveLength(1);
+    expect(finnhubGaps.filter((gap) => gap.field.startsWith("dataFallback.")).map((gap) => gap.field).sort())
+      .toEqual(["dataFallback.earningsCalendarNext", "dataFallback.news"]);
+    expect(bundle.news.ok).toBe(false);
+    expect(bundle.earningsCalendarNext.ok).toBe(false);
 
     // FINRA short interest is unaffected by the Finnhub outage.
     expect(bundle.shortInterest.ok).toBe(true);

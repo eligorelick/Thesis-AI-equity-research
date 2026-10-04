@@ -7,6 +7,42 @@ reversibility, the choice, and why. Reversible and disclosed beats clever.
 
 Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
 
+## D-34 (financial correctness 2026-10-03) Match common ownership and financial operating models
+
+- **Evidence**: a cached SCHW filing reported deposits and net interest income,
+  but the broad capital-markets label selected the industrial route. Its FY2025
+  income available to common was $8.417 billion and tangible common equity
+  $23.478 billion. The prior extraction ignored common earnings, withholding
+  ROTE while displaying tangible book value without deducting preferred stock.
+- **Options**: special-case the ticker, infer industrial EBIT, retain broad
+  industry labels unconditionally, or refine broad financial classifications
+  using corroborated, recent SEC facts and align the ownership basis.
+- **Choice**: corroborated deposit-funded evidence may refine broad financial
+  labels. Explicit industry and insurance-broker SIC safeguards remain. Extract
+  filed common earnings independently of total net income. Banks use annual
+  tangible common equity and matching ROTE for excess-return valuation; insurers
+  and mortgage REITs use common equity and common-equity returns. Payout uses
+  common earnings. Unknown preferred adjustments withhold the return/model.
+  Aggregate cash dividends cannot substitute for common dividends when preferred
+  stock is outstanding; preferred earnings allocations are not cash payments.
+  Industrial FCF, EV, debt/EBITDA, EBIT coverage and ROIC outputs are withheld
+  before scoring and report payload construction; share/dilution data remain.
+- **Integrity and disclosure**: EDGAR-derived statements checked against the
+  same companyfacts source are identities, not independent verification. Mark
+  those checks skipped with an information gap. EDGAR availability reflects
+  positive filing evidence instead of an unrelated individual-feed gap. No
+  identity, currency, split or missing-value safeguards are relaxed.
+- **Compatibility**: new runs use explicitly dated common-equity assumptions;
+  report spec 1.6.0 and payload 1.7.0 invalidate earlier calculation conventions;
+  historical reports retain their original values. The nonfinancial DEMO audit
+  fixture changes only EDGAR readiness and the ROTE/P-TBV explanatory text; its
+  numerical values and preserved fixture bytes do not change.
+- **Validation**: provider-free regression tests cover broad-label routing and
+  broker safeguards, common earnings, preferred-adjusted book/return/payout,
+  missing-common-income withholding, industrial suppression, currency gates
+  and SEC identity status. Cached filings were inspected read-only; no live AI
+  call was used to establish these financial calculations.
+
 ## D-33 (AI connections 2026-10-03) Explicit account allowance, no billing fallback
 
 - **Options**: support only API keys; imitate private subscription endpoints;

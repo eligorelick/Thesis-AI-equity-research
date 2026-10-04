@@ -23,6 +23,7 @@
 import type { ReactNode } from "react";
 
 import { Badge, GradeChip, type Tone } from "@/components/ui";
+import { gradeForDisplay } from "@/report/assessment";
 import type {
   GradeBlock,
   SourcedClaim,
@@ -238,7 +239,7 @@ export function GradeReasoning({
   return (
     <div className="border border-edge-strong bg-raised">
       <div className="flex items-center gap-2 border-b border-edge px-2.5 py-1.5">
-        <GradeChip grade={block.grade} />
+        <GradeChip grade={gradeForDisplay(block)} />
         <span className="mono text-[11px] uppercase tracking-[0.12em] text-muted">
           {title}
         </span>

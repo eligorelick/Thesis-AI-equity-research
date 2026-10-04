@@ -1,7 +1,7 @@
 /**
  * The model registry (config/models.json via src/models/registry.ts) is the
  * single source for model ids, request shaping and prices. These tests pin
- * the facts verified on 2026-09-02 and the acceptance rules for
+ * the facts verified on 2026-10-03 and the acceptance rules for
  * ANALYSIS_MODEL. No network.
  */
 import { describe, expect, it } from "vitest";
@@ -35,14 +35,17 @@ import { ANALYSIS_MODEL_OPTIONS, explainAnalysisModel, isValidDatedAnalysisModel
 import { modelSupportsEffort } from "@/report/execution";
 
 describe("config/models.json", () => {
-  it("is stamped with a snapshot date and lists the six active models in preference-aware order", () => {
+  it("is stamped with a snapshot date and retains old active models alongside the two 5.5 releases", () => {
     expect(REGISTRY_SNAPSHOT_DATE).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(REGISTRY_SNAPSHOT_DATE).toBe("2026-10-03");
     expect(MODEL_REGISTRY_SNAPSHOT_DATE).toBe(REGISTRY_SNAPSHOT_DATE);
     expect(activeModelIds()).toEqual([
       "claude-fable-5-1",
       "claude-fable-5",
+      "claude-opus-5-5",
       "claude-opus-5",
       "claude-opus-4-8",
+      "claude-sonnet-5-5",
       "claude-sonnet-5",
       "claude-haiku-4-5",
     ]);
@@ -56,6 +59,8 @@ describe("config/models.json", () => {
       inputPerMTok: 10, outputPerMTok: 50, cacheWrite5mPerMTok: 12.5, cacheWrite1hPerMTok: 20, cacheReadPerMTok: 0.25,
     });
     expect(price("claude-fable-5")).toMatchObject({ inputPerMTok: 10, outputPerMTok: 50, cacheReadPerMTok: 1 });
+    expect(price("claude-opus-5-5")).toEqual({ inputPerMTok: 4, outputPerMTok: 20, cacheWrite5mPerMTok: 5, cacheWrite1hPerMTok: 8, cacheReadPerMTok: 0.2 });
+    expect(price("claude-sonnet-5-5")).toEqual({ inputPerMTok: 2, outputPerMTok: 10, cacheWrite5mPerMTok: 2.5, cacheWrite1hPerMTok: 4, cacheReadPerMTok: 0.2 });
     expect(price("claude-opus-5")).toMatchObject({ inputPerMTok: 5, outputPerMTok: 25, cacheWrite5mPerMTok: 6.25, cacheWrite1hPerMTok: 10 });
     expect(price("claude-opus-4-8")).toEqual(price("claude-opus-5"));
     expect(price("claude-sonnet-5")).toMatchObject({ inputPerMTok: 2, outputPerMTok: 10, cacheReadPerMTok: 0.2 });
@@ -70,7 +75,7 @@ describe("config/models.json", () => {
 
   it("records context, output, effort, sampling, thinking and tool support per family", () => {
     const entry = (id: string) => assertRegistryModel(id).entry;
-    for (const id of ["claude-fable-5-1", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5"]) {
+    for (const id of ["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5-5", "claude-sonnet-5"]) {
       expect(entry(id).contextWindowTokens).toBe(1_000_000);
       expect(entry(id).maxOutputTokens).toBe(128_000);
       expect(entry(id).effort).toEqual({ supported: true, levels: ["low", "medium", "high", "xhigh", "max"] });
@@ -90,6 +95,10 @@ describe("config/models.json", () => {
     expect(modelSupportsEffort("claude-sonnet-4-5")).toBe(false);
     expect(entry("claude-fable-5-1").thinking).toEqual({ mode: "always-on", sendParam: false });
     expect(entry("claude-fable-5").thinking).toEqual({ mode: "always-on", sendParam: false });
+    expect(entry("claude-opus-5-5").thinking).toEqual({ mode: "always-on", sendParam: false });
+    expect(entry("claude-opus-5-5").releasedOn).toBe("2026-09-22");
+    expect(entry("claude-sonnet-5-5").thinking).toEqual({ mode: "adaptive", sendParam: false });
+    expect(entry("claude-sonnet-5-5").releasedOn).toBe("2026-09-28");
     expect(entry("claude-opus-5").thinking).toEqual({ mode: "adaptive", sendParam: true });
     expect(entry("claude-opus-4-8").thinking).toEqual({ mode: "adaptive", sendParam: true });
     expect(entry("claude-sonnet-5").thinking).toEqual({ mode: "adaptive", sendParam: false });
@@ -99,15 +108,17 @@ describe("config/models.json", () => {
         model: "claude-opus-4-8",
       });
     }
-    for (const id of ["claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]) {
+    for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5-5", "claude-sonnet-5", "claude-haiku-4-5"]) {
       expect(entry(id).serverSideFallback).toBeNull();
     }
   });
 
-  it("puts claude-fable-5-1 in the auto policy without moving Opus 5 off the top", () => {
+  it("prefers Opus 5.5 while retaining the older active choices", () => {
     expect(autoPreferenceIds()).toEqual([
+      "claude-opus-5-5",
       "claude-opus-5",
       "claude-opus-4-8",
+      "claude-sonnet-5-5",
       "claude-sonnet-5",
       "claude-fable-5-1",
       "claude-fable-5",
@@ -116,7 +127,7 @@ describe("config/models.json", () => {
   });
 
   it("owns the judge floor, and every consumer reads it from here", () => {
-    expect(judgeFloorModelId()).toBe("claude-sonnet-5");
+    expect(judgeFloorModelId()).toBe("claude-sonnet-5-5");
     expect(activeModelIds()).toContain(judgeFloorModelId());
     // Stage C's judge route and both provider reservation bounds.
     expect(JUDGE_MODEL_FLOOR).toBe(judgeFloorModelId());
@@ -146,12 +157,14 @@ describe("ANALYSIS_MODEL acceptance", () => {
     });
     expect(isRegistryDatedSnapshot("claude-haiku-4-5-20251001")).toBe(true);
     expect(isValidDatedAnalysisModel("claude-haiku-4-5-20251001")).toBe(true);
-    expect(acceptedModelIds()).toEqual([...activeModelIds().slice(0, 5), "claude-haiku-4-5", "claude-haiku-4-5-20251001"]);
+    expect(acceptedModelIds()).toEqual([...activeModelIds(), "claude-haiku-4-5-20251001"]);
     expect(explainAnalysisModel("auto")).toBeNull();
   });
 
   it("rejects dated ids for the 4.6+ families with a message naming the pinned id", () => {
     for (const [dated, base] of [
+      ["claude-opus-5-5-20260922", "claude-opus-5-5"],
+      ["claude-sonnet-5-5-20260928", "claude-sonnet-5-5"],
       ["claude-opus-5-20260115", "claude-opus-5"],
       ["claude-opus-4-8-20260601", "claude-opus-4-8"],
       ["claude-sonnet-5-20260808", "claude-sonnet-5"],
@@ -216,7 +229,7 @@ describe("registry validation", () => {
     expect(() => parseModelRegistry(badFallback)).toThrow(/fallback model claude-nope/);
 
     const badThinking = valid();
-    badThinking.models[5]!.thinking = { mode: "none", sendParam: true };
+    badThinking.models.find((entry) => entry.id === "claude-haiku-4-5")!.thinking = { mode: "none", sendParam: true };
     expect(() => parseModelRegistry(badThinking)).toThrow(/only adaptive thinking may send a param/);
   });
 });

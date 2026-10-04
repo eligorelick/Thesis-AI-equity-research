@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { assertSameOrigin } from "@/app/api/sameOrigin";
 import { getConfig } from "@/config/env";
+import { hasConfiguredEdgarIdentity } from "@/providers/edgar";
 import {
   ANALYSIS_MODEL_OPTIONS,
   EFFORT_LEVELS,
@@ -38,6 +39,7 @@ function payloadFor(authority: WritableSettingsAuthority): SettingsPayload {
       hasFinnhubKey: config.hasFinnhubKey,
       hasFredKey: config.hasFredKey,
       hasAnthropicKey: config.hasAnthropicKey,
+      hasEdgarContact: hasConfiguredEdgarIdentity(),
       fixtureMode: config.fixtureMode,
       resumeOnStart: config.resumeOnStart,
     },

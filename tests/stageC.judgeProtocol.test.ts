@@ -33,6 +33,7 @@ import type { AnalystCase, JudgeOutput, Report } from "@/report/schema";
 import { ANALYST_CASE_SCHEMA, analystCaseToJsonSchema } from "@/report/schema";
 import {
   annotateSharedModelFamily,
+  attributeJudgeProtocolDisclosures,
   buildExecutionMetadataEntry,
   sharedModelFamilyOf,
 } from "@/report/execution";
@@ -492,6 +493,25 @@ describe("judge case order (THESIS_JUDGE_ORDER)", () => {
       resolveJudgeOrder("random", payloadFingerprint(payload)).order,
     );
   });
+
+  it("retains the user's Haiku request when the provider records the internally floored Sonnet request", async () => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { model: "claude-sonnet-5-5", execution: {
+      requestedModel: "claude-sonnet-5-5", requestedEffort: "high", effectiveEffort: "high",
+    } });
+    let settled: unknown;
+    const run = await runJudgePass(makeDeps(mock, { model: "claude-haiku-4-5" }), payload,
+      analystCase("bull"), analystCase("bear"), undefined, (settlement) => { settled = settlement.telemetry; });
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.execution).toMatchObject({ requestedModel: "claude-haiku-4-5", effectiveEffort: "high" });
+    expect(settled).toMatchObject({ model: "claude-sonnet-5-5", execution: { requestedModel: "claude-haiku-4-5" } });
+    expect(buildExecutionMetadataEntry({ step: "synthesize", requestedModel: "claude-haiku-4-5", effectiveModel: run.result.model,
+      requestedEffort: "high", fallbackUsed: false, execution: run.result.execution })).toMatchObject({
+      requestedModel: "claude-haiku-4-5", adjustments: ["model-floor"],
+    });
+  });
 });
 
 /* ------------------------------------------------------------------------ *
@@ -499,6 +519,108 @@ describe("judge case order (THESIS_JUDGE_ORDER)", () => {
  * ------------------------------------------------------------------------ */
 
 describe("THESIS_JUDGE_ORDER=both", () => {
+  it.each([true, false])("settles combined ChatGPT usage with truthful actual controls (matching: %s)", async (matching) => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    const execution = { requestedEffort: "high", effectiveEffort: "high", requestedServiceTier: "fast", effectiveServiceTier: "fast" } as const;
+    mock.onJson("llm.judge", fakeJudgeOutput(), { model: "chatgpt/gpt-6.1-sol", execution });
+    mock.onJson("llm.judge", fakeJudgeOutput(), { model: "chatgpt/gpt-6.1-sol", execution: {
+      ...execution, effectiveEffort: matching ? "high" : "medium", effectiveServiceTier: matching ? "fast" : "default",
+    } });
+    let settled: unknown;
+    const run = await runJudgePass(
+      makeDeps(mock, { model: "chatgpt/gpt-6.1-sol", judgeOrder: "both" }), payload,
+      analystCase("bull"), analystCase("bear"), undefined,
+      (settlement) => { settled = settlement.telemetry; },
+    );
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.usage.input_tokens).toBe(2000);
+    expect(settled).toMatchObject({
+      model: "chatgpt/gpt-6.1-sol", inputTokens: 2000, outputTokens: 2000, billable: false,
+      execution: { requestedEffort: "high", requestedServiceTier: "fast", observedModels: ["gpt-6.1-sol"],
+        effectiveEffort: matching ? "high" : null, effectiveServiceTier: matching ? "fast" : null },
+    });
+  });
+
+  it.each([true, false])("retains both Gemini models even when the mirrored output is rejected (valid: %s)", async (valid) => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { model: "gemini/gemini-pro", execution: {
+      requestedEffort: null, effectiveEffort: null, observedModels: ["gemini-pro"],
+    } });
+    const mirrored = { model: "gemini/gemini-fast", execution: {
+      requestedEffort: null, effectiveEffort: null, observedModels: ["gemini-fast"],
+    } };
+    if (valid) mock.onJson("llm.judge", fakeJudgeOutput(), mirrored);
+    else mock.onText("llm.judge", "not valid JSON", mirrored);
+    let settled: unknown;
+    const run = await runJudgePass(
+      makeDeps(mock, { model: "gemini/auto", judgeOrder: "both" }), payload,
+      analystCase("bull"), analystCase("bear"), undefined,
+      (settlement) => { settled = settlement.telemetry; },
+    );
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(settled).toMatchObject({
+      model: "gemini/multiple-models", inputTokens: 2000, outputTokens: 2000,
+      execution: { requestedModel: "gemini/auto", requestedEffort: null, effectiveEffort: null,
+        observedModels: ["gemini-pro", "gemini-fast"] },
+    });
+    expect(run.result.execution?.requestedServiceTier).toBeUndefined();
+  });
+
+  it("does not treat a failed mirror's requested automatic model as an observed model", async () => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { model: "gemini/gemini-pro", execution: {
+      requestedEffort: null, effectiveEffort: null, observedModels: ["gemini-pro"],
+    } });
+    mock.on("llm.judge", { kind: "error", error: { kind: "transport", message: "no response", model: "gemini/auto", costUsd: 0,
+      execution: { requestedEffort: null, effectiveEffort: null } } });
+    const run = await runJudgePass(makeDeps(mock, { model: "gemini/auto", judgeOrder: "both" }), payload, analystCase("bull"), analystCase("bear"));
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.model).toBe("gemini/gemini-pro");
+    expect(run.result.usage.input_tokens).toBe(1000);
+    expect(run.result.execution?.observedModels).toEqual(["gemini-pro"]);
+  });
+
+  it.each([true, false])("does not turn an unobserved mirror model into an actual aggregate model (usage reported: %s)", async (usageReported) => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { model: "gemini/gemini-pro", execution: { modelObserved: true, usageReported: true } });
+    mock.on("llm.judge", { kind: "error", error: { kind: "transport", message: "model not reported", model: "gemini/auto", costUsd: 0,
+      ...(usageReported ? { usage: { input_tokens: 100, output_tokens: 20 } } : {}), execution: { modelObserved: false, usageReported } } });
+    const run = await runJudgePass(makeDeps(mock, { model: "gemini/auto", judgeOrder: "both" }), payload, analystCase("bull"), analystCase("bear"));
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.execution?.observedModels).toEqual(["gemini-pro"]);
+    expect(run.result.execution?.modelObserved).toBe(false);
+    expect(run.result.execution?.usageReported).toBe(usageReported);
+  });
+
+  it.each([0, 1])("retains a presumed billing bound from contributing judge request %s", async (presumedIndex) => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { costUsd: 0.4 });
+    mock.onJson("llm.judge", fakeJudgeOutput(), { costUsd: 0.6 });
+    const deps = makeDeps(mock, { judgeOrder: "both" });
+    let call = 0;
+    deps.runPass = async (args) => {
+      const outcome = await mock.runPass(args);
+      if (outcome.ok && call++ === presumedIndex) outcome.value.data.presumed = true;
+      return outcome;
+    };
+    let settled: unknown;
+    const run = await runJudgePass(deps, payload, analystCase("bull"), analystCase("bear"), undefined,
+      (settlement) => { settled = settlement.telemetry; });
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.presumed).toBe(true);
+    expect(settled).toMatchObject({ presumed: true, costUsd: 1 });
+  });
+
   it("declares its cost as two judge passes and every other setting as one", () => {
     expect(JUDGE_PASSES_PER_SETTING.both).toBe(2);
     for (const setting of JUDGE_ORDER_SETTINGS.filter((s) => s !== "both")) {
@@ -1155,6 +1277,56 @@ describe("shared judge/analyst model family", () => {
  * ------------------------------------------------------------------------ */
 
 describe("judgement protocol reaches the rendered report", () => {
+  it.each([
+    ["claude-opus-4-8", "anthropic"],
+    ["chatgpt/gpt-6-astra", "chatgpt"],
+  ])("attributes completed judge disclosures to %s", (model, provider) => {
+    const { bundle, computed } = buildInputs();
+    const report = assembleReport({ symbol: "AAPL", bundle, computed,
+      judgeOutput: fakeJudgeOutput(), verify: { verificationRate: null, log: [] },
+      costEntries: ["bull", "bear", "synthesize"].map((step) => ({ step, model, costUsd: 0 })),
+      model,
+      judgeProtocol: buildJudgeProtocolDraft(buildJudgePresentation({
+        setting: "bull-first", seed: "provider-disclosure", bull: analystCase("bull"), bear: analystCase("bear"),
+      })),
+    }, GENERATED_AT);
+    for (const field of ["llm.judge.case-order", "llm.judge.model-family"]) {
+      expect(report.appendix.missingData.find((gap) => gap.field === field)?.attemptedSources).toEqual([provider]);
+    }
+  });
+
+  it("restamps only known protocol disclosures using explicit per-pass execution evidence", () => {
+    const fields = ["llm.judge.case-order", "llm.judge.model-family", "llm.judge.protocol-recovered",
+      "llm.judge.order-reconciliation", "llm.judge.order-sensitive.grade", "llm.bull.length-cap", "llm.bear.length-cap", "llm.judge.unrelated"];
+    const gaps = fields.map((field) => ({ field, reason: "preserved disclosure", severity: "warn" as const, attemptedSources: ["anthropic"] }));
+    const original = JSON.stringify(gaps);
+    const updated = attributeJudgeProtocolDisclosures(gaps, { model: "claude-opus-4-8", execution: [
+      { step: "bull", requestedModel: "chatgpt/gpt-6-astra", effectiveModel: "chatgpt/gpt-6-astra" },
+      { step: "bear", requestedModel: "gemini/auto", effectiveModel: "unknown" },
+      { step: "synthesize", requestedModel: "chatgpt/gpt-6-astra", effectiveModel: "chatgpt/gpt-6-astra" },
+    ] });
+    expect(updated.filter((gap) => gap.field.startsWith("llm.judge.") && !["llm.judge.model-family", "llm.judge.unrelated"].includes(gap.field))
+      .every((gap) => JSON.stringify(gap.attemptedSources) === '["chatgpt"]')).toBe(true);
+    expect(updated.find((gap) => gap.field === "llm.judge.model-family")?.attemptedSources).toEqual(["chatgpt", "gemini"]);
+    expect(updated.find((gap) => gap.field === "llm.bull.length-cap")?.attemptedSources).toEqual(["chatgpt"]);
+    expect(updated.find((gap) => gap.field === "llm.bear.length-cap")?.attemptedSources).toEqual(["gemini"]);
+    expect(updated.find((gap) => gap.field === "llm.judge.unrelated")).toBe(gaps.at(-1));
+    expect(JSON.stringify(gaps)).toBe(original);
+  });
+
+  it("uses the explicit report request before execution metadata exists and never guesses an unknown provider", () => {
+    const gaps = [{ field: "llm.judge.case-order", reason: "Order recorded", severity: "info" as const, attemptedSources: ["anthropic"] }];
+    expect(attributeJudgeProtocolDisclosures(gaps, { model: "chatgpt/gpt-6-astra" })[0].attemptedSources).toEqual(["chatgpt"]);
+    expect(attributeJudgeProtocolDisclosures(gaps, { model: "claude-opus-4-8" })[0].attemptedSources).toEqual(["anthropic"]);
+    expect(attributeJudgeProtocolDisclosures(gaps, {})[0].attemptedSources).toEqual([]);
+    expect(attributeJudgeProtocolDisclosures(gaps, { model: "unknown", execution: [
+      { step: "synthesize attempt 1", effectiveModel: "unknown", requestedModel: "unknown" },
+    ] })[0].attemptedSources).toEqual([]);
+    expect(attributeJudgeProtocolDisclosures(gaps, { execution: [
+      { step: "synthesize attempt 1", effectiveModel: "unknown", requestedModel: "chatgpt/gpt-6-astra" },
+    ] })[0].attemptedSources).toEqual(["chatgpt"]);
+  });
+
   it("prints the protocol sentence and the checks table in both exports", () => {
     const { bundle, computed } = buildInputs();
     const checks = {

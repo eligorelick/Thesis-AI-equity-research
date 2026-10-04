@@ -91,7 +91,8 @@ export function StatCell({
 }
 
 /** A–F grade chip, color-coded via the --grade-* CSS variables. */
-export function GradeChip({ grade }: { grade: Grade }) {
+export function GradeChip({ grade }: { grade: Grade | null }) {
+  if (grade === null) return <span className="mono text-[10px] text-faint" aria-label="not assessed">n/a</span>;
   const color = `var(--grade-${grade.toLowerCase()})`;
   return (
     <span

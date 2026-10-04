@@ -17,9 +17,8 @@
  * Data-only reports (the multi-pass analysis is absent, including attempted
  * passes that failed) are detected exactly as the view API detects them
  * (appendix.missingData has an `analysis.llm` entry) and render a clear banner;
- * the graded LLM sections still render (the data-only report carries all-F
- * placeholder grades with a data-only synthesis) but the banner sets
- * expectations, and the appendix/manifest is always shown.
+ * deterministic sections still render, with unavailable or thin-evidence
+ * assessments withheld. The appendix/manifest is always shown.
  *
  * Server Component: the anchor nav is plain <a href> links and the expandable
  * reasoning is native <details>, so none of this needs to hydrate. Callers
@@ -163,7 +162,7 @@ export function ReportView({
     technicals: <TechnicalsSection technicals={report.technicals} index={reportSection("technicals").index} chart={technicalsChart} />,
     leadership: <LeadershipSection leadership={report.leadership} index={reportSection("leadership").index} />,
     competitive: <CompetitiveSection competitive={report.competitive} index={reportSection("competitive").index} />,
-    catalystsRisks: <CatalystsRisksPanel catalystsRisks={report.catalystsRisks} index={reportSection("catalystsRisks").index} />,
+    catalystsRisks: <CatalystsRisksPanel catalystsRisks={report.catalystsRisks} dataOnly={isDataOnlyReport(report)} index={reportSection("catalystsRisks").index} />,
     outlook: <OutlookSection outlook={report.outlook} index={reportSection("outlook").index} />,
     projections: report.projections ? <ProjectionsSection projections={report.projections} index={reportSection("projections").index} /> : null,
     macro: <MacroSection macro={report.macro} index={reportSection("macro").index} />,

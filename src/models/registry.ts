@@ -59,7 +59,7 @@ const RegistryModelSchema = z
       .strict(),
     thinking: z
       .object({
-        /** always-on: never send the param; adaptive: adaptive thinking; none: unsupported. */
+        /** always-on: cannot disable adaptive thinking; adaptive: optional; none: unused here. */
         mode: z.enum(["always-on", "adaptive", "none"]),
         /** Whether `thinking: {type: "adaptive"}` is sent explicitly. */
         sendParam: z.boolean(),

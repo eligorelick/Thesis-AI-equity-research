@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -10,6 +12,7 @@ import {
   createJobStreamSnapshotFence,
   fetchReportSummaryForSnapshot,
   readFencedJobRequestJson,
+  ReportReadyPanel,
   terminalSnapshotFinalized,
   terminalStateFromSnapshot,
 } from "@/app/company/[symbol]/GenerateReport";
@@ -431,6 +434,30 @@ describe("GenerateReport — revisioned snapshot stream fence", () => {
       async () => new Response(JSON.stringify(reportSummary()), { status: 200 }),
     );
     expect(installed).toEqual([expect.objectContaining({ reportId: 11, symbol: "AAPL" })]);
+  });
+
+  it("accepts unassessed grades and renders neutral labels while rejecting invalid grade values", async () => {
+    const fence = createJobStreamSnapshotFence();
+    const source = {};
+    fence.activate(source, "job-A", "AAPL");
+    fence.accept(source, snapshot({ revision: 1, status: "done", reportId: 11 }));
+    const token = fence.token(source, "job-A")!;
+    const canonical = reportSummary().grades as Array<Record<string, unknown>>;
+    const installed: unknown[] = [];
+    let markup = "";
+    for (const grade of [null, "Z", 0, undefined]) {
+      await fetchReportSummaryForSnapshot(11, token, fence, (summary) => {
+        installed.push(summary);
+        markup = renderToStaticMarkup(createElement(ReportReadyPanel, { summary, dataOnly: true, totalCost: 0, steps: [] }));
+      }, async () => ({ ok: true, json: async () => reportSummary({
+        grades: canonical.map((cell) => ({ ...cell, grade, oneLineWhy: "Not assessed" })),
+        dataOnly: true, missingData: [ANALYSIS_GAP],
+      }) }));
+    }
+    expect(installed).toHaveLength(1);
+    expect(markup.match(/>n\/a<\/span>/g)).toHaveLength(7);
+    expect(markup).not.toMatch(/var\(--grade-[abcdf]\)/);
+    expect(markup).toContain("Not assessed");
   });
 
   it("accepts exactly the canonical required grade sequence plus optional balance and rejects malformed sequences", async () => {

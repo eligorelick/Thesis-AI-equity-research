@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // The supported runtime binds to loopback. HTTP gzip adds no useful network
+  // savings here, and Next's bundled compression forwards drain listeners to
+  // Gzip without forwarding their removal (leaking once listeners on long
+  // responses). Storage compression in src/cache/compression.ts is independent.
+  compress: false,
   // Native module (better-sqlite3) + a large server-only SDK (@anthropic-ai/sdk,
   // used only in src/providers/anthropic.ts): keep both external so they stay a
   // runtime `require` instead of being pulled into the server module graph.

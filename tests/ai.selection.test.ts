@@ -45,4 +45,14 @@ describe("explicit account selection", () => {
     expect(view.connections[1].label).toContain("ChatGPT account");
     expect(JSON.stringify(view)).not.toContain("oaiapp_private");
   });
+  it("saves only validated ChatGPT effort and speed controls", async () => {
+    const s = store();
+    s.profiles.push({ id: "p", clientId: "oaiapp_fixture", tokens: { access: "a", refresh: "r", id: "i", expiresAt: 1, scopes: ["chatgpt.tokens.use.direct"] } });
+    const choice = { provider: "chatgpt", connectionId: "p", model: "gpt-6.1-sol", effort: "high", serviceTier: "fast" };
+    await selectConnection(choice); expect(s.selection).toEqual(choice);
+    await expect(selectConnection({ ...choice, effort: "ultra" })).rejects.toThrow("Choose");
+    await expect(selectConnection({ ...choice, serviceTier: "invalid" })).rejects.toThrow("Choose");
+    await expect(selectConnection({ ...choice, provider: "gemini" })).rejects.toThrow("Choose");
+    expect(s.selection).toEqual(choice);
+  });
 });

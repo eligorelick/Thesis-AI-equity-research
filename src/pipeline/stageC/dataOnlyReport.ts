@@ -15,7 +15,7 @@
  *      same `computed.*` source ids the LLM payload registers, and every prose
  *      string is a template over those numbers. No judgment is manufactured.
  *   2. The report says plainly, in the synthesis and in every graded block,
- *      that no analyst pass ran. Letter grades are the deterministic score
+ *      that no completed analyst assessment is available. Letter grades are the deterministic score
  *      bands — the same reproducible anchor the judge is prompted to align to.
  *   3. Sections the pipeline cannot fill deterministically (catalysts, risks,
  *      outlook narratives, executive credibility, moat sources) stay empty and
@@ -37,7 +37,7 @@ import type { DataBundle } from "@/pipeline/types";
 import type { ForensicFlag } from "@/pipeline/stageB/forensics";
 import { scoreToBand } from "@/pipeline/stageB/grading";
 import { CORE_SERIES, fredFigureUnit, type FredUnits } from "@/providers/fred";
-import { calculateCoverage } from "@/pipeline/stageC/provenance";
+import { MIN_HEADLINE_EVIDENCE } from "@/report/assessment";
 import { establishedCurrency } from "@/report/format";
 import {
   applyDcfDisplay,
@@ -46,13 +46,11 @@ import {
   applyMultiples,
   applyReverseDcf,
   applyScenarioTargets,
-  collectTracedNumbers,
 } from "@/pipeline/stageC/passes";
 import type {
   AspectScore,
   GradeBlock,
   MetricRow,
-  ProvenanceCoverage,
   Report,
   ScoreAspect,
   SourcedClaim,
@@ -244,7 +242,8 @@ function gradeBlock(
     const placeholder = scoreToBand(NEUTRAL_MIDPOINT_SCORE);
     return {
       grade: placeholder,
-      oneLineWhy: `Not scored — ${reason}. The letter ${placeholder} is the band of the composite's neutral midpoint (${NEUTRAL_MIDPOINT_SCORE}/100), shown because the schema requires one; it is a placeholder, not an assessment, and no analyst pass ran.`,
+      assessmentStatus: "not-assessed",
+      oneLineWhy: `Not scored — ${reason}; no completed analyst assessment is available.`,
       reasoning: [
         fact(`Deterministic ${ASPECT_LABEL[key]} score unavailable: ${reason}.`, source, asOf),
         flagClaim,
@@ -254,9 +253,11 @@ function gradeBlock(
     };
   }
   const completenessPct = Math.round(aspect.dataCompleteness * 100);
+  const limited = aspect.dataCompleteness < MIN_HEADLINE_EVIDENCE;
   return {
     grade: aspect.band,
-    oneLineWhy: `Deterministic score ${fmtNum(aspect.score, 1)}/100 (band ${aspect.band}) on ${completenessPct}% of intended signals; no analyst pass ran.`,
+    assessmentStatus: limited ? "limited-evidence" : "deterministic",
+    oneLineWhy: `${limited ? "Not assessed — limited evidence. " : ""}Deterministic score ${fmtNum(aspect.score, 1)}/100 (raw band ${aspect.band}) on ${completenessPct}% of intended signals; no completed analyst assessment is available.`,
     reasoning: [
       fact(
         `Deterministic ${ASPECT_LABEL[key]} score ${fmtNum(aspect.score, 2)}/100 maps to band ${aspect.band} under the versioned house band table; ${completenessPct}% of the aspect's intended signal weight had data. ${aspect.note}`,
@@ -268,7 +269,7 @@ function gradeBlock(
     confidence: aspect.dataCompleteness >= 0.75 ? "medium" : "low",
     keyNumbers: aspect.drivers,
     interpretation:
-      "This is the pipeline's reproducible score band, the same anchor the analyst pass is prompted to align its letter to. It is not an analyst grade: no bull, bear or synthesis pass ran on this report.",
+      "This is a reproducible deterministic score, not a completed analyst assessment. Headline grades are withheld when fewer than half of the intended signals have data; the raw score and band remain visible for audit.",
   };
 }
 
@@ -511,7 +512,7 @@ function bestMeasuredCagr(points: ComputedMetrics["growth"]["revenueCagrs"]): { 
 function reverseDcfNarrative(computed: ComputedMetrics): string {
   const v = computed.valuation;
   if (v.kind !== "dcf" || v.reverseDcf === null || v.reverseDcf.method === "none") {
-    return `Reverse DCF not computed on the ${v.kind} route; no narrative analysis ran on this data-only report.`;
+    return `Reverse DCF not computed on the ${v.kind} route; no completed narrative assessment is available on this data-only report.`;
   }
   const r = v.reverseDcf;
   if (r.method === "growth" && isNum(r.impliedRevenueGrowthPct)) {
@@ -519,12 +520,12 @@ function reverseDcfNarrative(computed: ComputedMetrics): string {
     const compare = achievable
       ? ` The measured ${achievable.windowYears}-year revenue CAGR is ${fmtPct(achievable.cagrPct)}, a ${fmtSignedPp(r.impliedRevenueGrowthPct - achievable.cagrPct)} gap between what the price requires and what was delivered.`
       : "";
-    return `The market price is consistent with ${fmtPct(r.impliedRevenueGrowthPct)} constant revenue growth over the explicit DCF horizon, with every other DCF input held at its base value.${compare} Deterministic solve; no narrative analysis ran.`;
+    return `The market price is consistent with ${fmtPct(r.impliedRevenueGrowthPct)} constant revenue growth over the explicit DCF horizon, with every other DCF input held at its base value.${compare} Deterministic solve; no completed narrative assessment is available.`;
   }
   if (r.method === "margin" && isNum(r.impliedTerminalMarginPct)) {
-    return `The market price is consistent with a ${fmtPct(r.impliedTerminalMarginPct)} terminal EBIT margin, with growth held at its base path (margin-solve fallback). Deterministic solve; no narrative analysis ran.`;
+    return `The market price is consistent with a ${fmtPct(r.impliedTerminalMarginPct)} terminal EBIT margin, with growth held at its base path (margin-solve fallback). Deterministic solve; no completed narrative assessment is available.`;
   }
-  return "Reverse DCF did not converge; see the missing-data manifest. No narrative analysis ran.";
+  return "Reverse DCF did not converge; see the missing-data manifest. No completed narrative assessment is available.";
 }
 
 function valuationSection(
@@ -545,11 +546,11 @@ function valuationSection(
       assumptions: target
         ? [
             `Deterministic Stage B target (${targets?.method ?? "scenario-targets"} ${targets?.methodVersion ?? ""}): revenue growth ${fmtSignedPp(target.growthDeltaPp)} and operating margin ${fmtSignedPp(target.marginDeltaPp)} versus the base DCF path.`.replace("  ", " "),
-            "Probability is not assigned: scenario odds are analyst judgments and no analyst pass ran.",
+            "Probability is not assigned: scenario odds are analyst judgments and no completed analyst assessment is available.",
           ]
         : ["Deterministic scenario target unavailable for this route or inputs; see the missing-data manifest."],
       whatWouldHaveToBeTrue: [
-        "Narrative scenario conditions require the analyst passes, which did not run on this data-only report.",
+        "Narrative scenario conditions require the analyst passes, which did not produce a completed assessment on this data-only report.",
       ],
     };
   });
@@ -575,7 +576,14 @@ const FLAG_SEVERITY: Record<ForensicFlag["severity"], "high" | "medium" | "low">
 };
 
 function qualitySection(stub: Report["quality"], computed: ComputedMetrics, graded: GradeBlock): Report["quality"] {
-  const withScores = applyForensicScores({ ...stub, graded }, computed.forensics);
+  const fields = { altman: "forensics.altmanZ", beneish: "forensics.beneishM", piotroski: "forensics.piotroski", accruals: "forensics.accrualsRatio" } as const;
+  const forensicScores = { ...stub.forensicScores };
+  for (const key of Object.keys(fields) as Array<keyof typeof fields>) {
+    const field = fields[key];
+    const reasons = computed.forensics.gaps.filter((gap) => gap.field === field || gap.field.startsWith(`${field}.`)).map((gap) => gap.reason);
+    forensicScores[key] = { ...forensicScores[key], notApplicableReason: reasons.join(" ") || "Not available from the deterministic inputs; see the missing-data manifest." };
+  }
+  const withScores = applyForensicScores({ ...stub, forensicScores, graded }, computed.forensics);
   const flags = computed.forensics.flags.map((flag) => ({
     severity: FLAG_SEVERITY[flag.severity],
     text: `${flag.message} (rule: ${flag.rule})`,
@@ -607,7 +615,7 @@ function technicalsSection(computed: ComputedMetrics, graded: GradeBlock, curren
   return {
     graded,
     read: {
-      trend: `${t.read.trend} (deterministic SMA50/SMA200 read; no analyst pass ran)`,
+      trend: `${t.read.trend} (deterministic SMA50/SMA200 read; no completed analyst assessment is available)`,
       momentum: `${t.read.momentum} (deterministic RSI/MACD read)`,
       keyLevels: `${px("SMA50", t.read.keyLevels.sma50)} · ${px("SMA200", t.read.keyLevels.sma200)} · ${px("52-week high", t.read.keyLevels.high52w)} · ${px("52-week low", t.read.keyLevels.low52w)}`,
       relativeStrength: t.read.relativeStrength,
@@ -680,7 +688,10 @@ function macroSection(bundle: DataBundle, stub: Report["macro"]): Report["macro"
       if (!last) continue;
       const latest = macroTraced(seriesId, unitsOf(seriesId), last.value, last.date);
       if (latest === null) continue;
-      rows.push({ seriesId, name: labels.get(seriesId) ?? seriesId, latest, relevance });
+      const figureUnit = fredFigureUnit(seriesId, unitsOf(seriesId));
+      const rawLabel = labels.get(seriesId) ?? seriesId;
+      const name = figureUnit.scale === 1 ? rawLabel : rawLabel.replace(/\s*\(thous\.\)/g, "");
+      rows.push({ seriesId, name, latest, relevance: figureUnit.qualifier ? `${relevance} Displayed in ${figureUnit.qualifier}.` : relevance });
     }
   };
   emit(
@@ -756,14 +767,14 @@ function synthesis(
   disclosedGaps: number,
 ): string {
   const parts: string[] = [
-    `Data-only report: the grounded analyst passes did not run (${reason}), so there is no synthesis, no narrative scenarios and no analyst grades.`,
+    `Data-only report: no completed multi-pass analysis is available (${reason}), so there is no analyst synthesis, no narrative scenarios and no analyst grades.`,
   ];
   const composite = computed.scores.composite;
   if (composite.score !== null && composite.band !== null) {
     const bands = (Object.keys(ASPECT_LABEL) as ScoreAspect[])
       .map((key) => {
         const aspect = computed.scores.aspects[key];
-        return `${ASPECT_LABEL[key]} ${aspect.band ?? "n/s"}`;
+        return `${ASPECT_LABEL[key]} ${aspect.band === null ? "not assessed" : aspect.dataCompleteness < MIN_HEADLINE_EVIDENCE ? "limited evidence" : aspect.band}`;
       })
       .join(", ");
     parts.push(
@@ -791,63 +802,9 @@ function synthesis(
   const flags = computed.forensics.flags.length;
   const gaps = disclosedGaps;
   parts.push(
-    `${flags} forensic flag${flags === 1 ? "" : "s"} raised; ${gaps} data gap${gaps === 1 ? "" : "s"} disclosed in the appendix. Every figure below is a Stage B computation with its source; nothing was authored.`,
+    `${flags} forensic flag${flags === 1 ? "" : "s"} raised; ${gaps} data gap${gaps === 1 ? "" : "s"} disclosed in the appendix. Figures below come from fetched data and deterministic computations; no completed analyst synthesis is available.`,
   );
   return parts.join(" ");
-}
-
-/**
- * A data-only claim is supported when its source is a deterministic pipeline
- * path (`computed.*`) or a provider record tag the bundle fetched; the flag
- * claim's `pipeline` source is neither, and a claim is counted rather than
- * assumed (audit 2026-09-06, F182: every claim used to be scored supported
- * without a check, in the same report whose manifest says no verification
- * ran). Rates are the exact fraction: the schema pins `rate === supported /
- * total`, which a 4-dp rounding broke for any non-terminating ratio (F169).
- */
-const PIPELINE_OWNED_SOURCE = /^(?:computed\.|fmp:|edgar:|fred:|yahoo:)/;
-
-function provenanceCoverage(report: Report): ProvenanceCoverage {
-  const numbers = collectTracedNumbers(report);
-  const numericTotal = numbers.length;
-  const numericSupported = numbers.filter((n) => n.verified === true).length;
-  const claims = collectClaims(report);
-  const facts = claims.filter((claim) => claim.label === "FACT");
-  const judgments = claims.filter((claim) => claim.label === "JUDGMENT");
-  const owned = (claim: SourcedClaim): boolean => PIPELINE_OWNED_SOURCE.test(claim.source);
-  const factsSupported = facts.filter(owned).length;
-  const judgmentsCited = judgments.filter(owned).length;
-  const numeric = calculateCoverage(numericSupported, numericTotal);
-  const factualClaims = calculateCoverage(factsSupported, facts.length);
-  const judgmentCoverage = calculateCoverage(judgmentsCited, judgments.length);
-  return {
-    numeric,
-    factualClaims,
-    judgments: { cited: judgmentCoverage.supported, total: judgmentCoverage.total, rate: judgmentCoverage.rate },
-  };
-}
-
-function collectClaims(root: unknown): SourcedClaim[] {
-  const out: SourcedClaim[] = [];
-  const visit = (node: unknown): void => {
-    if (node === null || typeof node !== "object") return;
-    if (Array.isArray(node)) {
-      for (const item of node) visit(item);
-      return;
-    }
-    const record = node as Record<string, unknown>;
-    if (
-      typeof record.text === "string" &&
-      (record.label === "FACT" || record.label === "ESTIMATE" || record.label === "JUDGMENT") &&
-      typeof record.source === "string"
-    ) {
-      out.push(record as unknown as SourcedClaim);
-      return;
-    }
-    for (const value of Object.values(record)) visit(value);
-  };
-  visit(root);
-  return out;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -857,13 +814,13 @@ function collectClaims(root: unknown): SourcedClaim[] {
 export interface EnrichDataOnlyReportArgs {
   bundle: DataBundle;
   computed: ComputedMetrics;
-  /** Why the LLM passes did not run — quoted in the synthesis. */
+  /** Why the LLM analysis is incomplete — quoted in the synthesis. */
   reason: string;
 }
 
 /**
  * Fill a data-only report stub with the deterministic Stage B content. Every
- * section keeps its explicit "no analyst pass ran" disclosure; the numbers,
+ * section keeps its explicit "no completed analyst assessment is available" disclosure; the numbers,
  * scores, fair value, scenario targets and projections are attached exactly as
  * the LLM path attaches them after the judge.
  */
@@ -880,7 +837,7 @@ export function enrichDataOnlyReport(stub: Report, args: EnrichDataOnlyReportArg
   const asOf = computed.builtAt.slice(0, 10);
   const flagClaim =
     stub.fundamentals.commentary[0] ??
-    ({ text: `LLM analysis did not run — ${args.reason}.`, label: "JUDGMENT", source: "pipeline", asOf: null } satisfies SourcedClaim);
+    ({ text: `No completed LLM analysis is available — ${args.reason}.`, label: "JUDGMENT", source: "pipeline", asOf: null } satisfies SourcedClaim);
 
   const block = (key: ScoreAspect): GradeBlock => gradeBlock(key, computed.scores.aspects[key], asOf, flagClaim);
   const fundamentalsGrade = block("fundamentals");
@@ -923,7 +880,7 @@ export function enrichDataOnlyReport(stub: Report, args: EnrichDataOnlyReportArg
     competitive: {
       ...stub.competitive,
       moatGraded: moatGrade,
-      marketShareDirection: "Not assessed: market-share direction is an analyst judgment and no analyst pass ran on this data-only report.",
+      marketShareDirection: "Not assessed: market-share direction is an analyst judgment and no completed analyst assessment is available on this data-only report.",
     },
     macro: macroSection(bundle, stub.macro),
     scores: computed.scores,
@@ -936,10 +893,11 @@ export function enrichDataOnlyReport(stub: Report, args: EnrichDataOnlyReportArg
     ...(routeMetrics ? { routeMetrics } : {}),
   };
 
-  const coverage = provenanceCoverage(candidate);
-  return {
-    ...candidate,
-    meta: { ...candidate.meta, provenanceCoverage: coverage },
-    appendix: { ...candidate.appendix, provenanceCoverage: coverage },
-  };
+  // Templates and copied pipeline values have known origins, but no citation
+  // check ran. A provider/path prefix alone cannot justify 100% support.
+  const { provenanceCoverage: _metaCoverage, ...meta } = candidate.meta;
+  const { provenanceCoverage: _appendixCoverage, ...appendix } = candidate.appendix;
+  void _metaCoverage;
+  void _appendixCoverage;
+  return { ...candidate, meta, appendix };
 }

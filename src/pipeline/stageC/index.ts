@@ -247,7 +247,7 @@ function toPassDeps(deps: RunnerPassDeps<ContextPayload>): PassDeps {
     if (!connectionId) throw new Error("Subscription pass is missing its captured account connection");
     return {
       model: deps.analysisModel, signal: deps.signal, jobSeed: deps.jobSeed,
-      runPass: (args) => runSubscriptionPass(args, connectionId),
+      runPass: (args) => runSubscriptionPass(args, connectionId, deps.subscriptionOptions),
       validateRunPass: (args) => {
         if (args.model !== deps.analysisModel || JSON.stringify(args.messages).length > 2_000_000) {
           throw new Error("Subscription pass changed model or exceeded the local input size limit");
@@ -295,6 +295,7 @@ function withJudgeOrder(passDeps: PassDeps): PassDeps {
  */
 function toPassResultLike<T>(r: PassResult<T>): PassResultLike<T> {
   return {
+    ...(r.presumed === undefined ? {} : { presumed: r.presumed }),
     data: r.output,
     model: r.model,
     costUsd: r.costUsd,
@@ -307,6 +308,7 @@ function toPassResultLike<T>(r: PassResult<T>): PassResultLike<T> {
     },
     webSearches: r.webSearches,
     fetchedUrls: r.fetchedUrls,
+    ...(r.execution === undefined ? {} : { execution: r.execution }),
   };
 }
 
@@ -326,6 +328,7 @@ class PassRunError extends Error {
 function billedAttemptFromRun<T>(run: PassRun<T>): BilledPassAttempt | undefined {
   if (run.ok || run.costUsd === undefined || run.model === undefined) return undefined;
   return {
+    ...(run.presumed === undefined ? {} : { presumed: run.presumed }),
     model: run.model,
     costUsd: run.costUsd,
     fallbackUsed: run.fallbackUsed ?? false,
@@ -338,6 +341,7 @@ function billedAttemptFromRun<T>(run: PassRun<T>): BilledPassAttempt | undefined
         }
       : undefined,
     webSearches: run.webSearches,
+    ...(run.execution === undefined ? {} : { execution: run.execution }),
   };
 }
 

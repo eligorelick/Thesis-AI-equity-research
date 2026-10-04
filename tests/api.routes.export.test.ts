@@ -340,6 +340,27 @@ describe("GET /api/export/[reportId]", () => {
  * ------------------------------------------------------------------------ */
 
 describe("GET /api/report/view/[reportId]", () => {
+  it("withholds current and legacy placeholder grades in compact summaries without rewriting the report", async () => {
+    const report = task28SentinelReport();
+    report.appendix.missingData.push({ field: "analysis.llm", reason: "No completed assessment", severity: "critical" });
+    report.verdict.gradeStrip.moat.grade = "F";
+    report.verdict.gradeStrip.moat.oneLineWhy = "Not graded — Stage B did not run.";
+    report.verdict.gradeStrip.quality.grade = "A";
+    report.verdict.gradeStrip.quality.assessmentStatus = "limited-evidence";
+    report.verdict.gradeStrip.fundamentals.oneLineWhy = "Deterministic score 96/100 (band A) on 10% of intended signals; no analyst pass ran.";
+    const storedBytes = JSON.stringify(report);
+    const id = seedReport(report);
+    const response = await viewGET(...viewReq(String(id)));
+    const body = await response.json() as { dataOnly: boolean; grades: Array<{ key: string; grade: string | null }> };
+    expect(body.dataOnly).toBe(true);
+    for (const key of ["moat", "quality", "fundamentals"]) {
+      expect(body.grades.find((cell) => cell.key === key)?.grade).toBeNull();
+    }
+    expect(body.grades.find((cell) => cell.key === "valuation")?.grade).toBe(report.verdict.gradeStrip.valuation.grade);
+    expect(handle.db.select({ reportJson: reports.reportJson }).from(reports)
+      .where(eq(reports.id, id)).get()?.reportJson).toBe(storedBytes);
+  });
+
   it("returns persisted completeness and the complete missing-data manifest without mutation", async () => {
     const report = task28SentinelReport();
     const storedBytes = JSON.stringify(report);

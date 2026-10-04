@@ -52,10 +52,10 @@ describe("generated pricing block", () => {
     for (const model of MODEL_REGISTRY.models.filter((m) => m.lifecycle === "active")) {
       expect(block).toContain(`| ${model.displayName} |`);
     }
-    // Sonnet 5: one analyst request is $3.86 and the pass worst case $138.96.
-    expect(block).toMatch(/\| Claude Sonnet 5 \| \$3\.86 \| \$3\.78 \| \$138\.96 \| \$\d/);
-    // Haiku's synthesize figure is Sonnet 5's, because that pass is floored.
-    expect(block).toMatch(/\| Claude Haiku 4\.5 \| \$0\.65 \| \$3\.78 \|/);
+    // Server search can bill ten sampling inputs within one request.
+    expect(block).toMatch(/\| Claude Sonnet 5 \| \$26\.36 \| \$3\.78 \| \$948\.96 \| \$\d/);
+    // Haiku's synthesize figure is Sonnet 5.5's, because that pass is floored.
+    expect(block).toMatch(/\| Claude Haiku 4\.5 \| \$2\.90 \| \$3\.78 \|/);
     expect(block).toContain(`(${PASS_MAX_REQUESTS}: six transport`);
     expect(block).toContain("reported, not");
     expect(block).toContain("not a measurement");
@@ -82,9 +82,9 @@ describe("generated pricing block", () => {
 
     const block = renderPricingBlock(MODEL_REGISTRY, sizing);
     // 64K then 128K output at $50/MTok.
-    expect(block).toContain("| Claude Fable 5.1 | $18.98 | $18.90 | $683.28 | $3.20 → $6.40 |");
+    expect(block).toContain("| Claude Fable 5.1 | $197.18 | $28.35 | $7,098.48 | $3.20 → $6.40 |");
     // 64K at $10/MTok, and no arrow: the step does not exist on this model.
-    expect(block).toContain("| Claude Haiku 4.5 | $0.65 | $3.78 | $23.40 | $0.32 |");
+    expect(block).toContain("| Claude Haiku 4.5 | $2.90 | $3.78 | $104.40 | $0.32 |");
     expect(block).toContain("does NOT scale with effort");
   });
 

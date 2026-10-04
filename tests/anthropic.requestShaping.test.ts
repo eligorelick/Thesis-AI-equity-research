@@ -18,6 +18,7 @@ import {
   passWorstCaseCostUsd,
   modelContextTokenLimit,
   modelMaxOutputTokens,
+  registryEntryFor,
   supportsEffort,
   thinkingConfigFor,
   webSearchTool,
@@ -102,10 +103,14 @@ describe.each(activeModels().map((entry) => [entry.id, entry] as const))("reques
   });
 
   it("bounds one request with the registry output ceiling and the 5-minute cache-write price", () => {
+    const fallback = entry.serverSideFallback === null ? null : registryEntryFor(entry.serverSideFallback.model);
+    const fallbackTokensUsd = fallback === null ? 0 :
+      (fallback.contextWindowTokens / 1e6) * fallback.pricing.cacheWrite5mPerMTok * 10 +
+      (fallback.maxOutputTokens / 1e6) * fallback.pricing.outputPerMTok;
     const perRequestUsd =
-      (entry.contextWindowTokens / 1e6) * entry.pricing.cacheWrite5mPerMTok +
+      (entry.contextWindowTokens / 1e6) * entry.pricing.cacheWrite5mPerMTok * 10 +
       (entry.maxOutputTokens / 1e6) * entry.pricing.outputPerMTok +
-      8 * 0.01;
+      8 * 0.01 + fallbackTokensUsd;
     // What a single request can bill: the amount request-reservation mode
     // admits before sending it (DECISIONS D-10).
     expect(maximumRequestCostUsd(id, "bull")).toBeCloseTo(perRequestUsd, 6);
@@ -120,23 +125,23 @@ describe.each(activeModels().map((entry) => [entry.id, entry] as const))("reques
 });
 
 describe("Haiku route", () => {
-  it("floors the judge to Sonnet 5 and names both models and the effort handling in the disclosure", () => {
-    expect(judgeModelFor("claude-haiku-4-5")).toBe("claude-sonnet-5");
-    expect(judgeModelFor("claude-haiku-4-5-20251001")).toBe("claude-sonnet-5");
+  it("floors the judge to Sonnet 5.5 and names both models and the effort handling in the disclosure", () => {
+    expect(judgeModelFor("claude-haiku-4-5")).toBe("claude-sonnet-5-5");
+    expect(judgeModelFor("claude-haiku-4-5-20251001")).toBe("claude-sonnet-5-5");
     for (const id of activeModels().filter((m) => m.family !== "haiku").map((m) => m.id)) {
       expect(judgeModelFor(id)).toBe(id);
     }
     const judge = buildExecutionMetadataEntry({
       step: "synthesize",
       requestedModel: "claude-haiku-4-5",
-      effectiveModel: "claude-sonnet-5",
+      effectiveModel: "claude-sonnet-5-5",
       requestedEffort: "xhigh",
       fallbackUsed: false,
     });
     expect(judge.adjustments).toEqual(["model-floor"]);
     expect(judge.effectiveEffort).toBe("xhigh");
-    expect(judge.note).toContain("raised from claude-haiku-4-5 to claude-sonnet-5 (model-floor)");
-    expect(judge.note).toContain("effort xhigh applied to claude-sonnet-5");
+    expect(judge.note).toContain("raised from claude-haiku-4-5 to claude-sonnet-5-5 (model-floor)");
+    expect(judge.note).toContain("effort xhigh applied to claude-sonnet-5-5");
     expect(judge.note).toContain("claude-haiku-4-5 does not accept an effort setting, so the analyst passes on it ignore ANALYSIS_EFFORT");
 
     const analyst = buildExecutionMetadataEntry({
@@ -162,6 +167,21 @@ describe("Haiku route", () => {
     });
     expect(plain.adjustments).toEqual([]);
     expect(plain).not.toHaveProperty("note");
+  });
+});
+
+describe("Claude 5.5 compatibility", () => {
+  it.each(["claude-opus-5-5", "claude-sonnet-5-5"])("keeps %s requests compatible across all configured efforts", (model) => {
+    const schema = { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false };
+    for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
+      const { params } = buildPassParams({ ...baseOpts, model, effort, outputSchema: schema });
+      expect(params).not.toHaveProperty("thinking");
+      expect(params).not.toHaveProperty("tool_choice");
+      expect(params).not.toHaveProperty("temperature");
+      expect(params).not.toHaveProperty("top_p");
+      expect(params).not.toHaveProperty("top_k");
+      expect(params.output_config).toEqual({ effort, format: { type: "json_schema", schema } });
+    }
   });
 });
 

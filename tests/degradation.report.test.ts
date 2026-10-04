@@ -35,6 +35,8 @@ import {
 import { applySegmentShares, collectTracedNumbers } from "@/pipeline/stageC/passes";
 import { buildDataOnlyReport } from "@/pipeline/jobRunner";
 import { ReportSchema, DISCLAIMER_TEXT, type Report, type TracedNumber } from "@/report/schema";
+import { reportToMarkdown } from "@/report/export/markdown";
+import { reportToPrintBody } from "@/report/export/printHtml";
 import type { DataBundle } from "@/pipeline/types";
 import type { ValidationReport } from "@/pipeline/stageA/validate";
 import type { DataSource } from "@/types/core";
@@ -266,6 +268,37 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
     expect(report.meta.companyName).toBe("Apple Inc.");
   });
 
+  it("withholds headline grades for absent or sparse evidence and discloses incomplete analysis", () => {
+    const { bundle, computed, validation } = buildInputs();
+    computed.scores.aspects.moat = { ...computed.scores.aspects.moat, score: null, band: null, dataCompleteness: 0, notApplicableReason: "No applicable signals" };
+    computed.scores.aspects.quality = { ...computed.scores.aspects.quality, score: 96, band: "A", dataCompleteness: 0.1 };
+    const report = buildDataOnlyReport({ symbol: "AAPL", companyName: "Apple Inc.", generatedAt: GENERATED_AT,
+      model: "chatgpt/gpt-6.1-sol", costUsd: 0, bundle, computed, validation, costBreakdown: [],
+      reason: "The bull pass failed after being attempted; no analysis completed." });
+    expect(report.verdict.gradeStrip.moat).toHaveProperty("assessmentStatus", "not-assessed");
+    expect(report.verdict.gradeStrip.quality).toHaveProperty("assessmentStatus", "limited-evidence");
+    expect(report.verdict.gradeStrip.quality.oneLineWhy).toContain("10%");
+    expect(report.verdict.synthesis).not.toMatch(/passes did not run|no analyst pass ran/);
+    for (const rendered of [reportToMarkdown(report), reportToPrintBody(report)]) {
+      expect(rendered).toContain("Not assessed");
+      expect(rendered).toContain("limited evidence");
+      expect(rendered).not.toContain("Quality — Grade A");
+      expect(rendered).not.toContain("Moat — Grade D");
+      expect(rendered).not.toContain("0 catalysts · 0 risks");
+    }
+  });
+
+  it("uses deterministic withholding reasons for unavailable forensic scores", () => {
+    const { bundle, computed, validation } = buildInputs();
+    const reason = "Beneish M-score withheld for a financial company: financial institutions were excluded from its estimation sample";
+    computed.forensics.beneish = null;
+    computed.forensics.gaps.push({ field: "forensics.beneishM", reason, severity: "info" });
+    const report = buildDataOnlyReport({ symbol: "AAPL", companyName: "Apple Inc.", generatedAt: GENERATED_AT,
+      model: "none", costUsd: 0, bundle, computed, validation, costBreakdown: [], reason: "Analysis unavailable" });
+    expect(report.quality.forensicScores.beneish.notApplicableReason).toBe(reason);
+    expect(reportToMarkdown(report)).not.toContain("forensic scores not computed by this path");
+  });
+
   it("carries the data-only disclosure and the standing not-investment-advice disclaimer", () => {
     const reason = "ANTHROPIC_API_KEY not set — analysis passes skipped";
     const report = dataOnly(reason);
@@ -307,7 +340,7 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
       } else {
         expect(block.oneLineWhy).toContain("Not scored");
       }
-      expect(block.oneLineWhy).toContain("no analyst pass ran");
+      expect(block.oneLineWhy).toContain("no completed analyst assessment");
       expect(["low", "medium"]).toContain(block.confidence);
       // The numbers behind the band are the score drivers, and the reasoning
       // still discloses that the LLM did not run — never a fabricated claim.
@@ -329,6 +362,9 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
     expect(byId.get("CPIAUCSL")).toMatchObject({ value: 2.7, unit: "%" });
     // Payrolls are served in thousands and shown as a plain count, ×1,000.
     expect(byId.get("PAYEMS")).toMatchObject({ value: 147_000, unit: "count" });
+    const payrolls = report.macro.relevantSeries.find((row) => row.seriesId === "PAYEMS")!;
+    expect(payrolls.name).not.toContain("thous.");
+    expect(payrolls.relevance).toContain("persons");
     expect(() => ReportSchema.parse(report)).not.toThrow();
   });
 
@@ -368,7 +404,7 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
     expect(llmPath.segments.product.map((row) => row.sharePct)).toEqual(rows.map((row) => row.sharePct));
   });
 
-  it("states a not-scored aspect's letter as a placeholder, carries the balance-sheet strip entry, and counts coverage honestly (audit 2026-09-06, F175/F179/F182/F170)", () => {
+  it("marks unscored bands unavailable and does not claim citation checks for template source paths", () => {
     const report = dataOnly();
     const { computed } = buildInputs();
     const strip = report.verdict.gradeStrip;
@@ -376,22 +412,14 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
     for (const [aspect, block] of Object.entries(strip) as [keyof typeof computed.scores.aspects, (typeof strip)["fundamentals"]][]) {
       if (computed.scores.aspects[aspect].band !== null) continue;
       expect(block.grade).toBe("D");
-      expect(block.oneLineWhy).toContain("placeholder, not an assessment");
-      expect(block.oneLineWhy).toContain("neutral midpoint (50/100)");
+      expect(block.assessmentStatus).toBe("not-assessed");
+      expect(block.oneLineWhy).toContain("Not scored");
     }
     for (const block of collectGradeBlocks(report)) {
       expect(block.reasoning.some((c) => c.text.includes("no analyst grade exists"))).toBe(true);
       expect(block.reasoning.some((c) => /ungraded/i.test(c.text))).toBe(false);
     }
-    const coverage = report.meta.provenanceCoverage;
-    expect(coverage).toBeDefined();
-    // The flag claim's `pipeline` source is not a citation, so the judgment
-    // rate is below 1 and is the exact fraction the schema pins.
-    expect(coverage!.judgments.cited).toBeLessThan(coverage!.judgments.total);
-    expect(coverage!.judgments.rate).toBe(coverage!.judgments.cited / coverage!.judgments.total);
-    expect(coverage!.factualClaims.rate).toBe(
-      coverage!.factualClaims.total === 0 ? null : coverage!.factualClaims.supported / coverage!.factualClaims.total,
-    );
+    expect(report.meta.provenanceCoverage).toBeUndefined();
   });
 
   it("carries only pipeline-computed numbers, each traced to a computed source, and no scenario odds", () => {
@@ -413,12 +441,9 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
       null,
       null,
     ]);
-    expect(report.meta.provenanceCoverage?.numeric).toEqual({
-      supported: numbers.length,
-      total: numbers.length,
-      rate: 1,
-    });
-    expect(report.appendix.provenanceCoverage).toEqual(report.meta.provenanceCoverage);
+    // Pipeline ownership is not an independently checked factual citation.
+    expect(report.meta.provenanceCoverage).toBeUndefined();
+    expect(report.appendix.provenanceCoverage).toBeUndefined();
   });
 
   it("attaches the deterministic Stage B blocks exactly as the LLM path does", () => {
@@ -440,7 +465,7 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
       expect(report.valuation.reverseDcf.impliedValue).toBe(
         computed.valuation.reverseDcf.impliedRevenueGrowthPct,
       );
-      expect(report.valuation.reverseDcf.narrative).toContain("no narrative analysis ran");
+      expect(report.valuation.reverseDcf.narrative).toContain("no completed narrative assessment is available");
     }
     expect(report.valuation.multiples.length).toBeGreaterThan(0);
     expect(report.quality.forensicScores.altman.score).toBe(computed.forensics.altman?.score ?? null);
@@ -483,7 +508,7 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
     expect(report.catalystsRisks).toEqual({ catalysts: [], risks: [] });
     expect(report.competitive.peerTable).toEqual([]);
     expect(report.competitive.moatAssessment).toEqual([]);
-    expect(report.competitive.marketShareDirection).toContain("no analyst pass ran");
+    expect(report.competitive.marketShareDirection).toContain("no completed analyst assessment");
     expect(report.leadership.executives).toEqual([]);
     expect(report.verdict.synthesis).toContain("Data-only report");
     expect(report.verdict.synthesis).toContain("deterministic composite score");
@@ -562,7 +587,7 @@ describe("data-only report (keyless / no-LLM degraded path)", () => {
     expect(executiveNotes.every((note) => note.label === "FACT" && note.asOf === "2026-06-30")).toBe(true);
 
     expect(report.valuation.reverseDcf.narrative).toBe(
-      "The market price is consistent with a 31.4% terminal EBIT margin, with growth held at its base path (margin-solve fallback). Deterministic solve; no narrative analysis ran.",
+      "The market price is consistent with a 31.4% terminal EBIT margin, with growth held at its base path (margin-solve fallback). Deterministic solve; no completed narrative assessment is available.",
     );
 
     const serialized = JSON.stringify(report);

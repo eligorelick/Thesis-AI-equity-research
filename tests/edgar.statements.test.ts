@@ -150,6 +150,18 @@ const OPTS = {
 const FY25_INSTANT = { end: "2025-09-27", form: "10-K", fp: "FY", fy: 2025, filed: "2025-10-31" } as const;
 
 describe("buildStatementsFromCompanyFacts — annual rows", () => {
+  it("preserves total income and income available to common as separate amounts", () => {
+    const f = appleLike();
+    f.facts["us-gaap"].NetIncomeLossAvailableToCommonStockholdersBasic = {
+      label: "Income available to common", units: { USD: [
+        { start: "2024-09-29", end: "2025-09-27", val: 94, accn: "0000000000-25-000001", fy: 2025, fp: "FY", form: "10-K", filed: "2025-10-31" },
+      ] },
+    };
+    const row = buildStatementsFromCompanyFacts(f, OPTS).incomeAnnual.rows[0];
+    expect(row.netIncome).toBe(100);
+    expect(row.netIncomeAvailableToCommon).toBe(94);
+  });
+
   it("builds FMP-shaped annual income rows newest first with computed totals only from present operands", () => {
     const built = buildStatementsFromCompanyFacts(appleLike(), OPTS);
     const rows = built.incomeAnnual.rows;
@@ -1546,6 +1558,23 @@ describe("buildStatementsFromCompanyFacts — audit 2026-09-06", () => {
     );
     expect(totalOnly.cashflowAnnual.rows[0]).toMatchObject({ commonDividendsPaid: -15, netDividendsPaid: -15, preferredDividendsPaid: null });
     expect(totalOnly.cashflowAnnual.notes.some((n) => /common dividends/.test(n))).toBe(false);
+  });
+
+  it("withholds an aggregate dividend proxy when preferred stock is outstanding", () => {
+    const build = (preferred: number, common?: number) => buildStatementsFromCompanyFacts(facts({
+      NetCashProvidedByUsedInOperatingActivities: y(400),
+      PaymentsOfDividends: y(20),
+      PreferredStockValue: inst(preferred),
+      // Earnings allocations are not evidence of cash dividends paid.
+      PreferredStockDividendsAndOtherAdjustments: y(8),
+      ...(common === undefined ? {} : { PaymentsOfDividendsCommonStock: y(common) }),
+      Assets: inst(900),
+    }), OPTS);
+    const outstanding = build(100);
+    expect(outstanding.cashflowAnnual.rows[0]).toMatchObject({ commonDividendsPaid: null, netDividendsPaid: -20 });
+    expect(outstanding.cashflowAnnual.notes.join(" ")).toMatch(/preferred stock.*outstanding.*common dividends.*withheld/i);
+    expect(build(100, 12).cashflowAnnual.rows[0].commonDividendsPaid).toBe(-12);
+    expect(build(0).cashflowAnnual.rows[0].commonDividendsPaid).toBe(-20);
   });
 });
 

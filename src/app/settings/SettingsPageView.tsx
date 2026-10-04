@@ -24,7 +24,7 @@ import { AiConnections } from "./AiConnections";
  * two newest choices rendered without a label at all.
  */
 const MODEL_LABELS: Record<string, string> = {
-  auto: "auto — best available [recommended]",
+  auto: "auto — preferred model available to your API key",
   ...Object.fromEntries(
     activeModels().map((entry) => [entry.id, `${entry.id} — ${entry.displayName}`]),
   ),
@@ -33,7 +33,7 @@ const MODEL_LABELS: Record<string, string> = {
 const EFFORT_LABELS: Record<string, string> = {
   low: "low — fastest/cheapest, shallow reasoning",
   medium: "medium — balanced cost/quality",
-  high: "high — thorough reasoning [recommended]",
+  high: "high — thorough reasoning",
   xhigh: "xhigh — extra-deep reasoning, higher cost",
   max: "max — deepest reasoning, highest cost",
 };
@@ -81,7 +81,7 @@ export function SettingsPageView({
       <div className="pt-2">
         <SectionHeading>settings</SectionHeading>
         <p className="pt-1 text-[11px] leading-snug text-faint">
-          Model choices persist to the local database. API keys are configured
+          Model choices persist to the local database. API keys and the SEC contact are configured
           in <span className="mono">.env</span> only.
         </p>
       </div>
@@ -169,9 +169,17 @@ export function SettingsPageView({
                 ))}
               </fieldset>
               <p className="pt-2 text-[11px] leading-snug text-faint">
-                Controls how much the model reasons per pass. Reasoning tokens
-                are billed as output and are the largest cost component of a
-                report, so lower effort trades analytical depth for cost.
+                Reasoning tokens are billed as output. Anthropic recommends starting
+                Opus 5.5 at medium; Sonnet 5.5 and Fable 5.1 default to high.
+                Thesis sends your saved effort explicitly, so changing models does
+                not reset it. Start lower and raise effort when the results need it;
+                xhigh and max can consume substantially more tokens.
+              </p>
+              <p className="pt-2 text-[11px] leading-snug text-faint">
+                Opus 5.5 is the general starting choice; Sonnet 5.5 costs less,
+                while Fable 5.1 targets the most demanding research. Claude runs at
+                standard API speed here; the Fast control above applies to ChatGPT.
+                {" "}<a className="underline" href="https://platform.claude.com/docs/en/about-claude/models/choosing-a-model" target="_blank" rel="noreferrer">Anthropic’s model guidance</a>.
               </p>
             </>
           ) : null}
@@ -189,7 +197,7 @@ export function SettingsPageView({
           </p>
         </Panel>
 
-        <Panel title="api keys (read-only)">
+        <Panel title="provider access (read-only)">
           {settings !== null ? (
             <div className="flex flex-col">
               {settings.capabilities.fixtureMode && (
@@ -204,10 +212,24 @@ export function SettingsPageView({
               <CapabilityRow name="FINNHUB_API_KEY" ok={settings.capabilities.hasFinnhubKey} />
               <CapabilityRow name="FRED_API_KEY" ok={settings.capabilities.hasFredKey} />
               <CapabilityRow name="ANTHROPIC_API_KEY" ok={settings.capabilities.hasAnthropicKey} />
+              <CapabilityRow name="EDGAR_CONTACT" ok={settings.capabilities.hasEdgarContact} />
               <p className="pt-2 text-[11px] leading-snug text-faint">
-                Keys are read from <span className="mono">.env</span> at server
-                start and never enter the browser. Server-side requests send
-                each key only to its configured provider. Restart after editing.
+                An FMP key does not confirm subscription entitlement. Free or lower-tier
+                keys can return HTTP 402 for restricted endpoints or symbols. SEC and
+                Yahoo fallbacks can fill supported data after issuer verification;
+                some FMP datasets remain unavailable on those plans.
+              </p>
+              <p className="pt-2 text-[11px] leading-snug text-faint">
+                SEC EDGAR needs no paid key. Set <span className="mono">EDGAR_CONTACT</span>{" "}
+                to your name or organization and a reachable email to enable SEC filings,
+                issuer verification, and eligible fallback data. A placeholder contact
+                leaves SEC access disabled. Configured status checks the contact format,
+                not whether SEC is currently reachable.
+              </p>
+              <p className="pt-2 text-[11px] leading-snug text-faint">
+                Keys and the SEC contact are read from <span className="mono">.env</span>{" "}
+                and never enter the browser. Server-side requests send each key only to
+                its provider and the contact only to SEC. Restart after editing.
               </p>
             </div>
           ) : state.status === "loading" ? (

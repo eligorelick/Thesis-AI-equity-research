@@ -11,10 +11,11 @@
  * - All requests go through the beta messages surface (`client.beta.messages`)
  *   so fable-5 server-side refusal fallbacks and fallback detection share one
  *   code path; without `betas` the beta endpoint behaves like the GA API.
- * - NEVER send `temperature` / `top_p` / `top_k` (400 on 4.7+ models) and
- *   NEVER send a `thinking` param for the Fable family (always-on; explicit
- *   config is a 400). Opus 4.8 and Opus 5 get `thinking: {type: "adaptive"}`;
- *   Sonnet 5 runs adaptive by default when the param is omitted. Thinking is
+ * - Omit `temperature` / `top_p` / `top_k` (non-default values fail on current models).
+ *   Fable and Opus 5.5 use their always-on adaptive default by omitting thinking;
+ *   Fable 5.1 and Opus 5.5 also accept an explicit adaptive configuration.
+ *   Opus 4.8 and Opus 5 get `thinking: {type: "adaptive"}`;
+ *   Sonnet 5/5.5 run adaptive by default when the param is omitted. Thinking is
  *   never disabled. Every per-model rule is read from the model registry
  *   (config/models.json via src/models/registry.ts), never hard-coded here.
  *
@@ -56,7 +57,7 @@ import {
   ANTHROPIC_REQUEST_TIMEOUT_MS as REQUEST_TIMEOUT_MS,
   MODEL_STAGE_DEADLINE_MS,
 } from "@/pipeline/leaseTiming";
-import { modelSupportsEffort } from "@/report/execution";
+import { modelSupportsEffort, type ProviderExecution } from "@/report/execution";
 import {
   MODEL_REGISTRY,
   REGISTRY_SNAPSHOT_DATE,
@@ -80,18 +81,17 @@ import { canonicalizeFetchedUrl } from "@/pipeline/stageC/provenance";
 /**
  * "auto" model resolution preference order.
  *
- * Opus FIRST — the tier recommended for accurate professional analysis in the
- * Anthropic API contract. Opus 5 leads and Opus 4.8 is the immediate
- * fallback: they are the same price ($5/$25) and the same context (1M), so
- * preferring the newer model costs nothing, and resolution already probes
- * models.list() and falls through when a key cannot reach Opus 5.
+ * Opus FIRST is this application's research policy. Opus 5.5 leads at $4/$20
+ * per MTok and a 1M context window. Older active Opus entries remain available
+ * at their own registry prices. Resolution probes models.list() and falls
+ * through the registry order when an account cannot reach a preferred model.
  *
  * Fable 5 is deliberately LAST despite being the "most capable" model: at 2x
- * Opus cost its cyber/bio safety classifiers can refuse benign
+ * the older Opus cost its cyber/bio safety classifiers can refuse benign
  * finance-adjacent tickers (defense, biotech, sanctions) → degraded data-only
  * reports, its single turns can run many minutes (worsening page latency), and
- * it requires 30-day org data retention (400s under ZDR). Sonnet 5 is the safe
- * cheaper middle (near-Opus quality, no classifier/retention constraints).
+ * it requires 30-day org data retention (400s under ZDR). Sonnet 5.5 and 5
+ * provide the lower-priced $2/$10 tier in the existing policy.
  * Fable 5 stays reachable via an explicit ANALYSIS_MODEL override ("deep-dive"
  * mode) but is never auto-selected while Opus/Sonnet are available. Fable 5.1
  * sits just before Fable 5 at the tail for the same reasons (same price tier).
@@ -146,7 +146,7 @@ export function streamIdleTimeoutMs(): number {
  * SDK drops them before any listener runs (`core/streaming.js`:
  * `if (sse.event === 'ping') continue;`) — and it cannot see that the model is
  * working, because Thesis never asks for thinking summaries: the Fable family
- * gets no `thinking` param at all (always-on) and Opus gets
+ * gets no `thinking` param at all (always-on), as does Opus 5.5; older Opus gets
  * `{type: "adaptive"}` with no `display`, so `display` is the API default
  * "omitted" on every model and reasoning produces no stream traffic.
  *
@@ -224,6 +224,11 @@ export const WEB_SEARCH_USD_PER_SEARCH = MODEL_REGISTRY.webSearchUsdPerThousand 
 
 /** Scheduler reservation and provider-boundary cap for one analyst request. */
 export const MAX_PROVIDER_WEB_SEARCHES = 8;
+
+/** Default server-tool sampling limit before pause_turn; each iteration bills input.
+ * https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons#pause_turn
+ */
+export const MAX_SERVER_TOOL_SAMPLING_ITERATIONS = 10;
 
 /** Registry snapshot date, surfaced in report metadata and the pricing table. */
 export const MODEL_REGISTRY_SNAPSHOT_DATE: string = REGISTRY_SNAPSHOT_DATE;
@@ -412,14 +417,20 @@ export function maximumPassCostUsd(
       ? 0
       : MAX_PROVIDER_WEB_SEARCHES;
 
+  const inputIterations = searches > 0 ? MAX_SERVER_TOOL_SAMPLING_ITERATIONS : 1;
+  const fallback = effective.serverSideFallback === null ? null : registryEntryFor(effective.serverSideFallback.model);
+  const fallbackQuarterMicroUsd = fallback === null ? 0 : (
+    (pass === "verify" ? inputTokens : fallback.contextWindowTokens) * fallback.pricing.cacheWrite5mPerMTok * inputIterations * 4 +
+    (pass === "verify" ? outputTokens : fallback.maxOutputTokens) * fallback.pricing.outputPerMTok * 4
+  );
   // Work in quarter-micro-USD so the cache-write price (a quarter-dollar
   // multiple on every registry entry) and the cap comparison never acquire a
   // binary-floating-point extra micro-dollar. Input is bounded at the
   // 5-minute cache-write price, the dearest way an input token can bill.
   const quarterMicroUsdPerExecution = Math.round(
-    inputTokens * pricing.cacheWrite5mPerMTok * 4 +
+    inputTokens * pricing.cacheWrite5mPerMTok * inputIterations * 4 +
     outputTokens * pricing.outputPerMTok * 4 +
-    searches * 40_000,
+    searches * 40_000 + fallbackQuarterMicroUsd,
   );
   const microUsd = Math.ceil(
     (quarterMicroUsdPerExecution *
@@ -572,6 +583,8 @@ export function isRetryableTransportError(err: unknown): boolean {
   if (err instanceof APIConnectionError) return true;
   if (isStreamConnectionFailure(err)) return true;
   if (err instanceof APIError) {
+    const body = err.error as { error?: { details?: { error_code?: string } }; details?: { error_code?: string } } | undefined;
+    if ((body?.error?.details ?? body?.details)?.error_code === "enforced_spend_limit_reached") return false;
     if (typeof err.status === "number") {
       return err.status === 408 || err.status === 409 || err.status === 429 || err.status >= 500;
     }
@@ -587,6 +600,18 @@ export function isRetryableTransportError(err: unknown): boolean {
   return false;
 }
 
+/** Retry-After is a minimum delay; keep the local backoff when it is longer. */
+function transportRetryDelayMs(err: unknown, localDelay: number): number {
+  if (!(err instanceof APIError)) return localDelay;
+  const raw = err.headers?.get("retry-after")?.trim();
+  if (!raw) return localDelay;
+  const seconds = /^\d+(?:\.\d+)?$/.test(raw) ? Number(raw) : null;
+  const delay = seconds === null ? Date.parse(raw) - Date.now() : seconds * 1_000;
+  return Number.isFinite(delay) && delay >= 0
+    ? Math.max(localDelay, delay)
+    : localDelay;
+}
+
 /** Sleep between pass-level transport retries — injectable so tests don't wait. */
 let transportRetrySleep: (ms: number) => Promise<void> = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -597,6 +622,13 @@ export function _setTransportRetrySleepForTests(fn?: (ms: number) => Promise<voi
 }
 
 async function transportRetrySleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  // Honor even long Retry-After values without overflowing a Node timer or
+  // retrying before the provider allows it. Each chunk remains cancellable.
+  if (ms > 2_147_483_647) {
+    await transportRetrySleepWithSignal(2_147_483_647, signal);
+    await transportRetrySleepWithSignal(ms - 2_147_483_647, signal);
+    return;
+  }
   if (signal === undefined) {
     await transportRetrySleep(ms);
     return;
@@ -855,16 +887,16 @@ export function validateRunPassOptions(opts: RunPassOptions): void {
 
 /**
  * Thinking config from the `thinking` block of the registry entry:
- * - mode "always-on" (Fable family): OMIT the param entirely (explicit config
- *   is a 400).
+ * - mode "always-on" (Fable family, Opus 5.5): OMIT the param to use the default.
+ *   Fable 5.1 and Opus 5.5 accept adaptive explicitly but reject disabled/manual.
  * - mode "adaptive" with sendParam (Opus 4.8, Opus 5): `{type: "adaptive"}`.
  *   Opus 4.8 would run WITHOUT thinking if the param were omitted; Opus 5
  *   already runs adaptive by default, so the explicit param states intent.
- * - mode "adaptive" without sendParam (Sonnet 5) and mode "none" (Haiku 4.5):
+ * - mode "adaptive" without sendParam (Sonnet 5/5.5) and mode "none" (Haiku 4.5):
  *   omit.
  *
- * `{type: "disabled"}` is never produced: Opus 5 rejects it above effort
- * `high`, and no pass ever wants thinking off.
+ * Disabled/manual thinking is never produced. Effort is explicitly configured
+ * by the run; Opus 5.5's provider default of medium does not override that setting.
  */
 export function thinkingConfigFor(model: string): BetaThinkingConfigParam | undefined {
   const entry = registryEntryFor(model);
@@ -1019,59 +1051,126 @@ function pricedIteration(entry: unknown): PricedIteration | null {
   if (typeof entry !== "object" || entry === null) return null;
   const e = entry as Record<string, unknown>;
   if (typeof e.model !== "string" || !findPricing(e.model)) return null;
-  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null);
   const input = num(e.input_tokens);
   const output = num(e.output_tokens);
-  if (input === null || output === null) return null;
+  const cacheWrite = e.cache_creation_input_tokens == null ? 0 : num(e.cache_creation_input_tokens);
+  const cacheRead = e.cache_read_input_tokens == null ? 0 : num(e.cache_read_input_tokens);
+  if (input === null || output === null || cacheWrite === null || cacheRead === null) return null;
   return {
     model: e.model,
     input_tokens: input,
     output_tokens: output,
-    cache_creation_input_tokens: num(e.cache_creation_input_tokens) ?? 0,
-    cache_read_input_tokens: num(e.cache_read_input_tokens) ?? 0,
+    cache_creation_input_tokens: cacheWrite,
+    cache_read_input_tokens: cacheRead,
   };
 }
 
-/**
- * Price a response hop by hop when the provider billed it under more than one
- * model. A server-side refusal fallback bills the declining hop's streamed
- * tokens at the declining model's rate and the rescue at the fallback model's
- * (a Fable → Opus fallback is 2× on the first hop); `usage.iterations` carries
- * each hop's model and tokens. Used only when every hop names a priced model
- * AND the hops account for exactly the message's token totals — otherwise the
- * single-model price stands, which is what one hop is anyway.
- */
-function costPerIteration(message: BetaMessage): number | null {
+type RefusalCategory = "cyber" | "general_harms" | "bio" | "frontier_llm" | "reasoning_extraction" | null;
+
+function refusalCategory(details: unknown): RefusalCategory | undefined {
+  if (typeof details !== "object" || details === null) return undefined;
+  const category = (details as { category?: unknown }).category;
+  return category === null || category === "cyber" || category === "general_harms" ||
+    category === "bio" || category === "frontier_llm" || category === "reasoning_extraction"
+    ? category : undefined;
+}
+
+/** Top-level usage is the final attempt only, not the sum of iterations. */
+function messageIterations(message: BetaMessage): PricedIteration[] | null {
+  // Ordinary server-tool loops also expose iterations. Their existing
+  // top-level totals remain authoritative; this normalization is for fallback.
+  if (!detectFallbackUsed(message)) return null;
   const entries = message.usage.iterations ?? [];
-  if (entries.length < 2) return null;
+  if (entries.length === 0) return null;
   const hops: PricedIteration[] = [];
   for (const entry of entries) {
+    if (entry.type !== "message" && entry.type !== "fallback_message") return null;
     const hop = pricedIteration(entry);
     if (hop === null) return null;
     hops.push(hop);
   }
-  const sum = (pick: (hop: PricedIteration) => number): number =>
-    hops.reduce((total, hop) => total + pick(hop), 0);
+  const final = hops[hops.length - 1];
   const u = message.usage;
-  const matches =
-    sum((h) => h.input_tokens) === u.input_tokens &&
-    sum((h) => h.output_tokens) === u.output_tokens &&
-    sum((h) => h.cache_creation_input_tokens) === (u.cache_creation_input_tokens ?? 0) &&
-    sum((h) => h.cache_read_input_tokens) === (u.cache_read_input_tokens ?? 0);
-  if (!matches) return null;
-  return (
-    hops.reduce((total, hop) => total + computeCostUsd(hop, hop.model), 0) +
-    webSearchCount(message) * WEB_SEARCH_USD_PER_SEARCH
-  );
+  return final.input_tokens === u.input_tokens && final.output_tokens === u.output_tokens &&
+    final.cache_creation_input_tokens === (u.cache_creation_input_tokens ?? 0) &&
+    final.cache_read_input_tokens === (u.cache_read_input_tokens ?? 0) ? hops : null;
+}
+
+function actualModel(message: BetaMessage): string {
+  if (!detectFallbackUsed(message)) return message.model;
+  const entries = message.usage.iterations ?? [];
+  const final = entries[entries.length - 1];
+  if (final && (final.type === "message" || final.type === "fallback_message") && final.model) return final.model;
+  const switches = message.content.filter((block) => block.type === "fallback");
+  return switches[switches.length - 1]?.to?.model || message.model;
+}
+
+function withActualModel(message: BetaMessage): BetaMessage {
+  const model = actualModel(message);
+  return model === message.model ? message : { ...message, model };
+}
+
+/** Refusals before output are free only with an explicitly documented category. */
+function refusalBilling(outputTokens: number, declined: boolean, details: unknown): { free: boolean; presumed: boolean } {
+  if (!declined || outputTokens > 0) return { free: false, presumed: false };
+  const category = refusalCategory(details);
+  return {
+    free: category === null || category === "cyber" || category === "general_harms",
+    presumed: category === undefined,
+  };
+}
+
+function billingForMessage(message: BetaMessage, opts: RunPassOptions): { costUsd: number; presumed: boolean } {
+  const hops = messageIterations(message);
+  const switches = message.content.filter((block) => block.type === "fallback");
+  const toolsUsd = webSearchCount(message) * WEB_SEARCH_USD_PER_SEARCH;
+  if (hops !== null) {
+    let presumed = false;
+    let nextBoundary = 0;
+    const costUsd = hops.reduce((total, hop, index) => {
+      const final = index === hops.length - 1;
+      const transition = !final && hop.model !== hops[index + 1].model;
+      // Server-tool sampling can add same-model iterations before a fallback.
+      // Content has one boundary per model transition, not one per iteration.
+      const boundaryIndex = transition ? switches.findIndex((boundary, i) =>
+        i >= nextBoundary && boundary.from.model === hop.model && boundary.to.model === hops[index + 1].model,
+      ) : -1;
+      if (boundaryIndex >= 0) nextBoundary = boundaryIndex + 1;
+      const details = final ? message.stop_details : switches[boundaryIndex]?.trigger;
+      const billing = refusalBilling(hop.output_tokens, transition || (final && message.stop_reason === "refusal"), details);
+      presumed ||= billing.presumed;
+      return total + (billing.free ? 0 : computeCostUsd(hop, hop.model));
+    }, toolsUsd);
+    return { costUsd, presumed };
+  }
+  const model = actualModel(message);
+  const knownModel = findPricing(model) !== undefined;
+  const billing = refusalBilling(message.usage.output_tokens, message.stop_reason === "refusal", message.stop_details);
+  const observed = (billing.free ? 0 : computeCostUsd(message.usage, knownModel ? model : opts.model)) + toolsUsd;
+  const incomplete = detectFallbackUsed(message) || !knownModel;
+  // Missing hops cannot be reconstructed. Retain the reserved upper bound,
+  // visibly presumed, rather than presenting the final hop as the entire bill.
+  return {
+    costUsd: incomplete ? Math.max(observed, requestReservationUsd(opts)) : observed,
+    presumed: incomplete || billing.presumed,
+  };
 }
 
 function costForMessage(message: BetaMessage, opts: RunPassOptions): number {
-  const perHop = costPerIteration(message);
-  if (perHop !== null) return perHop;
-  // A fallback-served response reports the serving model's canonical id;
-  // fall back to the requested model if the served id has no pricing entry.
-  const pricingModel = findPricing(message.model) ? message.model : opts.model;
-  return computeCostUsd(message.usage, pricingModel, webSearchCount(message));
+  return billingForMessage(message, opts).costUsd;
+}
+
+function messageUsage(message: BetaMessage): BetaUsage {
+  const hops = messageIterations(message);
+  if (hops === null) return message.usage;
+  return {
+    ...message.usage,
+    input_tokens: hops.reduce((sum, hop) => sum + hop.input_tokens, 0),
+    output_tokens: hops.reduce((sum, hop) => sum + hop.output_tokens, 0),
+    cache_creation_input_tokens: hops.reduce((sum, hop) => sum + hop.cache_creation_input_tokens, 0),
+    cache_read_input_tokens: hops.reduce((sum, hop) => sum + hop.cache_read_input_tokens, 0),
+  };
 }
 
 function aggregateUsage(messages: readonly BetaMessage[]): BetaUsage {
@@ -1079,16 +1178,17 @@ function aggregateUsage(messages: readonly BetaMessage[]): BetaUsage {
   if (!finalUsage) {
     throw new Error("aggregateUsage: at least one message is required");
   }
-  if (messages.length === 1) return finalUsage;
+  if (messages.length === 1) return messageUsage(messages[0]);
 
-  const inputTokens = messages.reduce((sum, message) => sum + message.usage.input_tokens, 0);
-  const outputTokens = messages.reduce((sum, message) => sum + message.usage.output_tokens, 0);
-  const cacheCreationTokens = messages.reduce(
-    (sum, message) => sum + (message.usage.cache_creation_input_tokens ?? 0),
+  const usages = messages.map(messageUsage);
+  const inputTokens = usages.reduce((sum, usage) => sum + usage.input_tokens, 0);
+  const outputTokens = usages.reduce((sum, usage) => sum + usage.output_tokens, 0);
+  const cacheCreationTokens = usages.reduce(
+    (sum, usage) => sum + (usage.cache_creation_input_tokens ?? 0),
     0,
   );
-  const cacheReadTokens = messages.reduce(
-    (sum, message) => sum + (message.usage.cache_read_input_tokens ?? 0),
+  const cacheReadTokens = usages.reduce(
+    (sum, usage) => sum + (usage.cache_read_input_tokens ?? 0),
     0,
   );
   const webSearches = messages.reduce((sum, message) => sum + webSearchCount(message), 0);
@@ -1166,7 +1266,7 @@ export const PASS_MAX_REQUESTS = PASS_TRANSPORT_MAX_ATTEMPTS * (MAX_PAUSE_RESUMP
 /**
  * Maximum a SINGLE provider request can bill, at standard prices:
  *
- *   input_cap x input_price x cache_mult
+ *   input_cap x input_price x cache_mult x input_iterations
  * + output_cap x output_price
  * + search_cap x $0.01
  *
@@ -1174,7 +1274,9 @@ export const PASS_MAX_REQUESTS = PASS_TRANSPORT_MAX_ATTEMPTS * (MAX_PAUSE_RESUMP
  * the 1-hour cache-write price when a 1-hour TTL could be requested, the
  * 5-minute price when only 5-minute blocks are sent (what Thesis sends), and
  * the plain input price when caching is off. Prices come from the registry, so
- * a model's own cache economics are used rather than one global ratio.
+ * a model's own cache economics are used rather than one global ratio. Search
+ * requests reserve up to 10 sampling iterations of input per model attempt;
+ * the output cap and web-search limit apply to the request as a whole.
  */
 export function maximumRequestCostUsd(
   model: string,
@@ -1217,12 +1319,20 @@ export function maximumRequestCostUsd(
       ? 0
       : MAX_PROVIDER_WEB_SEARCHES;
 
+  // One explicit server fallback can bill its own input/output attempt. The
+  // request's server-tool counter is shared, so reserve its search cap once.
+  const inputIterations = searches > 0 ? MAX_SERVER_TOOL_SAMPLING_ITERATIONS : 1;
+  const fallback = effective.serverSideFallback === null ? null : registryEntryFor(effective.serverSideFallback.model);
+  const fallbackQuarterMicroUsd = fallback === null ? 0 : (
+    (pass === "verify" ? inputTokens : fallback.contextWindowTokens) * fallback.pricing.cacheWrite5mPerMTok * inputIterations * 4 +
+    (pass === "verify" ? outputTokens : fallback.maxOutputTokens) * fallback.pricing.outputPerMTok * 4
+  );
   // Quarter-micro-USD, as in maximumPassCostUsd: every registry cache-write
   // price is a quarter-dollar multiple, so the arithmetic stays exact.
   const quarterMicroUsd = Math.round(
-    inputTokens * pricing.cacheWrite5mPerMTok * 4 +
+    inputTokens * pricing.cacheWrite5mPerMTok * inputIterations * 4 +
     outputTokens * pricing.outputPerMTok * 4 +
-    searches * 40_000,
+    searches * 40_000 + fallbackQuarterMicroUsd,
   );
   return Math.ceil(quarterMicroUsd / 4) / 1_000_000;
 }
@@ -1271,9 +1381,8 @@ export interface RequestSettlement {
   webSearches: number;
   fallbackUsed: boolean;
   /**
-   * True when the figure is a presumed maximum rather than reported usage:
-   * the request was sent and then timed out or went silent, so what it billed
-   * is unknown and the bound stands until something reconciles it.
+   * True when billing cannot be verified from the response: for example a
+   * timeout, missing fallback usage, or an unknown pre-output refusal category.
    */
   presumed?: boolean;
 }
@@ -1300,7 +1409,7 @@ export interface PassError {
   kind: PassErrorKind;
   message: string;
   /** kind "refusal": policy category from stop_details (may be null). */
-  refusalCategory?: "cyber" | "bio" | "frontier_llm" | "reasoning_extraction" | null;
+  refusalCategory?: RefusalCategory;
   /**
    * kind "max_tokens"/"context_window": the `max_tokens` the request actually
    * SENT ({@link effectiveMaxTokens}) — at effort `high` and above that is the
@@ -1310,7 +1419,10 @@ export interface PassError {
   /** Usage/cost of the failed attempt(s) (mid-stream failures bill partial output). */
   usage?: BetaUsage;
   costUsd?: number;
+  presumed?: boolean;
   fallbackUsed?: boolean;
+  /** Original request settings, retained even when a fallback served the pass. */
+  execution?: ProviderExecution;
   /** Model that served the billed attempt(s), when known (kind "transport"). */
   model?: string;
   /** Web searches billed across failed attempt(s) ($0.01 each, kind "transport"). */
@@ -1330,10 +1442,14 @@ export interface PassOutcome {
   fetchedUrls: string[];
   usage: BetaUsage;
   costUsd: number;
+  /** Billing evidence was incomplete; the cost includes a conservative estimate. */
+  presumed?: boolean;
   /** True when the fable-5 server-side fallback chain served the response. */
   fallbackUsed: boolean;
   /** Model that actually produced the response (fallback model when one served it). */
   model: string;
+  /** Original request settings, retained even when a fallback served the pass. */
+  execution?: ProviderExecution;
 }
 
 /**
@@ -1358,6 +1474,15 @@ function gapEntry(opts: RunPassOptions, reason: string): ManifestEntry {
   };
 }
 
+/** Effort records what request construction sends, not a new model default. */
+function passExecution(opts: RunPassOptions, dispatched = true): ProviderExecution {
+  return {
+    requestedModel: opts.model,
+    requestedEffort: opts.effort ?? null,
+    effectiveEffort: dispatched && supportsEffort(opts.model) ? opts.effort ?? null : null,
+  };
+}
+
 function noKeyResult(opts: RunPassOptions): RunPassResult {
   return {
     ok: false,
@@ -1365,6 +1490,7 @@ function noKeyResult(opts: RunPassOptions): RunPassResult {
     error: {
       kind: "no_key",
       message: "ANTHROPIC_API_KEY is not set — Anthropic calls are disabled (pipeline dry-run)",
+      execution: passExecution(opts, false),
     },
   };
 }
@@ -1374,15 +1500,21 @@ function interpretPassMessages(
   opts: RunPassOptions,
   billableMessages: readonly BetaMessage[],
 ): RunPassResult {
+  message = withActualModel(message);
   const fallbackUsed = billableMessages.some(detectFallbackUsed);
   const usage = aggregateUsage(billableMessages);
   const costUsd = billableMessages.reduce((sum, billedMessage) => sum + costForMessage(billedMessage, opts), 0);
+  const accounting = {
+    model: message.model,
+    execution: passExecution(opts),
+    ...(billableMessages.some((billed) => billingForMessage(billed, opts).presumed) ? { presumed: true } : {}),
+  };
   const fetchedUrls = [
     ...new Set(billableMessages.flatMap((billedMessage) => collectFetchedUrls(billedMessage))),
   ].sort();
 
   if (message.stop_reason === "refusal") {
-    const category = message.stop_details?.category ?? null;
+    const category = refusalCategory(message.stop_details);
     return {
       ok: false,
       gap: gapEntry(
@@ -1398,6 +1530,7 @@ function interpretPassMessages(
         usage,
         costUsd,
         fallbackUsed,
+        ...accounting,
       },
     };
   }
@@ -1427,6 +1560,7 @@ function interpretPassMessages(
         usage,
         costUsd,
         fallbackUsed,
+        ...accounting,
       },
     };
   }
@@ -1445,6 +1579,7 @@ function interpretPassMessages(
         usage,
         costUsd,
         fallbackUsed,
+        ...accounting,
       },
     };
   }
@@ -1468,6 +1603,7 @@ function interpretPassMessages(
         usage,
         costUsd,
         fallbackUsed,
+        ...accounting,
       },
     };
   }
@@ -1482,7 +1618,7 @@ function interpretPassMessages(
         usage,
         costUsd,
         fallbackUsed,
-        model: message.model,
+        ...accounting,
       },
       asOf: now,
       source: "anthropic",
@@ -1562,12 +1698,14 @@ async function settleRequest(
     });
     return;
   }
+  const billing = billingForMessage(billed, opts);
   await admission.settle(permit, {
-    usage: billed.usage,
-    costUsd: costForMessage(billed, opts),
-    model: billed.model || opts.model,
+    usage: messageUsage(billed),
+    costUsd: billing.costUsd,
+    model: actualModel(billed) || opts.model,
     webSearches: webSearchCount(billed),
     fallbackUsed: detectFallbackUsed(billed),
+    ...(billing.presumed ? { presumed: true } : {}),
   });
 }
 
@@ -1626,7 +1764,7 @@ async function streamFinalMessage(
   stream.on("streamEvent", resetIdle);
   resetIdle();
   try {
-    return await Promise.race([stream.finalMessage(), idleGuard]);
+    return withActualModel(await Promise.race([stream.finalMessage(), idleGuard]));
   } catch (err) {
     if (err instanceof StreamIdleTimeoutError) {
       (stream as { abort?: () => void } | undefined)?.abort?.();
@@ -1661,6 +1799,18 @@ async function streamFinalMessage(
  * billed so far and the resumption's own usage snapshot) if a resumption
  * fails; the resumption settles its own permit before throwing.
  */
+function continuationContent(message: BetaMessage): BetaMessage["content"] {
+  const lastFallback = message.content.findLastIndex((block) => block.type === "fallback");
+  if (lastFallback < 0) return message.content;
+  const results = new Set(message.content.flatMap((block) =>
+    "tool_use_id" in block && typeof block.tool_use_id === "string" ? [block.tool_use_id] : []));
+  return message.content.filter((block, index) => {
+    if (index >= lastFallback) return true;
+    if (["thinking", "redacted_thinking", "connector_text", "tool_use"].includes(block.type)) return false;
+    return block.type !== "server_tool_use" || results.has(block.id);
+  });
+}
+
 async function resumeIfPausedWithUsage(
   client: Anthropic,
   params: MessageCreateParamsNonStreaming,
@@ -1680,7 +1830,7 @@ async function resumeIfPausedWithUsage(
   while (msg.stop_reason === "pause_turn" && resumptions < MAX_PAUSE_RESUMPTIONS) {
     current = {
       ...current,
-      messages: [...current.messages, { role: "assistant", content: msg.content }],
+      messages: [...current.messages, { role: "assistant", content: continuationContent(msg) }],
     };
     // A resumption is its own billable request, so it is admitted and settled
     // on its own rather than riding the first request's reservation.
@@ -1771,6 +1921,9 @@ export interface StreamingPassHandle {
 interface StreamedUsageSnapshot {
   model: string | null;
   usage: BetaUsage | null;
+  content?: BetaMessage["content"];
+  stopReason?: BetaMessage["stop_reason"];
+  stopDetails?: BetaMessage["stop_details"];
 }
 
 function trackStreamedUsage(
@@ -1783,6 +1936,14 @@ function trackStreamedUsage(
     if (event.type === "message_start") {
       snapshot.model = event.message.model;
       snapshot.usage = { ...event.message.usage };
+      snapshot.content = (event.message.content ?? []).filter((block) => block.type === "fallback");
+      snapshot.stopReason = event.message.stop_reason;
+      snapshot.stopDetails = event.message.stop_details;
+      return;
+    }
+    if (event.type === "content_block_start" && event.content_block.type === "fallback") {
+      snapshot.content = [...(snapshot.content ?? []), event.content_block];
+      snapshot.model = event.content_block.to.model;
       return;
     }
     if (event.type === "message_delta" && event.usage) {
@@ -1799,7 +1960,12 @@ function trackStreamedUsage(
           ? { cache_read_input_tokens: u.cache_read_input_tokens }
           : {}),
         ...(u.server_tool_use ? { server_tool_use: u.server_tool_use } : {}),
+        ...(u.iterations != null ? { iterations: u.iterations } : {}),
       };
+      if (event.delta.stop_reason != null) snapshot.stopReason = event.delta.stop_reason;
+      if (event.delta.stop_details != null) snapshot.stopDetails = event.delta.stop_details;
+      const final = u.iterations?.[u.iterations.length - 1];
+      if (final && (final.type === "message" || final.type === "fallback_message") && final.model) snapshot.model = final.model;
     }
   });
   return snapshot;
@@ -1824,10 +1990,10 @@ function billedMessageFromSnapshot(
     type: "message",
     role: "assistant",
     model: snapshot.model ?? opts.model,
-    content: [],
-    stop_reason: null,
+    content: snapshot.content ?? [],
+    stop_reason: snapshot.stopReason ?? null,
     stop_sequence: null,
-    stop_details: null,
+    stop_details: snapshot.stopDetails ?? null,
     usage: {
       ...u,
       input_tokens: u.input_tokens ?? 0,
@@ -1856,6 +2022,17 @@ function billedMessageFromSnapshot(
  * orchestrator that stopped the request on purpose can tell it from a
  * provider fault.
  */
+function abandonedRequestCostUsd(opts: RunPassOptions, reported: BetaMessage | null): number {
+  const reportedUsd = reported === null ? 0 : costForMessage(reported, opts);
+  if (boundedWebSearchUses(opts.tools) > 0 || registryEntryFor(opts.model).serverSideFallback !== null || (reported !== null && detectFallbackUsed(reported))) {
+    // Unseen tool rounds can bill more input/searches; fallback can add a full
+    // model attempt. If incomplete usage retained the bound, do not add it again.
+    return Math.max(reportedUsd, requestReservationUsd(opts));
+  }
+  const remaining = Math.max(0, effectiveMaxTokens(opts) - (reported?.usage.output_tokens ?? 0));
+  return reportedUsd + remaining / 1_000_000 * registryEntryFor(opts.model).pricing.outputPerMTok;
+}
+
 function presumedRemainderResult(
   opts: RunPassOptions,
   snapshot: StreamedUsageSnapshot,
@@ -1869,11 +2046,14 @@ function presumedRemainderResult(
   const reportedOutputTokens = reported?.usage.output_tokens ?? 0;
   const remainingOutputTokens = Math.max(0, effectiveMaxTokens(opts) - reportedOutputTokens);
   const pricing = registryEntryFor(opts.model).pricing;
-  const remainderUsd = (remainingOutputTokens / 1_000_000) * pricing.outputPerMTok;
-  const reportedUsd = billedMessages.reduce((sum, m) => sum + costForMessage(m, opts), 0);
+  const priorUsd = priorBilled.reduce((sum, m) => sum + costForMessage(m, opts), 0);
   const usage = billedMessages.length > 0 ? aggregateUsage(billedMessages) : undefined;
   const attemptNoun = `${attempts} attempt${attempts === 1 ? "" : "s"}`;
-  const detail =
+  const fallbackExposure = registryEntryFor(opts.model).serverSideFallback !== null || (reported !== null && detectFallbackUsed(reported));
+  const searchExposure = boundedWebSearchUses(opts.tools) > 0;
+  const detail = fallbackExposure || searchExposure
+    ? `${headline}; retained the presumed request maximum, including ${[searchExposure ? "unreported search iterations" : null, fallbackExposure ? "the configured fallback attempt" : null].filter(Boolean).join(" and ")}`
+    :
     `${headline}; settled ${billedMessages.length > 0 ? "reported usage" : "no reported usage"} ` +
     `plus a presumed ${remainingOutputTokens.toLocaleString("en-US")} remaining output tokens at $${pricing.outputPerMTok}/MTok`;
   return {
@@ -1884,9 +2064,11 @@ function presumedRemainderResult(
       ...(aborted ? { aborted: true as const } : {}),
       message: `${aborted ? "request aborted by the caller" : "stream idle timeout"} after ${attemptNoun}: ${detail}`,
       usage,
-      costUsd: reportedUsd + remainderUsd,
+      costUsd: priorUsd + abandonedRequestCostUsd(opts, reported),
+      presumed: true,
       fallbackUsed: billedMessages.some(detectFallbackUsed),
       model: billedMessages[billedMessages.length - 1]?.model || opts.model,
+      execution: passExecution(opts),
       webSearches: billedMessages.reduce((sum, m) => sum + webSearchCount(m), 0),
     },
   };
@@ -1923,16 +2105,10 @@ async function settlePresumedRemainder(
 ): Promise<void> {
   if (opts.admission === undefined || permit === null) return;
   const reported = billedMessageFromSnapshot(snapshot, opts);
-  const reportedOutputTokens = reported?.usage.output_tokens ?? 0;
-  const pricing = registryEntryFor(opts.model).pricing;
-  const remainderUsd =
-    (Math.max(0, effectiveMaxTokens(opts) - reportedOutputTokens) / 1_000_000) *
-    pricing.outputPerMTok;
-  const reportedUsd = reported === null ? 0 : costForMessage(reported, opts);
   await opts.admission.settle(permit, {
-    ...(reported === null ? {} : { usage: reported.usage }),
-    costUsd: Math.min(permit.maximumUsd, reportedUsd + remainderUsd),
-    model: reported?.model || opts.model,
+    ...(reported === null ? {} : { usage: messageUsage(reported) }),
+    costUsd: abandonedRequestCostUsd(opts, reported),
+    model: reported === null ? opts.model : actualModel(reported),
     webSearches: reported === null ? 0 : webSearchCount(reported),
     fallbackUsed: reported === null ? false : detectFallbackUsed(reported),
     presumed: true,
@@ -1957,10 +2133,12 @@ function admissionRefusedResult(
     error: {
       kind: "transport",
       message: `spend admission refused request ${attempts}: ${raw}`,
+      execution: passExecution(opts, billed),
       ...(billed
         ? {
             usage: aggregateUsage(billedMessages),
             costUsd: billedMessages.reduce((sum, m) => sum + costForMessage(m, opts), 0),
+            ...(billedMessages.some((m) => billingForMessage(m, opts).presumed) ? { presumed: true } : {}),
             fallbackUsed: billedMessages.some(detectFallbackUsed),
             model: billedMessages[billedMessages.length - 1].model || opts.model,
             webSearches: billedMessages.reduce((sum, m) => sum + webSearchCount(m), 0),
@@ -2000,8 +2178,10 @@ function transportFailureResult(
       message: `transport failure after ${attemptNoun}: ${raw}`,
       usage,
       costUsd,
+      ...(billedMessages.some((m) => billingForMessage(m, opts).presumed) ? { presumed: true } : {}),
       fallbackUsed: billed ? billedMessages.some(detectFallbackUsed) : undefined,
       model: billed ? (billedMessages[billedMessages.length - 1].model || opts.model) : undefined,
+      execution: passExecution(opts),
       webSearches,
     },
   };
@@ -2145,7 +2325,7 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
           const delays = midStream
             ? PASS_MID_STREAM_RETRY_DELAYS_MS
             : PASS_TRANSPORT_RETRY_DELAYS_MS;
-          const delay = delays[Math.min(attempt - 1, delays.length - 1)];
+          const delay = transportRetryDelayMs(cause, delays[Math.min(attempt - 1, delays.length - 1)]);
           // Server-log every retry — post-mortems must not depend on the
           // transient pipeline UI (2026-07-10: the only trace of two failed
           // ~8-minute passes was a step detail on one page).

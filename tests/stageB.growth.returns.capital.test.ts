@@ -844,6 +844,21 @@ const capMcapHistory: MarketCapPoint[] = [
 describe("computeCapital — core ratios", () => {
   const res = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20 }, USD_QUOTE);
 
+  it("withholds industrial cash-flow and debt diagnostics on financial-company routes", () => {
+    for (const route of ["bank", "insurer", "reit-mortgage"] as const) {
+      const financial = computeCapital(capIncome, capCashflow, capBalance, capMcapHistory, { price: 20 }, { ...USD_QUOTE, route });
+      expect(financial.fcf.latestFcf).toBeNull();
+      expect(financial.fcf.series).toEqual([]);
+      expect(financial.netDebtToEbitda.value).toBeNull();
+      expect(financial.netDebtToEbitda.netDebt).toBeNull();
+      expect(financial.interestCoverage.value).toBeNull();
+      expect(financial.sbc.pctOfFcf).toBeNull();
+      expect(financial.sbc.latest).toBe(res.sbc.latest);
+      expect(financial.shareCount).toEqual(res.shareCount);
+      expect(financial.gaps.some((g) => /capital\.(fcf|maintenanceCapex|interestCoverage|netDebtToEbitda)/.test(g.field))).toBe(false);
+    }
+  });
+
   it("net debt / EBITDA uses own EBITDA (opInc + cash-flow D&A)", () => {
     // House net debt = 600 - (100 cash + 50 STI) = 450; EBITDA = 250.
     expect(res.netDebtToEbitda.ebitda).toBeCloseTo(250, 12);

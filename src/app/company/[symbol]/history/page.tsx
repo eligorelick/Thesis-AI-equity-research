@@ -140,7 +140,9 @@ function ReportRow({
         </div>
       </td>
       <td className="px-2 py-1.5">
-        <span className="mono text-[11px] text-muted">{shortModel(r.model)}</span>
+        <span className="mono text-[11px] text-muted" title={`Requested model: ${r.model}`}>
+          {(r.actualModels ?? [r.model]).map(shortModel).join(" · ")}
+        </span>
       </td>
       <td className="px-2 py-1.5">
         <GradeStripInline
@@ -201,7 +203,7 @@ export default async function HistoryPage({
 
   const compareOptions: CompareOption[] = reports.map((r) => ({
     id: r.id,
-    label: `#${r.id} · ${r.createdAt.slice(0, 10)} · ${shortModel(r.model)}`,
+    label: `#${r.id} · ${r.createdAt.slice(0, 10)} · ${(r.actualModels ?? [r.model]).map(shortModel).join(" · ")}`,
   }));
   const displayedGradeSurfaces = GRADE_SURFACES.filter((descriptor) =>
     reports.some((report) => report.gradeStrip?.some((cell) => cell.key === descriptor.key)));

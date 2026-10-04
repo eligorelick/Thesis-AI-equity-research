@@ -128,6 +128,7 @@ function expectFullSettingsPayload(body: SettingsPayload): void {
   expect(Object.keys(body.capabilities).sort()).toEqual([
     "fixtureMode",
     "hasAnthropicKey",
+    "hasEdgarContact",
     "hasFinnhubKey",
     "hasFmpKey",
     "hasFredKey",
@@ -223,6 +224,7 @@ describe("GET /api/settings", () => {
       "hasFinnhubKey",
       "hasFredKey",
       "hasAnthropicKey",
+      "hasEdgarContact",
       "fixtureMode",
       "resumeOnStart",
     ]) {
@@ -231,6 +233,7 @@ describe("GET /api/settings", () => {
     expect(Object.keys(body.capabilities).sort()).toEqual([
       "fixtureMode",
       "hasAnthropicKey",
+      "hasEdgarContact",
       "hasFinnhubKey",
       "hasFmpKey",
       "hasFredKey",
@@ -248,6 +251,19 @@ describe("GET /api/settings", () => {
       "revision",
       "sources",
     ]);
+  });
+
+  it.each([
+    ["", false],
+    ["Research contact@example.com", false],
+    ["research@unit-firm.org", false],
+    ["Research Team research@unit-firm.org", true],
+  ] as const)("reports SEC identity readiness without exposing the contact (%s)", async (contact, configured) => {
+    vi.stubEnv("EDGAR_CONTACT", contact);
+    const { body } = await currentSettings();
+    expect(body.capabilities.hasEdgarContact).toBe(configured);
+    if (contact !== "") expect(JSON.stringify(body)).not.toContain(contact);
+    expect(JSON.stringify(body)).not.toContain("research@unit-firm.org");
   });
 
   it("resolves writable values from the live trimmed environment without config-cache coupling", async () => {

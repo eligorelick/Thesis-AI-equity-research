@@ -17,6 +17,7 @@
  * server-only imports (no db/providers), so it can also be unit-tested directly.
  */
 
+import { formatExecutionMetadata } from "@/report/execution";
 import type {
   Appendix,
   BalanceSheet,
@@ -91,6 +92,7 @@ import {
   projectionPeriodRows,
 } from "@/report/surfaceManifest";
 import { DISCLAIMER_TEXT, FRED_ATTRIBUTION_TEXT, citationOutcomeLabel } from "@/report/schema";
+import { gradeDisplayLabel } from "@/report/assessment";
 
 /* ======================================================================== *
  * Deterministic value formatting (no locale, no grouping — stable text)
@@ -249,7 +251,7 @@ function claimList(claims: readonly SourcedClaim[]): string {
 function gradeBlock(title: string, block: GradeBlock): string {
   const lines: string[] = [];
   lines.push(
-    `**${title} — Grade ${block.grade}** (confidence: ${block.confidence})`,
+    `**${title} — Grade ${gradeDisplayLabel(block)}** (confidence: ${block.confidence})`,
   );
   lines.push("");
   lines.push(`_${markdownProse(block.oneLineWhy)}_`);
@@ -321,7 +323,7 @@ function renderVerdict(report: Report): string {
     ["Section", "Grade", "Why"],
     gradeSurfaceEntries(v.gradeStrip).map(({ descriptor, block }) => [
       descriptor.label,
-      block.grade,
+      gradeDisplayLabel(block),
       block.oneLineWhy,
     ]),
   );
@@ -935,8 +937,9 @@ function renderCompetitive(c: Competitive): string {
   return lines.join("\n");
 }
 
-function renderCatalystsRisks(cr: CatalystsRisks): string {
+function renderCatalystsRisks(cr: CatalystsRisks, dataOnly = false): string {
   const lines: string[] = [sectionHeading("catalystsRisks"), ""];
+  if (dataOnly) lines.push("Not assessed — no completed analyst assessment is available. Empty lists do not establish that no catalysts or risks exist.", "");
   lines.push(
     "### Catalysts",
     "",
@@ -1077,7 +1080,9 @@ function renderAppendix(
     }** — share of report figures traceable to a citation or payload value; a provenance check, not a correctness/accuracy check.`,
     "",
   );
-  if (a.provenanceCoverage) {
+  if (a.missingData.some((gap) => gap.field === "analysis.llm")) {
+    lines.push("No completed citation-check pass. Deterministic values retain their source paths; these paths do not establish independently checked factual claims.", "");
+  } else if (a.provenanceCoverage) {
     lines.push(provenanceCoverageTable(a.provenanceCoverage), "");
   }
   // WS7 (D-20): what was CHECKED, in its own subsection so it is never read as
@@ -1168,7 +1173,7 @@ function renderHeader(
         ...(m.execution
           ? [[
               "Pass execution",
-              m.execution.map((entry) => `${entry.step}: requested ${entry.requestedModel}/${entry.requestedEffort ?? "n/a"}; effective ${entry.effectiveModel}/${entry.effectiveEffort ?? "n/a"}${entry.adjustments.length > 0 ? ` (${entry.adjustments.join(", ")})` : ""}`).join(" | "),
+              m.execution.map(formatExecutionMetadata).join(" | "),
             ]]
           : []),
         // Legacy reports carry a verifyModel label (removed setting) — keep it.
@@ -1245,7 +1250,7 @@ export function reportToMarkdown(report: Report): string {
     renderTechnicals(report.technicals),
     renderLeadership(report.leadership),
     renderCompetitive(report.competitive),
-    renderCatalystsRisks(report.catalystsRisks),
+    renderCatalystsRisks(report.catalystsRisks, report.appendix.missingData.some((gap) => gap.field === "analysis.llm")),
     renderOutlook(report),
     report.projections ? renderProjections(report.projections) : "",
     renderMacro(report.macro),

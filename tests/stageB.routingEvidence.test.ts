@@ -241,6 +241,24 @@ describe("deriveRoutingEvidence — tag presence with values and periods", () =>
 });
 
 describe("routeCompany — XBRL evidence decides when industry and SIC do not", () => {
+  it.each(["Financial - Capital Markets", "Capital Markets", "Financial Conglomerates"])(
+    "refines the broad financial industry %s with corroborated deposit-funded operations", (industry) => {
+      const r = route({ sector: "Financial Services", industry, sic: "6211" }, okFacts(BANK_FACTS));
+      expect(r.base).toBe("bank");
+      expect(r.notes.join(" ")).toMatch(/broad financial classification/i);
+      expect(r.gaps.some((g) => g.field === "route.evidence.conflict")).toBe(false);
+      expect(metricPolicy(r).suppress).toContain("fcfDcf");
+    },
+  );
+
+  it("retains a fee-based insurance broker and a broad financial label without bank evidence", () => {
+    expect(route({ sector: "Financial Services", industry: "Insurance - Brokers", sic: "6411" }, okFacts(BANK_FACTS)).base).toBe("general");
+    const brokerSic = route({ sector: "Financial Services", industry: null, sic: "6411" }, okFacts(BANK_FACTS));
+    expect(brokerSic.base).toBe("general");
+    expect(brokerSic.gaps.some((g) => g.field === "route.evidence.conflict")).toBe(true);
+    expect(route({ sector: "Financial Services", industry: "Financial - Capital Markets", sic: "6211" }, okFacts({})).base).toBe("general");
+  });
+
   it("routes a bank on tag evidence alone, naming the tags and the classification inputs", () => {
     const r = route({ sector: null, industry: null, sic: null }, okFacts(BANK_FACTS));
 

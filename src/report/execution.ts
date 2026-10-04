@@ -1,7 +1,51 @@
 import { judgeFloorModelId, resolveRegistryModel } from "@/models/registry";
-import { parseSubscriptionModel } from "@/ai/contracts";
+import { parseSubscriptionModel, subscriptionModel, validModelId } from "@/ai/contracts";
+import type { ManifestEntry } from "@/types/core";
+
+/**
+ * Protocol construction is provider-independent. Attribute only its known
+ * disclosure fields once explicit execution/request evidence is available.
+ * Kept in this pure module so stored-report and CLI readers need no providers.
+ */
+export function attributeJudgeProtocolDisclosures(
+  entries: readonly ManifestEntry[],
+  context: {
+    model?: string;
+    execution?: readonly Pick<ExecutionMetadataEntry, "step" | "requestedModel" | "effectiveModel">[];
+  },
+): ManifestEntry[] {
+  const providerOf = (model: string | undefined): string | null => model === undefined ? null
+    : parseSubscriptionModel(model)?.provider ?? (model.startsWith("claude-") ? "anthropic" : null);
+  return entries.map((entry) => {
+    const lengthCap = /^llm\.(bull|bear)\.length-cap$/.exec(entry.field);
+    const judge = /^llm\.judge\.(case-order|model-family|protocol-recovered|order-reconciliation|order-sensitive\..+)$/.exec(entry.field);
+    if (!lengthCap && !judge) return entry;
+    const steps = lengthCap ? [lengthCap[1]] : judge?.[1] === "model-family" ? ["bull", "bear", "synthesize"] : ["synthesize"];
+    const sources = (context.execution ?? []).filter((execution) => steps.includes(execution.step.replace(/ attempt \d+$/, "")))
+      .flatMap((execution) => {
+        const provider = providerOf(execution.effectiveModel) ?? providerOf(execution.requestedModel);
+        return provider === null ? [] : [provider];
+      });
+    const fallback = providerOf(context.model);
+    if (sources.length === 0 && fallback !== null) sources.push(fallback);
+    return { ...entry, attemptedSources: [...new Set(sources)].sort() };
+  });
+}
 
 export type ExecutionEffort = "low" | "medium" | "high" | "xhigh" | "max";
+/** Provider evidence, retained on durable artifacts independently of API charges. */
+export interface ProviderExecution {
+  requestedModel?: string;
+  requestedEffort?: ExecutionEffort | null;
+  effectiveEffort?: ExecutionEffort | null;
+  requestedServiceTier?: "default" | "fast";
+  effectiveServiceTier?: string | null;
+  observedModels?: string[];
+  /** False means a request id must not be represented as an observed model. */
+  modelObserved?: boolean;
+  /** False distinguishes unavailable usage from legacy telemetry's zero placeholders. */
+  usageReported?: boolean;
+}
 export type ExecutionAdjustment =
   | "model-floor"
   | "fallback"
@@ -20,6 +64,11 @@ export interface ExecutionMetadataEntry {
   effectiveModel: string;
   requestedEffort: ExecutionEffort | null;
   effectiveEffort: ExecutionEffort | null;
+  requestedServiceTier?: "default" | "fast";
+  effectiveServiceTier?: string | null;
+  inputTokens?: number;
+  outputTokens?: number;
+  observedModels?: string[];
   fallbackUsed: boolean;
   adjustments: ExecutionAdjustment[];
   /**
@@ -41,6 +90,8 @@ export function buildExecutionMetadataEntry(input: {
   effectiveModel: string;
   requestedEffort: ExecutionEffort | null;
   fallbackUsed: boolean;
+  execution?: ProviderExecution;
+  usage?: { input_tokens?: number | null; output_tokens?: number | null };
   /**
    * Why the requested model was refused before any request was sent (D-02).
    * When present the entry is a `model-rejected` disclosure: no model ran, so
@@ -60,15 +111,31 @@ export function buildExecutionMetadataEntry(input: {
       note: `${input.step}: ${input.rejectedReason}`,
     };
   }
-  const effectiveEffort = input.requestedEffort !== null && modelSupportsEffort(input.effectiveModel)
-    ? input.requestedEffort
+  const requestedEffort = input.execution?.requestedEffort !== undefined
+    ? input.execution.requestedEffort : input.requestedEffort;
+  const effectiveModel = input.execution?.modelObserved === false ? "unknown" : input.effectiveModel;
+  const requestedModel = input.execution?.requestedModel ?? input.requestedModel;
+  const usage = input.execution?.usageReported === false ? undefined : input.usage;
+  const effectiveEffort = input.execution?.effectiveEffort !== undefined
+    ? input.execution.effectiveEffort
+    : requestedEffort !== null && modelSupportsEffort(effectiveModel)
+    ? requestedEffort
     : null;
   const adjustments: ExecutionAdjustment[] = [];
   const notes: string[] = [];
-  const subscription = parseSubscriptionModel(input.effectiveModel);
-  if (subscription) notes.push(`${input.step}: ${subscription.provider === "chatgpt" ? "ChatGPT plan" : "Google Gemini CLI"} allowance was used. $0 records API charges only, not free or unlimited usage. Provider limits and account credit settings apply. This pass used the supplied evidence without additional web search.`);
+  const subscription = parseSubscriptionModel(effectiveModel) ?? parseSubscriptionModel(requestedModel);
+  if (subscription) {
+    const provider = subscription.provider === "chatgpt" ? "ChatGPT plan" : "Google Gemini CLI";
+    notes.push(input.execution?.usageReported === false
+      ? `${input.step}: the request was configured for ${provider} usage. Provider usage was not reported, so allowance consumption is unknown. $0 records API charges only, not free or unlimited usage. Provider limits and account credit settings apply. No additional web search was configured.`
+      : `${input.step}: ${provider} allowance was used. $0 records API charges only, not free or unlimited usage. Provider limits and account credit settings apply. This pass used the supplied evidence without additional web search.`);
+  }
+  if (input.execution?.modelObserved === false) notes.push(`${input.step}: the provider did not report which model executed the request.`);
+  if (subscription && input.execution?.modelObserved !== false && input.execution?.observedModels && input.execution.observedModels.length > 1) {
+    notes.push(`${input.step}: provider reported usage for ${input.execution.observedModels.join(", ")}; the combined usage is not attributed to a single model.`);
+  }
   const requestedFamily = resolveRegistryModel(input.requestedModel)?.entry.family;
-  const effectiveFamily = resolveRegistryModel(input.effectiveModel)?.entry.family;
+  const effectiveFamily = resolveRegistryModel(effectiveModel)?.entry.family;
   // The floor is applied by the provider to the synthesize pass only, and to
   // the registry's `judgeFloorModelId` — the disclosure follows the same rule
   // rather than a hard-coded haiku→sonnet family pair, so moving the floor in
@@ -76,8 +143,8 @@ export function buildExecutionMetadataEntry(input: {
   // never be labelled with the judge's adjustment.
   const floored =
     input.step === "synthesize" &&
-    input.effectiveModel === judgeFloorModelId() &&
-    input.requestedModel !== input.effectiveModel &&
+    effectiveModel === judgeFloorModelId() &&
+    input.requestedModel !== effectiveModel &&
     requestedFamily !== effectiveFamily;
   if (input.fallbackUsed) {
     adjustments.push("fallback");
@@ -97,7 +164,10 @@ export function buildExecutionMetadataEntry(input: {
           : `; ${input.requestedModel} does not accept an effort setting, so the analyst passes on it ignore ANALYSIS_EFFORT.`),
     );
   }
-  if (input.requestedEffort !== null && effectiveEffort === null) {
+  if (input.execution !== undefined && subscription) {
+    if (requestedEffort !== null) notes.push(`${input.step}: requested reasoning ${requestedEffort}; ${effectiveEffort === null ? "the applied reasoning effort could not be established for the whole pass" : `provider reported ${effectiveEffort}`}.`);
+    if (input.execution.requestedServiceTier !== undefined) notes.push(`${input.step}: requested ${input.execution.requestedServiceTier} speed; ${input.execution.effectiveServiceTier == null ? "the applied service tier could not be established for the whole pass" : `provider reported service tier ${input.execution.effectiveServiceTier}`}.`);
+  } else if (requestedEffort !== null && effectiveEffort === null) {
     adjustments.push("effort-stripped");
     notes.push(
       subscription
@@ -107,14 +177,40 @@ export function buildExecutionMetadataEntry(input: {
   }
   return {
     step: input.step,
-    requestedModel: input.requestedModel,
-    effectiveModel: input.effectiveModel,
-    requestedEffort: input.requestedEffort,
+    requestedModel,
+    effectiveModel,
+    requestedEffort,
     fallbackUsed: input.fallbackUsed,
     effectiveEffort,
+    ...(input.execution?.requestedServiceTier === undefined ? {} : { requestedServiceTier: input.execution.requestedServiceTier }),
+    ...(input.execution?.effectiveServiceTier === undefined ? {} : { effectiveServiceTier: input.execution.effectiveServiceTier }),
+    ...(usage?.input_tokens == null ? {} : { inputTokens: usage.input_tokens }),
+    ...(usage?.output_tokens == null ? {} : { outputTokens: usage.output_tokens }),
+    ...(input.execution?.observedModels === undefined || input.execution.modelObserved === false ? {} : { observedModels: input.execution.observedModels }),
     adjustments,
     ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
   };
+}
+
+/** Shared display text for the live report and both export formats. */
+export function formatExecutionMetadata(entry: ExecutionMetadataEntry): string {
+  const speed = entry.requestedServiceTier === undefined ? ""
+    : `; speed requested ${entry.requestedServiceTier}, provider ${entry.effectiveServiceTier ?? "unknown"}`;
+  const usage = entry.inputTokens === undefined && entry.outputTokens === undefined ? ""
+    : `; tokens ${entry.inputTokens ?? "unknown"} input, ${entry.outputTokens ?? "unknown"} output`;
+  return `${entry.step}: requested ${entry.requestedModel}/${entry.requestedEffort ?? "n/a"}; effective ${entry.effectiveModel}/${entry.effectiveEffort ?? "n/a"}${speed}${usage}${entry.adjustments.length ? ` (${entry.adjustments.join(", ")})` : ""}${entry.note ? `. ${entry.note}` : ""}`;
+}
+
+/** Actual subscription models, including a Gemini automatic selection's resolved model. */
+export function subscriptionExecutionModels(entries: readonly ExecutionMetadataEntry[] | undefined): string[] {
+  return [...new Set((entries ?? []).flatMap((entry) => {
+    const subscription = parseSubscriptionModel(entry.effectiveModel);
+    if (!subscription) return [];
+    const observed = entry.observedModels?.filter(validModelId) ?? [];
+    return subscription.model === "multiple-models" && observed.length
+      ? observed.map((model) => subscriptionModel(subscription.provider, model))
+      : [entry.effectiveModel];
+  }))];
 }
 
 /* ------------------------------------------------------------------------ *
@@ -135,7 +231,9 @@ const ANALYST_STEPS = new Set(["bull", "bear"]);
 const JUDGE_STEP = "synthesize";
 
 function familyOf(model: string): string | null {
-  return resolveRegistryModel(model)?.entry.family ?? (parseSubscriptionModel(model) ? model : null);
+  const subscription = parseSubscriptionModel(model);
+  if (subscription?.model === "multiple-models") return null;
+  return resolveRegistryModel(model)?.entry.family ?? (subscription ? model : null);
 }
 
 export interface SharedModelFamily {

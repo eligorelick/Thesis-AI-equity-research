@@ -7,6 +7,7 @@
  */
 
 import type { Grade } from "@/types/core";
+import { gradeForDisplay } from "@/report/assessment";
 import { normalizeSymbol, sameEntitySymbol } from "@/symbol";
 import {
   GRADE_SURFACES,
@@ -748,8 +749,10 @@ export function diffReports(
 
   const gradeChanges: GradeChange[] = [];
   for (const descriptor of GRADE_SURFACES) {
-    const from = fromReport.verdict.gradeStrip[descriptor.key]?.grade ?? null;
-    const to = toReport.verdict.gradeStrip[descriptor.key]?.grade ?? null;
+    const fromBlock = fromReport.verdict.gradeStrip[descriptor.key];
+    const toBlock = toReport.verdict.gradeStrip[descriptor.key];
+    const from = fromBlock ? gradeForDisplay(fromBlock) : null;
+    const to = toBlock ? gradeForDisplay(toBlock) : null;
     if (from === to) continue;
     const transition =
       from === null ? "added" : to === null ? "removed" : "changed";

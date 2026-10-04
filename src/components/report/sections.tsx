@@ -14,6 +14,8 @@
  */
 
 import type { ReactNode } from "react";
+import { gradeForDisplay, MIN_HEADLINE_EVIDENCE } from "@/report/assessment";
+import { formatExecutionMetadata } from "@/report/execution";
 
 import {
   Badge,
@@ -296,7 +298,7 @@ export function GradeStripBar({
               <span className="text-[9px] uppercase tracking-[0.09em] text-faint group-hover:text-muted">
                 {descriptor.label}
               </span>
-              <GradeChip grade={block.grade} />
+              <GradeChip grade={gradeForDisplay(block)} />
             </div>
             {!compact && (
               <p className="line-clamp-2 text-[10px] leading-snug text-faint">
@@ -352,7 +354,9 @@ export function CompositeScorecard({ scores }: { scores: Scoring }) {
               >
                 <span className="text-[9px] uppercase tracking-[0.09em] text-faint">{descriptor.label}</span>
                 <div className="flex items-center justify-between gap-1">
-                  <ScorePill score={a.score} band={a.band} />
+                  {a.score !== null && a.dataCompleteness < MIN_HEADLINE_EVIDENCE
+                    ? <span className="mono text-[10px] text-warn">limited evidence</span>
+                    : <ScorePill score={a.score} band={a.band} />}
                   {a.score !== null && a.dataCompleteness < 1 && (
                     <span
                       className="mono text-[9px] text-warn"
@@ -674,7 +678,7 @@ export function BusinessSegments({
         </SubBlock>
       </div>
       <SubBlock label="concentration risks">
-        <ClaimList claims={business.concentrationRisks} empty="none disclosed" />
+        <ClaimList claims={business.concentrationRisks} empty="No concentration-risk assessment available." />
       </SubBlock>
     </SectionFrame>
   );
@@ -1255,7 +1259,7 @@ export function QualityFlags({
       </SubBlock>
       <SubBlock label={`plain-english flags (${sortedFlags.length})`}>
         {sortedFlags.length === 0 ? (
-          <div className="text-[11px] text-faint">no flags raised.</div>
+          <div className="text-[11px] text-faint">No flags were raised by the checks with available inputs. Unavailable or inapplicable checks are disclosed above and in the missing-data manifest.</div>
         ) : (
           <div className="flex flex-col gap-1.5">
             {sortedFlags.map((flag, i) => (
@@ -1614,9 +1618,11 @@ const SIGNIFICANCE_TONE: Record<"high" | "medium" | "low", Tone> = {
 export function CatalystsRisksPanel({
   catalystsRisks,
   index,
+  dataOnly = false,
 }: {
   catalystsRisks: CatalystsRisks;
   index?: number;
+  dataOnly?: boolean;
 }) {
   const { catalysts, risks } = catalystsRisks;
   const matrixItems: MatrixItem[] = risks.map((r) => ({
@@ -1649,7 +1655,7 @@ export function CatalystsRisksPanel({
           </h2>
         </div>
         <span className="mono text-[10px] text-muted">
-          {catalysts.length} catalysts · {risks.length} risks
+          {dataOnly ? "Not assessed" : `${catalysts.length} catalysts · ${risks.length} risks`}
         </span>
       </div>
 
@@ -1660,7 +1666,7 @@ export function CatalystsRisksPanel({
             catalysts · dated
           </div>
           {sortedCatalysts.length === 0 ? (
-            <div className="text-[11px] text-faint">none identified</div>
+            <div className="text-[11px] text-faint">{dataOnly ? "Not assessed — no completed analyst assessment is available." : "No catalysts recorded."}</div>
           ) : (
             <ol className="flex flex-col">
               {sortedCatalysts.map((c, i) => {
@@ -1717,7 +1723,9 @@ export function CatalystsRisksPanel({
           <div className="text-[9px] uppercase tracking-[0.12em] text-faint">
             risks · severity × probability
           </div>
-          <SeverityProbMatrix items={matrixItems} />
+          {dataOnly && risks.length === 0
+            ? <p className="text-[11px] text-faint">Not assessed — an empty list does not establish that no risks exist.</p>
+            : <SeverityProbMatrix items={matrixItems} />}
           <div className="mt-1 flex flex-col gap-1.5">
             {risks.map((r, i) => (
               <div
@@ -1939,7 +1947,8 @@ export function AppendixSection({
   ];
   const totalCost = roundedDisplayedCostTotal(appendix.costBreakdown.map((entry) => entry.costUsd));
   const rate = appendix.verificationRate;
-  const provenance = appendix.provenanceCoverage;
+  const dataOnly = appendix.missingData.some((gap) => gap.field === "analysis.llm");
+  const provenance = dataOnly ? undefined : appendix.provenanceCoverage;
   const checks = appendix.consistencyChecks; // WS7 (D-20)
   const presentation = completeness ?? deriveReportCompletenessPresentation(
     undefined,
@@ -2000,6 +2009,7 @@ export function AppendixSection({
         </SubBlock>
       </div>
 
+      {dataOnly && <p className="text-[11px] text-faint">No completed citation-check pass. Deterministic values retain their source paths; these paths do not establish independently checked factual claims.</p>}
       {provenance && (
         <SubBlock label="provenance coverage (support, not correctness)">
           <div className="grid gap-2 text-[11px] sm:grid-cols-3">
@@ -2159,7 +2169,7 @@ export function ReportMetaStrip({
           model <span className="mono text-muted">{m.model}</span>
         </span>
         {m.execution && (
-          <span title={m.execution.map((entry) => `${entry.step}: requested ${entry.requestedModel}/${entry.requestedEffort ?? "n/a"}; effective ${entry.effectiveModel}/${entry.effectiveEffort ?? "n/a"}${entry.adjustments.length ? ` (${entry.adjustments.join(", ")})` : ""}`).join("\n")}>
+          <span title={m.execution.map(formatExecutionMetadata).join("\n")}>
             passes <span className="mono text-muted">{m.execution.map((entry) => `${entry.step}:${entry.effectiveModel.replace(/^claude-/, "")}`).join(" · ")}</span>
           </span>
         )}
@@ -2212,6 +2222,14 @@ export function ReportMetaStrip({
           seven letter grades and three price targets — the Markdown and print
           exports already printed it; the live view did not (audit 2026-09-06,
           F207). */}
+      {m.execution && m.execution.length > 0 && (
+        <details className="basis-full text-[10px] leading-snug text-faint">
+          <summary>Model, reasoning, and speed details</summary>
+          <ul className="mt-1 space-y-1">
+            {m.execution.map((entry, index) => <li key={`${entry.step}-${index}`}>{formatExecutionMetadata(entry)}</li>)}
+          </ul>
+        </details>
+      )}
       <p className="basis-full text-[10px] leading-snug text-faint">{m.disclaimer}</p>
     </div>
   );

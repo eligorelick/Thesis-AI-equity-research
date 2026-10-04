@@ -237,7 +237,9 @@ export interface ContextPayload {
 // 1.6.0 (2026-10-02): currency-safe own-history bands, dated ROE and REIT
 // approximation disclosures change the financial evidence sent to analysts.
 // A pass stored under 1.5.0 must not resume with these changed conventions.
-export const PAYLOAD_VERSION = "1.6.0" as const;
+// 1.7.0 (D-34): bank evidence routing, common-equity/return pairing, and
+// financial-route metric applicability. Older analyst work must be regenerated.
+export const PAYLOAD_VERSION = "1.7.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Small pure helpers
@@ -1060,7 +1062,7 @@ function newsSection(bundle: DataBundle): PayloadSection {
   let clippedRows = 0;
   let droppedRows = 0;
   const budget = PAYLOAD_BUDGETS.newsChars;
-  const addRows = (rows: FmpRawRow[], tag: string): void => {
+  const addRows = (rows: FmpRawRow[], tag: string, provider: string): void => {
     for (const r of rows) {
       if (used >= budget) {
         droppedRows += 1;
@@ -1072,12 +1074,12 @@ function newsSection(bundle: DataBundle): PayloadSection {
       const line = `${d} [${tag}] ${strOrNull(r.publisher) ?? "?"}: ${title}${text ? ` — ${text}` : ""}`;
       const clipped = line.length + used > budget ? line.slice(0, Math.max(0, budget - used)) : line;
       if (clipped.length < line.length) clippedRows += 1;
-      notes.push(`${clipped} [fmp:${tag} · ${d}]`);
+      notes.push(`${clipped} [${provider}:${tag} · ${d}]`);
       used += clipped.length;
     }
   };
-  addRows(rowsOf(bundle.news).slice(0, PAYLOAD_BUDGETS.listRows), "news");
-  addRows(rowsOf(bundle.pressReleases).slice(0, PAYLOAD_BUDGETS.listRows), "press-release");
+  if (bundle.news.ok) addRows(rowsOf(bundle.news).slice(0, PAYLOAD_BUDGETS.listRows), "news", bundle.news.value.source);
+  if (bundle.pressReleases.ok) addRows(rowsOf(bundle.pressReleases).slice(0, PAYLOAD_BUDGETS.listRows), "press-release", bundle.pressReleases.value.source);
   // Every truncation is disclosed (module rule): a snippet cut mid-line or a
   // row left out for the budget used to vanish silently (audit 2026-09-06,
   // F171). The note carries no source tag, so it registers no citation.
@@ -1380,7 +1382,7 @@ function attachProvenanceRegistry(
   // tag at the end. Parse only that final, allowlisted tag; never register a tag
   // embedded inside provider-controlled title/body text.
   for (const note of payload.news.notes) {
-    const match = /\[(fmp:(?:news|press-release)) · (\d{4}-\d{2}-\d{2})\]$/.exec(note);
+    const match = /\[((?:fmp|finnhub):news|fmp:press-release) · (\d{4}-\d{2}-\d{2})\]$/.exec(note);
     if (match) registerCitation(match[1], match[2], match[1]);
   }
   // Insider-trade + key-executive rows render as inert text notes carrying one

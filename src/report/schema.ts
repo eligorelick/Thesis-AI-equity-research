@@ -61,7 +61,9 @@ import type { Grade, ClaimLabel, ManifestEntry } from "@/types/core";
 // 1.5.0 (2026-10-02): currency-safe own-history bands, dated ROE fallback,
 // and explicit FFO/AFFO ownership-basis approximation. Older reports retain
 // their stored stamp and are not compared as the same financial convention.
-export const REPORT_SPEC_VERSION = "1.5.0" as const;
+// 1.6.0 (D-34): financial common-equity basis, disclosed assessment coverage,
+// and durable observed OAuth execution. Previously saved reports remain readable.
+export const REPORT_SPEC_VERSION = "1.6.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Legacy-read leniency
@@ -339,6 +341,8 @@ export type TracedNumber = z.infer<typeof TracedNumberSchema>;
 export const GradeBlockSchema = z
   .object({
     grade: GradeSchema,
+    /** Pipeline-owned evidence limit for headline grades; raw letters remain auditable. */
+    assessmentStatus: z.enum(["not-assessed", "limited-evidence", "deterministic"]).optional(),
     oneLineWhy: ratingSafeString(),
     reasoning: z.array(SourcedClaimSchema),
     confidence: ConfidenceSchema,
@@ -636,6 +640,17 @@ export const DataCompletenessSchema = z
   .strict();
 export type DataCompleteness = z.infer<typeof DataCompletenessSchema>;
 
+export const ProviderExecutionSchema = z.object({
+  requestedModel: z.string().min(1).max(256).optional(),
+  modelObserved: z.boolean().optional(),
+  usageReported: z.boolean().optional(),
+  requestedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
+  effectiveEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
+  requestedServiceTier: z.enum(["default", "fast"]).optional(),
+  effectiveServiceTier: z.string().min(1).max(128).nullable().optional(),
+  observedModels: z.array(z.string().min(1).max(256)).max(64).optional(),
+}).strict();
+
 export const ExecutionMetadataEntrySchema = z
   .object({
     step: z.string(),
@@ -643,6 +658,11 @@ export const ExecutionMetadataEntrySchema = z
     effectiveModel: z.string(),
     requestedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable(),
     effectiveEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable(),
+    requestedServiceTier: z.enum(["default", "fast"]).optional(),
+    effectiveServiceTier: z.string().nullable().optional(),
+    inputTokens: z.number().int().nonnegative().optional(),
+    outputTokens: z.number().int().nonnegative().optional(),
+    observedModels: z.array(z.string().min(1).max(256)).max(64).optional(),
     fallbackUsed: z.boolean(),
     adjustments: z.array(z.enum(["model-floor", "fallback", "effort-stripped", "model-rejected"])),
     /** Sentence(s) naming what each adjustment changed and why; absent when none. */
@@ -2297,6 +2317,13 @@ export function removePipelineOwnedRequestFields<T>(schema: T): T {
     const obj = node as Record<string, unknown>;
     if (obj.type === "object" && obj.properties && typeof obj.properties === "object") {
       const props = obj.properties as Record<string, unknown>;
+      if ("grade" in props && "oneLineWhy" in props && "assessmentStatus" in props) {
+        // A deterministic data-only display decision, never model-authored.
+        delete props.assessmentStatus;
+        if (Array.isArray(obj.required)) {
+          obj.required = (obj.required as string[]).filter((key) => key !== "assessmentStatus");
+        }
+      }
       if (
         "name" in props &&
         "current" in props &&

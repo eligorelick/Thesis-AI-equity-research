@@ -43,6 +43,7 @@ import {
   isRetryableTransportError,
   isStreamConnectionFailure,
   modelContextTokenLimit,
+  maximumRequestCostUsd,
   pickPreferredModel,
   pricedModelAlias,
   registryEntryFor,
@@ -53,6 +54,7 @@ import {
   streamIdleTimeoutMs,
   streamIdleTimeoutMsFor,
   requestInputTokenUpperBound,
+  type RequestSettlement,
   supportsEffort,
   thinkingConfigFor,
   webSearchTool,
@@ -126,6 +128,11 @@ const baseOpts = {
  * ------------------------------------------------------------------------ */
 
 describe("pickPreferredModel", () => {
+  it("prefers Opus 5.5 when available and Sonnet 5.5 before older Sonnet", () => {
+    expect(pickPreferredModel(["claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-opus-5-5"])).toBe("claude-opus-5-5");
+    expect(pickPreferredModel(["claude-sonnet-5", "claude-sonnet-5-5", "claude-fable-5-1"])).toBe("claude-sonnet-5-5");
+  });
+
   it("picks claude-opus-4-8 first (research-recommended default) even when fable-5 is available", () => {
     expect(
       pickPreferredModel(["claude-haiku-4-5", "claude-sonnet-5", "claude-fable-5", "claude-opus-4-8"]),
@@ -170,6 +177,11 @@ describe("pickPreferredModel", () => {
 });
 
 describe("resolveModel", () => {
+  it("resolves the current Opus model from the account catalog", async () => {
+    _resetAnthropicForTests(fakeClient(["claude-opus-5", "claude-sonnet-5-5", "claude-opus-5-5"]));
+    expect(await resolveModel("auto")).toEqual({ model: "claude-opus-5-5", resolvedFrom: "auto" });
+  });
+
   it("passes explicit ids through untouched without touching the API", async () => {
     _resetAnthropicForTests(null); // keyless — must still work
     const resolved = await resolveModel("claude-sonnet-5");
@@ -381,7 +393,7 @@ describe("buildPassParams", () => {
     const fallback = registryEntryFor("claude-fable-5").serverSideFallback!;
     expect(params.betas).toEqual([fallback.beta]);
     expect(params.fallbacks).toEqual([{ model: fallback.model }]);
-    // fable-5: thinking is always-on — the param must NOT be sent (400).
+    // Fable uses its always-on default; the application omits explicit thinking.
     expect(params).not.toHaveProperty("thinking");
   });
 
@@ -401,14 +413,14 @@ describe("buildPassParams", () => {
     expect(thinkingConfigFor("claude-opus-4-8")).toEqual({ type: "adaptive" });
     expect(thinkingConfigFor("claude-opus-5")).toEqual({ type: "adaptive" });
     expect(thinkingConfigFor("claude-fable-5-1")).toBeUndefined();
+    expect(thinkingConfigFor("claude-opus-5-5")).toBeUndefined();
+    expect(thinkingConfigFor("claude-sonnet-5-5")).toBeUndefined();
     // An id outside the registry has no thinking rule to apply.
     expect(() => thinkingConfigFor("claude-opus-5-20260601")).toThrow(/unsupported model/);
   });
 
   it("prices, sizes and equips opus-5 like the rest of the Opus tier", () => {
-    // Opus 5 is the "auto" first choice; regressions here silently reroute or
-    // mis-bill every default run.
-    expect(PREFERENCE_ORDER[0]).toBe("claude-opus-5");
+    // Older explicit selections keep their original pricing and request shape.
     expect(pricedModelAlias("claude-opus-5")).toBe("claude-opus-5");
     expect(pricedModelAlias("claude-opus-5-20260601")).toBeNull();
     expect(pricedModelAlias("claude-opus-5-latest")).toBeNull();
@@ -695,17 +707,17 @@ describe("interpretPassMessage", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.data.fallbackUsed).toBe(true);
-    // Without per-hop usage the only price available is the SERVING model's
-    // rate ($5/MTok), not fable's $10.
-    expect(result.value.data.costUsd).toBeCloseTo(5, 10);
+    // Incomplete fallback billing evidence retains a conservative reservation.
+    expect(result.value.data.costUsd).toBeGreaterThan(5);
+    expect(result.value.data.presumed).toBe(true);
   });
 
   /**
    * A server-side fallback bills the declining hop at the declining model's
    * rate (Fable $10/$50) and the rescue at the fallback model's (Opus 4.8
    * $5/$25). `usage.iterations` carries each hop's model and tokens, so a
-   * response served by two models is priced hop by hop — only when the hops
-   * account for exactly the message's totals.
+   * response served by two models is priced hop by hop. Top-level usage is
+   * only the final attempt; it must not be added again to the iterations.
    */
   it("prices a two-model response hop by hop from usage.iterations", () => {
     const message = syntheticMessage({
@@ -715,8 +727,8 @@ describe("interpretPassMessage", () => {
         { type: "text", text: "case", citations: null },
       ],
       usage: syntheticUsage({
-        input_tokens: 1_000_000,
-        output_tokens: 100_000,
+        input_tokens: 400_000,
+        output_tokens: 80_000,
         iterations: [
           {
             type: "message",
@@ -744,8 +756,11 @@ describe("interpretPassMessage", () => {
     if (!result.ok) return;
     // Fable hop: 0.6M × $10 + 0.02M × $50 = $7; Opus hop: 0.4M × $5 + 0.08M × $25 = $4.
     expect(result.value.data.costUsd).toBeCloseTo(11, 10);
+    expect(result.value.data.usage.input_tokens).toBe(1_000_000);
+    expect(result.value.data.usage.output_tokens).toBe(100_000);
+    expect(result.value.data.presumed).toBeUndefined();
 
-    // Hops that do not add up to the message total fall back to one rate.
+    // A final iteration that disagrees with top-level usage is not exact evidence.
     const inconsistent = syntheticMessage({
       model: "claude-opus-4-8",
       usage: syntheticUsage({
@@ -760,7 +775,118 @@ describe("interpretPassMessage", () => {
     const fallback = interpretPassMessage(inconsistent, { ...baseOpts, model: "claude-fable-5" });
     expect(fallback.ok).toBe(true);
     if (!fallback.ok) return;
-    expect(fallback.value.data.costUsd).toBeCloseTo(5, 10);
+    expect(fallback.value.data.costUsd).toBeGreaterThan(5);
+    expect(fallback.value.data.presumed).toBe(true);
+  });
+
+  it.each([
+    ["cyber", false], ["general_harms", false], [null, false],
+    ["bio", true], ["frontier_llm", true], ["reasoning_extraction", true],
+  ])("accounts for pre-output refusal category %s", (category, billed) => {
+    const usage = syntheticUsage({ input_tokens: 1_000, cache_creation_input_tokens: 2_000, cache_read_input_tokens: 3_000 });
+    const result = interpretPassMessage(syntheticMessage({
+      stop_reason: "refusal", stop_details: { category }, content: [], usage,
+    }), baseOpts);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.costUsd).toBeCloseTo(billed ? computeCostUsd(usage, baseOpts.model) : 0, 10);
+    expect(result.error.refusalCategory).toBe(category);
+    expect(result.error.presumed).toBeUndefined();
+    expect(result.error.model).toBe(baseOpts.model);
+    // A refusal after output has started bills the observed generation.
+    const partial = interpretPassMessage(syntheticMessage({
+      stop_reason: "refusal", stop_details: { category }, usage: { ...usage, output_tokens: 10 },
+    }), baseOpts);
+    if (partial.ok) throw new Error("expected refusal");
+    expect(partial.error.costUsd).toBeGreaterThan(0);
+  });
+
+  it("does not treat an absent refusal category as an explicitly free null category", () => {
+    const result = interpretPassMessage(syntheticMessage({
+      stop_reason: "refusal", content: [], usage: syntheticUsage({ input_tokens: 1_000 }),
+    }), baseOpts);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.error.costUsd).toBeGreaterThan(0);
+    expect(result.error.presumed).toBe(true);
+    expect(result.error.refusalCategory).toBeUndefined();
+  });
+
+  it("preserves top-level accounting for ordinary server-tool sampling iterations", () => {
+    const usage = syntheticUsage({ input_tokens: 3_000, output_tokens: 300,
+      server_tool_use: { web_search_requests: 1, web_fetch_requests: 0 },
+      iterations: [
+        { type: "message", model: baseOpts.model, input_tokens: 1_000, output_tokens: 100 },
+        { type: "message", model: baseOpts.model, input_tokens: 2_000, output_tokens: 200 },
+      ] as never,
+    });
+    const result = interpretPassMessage(syntheticMessage({ usage }), baseOpts);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value.data.costUsd).toBeCloseTo(computeCostUsd(usage, baseOpts.model, 1), 10);
+    expect(result.value.data.usage).toBe(usage);
+    expect(result.value.data.presumed).toBeUndefined();
+  });
+
+  it.each([["general_harms", 0], [null, 0], ["bio", 0.01]])(
+    "prices a declined fallback hop using its own category %s", (category, firstCost) => {
+      const result = interpretPassMessage(syntheticMessage({
+        model: "claude-fable-5",
+        content: [{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" }, trigger: { type: "refusal", category } }],
+        usage: syntheticUsage({ input_tokens: 2_000, output_tokens: 100, iterations: [
+          { type: "message", model: "claude-fable-5", input_tokens: 1_000, output_tokens: 0 },
+          { type: "fallback_message", model: "claude-opus-4-8", input_tokens: 2_000, output_tokens: 100 },
+        ] as never }),
+      }), { ...baseOpts, model: "claude-fable-5" });
+      if (!result.ok) throw new Error("expected success");
+      expect(result.value.data.costUsd).toBeCloseTo(Number(firstCost) + 0.0125, 10);
+      expect(result.value.data.model).toBe("claude-opus-4-8");
+      expect(result.value.data.message.model).toBe("claude-opus-4-8");
+      expect(result.value.data.usage.input_tokens).toBe(3_000);
+    },
+  );
+
+  it.each(["cyber", "general_harms", "bio"])(
+    "matches fallback category %s after ordinary sampling iterations", (category) => {
+      const result = interpretPassMessage(syntheticMessage({
+        model: "claude-fable-5",
+        content: [{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" }, trigger: { type: "refusal", category } }],
+        usage: syntheticUsage({ input_tokens: 2_000, output_tokens: 100, iterations: [
+          { type: "message", model: "claude-fable-5", input_tokens: 500, output_tokens: 0 },
+          { type: "message", model: "claude-fable-5", input_tokens: 1_000, output_tokens: 0 },
+          { type: "fallback_message", model: "claude-opus-4-8", input_tokens: 2_000, output_tokens: 100 },
+        ] as never }),
+      }), { ...baseOpts, model: "claude-fable-5", effort: "high" });
+      if (!result.ok) throw new Error("expected success");
+      // The ordinary sampling iteration is paid; only the declining iteration
+      // inherits the transition's free pre-output refusal category.
+      expect(result.value.data.costUsd).toBeCloseTo(0.005 + (category === "bio" ? 0.01 : 0) + 0.0125, 10);
+      expect(result.value.data.presumed).toBeUndefined();
+      expect(result.value.data.execution).toMatchObject({
+        requestedModel: "claude-fable-5", requestedEffort: "high", effectiveEffort: "high",
+      });
+    },
+  );
+
+  it.each(["end_turn", "refusal", "max_tokens", "model_context_window_exceeded", "pause_turn"] as const)(
+    "preserves requested model and effort for completed stop reason %s", (stop_reason) => {
+      const result = interpretPassMessage(syntheticMessage({ stop_reason }), {
+        ...baseOpts, model: "claude-fable-5", effort: "high",
+      });
+      const outcome = result.ok ? result.value.data : result.error;
+      expect(outcome.model).toBe("claude-opus-4-8");
+      expect(outcome.execution).toMatchObject({
+        requestedModel: "claude-fable-5", requestedEffort: "high", effectiveEffort: "high",
+      });
+    },
+  );
+
+  it("records requested effort separately when the requested model strips it", () => {
+    const result = interpretPassMessage(syntheticMessage({ model: "claude-haiku-4-5" }), {
+      ...baseOpts, model: "claude-haiku-4-5", effort: "high",
+    });
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value.data.execution).toMatchObject({
+      requestedModel: "claude-haiku-4-5", requestedEffort: "high", effectiveEffort: null,
+    });
   });
 
   it('returns a typed "refusal" error with category and files a gap', () => {
@@ -899,6 +1025,26 @@ function fakeCreateClient(responses: BetaMessage[]): { client: Anthropic; calls:
 }
 
 describe("resumeIfPaused", () => {
+  it("drops incompatible pre-fallback blocks while preserving boundaries and paired server tools", async () => {
+    const boundary = { type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" }, trigger: { type: "refusal", category: "bio" } };
+    const text = { type: "text", text: "earlier text", citations: null };
+    const tool = { type: "server_tool_use", id: "paired", name: "web_search", input: {} };
+    const toolResult = { type: "web_search_tool_result", tool_use_id: "paired", content: [] };
+    const finalThinking = { type: "thinking", thinking: "final model", signature: "valid" };
+    const { client, calls } = fakeCreateClient([syntheticMessage()]);
+    await resumeIfPaused(client, { model: "claude-fable-5", messages: [] } as never, syntheticMessage({
+      stop_reason: "pause_turn", content: [
+        text, { type: "thinking", thinking: "discard", signature: "old" },
+        { type: "redacted_thinking", data: "discard" }, { type: "connector_text", text: "discard" },
+        { type: "tool_use", id: "client", name: "x", input: {} },
+        { type: "server_tool_use", id: "orphan", name: "web_search", input: {} },
+        tool, toolResult, boundary, finalThinking,
+      ],
+    }));
+    const sent = calls[0].messages as { content: unknown }[];
+    expect(sent[0].content).toEqual([text, tool, toolResult, boundary, finalThinking]);
+  });
+
   it("returns the message unchanged and makes no calls when it never paused", async () => {
     const { client, calls } = fakeCreateClient([]);
     const message = syntheticMessage({ stop_reason: "end_turn" });
@@ -1058,12 +1204,15 @@ describe("runPass resumes a paused turn end-to-end", () => {
 describe("runPass without a key", () => {
   it('returns the "no Anthropic key" gap instead of throwing', async () => {
     _resetAnthropicForTests(null);
-    const result = await runPass({ ...baseOpts, field: "llm.judge" });
+    const result = await runPass({ ...baseOpts, field: "llm.judge", effort: "high" });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.gap.reason).toBe("no Anthropic key");
     expect(result.gap.field).toBe("llm.judge");
     expect(result.error.kind).toBe("no_key");
+    expect(result.error.execution).toMatchObject({
+      requestedModel: baseOpts.model, requestedEffort: "high", effectiveEffort: null,
+    });
   });
 
   it("gaps on the streaming path too, with firstToken resolving immediately", async () => {
@@ -1074,6 +1223,21 @@ describe("runPass without a key", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.gap.reason).toBe("no Anthropic key");
+  });
+
+  it("retains the request when spend admission stops it before dispatch", async () => {
+    const { client, calls } = fakeCreateClient([syntheticMessage()]);
+    _resetAnthropicForTests(client);
+    const result = await runPass({ ...baseOpts, model: "claude-fable-5", effort: "high", admission: {
+      reserve: async () => { throw new Error("spend cap reached"); },
+      settle: async () => { throw new Error("nothing dispatched"); },
+      release: async () => { throw new Error("nothing admitted"); },
+    } });
+    expect(calls).toHaveLength(0);
+    if (result.ok) throw new Error("expected admission failure");
+    expect(result.error.execution).toMatchObject({
+      requestedModel: "claude-fable-5", requestedEffort: "high", effectiveEffort: null,
+    });
   });
 });
 
@@ -1211,6 +1375,13 @@ const failingAttemptScript: StreamScript = {
 };
 
 describe("isRetryableTransportError", () => {
+  it("does not retry an enforced spend limit even when its HTTP status is 429", () => {
+    const err = new RateLimitError(429, {
+      type: "error", error: { type: "rate_limit_error", details: { error_code: "enforced_spend_limit_reached" } },
+    } as never, "spend limit", new Headers());
+    expect(isRetryableTransportError(err)).toBe(false);
+  });
+
   it("retries mid-stream SSE errors for transient types (no HTTP status)", () => {
     expect(isRetryableTransportError(midStreamOverloadedError())).toBe(true);
     const apiErr = new APIError(
@@ -1291,6 +1462,94 @@ describe("isRetryableTransportError", () => {
 describe("runPassStreaming transport retry", () => {
   afterEach(() => {
     _setTransportRetrySleepForTests();
+  });
+
+  it("honors Retry-After on a transient throttle", async () => {
+    const delays = instantSleep();
+    const { client, streamCalls } = fakeStreamingClient([
+      { failWith: new RateLimitError(429, {} as never, "slow down", new Headers({ "retry-after": "17" })) },
+      { final: syntheticMessage() },
+    ]);
+    _resetAnthropicForTests(client);
+    expect((await runPassStreaming(streamingOpts).result).ok).toBe(true);
+    expect(delays).toEqual([17_000]);
+    expect(streamCalls).toHaveLength(2);
+  });
+
+  it("stops immediately at an enforced spend limit", async () => {
+    const delays = instantSleep();
+    const { client, streamCalls } = fakeStreamingClient([{ failWith: new RateLimitError(429, {
+      type: "error", error: { type: "rate_limit_error", details: { error_code: "enforced_spend_limit_reached" } },
+    } as never, "spend limit", new Headers()) }]);
+    _resetAnthropicForTests(client);
+    expect((await runPassStreaming(streamingOpts).result).ok).toBe(false);
+    expect(delays).toEqual([]);
+    expect(streamCalls).toHaveLength(1);
+  });
+
+  it("retains fallback iteration usage and the actual model when a stream fails", async () => {
+    const { client } = fakeStreamingClient([{
+      events: [
+        messageStartEvent({ input_tokens: 1_000 }, "claude-fable-5"),
+        { type: "content_block_start", index: 0, content_block: { type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" }, trigger: { type: "refusal", category: "general_harms" } } },
+        messageDeltaEvent({ input_tokens: 2_000, output_tokens: 100, iterations: [
+          { type: "message", model: "claude-fable-5", input_tokens: 1_000, output_tokens: 0 },
+          { type: "fallback_message", model: "claude-opus-4-8", input_tokens: 2_000, output_tokens: 100 },
+        ] as never }),
+      ],
+      failWith: new BadRequestError(400, {} as never, "terminal failure", new Headers()),
+    }]);
+    _resetAnthropicForTests(client);
+    const result = await runPassStreaming({ ...streamingOpts, model: "claude-fable-5" }).result;
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error.model).toBe("claude-opus-4-8");
+    expect(result.error.fallbackUsed).toBe(true);
+    expect(result.error.usage?.input_tokens).toBe(3_000);
+    expect(result.error.costUsd).toBeCloseTo(0.0125, 10);
+  });
+
+  it.each([false, true])("uses the same full request bound after interrupted fallback exposure (switch seen: %s)", async (switched) => {
+    const settled: RequestSettlement[] = [];
+    const admission = {
+      reserve: async (request: { maximumUsd: number }) => ({ id: "fallback", maximumUsd: request.maximumUsd }),
+      settle: async (_permit: unknown, settlement: RequestSettlement) => { settled.push(settlement); },
+      release: async () => { throw new Error("a generating request must not be released"); },
+    };
+    const { client } = fakeStreamingClient([{
+      events: [
+        messageStartEvent({ input_tokens: 1_000 }, "claude-fable-5"),
+        ...(switched ? [{ type: "content_block_start", index: 0, content_block: { type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" }, trigger: { type: "refusal", category: "bio" } } }] : []),
+      ],
+      failWith: new APIUserAbortError(),
+    }]);
+    _resetAnthropicForTests(client);
+    const result = await runPassStreaming({ ...streamingOpts, model: "claude-fable-5", admission }).result;
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error.costUsd).toBe(maximumRequestCostUsd("claude-fable-5", "bull"));
+    expect(result.error.presumed).toBe(true);
+    expect(settled).toHaveLength(1);
+    expect(settled[0]).toMatchObject({ costUsd: result.error.costUsd, presumed: true });
+    expect(result.error.model).toBe(switched ? "claude-opus-4-8" : "claude-fable-5");
+  });
+
+  it("retains the search request maximum after interruption, including unseen repeated inputs and searches", async () => {
+    const settled: RequestSettlement[] = [];
+    const admission = {
+      reserve: async (request: { maximumUsd: number }) => ({ id: "search", maximumUsd: request.maximumUsd }),
+      settle: async (_permit: unknown, settlement: RequestSettlement) => { settled.push(settlement); },
+      release: async () => { throw new Error("generation started"); },
+    };
+    const { client } = fakeStreamingClient([{
+      events: [messageStartEvent({ input_tokens: 1_000 }, "claude-sonnet-5")],
+      failWith: new APIUserAbortError(),
+    }]);
+    _resetAnthropicForTests(client);
+    const result = await runPassStreaming({ ...streamingOpts, model: "claude-sonnet-5", tools: [webSearchTool(8, "claude-sonnet-5")], admission }).result;
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error.costUsd).toBe(maximumRequestCostUsd("claude-sonnet-5", "bull"));
+    expect(result.error.costUsd).toBeCloseTo(26.36, 10);
+    expect(result.error.presumed).toBe(true);
+    expect(settled[0]).toMatchObject({ costUsd: result.error.costUsd, presumed: true });
   });
 
   it("retries a mid-stream overloaded error with backoff and succeeds on the next attempt", async () => {
@@ -1529,6 +1788,9 @@ describe("runPassStreaming transport retry", () => {
     expect(result.error.usage?.output_tokens).toBe(8_000 * PASS_TRANSPORT_MAX_ATTEMPTS);
     expect(result.error.model).toBe("claude-opus-4-8");
     expect(result.error.webSearches).toBe(2 * PASS_TRANSPORT_MAX_ATTEMPTS);
+    expect(result.error.execution).toMatchObject({
+      requestedModel: streamingOpts.model, requestedEffort: null, effectiveEffort: null,
+    });
     expect(result.error.costUsd).toBeCloseTo(
       PASS_TRANSPORT_MAX_ATTEMPTS * computeCostUsd(attemptBilledUsage, "claude-opus-4-8", 2),
       10,
@@ -1842,6 +2104,9 @@ describe("stream idle timeout", () => {
     expect(result.error.costUsd).toBeCloseTo(0.02 + 0.02 + 0.14001, 6);
     expect(result.error.usage).toMatchObject({ input_tokens: 10_000, output_tokens: 2_000 });
     expect(result.error.model).toBe("claude-sonnet-5");
+    expect(result.error.execution).toMatchObject({
+      requestedModel: idleOpts.model, requestedEffort: "low", effectiveEffort: "low",
+    });
   }, 15_000);
 
   it("does not fire while the stream keeps producing events", async () => {

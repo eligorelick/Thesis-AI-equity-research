@@ -1,9 +1,20 @@
 /** Browser-safe connection and model identifiers. No credential fields. */
 export type SubscriptionProvider = "chatgpt" | "gemini";
+export const CHATGPT_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ChatGptEffort = (typeof CHATGPT_EFFORTS)[number];
+export interface ChatGptRunOptions {
+  effort?: ChatGptEffort;
+  serviceTier?: "default" | "fast";
+}
+export interface ChatGptModelChoice {
+  id: string;
+  name: string;
+  efforts?: ChatGptEffort[];
+}
 export type AiSelection =
   | { provider: "none" }
   | { provider: "anthropic" }
-  | { provider: SubscriptionProvider; connectionId: string; model: string };
+  | ({ provider: SubscriptionProvider; connectionId: string; model: string } & ChatGptRunOptions);
 
 export interface AiConnectionSummary {
   id: string;

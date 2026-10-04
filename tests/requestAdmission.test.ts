@@ -252,16 +252,16 @@ const passOpts = {
 
 describe("what one request may cost", () => {
   it("bounds a request by context at the cache-write price, the output ceiling and the search cap", () => {
-    // Sonnet 5: 1M input at $2.50/MTok (5-minute cache write) + 128K output at
-    // $10/MTok + 8 searches at $0.01.
-    expect(maximumRequestCostUsd("claude-sonnet-5", "bull")).toBeCloseTo(2.5 + 1.28 + 0.08, 6);
+    // Sonnet 5: up to 10 sampling iterations of 1M input at $2.50/MTok,
+    // one 128K output ceiling at $10/MTok, and 8 searches at $0.01.
+    expect(maximumRequestCostUsd("claude-sonnet-5", "bull")).toBeCloseTo(25 + 1.28 + 0.08, 6);
     // The judge never searches.
     expect(maximumRequestCostUsd("claude-sonnet-5", "synthesize")).toBeCloseTo(2.5 + 1.28, 6);
     // Haiku's judge runs on the Sonnet floor, so it is bounded there.
     expect(maximumRequestCostUsd("claude-haiku-4-5", "synthesize"))
       .toBe(maximumRequestCostUsd("claude-sonnet-5", "synthesize"));
     expect(maximumRequestCostUsd("claude-haiku-4-5", "bull"))
-      .toBeCloseTo(0.25 + 0.32 + 0.08, 6);
+      .toBeCloseTo(2.5 + 0.32 + 0.08, 6);
     expect(MAX_PROVIDER_WEB_SEARCHES).toBe(8);
   });
 
@@ -307,6 +307,12 @@ describe("what one request may cost", () => {
   it("refuses a verify bound without explicit capability metadata", () => {
     expect(() => maximumRequestCostUsd("claude-sonnet-5", "verify")).toThrow(/capability|billable/i);
     expect(maximumRequestCostUsd("claude-sonnet-5", "verify", { billable: false })).toBe(0);
+  });
+
+  it("reserves repeated inputs only when verify permits server search", () => {
+    const capability = { billable: true as const, maxInputTokens: 1_000, maxOutputTokens: 100, maxWebSearches: 0 };
+    expect(maximumRequestCostUsd("claude-sonnet-5", "verify", capability)).toBeCloseTo(0.0035, 10);
+    expect(maximumRequestCostUsd("claude-sonnet-5", "verify", { ...capability, maxWebSearches: 1 })).toBeCloseTo(0.036, 10);
   });
 });
 
@@ -503,18 +509,29 @@ describe("every provider request is admitted and settled on its own", () => {
 });
 
 describe("spend caps at a usable size", () => {
-  it("admits a Sonnet 5 fixture-shaped run under a $5 per-job cap", () => {
-    seedJob(first.db, "job-e", "AAPL", 5);
+  it("refuses a search-capable request when the cap cannot cover its repeated-input exposure", () => {
+    seedJob(first.db, "job-e-small", "AAPL", 5);
+    const claim = claimNextQueuedJob("owner", NOW, LIMITS, first.db)!;
+    const acquired = acquirePaidPassLease(
+      claim, "bull", requestAttemptId("small", 1), maximumRequestCostUsd("claude-sonnet-5", "bull"),
+      NOW, LIMITS, first.db, "claude-sonnet-5",
+    );
+    expect(acquired.acquired).toBe(false);
+    expect(first.db.select().from(costLog).all()).toHaveLength(0);
+  });
+
+  it("admits a Sonnet 5 fixture-shaped run under a $30 per-job cap", () => {
+    seedJob(first.db, "job-e", "AAPL", 30);
     const claim = claimNextQueuedJob("owner", NOW, LIMITS, first.db)!;
     const perRequest = maximumRequestCostUsd("claude-sonnet-5", "bull");
-    expect(perRequest).toBeLessThan(5);
+    expect(perRequest).toBeLessThan(30);
 
     // A fixture run makes one request per analyst side and one for the judge.
     for (const [pass, attempt] of [["bull", "a1"], ["bear", "a2"]] as const) {
       const acquired = acquirePaidPassLease(
         claim, pass, requestAttemptId(attempt, 1), perRequest, NOW, LIMITS, first.db, "claude-sonnet-5",
       );
-      expect(acquired.acquired, `${pass} must be admitted under a $5 cap`).toBe(true);
+      expect(acquired.acquired, `${pass} must be admitted under a $30 cap`).toBe(true);
       if (acquired.acquired) {
         settleRequestCost(acquired.lease, {
           model: "claude-sonnet-5",

@@ -1,7 +1,7 @@
 /**
  * Version stamps after the 2026-10-02 release review, and legacy reads.
- * Report 1.5.0 and payload 1.6.0 apply currency-safe historical multiples,
- * dated ROE and explicit REIT approximation disclosures. Earlier stamps:
+ * Report 1.6.0 and payload 1.7.0 apply financial common-equity conventions,
+ * evidence-based routing and explicit assessment coverage. Earlier stamps:
  *
  *  - REPORT_SPEC_VERSION 1.4.0: every share count and per-share figure is on
  *    the share basis of the price it meets, or withheld. A 1.3.0 report's
@@ -74,31 +74,31 @@ function newReport(): Report {
 }
 
 describe("new version stamps", () => {
-  it("bumps the report spec to 1.5.0 and the payload to 1.6.0", () => {
-    expect(REPORT_SPEC_VERSION).toBe("1.5.0");
-    expect(PAYLOAD_VERSION).toBe("1.6.0");
+  it("bumps the report spec to 1.6.0 and the payload to 1.7.0", () => {
+    expect(REPORT_SPEC_VERSION).toBe("1.6.0");
+    expect(PAYLOAD_VERSION).toBe("1.7.0");
   });
 
   it("stamps a newly built report and payload with them", () => {
-    expect(newReport().meta.specVersion).toBe("1.5.0");
+    expect(newReport().meta.specVersion).toBe("1.6.0");
     const bundle = completeCurrencyBundle({});
     const payload = assembleContextPayload(bundle, runStageB(bundle), VALIDATION);
-    expect(payload.payloadVersion).toBe("1.6.0");
-    expect(payloadFingerprint(payload)).toMatch(/^1\.6\.0:[0-9a-f]{8}$/);
-    expect(serializePayloadForPrompt(payload)).toMatch(/^# CONTEXT PAYLOAD \(payloadVersion 1\.6\.0\)/);
+    expect(payload.payloadVersion).toBe("1.7.0");
+    expect(payloadFingerprint(payload)).toMatch(/^1\.7\.0:[0-9a-f]{8}$/);
+    expect(serializePayloadForPrompt(payload)).toMatch(/^# CONTEXT PAYLOAD \(payloadVersion 1\.7\.0\)/);
   });
 
-  it("never resumes a pass stored under the prior 1.5.0 financial conventions", () => {
+  it("never resumes a pass stored under the prior 1.6.0 financial conventions", () => {
     const bundle = completeCurrencyBundle({});
     const payload = assembleContextPayload(bundle, runStageB(bundle), VALIDATION);
-    const asStoredUnder150 = payloadFingerprint({ ...payload, payloadVersion: "1.5.0" });
-    expect(asStoredUnder150).toMatch(/^1\.5\.0:[0-9a-f]{8}$/);
-    expect(payloadFingerprint(payload)).not.toBe(asStoredUnder150);
+    const asStoredUnder160 = payloadFingerprint({ ...payload, payloadVersion: "1.6.0" });
+    expect(asStoredUnder160).toMatch(/^1\.6\.0:[0-9a-f]{8}$/);
+    expect(payloadFingerprint(payload)).not.toBe(asStoredUnder160);
   });
 
-  it("does not compare a prior 1.4.0 report as the same financial convention", () => {
+  it("does not compare a prior 1.5.0 report as the same financial convention", () => {
     const before = newReport();
-    before.meta.specVersion = "1.4.0";
+    before.meta.specVersion = "1.5.0";
     const after = newReport();
     const diff = diffReports(before, after, {
       fromReportVersion: before.meta.pipelineVersion,

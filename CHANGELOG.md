@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased — AI execution, current Claude models and limited FMP access
+
+- Refresh ChatGPT account models automatically, preserve saved selections, and
+  offer GPT-6.1 Sol explicitly with an access-unconfirmed label when absent.
+- Add separate ChatGPT reasoning and Standard/Fast controls. Preserve requested
+  and provider-reported settings, model IDs and tokens through saved reports,
+  recovery, history and exports; do not infer missing provider evidence.
+- Keep Gemini multi-model usage explicit, include reported cached input and
+  reasoning tokens, and reject missing or invalid usage records.
+- Learn explicit FMP endpoint/symbol subscription refusals for 15 minutes to
+  avoid repeated unavailable requests, while preserving cached successes and
+  keeping other keys, endpoints and symbols eligible.
+- Show SEC contact readiness and explain why unconfirmed issuer identity blocks
+  fallback data. An FMP key alone does not establish paid endpoint access.
+- Add Claude Opus 5.5 and Sonnet 5.5 with current prices, cache rates and request
+  capabilities. Auto prefers Opus 5.5; Haiku's judge floor is Sonnet 5.5.
+  Preserve explicit saved selections and update model/effort usage guidance.
+- Account for Claude fallback attempts separately, include server-tool sampling
+  inputs and configured fallback exposure in spending limits, and label incomplete billing evidence as presumed.
+  Preserve model changes in streams and valid content during continuation.
+- Stop retrying an enforced Claude spend cap and respect Retry-After during
+  temporary throttling.
+- Recover completed ChatGPT output items when the terminal event omits them;
+  retain failed-pass usage and distinguish unknown model/usage from zero.
+- Display missing and sparse assessments honestly across AI and data-only
+  reports, watchlists, history and exports; distinguish routing evidence from
+  XBRL validation and retain the actual provider in judge disclosures.
+- Use configured Finnhub news and upcoming-earnings fallbacks when FMP cannot
+  provide them, retaining provenance and genuine subscription limitations.
+- Preserve presumed billing and original model requests through pass settlement
+  and recovery; match Claude refusal billing to actual model transitions.
+- Disable redundant local HTTP compression that accumulated drain listeners.
+- Refine broad financial classifications using strong filing evidence, pair
+  common earnings with common equity, and withhold industrial cash-flow/EV
+  signals on financial routes. Report spec 1.6.0 and payload 1.7.0 preserve
+  historical reports while invalidating incompatible partial analysis.
+
 ## 0.1.0 — 2026-10-03
 
 First tagged open-source release of the local, single-user application. The

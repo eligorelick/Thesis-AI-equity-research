@@ -5,6 +5,8 @@ import {
   type EntityRegistry,
 } from "@/pipeline/stageC/entityValidation";
 import { buildDataCompleteness } from "@/report/completeness";
+import { applyReportAssessmentStatus } from "@/report/assessment";
+import { attributeJudgeProtocolDisclosures } from "@/report/execution";
 import {
   citationAsOf,
   citationSourceId,
@@ -58,7 +60,15 @@ export function parseStoredReportWithSafety(
       parsed,
       getEntityRegistry(parsed.meta.symbol),
     );
-    const revalidated = validateStoredReportInReadMode(safety.report, readMode);
+    const assessed = applyReportAssessmentStatus(safety.report);
+    const view = {
+      ...assessed,
+      appendix: {
+        ...assessed.appendix,
+        missingData: attributeJudgeProtocolDisclosures(assessed.appendix.missingData, assessed.meta),
+      },
+    };
+    const revalidated = validateStoredReportInReadMode(view, readMode);
     if (revalidated === null) return null;
     return {
       report: revalidated,

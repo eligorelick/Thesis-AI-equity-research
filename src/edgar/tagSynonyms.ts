@@ -220,6 +220,7 @@ export const LINE_ITEM_TAGS = {
   incomeTaxExpense: entry(["IncomeTaxExpenseBenefit"]),
   totalOtherIncomeExpensesNet: entry(["NonoperatingIncomeExpense"]),
   netIncome: entry(["NetIncomeLoss", "ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"]),
+  netIncomeAvailableToCommon: entry(["NetIncomeLossAvailableToCommonStockholdersBasic"]),
   netIncomeFromContinuingOperations: entry(["IncomeLossFromContinuingOperations"]),
   netIncomeFromDiscontinuedOperations: entry(["IncomeLossFromDiscontinuedOperationsNetOfTax"]),
   depreciationAndAmortization: entry([

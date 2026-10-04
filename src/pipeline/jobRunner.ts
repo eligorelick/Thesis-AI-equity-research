@@ -70,8 +70,10 @@ import {
 import { buildDataCompleteness } from "@/report/completeness";
 import {
   annotateSharedModelFamily,
+  attributeJudgeProtocolDisclosures,
   buildExecutionMetadataEntry,
   sharedModelFamilyOf,
+  type ProviderExecution,
 } from "@/report/execution";
 // WS7 (D-20): the judgement-protocol block the passes store is completed with
 // the model families only the runner's settled execution list knows. This is a
@@ -151,6 +153,8 @@ import {
  * cost-related is optional so a mock or a degraded pass can omit it.
  */
 export interface PassResultLike<T> {
+  presumed?: boolean;
+  execution?: ProviderExecution;
   /** The parsed structured output for this pass. */
   data: T;
   /** Model that actually served the response (fallback model when one served). */
@@ -169,6 +173,8 @@ export interface PassResultLike<T> {
 
 /** Billed telemetry from a pass attempt that did not produce valid output. */
 export interface BilledPassAttempt {
+  presumed?: boolean;
+  execution?: ProviderExecution;
   model: string;
   costUsd: number;
   fallbackUsed: boolean;
@@ -265,6 +271,7 @@ export interface PassDeps<TPayload = unknown> {
   analysisModel: string;
   /** Captured once for this job; never re-read global selection inside a pass. */
   connectionId?: string;
+  subscriptionOptions?: { effort?: EffortLevel; serviceTier?: "default" | "fast" };
   /**
    * Per-request cost admission for a pass (DECISIONS D-10). The Stage C
    * adapter threads the returned object into every provider request the pass
@@ -840,7 +847,9 @@ function telemetryFromPassResult<T>(
     costUsd: pass.costUsd,
     fallbackUsed: pass.fallbackUsed,
     billable,
+    ...(pass.presumed === undefined ? {} : { presumed: pass.presumed }),
     fetchedUrls: canonicalFetchedUrls(pass.fetchedUrls),
+    ...(pass.execution === undefined ? {} : { execution: pass.execution }),
   };
 }
 
@@ -858,7 +867,9 @@ function telemetryFromAttempt(
     costUsd: attempt?.costUsd ?? 0,
     fallbackUsed: attempt?.fallbackUsed ?? false,
     billable: attempt !== null,
+    ...(attempt?.presumed === undefined ? {} : { presumed: attempt.presumed }),
     fetchedUrls: [],
+    ...(attempt?.execution === undefined ? {} : { execution: attempt.execution }),
   };
 }
 
@@ -2627,6 +2638,7 @@ export async function runJob<TPayload = unknown>(
     }
     const aiSelection = opts.hasAnthropicKey === undefined
       ? captureAiSelection() : { provider: "anthropic" as const };
+    const capturedSettings = getWritableSettingsAuthority();
     const hasKey = opts.hasAnthropicKey ?? selectionIsConnected(aiSelection);
 
     // -- fetch ----------------------------------------------------------------
@@ -2754,7 +2766,6 @@ export async function runJob<TPayload = unknown>(
     // "skipped" with the resolution error and still persist a data-only report
     // Only genuinely unexpected
     // failures downstream still reach the outer catch and 'error'.
-    const capturedSettings = getWritableSettingsAuthority();
     let analysisModel: string;
     let analysisEffort: EffortLevel;
     if (reusableSynthesize !== null) {
@@ -2812,6 +2823,10 @@ export async function runJob<TPayload = unknown>(
     const deps: PassDeps<TPayload> = {
       analysisModel,
       ...("connectionId" in aiSelection ? { connectionId: aiSelection.connectionId } : {}),
+      ...(aiSelection.provider === "chatgpt" ? { subscriptionOptions: {
+        ...(aiSelection.effort === undefined ? {} : { effort: aiSelection.effort }),
+        ...(aiSelection.serviceTier === undefined ? {} : { serviceTier: aiSelection.serviceTier }),
+      } } : {}),
       effort: analysisEffort,
       payload,
       jobSeed: jobId, // WS7 (D-20): seeds the judge's case order
@@ -2865,6 +2880,8 @@ export async function runJob<TPayload = unknown>(
         runId: state.jobId,
         startedAt: state.startedAt,
         execution: [
+          ...readSuccessfulExecutions(state.jobId, analysisModel).filter((entry) =>
+            (entry.step === "bull" && bull === null) || (entry.step === "bear" && bear === null)),
           ...(bull === null
             ? []
             : [buildExecutionMetadataEntry({
@@ -2873,6 +2890,8 @@ export async function runJob<TPayload = unknown>(
                 effectiveModel: bull.model,
                 requestedEffort: analysisEffort,
                 fallbackUsed: bull.fallbackUsed,
+                execution: bull.execution,
+                usage: bull.usage,
               })]),
           ...(bear === null
             ? []
@@ -2882,6 +2901,8 @@ export async function runJob<TPayload = unknown>(
                 effectiveModel: bear.model,
                 requestedEffort: analysisEffort,
                 fallbackUsed: bear.fallbackUsed,
+                execution: bear.execution,
+                usage: bear.usage,
               })]),
           buildExecutionMetadataEntry({
             step: "synthesize",
@@ -2889,6 +2910,8 @@ export async function runJob<TPayload = unknown>(
             effectiveModel: judge.model,
             requestedEffort: analysisEffort,
             fallbackUsed: judge.fallbackUsed,
+            execution: judge.execution,
+            usage: judge.usage,
           }),
           buildExecutionMetadataEntry({
             step: "verify",
@@ -3229,7 +3252,7 @@ export async function runJob<TPayload = unknown>(
           field: "llm.judge",
           reason: detail,
           severity: "critical",
-          attemptedSources: judgeProviderAttempted ? ["anthropic"] : [],
+          attemptedSources: judgeProviderAttempted ? [parseSubscriptionModel(analysisModel)?.provider ?? "anthropic"] : [],
         });
         return persistDataOnly(state, bundle, validation, computed, now, hasKey);
       }
@@ -3383,7 +3406,7 @@ export async function runJob<TPayload = unknown>(
             reason: errMessage(err),
             severity: "critical",
             attemptedSources:
-              analystCheckpoint.wasLaunched() || billedAttempt !== null ? ["anthropic"] : [],
+              analystCheckpoint.wasLaunched() || billedAttempt !== null ? [parseSubscriptionModel(analysisModel)?.provider ?? "anthropic"] : [],
           });
           markSkipped(state, "synthesize", "upstream bull/bear pass failed");
           markSkipped(state, "verify", "upstream bull/bear pass failed");
@@ -3681,7 +3704,7 @@ export async function runJob<TPayload = unknown>(
           field: `llm.${side}`,
           reason: sideError ?? errMessage(err),
           severity: "critical",
-          attemptedSources: launched ? ["anthropic"] : [],
+          attemptedSources: launched ? [parseSubscriptionModel(analysisModel)?.provider ?? "anthropic"] : [],
         });
       }
       markSkipped(state, "synthesize", "upstream bull/bear pass failed");
@@ -3931,7 +3954,7 @@ function persistDataOnly(
     computed,
     costBreakdown: buildCostBreakdown(state),
     presumed: presumedSpendDisclosure(state.jobId),
-    execution: disclosure.execution,
+    execution: disclosure.execution ?? readSuccessfulExecutions(state.jobId, model, true),
     gaps: disclosure.gaps,
     reason: disclosure.reason ?? (hasKey ? LLM_FAILURE_DATA_ONLY_REASON : NO_KEY_SKIP_REASON),
   };
@@ -4052,10 +4075,10 @@ function persistReport(
           },
           appendix: {
             ...parsed.data.appendix,
-            costBreakdown: reconcilePersistedCostBreakdown(
+            costBreakdown: [...reconcilePersistedCostBreakdown(
               parsed.data.appendix.costBreakdown,
               ledger,
-            ),
+            ), ...readPlanCostBreakdown(state.jobId, db)],
           },
         }
       : report;
@@ -4145,6 +4168,8 @@ interface DiscardedAttempt {
   pass: string;
   attemptId: string;
   reason: string;
+  model: string;
+  billable: boolean;
 }
 
 /**
@@ -4190,6 +4215,8 @@ function readDiscardedAttempts(jobId: string): DiscardedAttempt[] {
         pass: artifact.pass,
         attemptId: artifact.attemptId,
         reason: readerSafeFailureText(artifact.envelope.failure),
+        model: artifact.telemetry.model,
+        billable: artifact.telemetry.billable,
       }];
     });
   } catch {
@@ -4199,7 +4226,7 @@ function readDiscardedAttempts(jobId: string): DiscardedAttempt[] {
 
 function buildCostBreakdown(state: RunState): CostBreakdownEntry[] {
   const discarded = readDiscardedAttempts(state.jobId);
-  return readCostLedger(state.jobId).map((row) => {
+  const entries: CostBreakdownEntry[] = readCostLedger(state.jobId).map((row) => {
     const match = discarded.find((attempt) => costRowBelongsToAttempt(row.attemptId, attempt.attemptId));
     return {
       step: row.step,
@@ -4208,6 +4235,24 @@ function buildCostBreakdown(state: RunState): CostBreakdownEntry[] {
       ...(match === undefined ? {} : { discarded: true, discardedReason: match.reason }),
     };
   });
+  return [...entries, ...readPlanCostBreakdown(state.jobId)];
+}
+
+function readPlanCostBreakdown(jobId: string, db: ThesisDb = getDb()): CostBreakdownEntry[] {
+  const entries: CostBreakdownEntry[] = [];
+  // Plan-allowance attempts intentionally have no API-charge ledger row.
+  // Their durable artifacts still belong in the report, including failures.
+  try {
+    for (const artifact of readJobPassArtifactLineage(jobId, db)) {
+      if (artifact.telemetry.billable || !parseSubscriptionModel(artifact.telemetry.model)) continue;
+      const failure = artifact.envelope.outcome === "failure" ? artifact.envelope.failure : null;
+      entries.push({ step: artifact.pass, model: artifact.telemetry.execution?.modelObserved === false
+        ? `unknown (requested ${artifact.telemetry.execution.requestedModel ?? artifact.telemetry.model})` : artifact.telemetry.model, costUsd: 0,
+        ...(failure === null ? {} : { discarded: true, discardedReason: readerSafeFailureText(failure) }),
+      });
+    }
+  } catch { /* Invalid artifacts must not replace verified API accounting. */ }
+  return entries;
 }
 
 /**
@@ -4225,13 +4270,15 @@ function discardedAttemptGaps(state: RunState): ManifestEntry[] {
     return {
       field: `llm.${attempt.pass}.discardedAttempt`,
       reason:
-        `the ${attempt.pass} pass was run more than once: an earlier attempt was billed and its output thrown ` +
+        parseSubscriptionModel(attempt.model) && !attempt.billable
+          ? `A ${attempt.pass} attempt did not produce usable output because ${attempt.reason}. It used the connected provider allowance and recorded $0 in API charges. The rejected output is excluded from this report; usage and failure details remain saved with the run.`
+          : `the ${attempt.pass} pass was run more than once: an earlier attempt was billed and its output thrown ` +
         `away because ${attempt.reason}. That attempt cost $${wasted.toFixed(4)}, which is included in the ` +
         "reported total and appears in the cost breakdown marked `discarded`. The analysis itself comes from the " +
         "attempt that succeeded; nothing from the rejected one reached this report, and the failure itself is " +
         "recorded against the run rather than quoted here.",
       severity: "info",
-      attemptedSources: ["anthropic"],
+      attemptedSources: [parseSubscriptionModel(attempt.model)?.provider ?? "anthropic"],
       expected: false,
     };
   });
@@ -4259,6 +4306,34 @@ function readCostLedger(jobId: string): CostLedgerRow[] {
     .where(eq(costLog.jobId, jobId))
     .orderBy(costLog.id)
     .all();
+}
+
+/** OAuth passes have no API-charge row; their durable artifacts retain execution evidence. */
+function readSuccessfulExecutions(jobId: string, requestedModel: string, includeFailures = false): ExecutionMetadataEntry[] {
+  // Reuse resume's authoritative fold: a newer failed/corrupt pass supersedes
+  // an older success, and newer upstream work invalidates old downstream work.
+  const cohort = getDb().transaction((db) => readStoredJobResumeInTransaction(db, jobId)?.artifacts);
+  if (cohort === undefined) return [];
+  return ["bull", "bear", "synthesize"].flatMap((step) => {
+    const artifacts = cohort.currentArtifacts.filter((artifact) =>
+      artifact.pass === step && (includeFailures || artifact.envelope.outcome === "success"));
+    if ((!includeFailures && artifacts.length !== 1) || cohort.corruptPasses.some((pass) => pass === step)) return [];
+    return artifacts.map((artifact, index) => {
+    const execution = buildExecutionMetadataEntry({
+      step: artifacts.length > 1 ? `${step} attempt ${index + 1}` : step,
+      requestedModel: artifact.telemetry.execution?.requestedModel ?? requestedModel,
+      effectiveModel: artifact.telemetry.model,
+      requestedEffort: null,
+      fallbackUsed: artifact.telemetry.fallbackUsed,
+      execution: artifact.telemetry.execution,
+      usage: { input_tokens: artifact.telemetry.inputTokens, output_tokens: artifact.telemetry.outputTokens },
+    });
+    if (artifact.envelope.outcome === "failure") {
+      execution.note = `${execution.note ? `${execution.note} ` : ""}${step}: no usable analysis was completed; the execution and usage above describe the failed attempt.`;
+    }
+    return execution;
+    });
+  });
 }
 
 /** Sum of every cost_log row already recorded for a job (resume rehydration). */
@@ -4305,8 +4380,8 @@ function presumedSpendDisclosure(jobId: string): PresumedSpendDisclosure | null 
       field: "cost.presumed",
       reason:
         `$${totalUsd.toFixed(4)} of the reported cost is a presumed upper bound, not a measured ` +
-        `charge: ${rows.length} authorized provider request(s) (${passes}) never reported what ` +
-        "they billed, so the whole reservation is counted until it is reconciled downward " +
+        `charge: ${rows.length} authorized provider request(s) (${passes}) did not provide ` +
+        "enough evidence to verify billing; a conservative upper bound is counted until reconciled " +
         "(npm run costs:reconcile).",
       severity: "warn",
       attemptedSources: ["anthropic"],
@@ -4366,7 +4441,7 @@ function reconcileMeta(
           sharedModelFamilyOf(annotatedExecution),
         );
 
-  const missingData = [
+  const missingData = attributeJudgeProtocolDisclosures([
     ...report.appendix.missingData.filter(
       (gap) =>
         !RECONCILED_MANIFEST_FIELDS.has(gap.field) &&
@@ -4379,7 +4454,7 @@ function reconcileMeta(
     // belong HERE, with the cost breakdown they explain, so the two cannot
     // disagree — and so `dataCompleteness` below is computed over them.
     ...discarded,
-  ];
+  ], { execution: annotatedExecution, model: meta.model });
   // Both edits above CHANGE the manifest this metadata summarizes. Recomputing
   // is not optional: deriveReportCompletenessPresentation recomputes from the
   // manifest and reports "inconsistent" — which blanks state, counts, EDGAR,
@@ -4458,8 +4533,14 @@ function reconcileRecoveredVerifyReport(
       effectiveByStep.set(row.step, row);
     }
   }
+  const savedExecution = readSuccessfulExecutions(state.jobId, requestedModel);
   const execution: ExecutionMetadataEntry[] = [];
   for (const step of ["bull", "bear", "synthesize"] as const) {
+    const saved = savedExecution.find((entry) => entry.step === step);
+    if (saved !== undefined) {
+      execution.push(saved);
+      continue;
+    }
     const row = effectiveByStep.get(step);
     if (row === undefined) continue;
     execution.push(buildExecutionMetadataEntry({
@@ -4482,14 +4563,14 @@ function reconcileRecoveredVerifyReport(
     requestedEffort: null,
     fallbackUsed: verify.fallbackUsed,
   }));
-  const costBreakdown = ledger.map((row) => ({
+  const costBreakdown = [...ledger.map((row) => ({
     step: row.step,
     model: row.model,
     costUsd: row.costUsd,
     // This is the only execution option cost_log persists per attempt. Do not
     // infer requested model/effort or derived adjustments for appendix rows.
     fallbackUsed: row.fallbackUsed,
-  }));
+  })), ...readPlanCostBreakdown(state.jobId)];
   const report = costBreakdown.length === 0
     ? {
         ...verify.data,
@@ -4607,14 +4688,15 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
   // ran and a schema placeholder when it did not; "ungraded" (before the
   // 2026-09-06 audit, F170) contradicted the band shown next to it.
   const flagClaim = {
-    text: `LLM analysis did not run — ${input.reason}. This section is data-only: no analyst grade exists, and any letter shown is the deterministic score band or a placeholder stated as such.`,
+    text: `No completed analysis is available — ${input.reason.replace(/[.!?]+$/, "")}. This section is data-only: no analyst grade exists; any displayed score band comes from deterministic calculations.`,
     label: "JUDGMENT" as const,
     source: "pipeline",
     asOf: null,
   };
   const grade = (): Report["verdict"]["gradeStrip"]["fundamentals"] => ({
     grade: "F",
-    oneLineWhy: "Not graded — Stage B did not run, so no score band exists; F is the schema's placeholder letter, not an assessment (LLM analysis did not run either).",
+    assessmentStatus: "not-assessed",
+    oneLineWhy: "Not assessed — deterministic calculations and completed AI analysis are unavailable.",
     reasoning: [flagClaim],
     confidence: "low",
     keyNumbers: [],
@@ -4665,7 +4747,7 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
     },
     verdict: {
       synthesis:
-        "Data-only report: the grounded LLM analysis passes did not run, so no synthesis, grades, or scenarios are available. The appendix lists the fetched sources and every disclosed data gap.",
+        "Data-only report: no completed AI analysis is available, so no synthesis, analyst grades, or scenarios are shown. The appendix lists the fetched sources and every disclosed data gap.",
       gradeStrip: {
         fundamentals: grade(),
         valuation: grade(),

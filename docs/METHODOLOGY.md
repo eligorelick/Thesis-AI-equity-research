@@ -489,7 +489,7 @@ code, and tag evidence read from EDGAR companyfacts.
    goes to the general map), `REIT…` → REIT.
 2. **SIC fallback**, consulted only when there is no industry string at all. A
    known industry that matched no prefix — credit services, mortgage finance,
-   capital markets, asset management, exchanges, conglomerates, and every
+   asset management, exchanges, and every
    non-financial industry — is a decided classification and goes to the
    general map (the FIN-OTHER treatment); the SIC is not consulted behind it.
    With no industry: 6020-6036 (depository institutions; major group 61,
@@ -499,7 +499,13 @@ code, and tag evidence read from EDGAR companyfacts.
    sub-map* below),
    sector "Financial Services" → the general map.
 3. **XBRL evidence** (`src/pipeline/stageB/routingEvidence.ts`), read-only from
-   the bundle's companyfacts payload.
+   the bundle's companyfacts payload. Broad financial labels (`Capital Markets`,
+   `Financial - Capital Markets`, `Financial Conglomerates` and diversified
+   financial-services labels) are refined to the bank map when recent deposits
+   and loans or net interest income corroborate a deposit-funded business.
+   Explicit fee-based insurance-broker industry or SIC classifications retain
+   their general route; conflicting evidence is disclosed. No ticker overrides
+   are used.
 
 #### What the tags decide
 
@@ -510,7 +516,7 @@ code, and tag evidence read from EDGAR companyfacts.
 | `RealEstateInvestmentPropertyNet` / `…AtCost` | equity REIT |
 | mortgage-backed securities **or** mortgage loans held for investment, **and no** investment property, **corroborated** (see below) | mortgage REIT |
 
-Four deliberate properties:
+Deliberate properties:
 
 - **A single line item is not a business model.** Deposits alone do not make a
   filer a bank; a loan or net-interest-income tag must accompany them. An
@@ -527,8 +533,9 @@ Four deliberate properties:
   They were, and they routed ordinary industrials to the mortgage-REIT map,
   which suppresses the DCF, the reverse DCF, EV/EBITDA and ROIC−WACC, drops
   Piotroski to three signals and leads the report with book value per share.
-- **Two rules fire on a single tag group, and evidence sets a route only where
-  nothing else has decided one.** Bank evidence needs two groups and insurer
+- **Two rules fire on a single tag group.** Evidence sets a route where no
+  classification has decided one, or refines a broad financial label using the
+  corroborated bank rule above. Bank evidence needs two groups and insurer
   evidence needs two; the equity-REIT rule (investment property) and the
   mortgage-REIT rule fire on one. The mortgage rule is the weakest evidence the
   module produces: before it may SET a base route, either the repo funding a
@@ -562,7 +569,9 @@ Four deliberate properties:
   and evidence against it is filed as `route.evidence.conflict` and changes
   nothing.
 - Industry/SIC matched and evidence agrees → the note records the confirmation.
-- Industry/SIC matched and evidence disagrees → **the declared classification
+- A broad financial label with corroborated bank evidence → refine to bank,
+  explicitly naming the label and supporting facts in the route note.
+- A specific industry/SIC matched and evidence disagrees → **the declared classification
   stands**, and the disagreement is filed as `route.evidence.conflict` (`warn`).
   A vendor string and an SEC code are evidence too; the honest outcome is a
   disclosed conflict, not a silent re-route.
@@ -614,6 +623,12 @@ in the notes and the missing-data manifest:
 | EV/EBITDA | `valuation.evEbitda` | enterprise value adds debt and subtracts cash, both operating items here — a profitable bank can show a negative EV |
 | ROIC − WACC | `returns.roicVsWacc` | invested capital (debt + equity − cash) is undefined when deposits, policy reserves or repo fund the assets and cash is itself an earning asset |
 
+Industrial FCF, FCF conversion and growth, P/FCF, net debt/EBITDA, EBIT interest
+coverage, maintenance-capex heuristics, and gross/operating-margin scoring are
+also withheld on these routes. Their missing inputs are not treated as data
+failures. Common-share issuance, repurchases, dilution and SBC/revenue remain
+useful and are retained.
+
 Equity REITs additionally withhold a **net-income DCF**
 (`valuation.netIncomeDcf`): GAAP net income is struck after real-estate
 depreciation, a large non-cash charge against assets that typically hold or gain
@@ -645,13 +660,28 @@ with, all printed as assumptions in their own right:
   in the cost of deposits, policy reserves or repo, which are this company's raw
   material rather than its financing. A null cost of equity **suppresses** the
   model with a critical gap rather than defaulting a rate.
-- **Opening book value `BV0`** — the latest total stockholders' equity. Later
+- **Opening book value `BV0`** — banks use annual tangible common equity
+  (stockholders' equity less goodwill, other intangibles and preferred stock)
+  with the matching fiscal-year ROTE. Insurers and mortgage REITs use annual
+  common book equity (stockholders' equity less preferred stock), with earnings
+  available to common divided by average common equity. Return and opening
+  book value share a dated fiscal-year basis; vendor total-equity ROE is never
+  substituted into a common-equity valuation. Later
   years compound at `ROE × retention`, where retention is `1 − payout`. A loss is
   retained in full: `roe × retention` on a negative ROE would return a fraction
   of the loss to book value, which is arithmetically a capital injection.
-- **Payout** — dividends plus net buybacks over net income, three-year average
-  from the annual cash-flow statements. Missing history suppresses the model
+- **Common earnings and payout** — use filed income available to common first;
+  otherwise deduct disclosed preferred distributions from net income. When
+  preferred stock is outstanding and the adjustment is unavailable, withhold
+  the return and model rather than credit preferred earnings to common. Payout
+  is common dividends plus net common buybacks over income available to common,
+  averaging up to three years with at least two usable years. Missing history suppresses the model
   rather than assuming a universal payout.
+  If preferred stock is outstanding and SEC facts give only aggregate cash
+  dividends, the total is not labeled common dividends. A preferred earnings
+  allocation is not a cash payment. Common payout and the valuation remain
+  unavailable without sufficient separate cash-distribution evidence; ROTE and
+  tangible book metrics remain available when their own inputs are established.
 
 The model also reverse-solves the **starting** ROE that reproduces the current
 market cap, under the same fade the forward path uses. Inverting a *different*
@@ -669,6 +699,13 @@ the same denominator — equity less goodwill, other intangibles and preferred �
 because goodwill absorbs losses only after common equity is gone, and pairing a
 book-value multiple with a tangible-equity return would compare two different
 bases. A goodwill-heavy acquirer at 1.0× book can be at 2.0× tangible book.
+
+The current multiple names its balance date; the annual return and model name
+their fiscal-year date. Preferred stock is deducted in both tangible bases.
+Undisclosed preferred is treated as zero and that convention is disclosed.
+Statements reconstructed from EDGAR companyfacts cannot independently verify
+themselves: their FMP↔XBRL check is marked skipped with an informational identity
+disclosure. Balance-sheet identities and other independent checks still run.
 
 The justified multiple is a **stable-growth cross-check**, in the Gordon form of
 the residual-income identity:

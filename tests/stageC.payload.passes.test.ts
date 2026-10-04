@@ -10,6 +10,21 @@
 
 import { describe, expect, it } from "vitest";
 
+it.each(["success", "schema", "transport"] as const)("forwards presumed billing through a %s pass settlement", async (kind) => {
+  const { payload } = buildInputs();
+  const usage = { input_tokens: 100, output_tokens: 20 };
+  const model = "claude-opus-4-8";
+  let presumed: boolean | undefined;
+  const runPass = async (): Promise<RunPassOutcome> => kind === "transport"
+    ? { ok: false, gap: { field: "llm.bull", reason: "unknown billing", severity: "critical" }, error: { kind: "transport", message: "unknown billing", model, usage, costUsd: 1, presumed: true } }
+    : { ok: true, value: { data: { model, usage, costUsd: 1, presumed: true, fallbackUsed: false,
+      message: { model, usage, content: [{ type: "text", text: JSON.stringify(kind === "success" ? analystCase("bull") : {}) }] },
+    } } };
+  const run = await runBullPass({ model, runPass }, payload, (settlement) => { presumed = settlement.telemetry.presumed; });
+  expect(presumed).toBe(true);
+  expect(run.ok ? run.result.presumed : run.presumed).toBe(true);
+});
+
 import { runStageB, type ComputedMetrics } from "@/pipeline/compute";
 import { computeDcfDisplay } from "@/pipeline/stageB/fairValue";
 import { validateBundle } from "@/pipeline/stageA/validate";
@@ -611,7 +626,9 @@ describe("payload determinism + provenance", () => {
       // 2026-10-02 release review (D-31): payload 1.6.0 invalidates stored
       // analysis under prior financial conventions. Only the version moves
       // in this fixture; all finance/provenance hashes below stay unchanged.
-      fingerprint: "1.6.0:f17613f8",
+      // 2026-10-03 (D-34): payload 1.7.0 invalidates prior financial-route
+      // assumptions. This general-company prompt and its numeric registry stay unchanged.
+      fingerprint: "1.7.0:65baff7f",
       promptBytes: 94_365,
       provenanceCount: 365,
       provenanceHash: "323c9887",
@@ -626,7 +643,9 @@ describe("payload determinism + provenance", () => {
       // FCFF. That is a deliberate content correction to the finance payload;
       // fingerprint and promptBytes are unchanged, so the model prompt is not
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
-      financeHash: "67988825",
+      // 2026-10-03: P/TBV basis now explicitly deducts preferred equity;
+      // this general-company fixture has zero preferred, so values are unchanged.
+      financeHash: "e22a40fc",
     });
   });
 
@@ -749,7 +768,7 @@ describe("payload determinism + provenance", () => {
     const second = buildInputs().payload;
     const ids = first.provenanceRegistry!.map((entry) => entry.id);
 
-    expect(first.payloadVersion).toBe("1.6.0");
+    expect(first.payloadVersion).toBe("1.7.0");
     expect(first.provenanceRegistry).toEqual(second.provenanceRegistry);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toContain("payload.quote.price");
@@ -1806,6 +1825,24 @@ describe("final assembled report verification", () => {
 });
 
 describe("assembleReport", () => {
+  it("attaches deterministic assessment limits to both full-AI grade surfaces without changing analyst output", () => {
+    const { bundle, computed } = buildInputs();
+    const output = judgeOutput();
+    output.balanceSheet.graded = { ...output.quality.graded, grade: "C" };
+    output.verdict.gradeStrip.balanceSheet = { ...output.balanceSheet.graded };
+    const original = JSON.stringify(output);
+    computed.scores!.aspects.quality = { ...computed.scores!.aspects.quality, score: 96, band: "A", dataCompleteness: 0.05 };
+    computed.scores!.aspects.balanceSheet = { ...computed.scores!.aspects.balanceSheet, score: null, band: null, dataCompleteness: 0 };
+    const report = assembleReport({ symbol: "AAPL", bundle, computed, judgeOutput: output,
+      verify: { verificationRate: 0.9, log: [] }, costEntries: [], model: "chatgpt/gpt-6.1-sol" }, GENERATED_AT);
+    expect(report.verdict.gradeStrip.quality).toEqual({ ...output.verdict.gradeStrip.quality, assessmentStatus: "limited-evidence" });
+    expect(report.quality.graded).toEqual({ ...output.quality.graded, assessmentStatus: "limited-evidence" });
+    expect(report.balanceSheet.graded?.assessmentStatus).toBe("not-assessed");
+    expect(report.verdict.gradeStrip.balanceSheet?.assessmentStatus).toBe("not-assessed");
+    expect(ReportSchema.safeParse(report).success).toBe(true);
+    expect(JSON.stringify(output)).toBe(original);
+  });
+
   it("preserves real source envelopes and deduplicates only identical tuples", () => {
     const bundle = fixtureBundle();
     const sources = buildSources(bundle);
@@ -1868,7 +1905,7 @@ describe("assembleReport", () => {
     expect(report.meta.disclaimer).toBe(
       "Informational only — not investment advice. This report contains A-F letter grades and scenario price targets; both are model outputs derived from the data and assumptions disclosed here, and neither is a recommendation to buy, sell, or hold any security.",
     );
-    expect(report.meta.specVersion).toBe("1.5.0");
+    expect(report.meta.specVersion).toBe("1.6.0");
     // verifyModel is no longer stamped (deterministic verification, no model);
     // the schema keeps it OPTIONAL so legacy persisted reports still parse.
     expect(report.meta.verifyModel).toBeUndefined();
@@ -2547,7 +2584,7 @@ describe("mock-driven bull/bear/judge passes", () => {
     }
   });
 
-  it("floors the judge model to sonnet-5 when analysis runs on haiku (schema fidelity)", async () => {
+  it("floors the judge model to sonnet-5-5 when analysis runs on haiku (schema fidelity)", async () => {
     const { payload } = buildInputs();
     const mock = new MockRunPass();
     mock.onJson("llm.judge", judgeOutput());
@@ -3257,6 +3294,21 @@ describe("runBullThenBear per-pass lifecycle hooks", () => {
       "beforeProviderLaunch:bull",
       "beforePass:bear",
     ]);
+  });
+
+  it("labels a thrown ChatGPT streaming failure with its actual provider and no source for unlaunched bear", async () => {
+    const { payload } = buildInputs();
+    const deps: PassDeps = {
+      model: "chatgpt/gpt-6.1-sol",
+      runPass: async () => { throw new Error("unexpected non-streaming call"); },
+      runPassStreaming: () => ({ firstToken: Promise.resolve("error"), result: Promise.reject(new Error("no usable content")) }),
+    };
+    const { bull, bear } = await runBullThenBear(deps, payload);
+    expect(bull.ok || bear.ok).toBe(false);
+    if (bull.ok || bear.ok) return;
+    expect(bull.gap.attemptedSources).toEqual(["chatgpt"]);
+    expect(bear.error.notLaunched).toBe(true);
+    expect(bear.gap.attemptedSources).toEqual([]);
   });
 
   it("never opens a bear request on the sequential path once bull has ended the run", async () => {

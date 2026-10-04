@@ -51,6 +51,7 @@ import {
   computeWacc,
   computeRoic,
   computeRote,
+  incomeAvailableToCommon,
   computeDupont,
   computeRoicVsWaccSpread,
   type WaccResult,
@@ -399,6 +400,7 @@ function toReturnsIncome(
     acceptedDate: str(r.acceptedDate),
     filingDate: str(r.filingDate),
     preferredDividendsPaid: prefRow ? num(prefRow.preferredDividendsPaid) : null,
+    netIncomeAvailableToCommon: num(r.netIncomeAvailableToCommon),
     revenue: num(r.revenue),
     operatingIncome: num(r.operatingIncome),
     // ROIC's EBIT is operating income; raw vendor EBIT may include other income.
@@ -1571,6 +1573,15 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     ...growthCompatible,
     margins: computeGrowth(incomeAnnualReported.map(toGrowthIncome), [], { period: "annual" }).margins,
   };
+  // Withhold structurally inapplicable values before both report builders and
+  // AI payloads consume them; a scoring-only suppression still leaked them.
+  if (isSuppressed("fcfGrowth")) {
+    growth.fcfCagrs = [];
+    growth.gaps = growth.gaps.filter((gap) => gap.field !== "growth.fcf");
+    growth.notes.push("Industrial free-cash-flow growth is not applicable to financial companies.");
+  }
+  if (isSuppressed("grossMargin")) growth.margins.gross = { series: [], slopePctPtsPerYear: null };
+  if (isSuppressed("operatingMargin")) growth.margins.operating = { series: [], slopePctPtsPerYear: null };
 
   // --- Returns (WACC / ROIC / DuPont) ---------------------------------------
   // WS6 (D-19): THESIS_EV_INCLUDE_LEASES is read ONCE per Stage B run and
@@ -1602,6 +1613,7 @@ export function runStageB(bundle: DataBundle): ComputedMetrics {
     })),
     quoteInput(quote),
     {
+      route: route.base,
       // The buyback price proxy divides reporting-currency repurchases by a
       // quote-currency, per-ordinary-share price; the ADR/currency guard the
       // WACC weights and the multiples already apply is applied here too.
@@ -2279,7 +2291,10 @@ function computeReturns(
   const returnsIncome = incomeAnnual.map((r) => toReturnsIncome(r, preferredByDate));
   const returnsBalance = balanceAnnual.map(toReturnsBalance);
 
-  const roic = computeRoic(returnsIncome, returnsBalance, { includeOperatingLeases });
+  const roic: RoicResult = isFinancial
+    ? { series: [], latestRoicPct: null, asOf: isoDay(incomeAnnual[0]?.date),
+        notes: ["ROIC is not applicable to financial companies: funding liabilities and cash are operating inputs."], gaps: [] }
+    : computeRoic(returnsIncome, returnsBalance, { includeOperatingLeases });
   // Return on tangible common equity — the capital-return measure for
   // deposit-funded balance sheets, where invested capital is undefined.
   const rote = computeRote(returnsIncome, returnsBalance);
@@ -2385,9 +2400,6 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
   const balPoint = balanceAnchor.row;
   const balPointBasis = balanceAnchor.basis;
   const ratiosTtm = rowsOf(bundle.ratiosTtm)[0] ?? rowsOf(bundle.ratios)[0];
-  // An annual vendor ROE is not a TTM snapshot; use the dated fiscal-year
-  // DuPont fallback below when the TTM observation is unavailable.
-  const keyMetricsTtm = rowsOf(bundle.keyMetricsTtm)[0];
 
   const currentPrice = num(quote?.price);
   const marketCap = num(quote?.marketCap ?? profile?.marketCap);
@@ -2656,35 +2668,47 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
   };
 
   // --- Excess-return inputs (financials) ------------------------------------
-  // Same FMP TTM-suffix drift as effectiveTaxRate above (returnOnEquity ->
-  // returnOnEquityTTM on key-metrics-ttm). That row is FMP-only: on the keyless
-  // path it never exists, and a null here SUPPRESSES the entire bank/insurer
-  // valuation with a critical gap. The latest fiscal-year DuPont ROE (net income
-  // / average equity) is computed from the same statements the rest of the
-  // route runs on, so it is a defensible — and disclosed — second basis.
-  const vendorRoePct = pctFromFraction(num(keyMetricsTtm?.returnOnEquityTTM ?? keyMetricsTtm?.returnOnEquity));
-  const dupontRoePct = ctx.dupont.latest?.roePct ?? null;
-  const currentRoeFromDupont = vendorRoePct === null && dupontRoePct !== null;
+  // Market cap and diluted shares belong to COMMON. Keep opening equity,
+  // earnings and payout on that ownership basis and the same fiscal year.
+  // A vendor total-equity ROE cannot be applied to common or tangible equity.
+  const financialRoute = route.base === "bank" || route.base === "insurer" || route.base === "reit-mortgage";
+  const financialCashByDate = new Map(ctx.cashflowAnnual.map((row) => [String(row.date ?? ""), row]));
+  const financialIncome = ctx.incomeAnnual.map((row) => toReturnsIncome(row, financialCashByDate));
+  const commonReturns = route.base === "bank" ? ctx.rote : computeRote(
+    financialIncome,
+    // Reuse the same dated common-earnings/average-equity calculation without
+    // deducting intangibles: insurers and mortgage REITs use common book equity.
+    ctx.balanceAnnual.map((row) => ({ ...toReturnsBalance(row), goodwill: 0, intangibleAssets: 0 })),
+  );
+  const commonPayoutRows = ctx.cashflowAnnual.map((row) => {
+    // A known total cash payout with an unknown common portion cannot be
+    // treated as zero common dividends merely because repurchases are known.
+    if (num(row.commonDividendsPaid) === null && num(row.netDividendsPaid) !== null && row.netDividendsPaid !== 0) {
+      return { ...row, netIncome: undefined };
+    }
+    const income = financialIncome.find((inc) => inc.date === row.date);
+    const balance = ctx.balanceAnnual.find((bal) => bal.date === row.date);
+    const filedCommon = income ? num(income.netIncomeAvailableToCommon) : null;
+    return { ...row, netIncome: filedCommon ?? (income && balance ? incomeAvailableToCommon(income, num(balance.preferredStock)) ?? undefined : undefined) };
+  });
 
   const excessReturn: ExcessReturnInputs | null =
-    route.base === "bank" || route.base === "insurer" || route.base === "reit-mortgage"
+    financialRoute
       ? {
-          bookValue: balPoint ? num(balPoint.totalStockholdersEquity) : null,
-          currentRoePct: vendorRoePct ?? dupontRoePct,
-          // The printed assumption names the figure it actually faded from;
-          // saying "TTM ROE" over a fiscal-year DuPont number made the report
-          // contradict its own substitution note below.
-          currentRoeBasis: currentRoeFromDupont ? "fiscal-year-dupont" : "ttm",
-          currentRoeAsOf: currentRoeFromDupont ? (ctx.dupont.latest?.date ?? null) : null,
+          bookValue: commonReturns.latestTangibleCommonEquity,
+          bookValueBasis: route.base === "bank" ? "tangible-common-equity" : "common-equity",
+          currentRoePct: commonReturns.latestRotePct,
+          currentRoeBasis: route.base === "bank" ? "fiscal-year-rote" : "fiscal-year-common-roe",
+          currentRoeAsOf: commonReturns.asOf,
           // Audit M5: null CoE SUPPRESSES the model inside excessReturnModel
           // (critical gap) — never a silent 10% default.
           costOfEquityPct: wacc.costOfEquityPct,
           // Audit L4: (dividends + net buybacks) / net income, 3y average, from
           // the annual cash-flow statements; null suppresses the valuation.
-          payoutRatioPct: payoutRatioPct3y(ctx.cashflowAnnual),
+          payoutRatioPct: payoutRatioPct3y(commonPayoutRows),
           dilutedShares,
           marketCap,
-          asOf: isoDay(balPoint?.date),
+          asOf: commonReturns.asOf,
           // WS5: P/TBV is read against ROTE, both on the tangible base the
           // returns block already computes — never against plain book equity.
           tangibleCommonEquity: ctx.rote?.latestTangibleCommonEquity ?? null,
@@ -2774,7 +2798,7 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
     result.notes.push(balanceAnchor.fallback);
     result.gaps.push({ field: "valuation.balanceAnchor", reason: balanceAnchor.fallback, severity: "info" });
   }
-  if (netDebtInfo.value === null && balPoint !== null) {
+  if (!financialRoute && netDebtInfo.value === null && balPoint !== null) {
     result.notes.push(
       `${netDebtInfo.version}: net debt unavailable — ${netDebtInfo.reason}`,
     );
@@ -2783,16 +2807,22 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
       reason: `${netDebtInfo.reason}; valuation equity bridge suppressed rather than using FMP's incompatible cash-only netDebt field`,
       severity: "warn",
     });
-  } else if (netDebtInfo.value !== null) {
+  } else if (!financialRoute && netDebtInfo.value !== null) {
     const c = netDebtInfo.components;
     result.notes.push(
       `${netDebtInfo.version}: net debt ${netDebtInfo.value} as of ${netDebtInfo.asOf ?? "?"}; totalDebt ${c.totalDebt}, cashAndShortTermInvestments ${c.cashAndShortTermInvestments ?? "derived from cash + shortTermInvestments"}`,
     );
   }
-  if (excessReturn !== null && currentRoeFromDupont) {
+  if (excessReturn !== null) {
     result.notes.push(
-      `current ROE from the latest fiscal-year DuPont decomposition (statements, FY ${ctx.dupont.latest?.date ?? "?"}: net income / average equity) — FMP key-metrics TTM unavailable`,
+      `Common-share valuation uses ${route.base === "bank" ? "tangible common equity and ROTE" : "common equity and common-equity ROE"} from FY ${commonReturns.asOf ?? "unavailable"}; ` +
+        "earnings and payout exclude preferred claims. Annual return and opening equity share one dated basis; vendor total-equity ROE is not substituted.",
     );
+    if (excessReturn.payoutRatioPct === null && ctx.cashflowAnnual.some(row => num(row.commonDividendsPaid) === null && num(row.netDividendsPaid) !== null && row.netDividendsPaid !== 0)) {
+      const reason = "Aggregate dividends paid are available but the common cash distribution is not separated from preferred payouts; insufficient common payout history to value common equity. Filed earnings allocations cannot substitute for cash dividends.";
+      result.notes.push(reason);
+      result.gaps.push({ field: "valuation.excessReturn.commonDividends", reason, severity: "warn" });
+    }
   }
   if (dilutedSharesBasis === "annual") {
     result.notes.push(
@@ -2979,10 +3009,6 @@ export function payoutRatioPct3y(cashflowAnnual: FmpCashFlowRow[]): number | nul
   if (ratios.length < 2) return null;
   const avg = ratios.reduce((a, b) => a + b, 0) / ratios.length;
   return Math.min(100, Math.max(0, avg));
-}
-
-function pctFromFraction(v: number | null): number | null {
-  return v === null ? null : v * 100;
 }
 
 /** Merge quarterly income + cash-flow + balance by matching fiscal-period date. */

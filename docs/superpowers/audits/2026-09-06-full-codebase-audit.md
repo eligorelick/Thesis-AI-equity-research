@@ -1,5 +1,17 @@
 # Full codebase audit — 2026-09-06
 
+> **Historical audit evidence; guidance reviewed 2026-10-03.** “Complete”
+> below means this September review closed, with the recorded September 7
+> live follow-up. Its commits, file-line references, dependency versions,
+> model choices, costs, test counts, coverage, and zero-vulnerability result
+> apply to the tested tree and time. They do not certify today's tree or
+> provider access. Preserve the findings and limitations as evidence; use
+> the [README](../../../README.md), [methodology](../../METHODOLOGY.md),
+> [privacy guidance](../../PRIVACY.md), and
+> [current verification scripts](../../../package.json) for maintained
+> operation and fresh verification. Later AI connection workflows are outside
+> this audit's original provider scope.
+
 **Status:** complete. Every section below is written; the closing verify run
 is recorded in §1 step 5.
 **Directive:** "Audit the entire codebase and ensure everything is the best

@@ -165,6 +165,18 @@ describe("Gemini lifecycle without authentication or inference", () => {
     if ("second" in output.stats.models) expect(value).toEqual({ text: "{}", model: "multiple-models", observedModels: ["first", "second"], input: 8, output: 3 });
     else expect(value).toEqual({ text: "{}", model: "first", observedModels: ["first"], input: 5, output: 3 });
   });
+  it("preserves Unicode when CLI stdout splits a UTF-8 character across chunks", async () => {
+    fake.store!.gemini = { id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", connected: true };
+    const response = '{"company":"Société 日本","currency":"€"}';
+    const result = runGemini(fake.store!.gemini.id, "auto", "evidence");
+    await vi.waitFor(() => expect(fake.spawn).toHaveBeenCalled());
+    const bytes = Buffer.from(JSON.stringify({ response, stats: { models: { first: { tokens: { input: 3, candidates: 1 } } } } }));
+    const split = bytes.indexOf(Buffer.from("é")) + 1;
+    child.stdout.emit("data", bytes.subarray(0, split));
+    child.stdout.emit("data", bytes.subarray(split));
+    Object.assign(child, { exitCode: 0 }); child.emit("close", 0);
+    expect((await result).text).toBe(response);
+  });
   it.each(["invalid-json", '{"error":"quota"}', '{"response":""}', '{"response":2}', '{"response":"{}"}', '{"response":"{}","stats":{"models":{"first":{}}}}', '{"response":"{}","stats":{"models":{"first":{"tokens":{"input":-1,"candidates":2}}}}}'])("rejects failed CLI results %s", async (output) => {
     fake.store!.gemini = { id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", connected: true };
     const result = runGemini(fake.store!.gemini.id, "auto", "evidence"); const rejected = expect(result).rejects.toThrow("could not complete");

@@ -318,6 +318,21 @@ function seedReport(row: SeedRow = {}): number {
  * ------------------------------------------------------------------------ */
 
 describe("getLatestDoneReport", () => {
+  it("withholds a valid report for a different issuer while preserving row metadata", () => {
+    const stored = JSON.stringify(makeReport());
+    const id = seedReport({ symbol: "MSFT", reportJson: stored });
+    const latest = getLatestDoneReport("MSFT");
+    expect(latest).toMatchObject({ reportId: id, symbol: "MSFT", report: null });
+    expect(handle.db.select().from(reports).get()!.reportJson).toBe(stored);
+  });
+
+  it("accepts matching embedded share-class aliases", () => {
+    const report = makeReport();
+    report.meta.symbol = "brk-b";
+    seedReport({ symbol: "BRK.B", reportJson: JSON.stringify(report) });
+    expect(getLatestDoneReport("brk.b")?.report?.meta.symbol).toBe("brk-b");
+  });
+
   it("fixture sanity: the seeded reportJson is schema-valid", () => {
     // Guards against fixture rot: if this fails, the happy-path expectations
     // below are testing the fixture, not the query.

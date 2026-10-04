@@ -1,0 +1,260 @@
+# Repository audit — 2026-10-03
+
+Status: repository review, repairs and local verification complete; UI selection
+pending. The PR remains a draft until that choice is resolved. Earlier dated
+audits and decisions remain historical evidence. No merge or deployment is authorized.
+
+## Scope and baseline
+
+Started from clean `main`, commit `4088d4b5902b8e7b4ea83ed383f617c39d6fb648`,
+on branch `codex/2026-10-03-repository-audit`. Local environment: Windows,
+Node 24.11.1, npm 11.6.2. Preserve private data, credentials, saved preferences,
+report compatibility and useful audit history. No paid API inference.
+
+Baseline `npm run verify` exited 0 before production edits:
+
+| Gate | Baseline evidence |
+| --- | --- |
+| Dependency shape, TypeScript, ESLint | Passed |
+| Product | 196 files; 4,462 passed, two opt-in live checks skipped; 36.25s |
+| Integration | Four passed; 3.03s |
+| Core coverage | Statements 96.42%, branches 90.61%, functions 99.10%, lines 97.52% |
+| Risk coverage | Statements 94.21%, branches 87.15%, functions 96.90%, lines 96.16%; per-file floors passed |
+| Production build | Passed; external Gemini/Chrome lookup caused tracing warnings |
+| Dependency security audit | Zero vulnerabilities reported, including dev dependencies |
+
+Timing is one local observation, not a benchmark. The baseline also emits Vite
+future-native-loader compatibility notices and an expected lint-rule fixture
+warning. Neither is a failing gate. The test fetch guard blocks external traffic
+by default; CLI tests use temporary databases. No user database or credential
+store was inspected or edited. Next's normal build loads local `.env` settings;
+no private values were printed or submitted to a model/provider. Required online
+dependency metadata is not inference.
+
+## Coverage and execution plan
+
+Inventory includes first-party `src`, scripts, configuration, CI, test/fixture
+contracts and all 14 pre-existing maintained Markdown documents. Coverage here
+distinguishes code review, focused regression evidence and broad suite execution;
+passing coverage percentages do not prove financial correctness.
+
+| Area | Review owner and focus | Status |
+| --- | --- | --- |
+| Providers, EDGAR, Stage A/B, compute, keyless/data bundle | Financial reviewer: dates, units, currencies, shares, formulas, access and provenance | Reviewed; targeted fixes and independent calculation cases |
+| AI, model registry, scheduler/jobs, persistence/cache/settings, routes/security | Runtime reviewer: billing, identity, abort/recovery, request boundaries | Complete body review of assigned modules; focused regressions pass |
+| Pages/components/charts | UI reviewer: source clarity, missing values, accessibility, navigation | Reviewed; bounded error/contrast/gap repairs |
+| Reports, exports, history, watchlist, Stage C, tooling/CI | Coordinator plus cross-review: integrity, evidence checks, escaping, release gates | Review and local integration checks complete |
+| Markdown | Financial methodology/research, historical records, current setup/rights/privacy | All 14 existing documents reviewed; reconciliation below |
+| UI choice | Current + two standalone interactive alternatives | Awaiting explicit user selection |
+| Integration and delivery | Final checks, independent diff review, local smoke, PR | Local gates passed; draft PR delivery, UI choice pending |
+
+## Findings and evidence
+
+| ID | Classification | Evidence, change and disposition |
+| --- | --- | --- |
+| A01 | Confirmed defect; fixed | Latest-report and direct-ID readers returned another issuer's embedded body from a mismatched row. Guard latest/history/view/API export reads; corrected CLI refuses the mismatch before output. Matching dot/hyphen aliases still work; stored bytes remain unchanged. Regression fixtures formerly hiding mismatches now carry their intended issuer. |
+| A02 | Confirmed data-loss defect | Corrected export silently truncated existing HTML/JSON, its source database, or a hard link to it. Four temporary-file regressions failed before repair. Reserve both destinations with exclusive creation before writing; refuse existing files and remove only newly created partial outputs. Fixed. |
+| A03 | Confirmed financial defect; fixed | Missing-month price gaps counted as monthly beta observations; 23 actual pairs became 24 and passed the minimum. Count only adjacent months within the fixed 60-calendar-month window; retain OLS/log-return/Blume conventions. |
+| A04 | Confirmed reliability defect; fixed | Cost reconciliation changed ledger totals without advancing job revisions, suppressing SSE updates. Advance each affected job once in the same transaction; no-op reconciliation stays unchanged. |
+| A05 | Confirmed billing failure; fixed | Paused-continuation admission refusal discarded prior received usage. Return the typed refusal with prior billing evidence; regression retains $0.012, 1,000 input/output tokens, one actual ledger row, no new request/lease. |
+| A06 | Confirmed text-integrity defect; fixed | Per-chunk Gemini decoding turned a split `é` into replacement characters. Stateful UTF-8 decoding preserves the response across arbitrary byte boundaries. |
+| A07 | Confirmed financial defect; fixed | Reverse DCF omitted exact roots at the final grid point. Check every finite point, including inclusive bounds and a root beside an unavailable neighbor. Independent two-year FCFF cases recover +60% growth and +60% margin. |
+| A08 | Confirmed financial defect; fixed | FRED CSV removed `.` observations before lagging, comparing the wrong periods. Retain missing slots internally and require both operands; regressions cover monthly change and year-on-year inflation. |
+| A09 | Confirmed reliability defect; fixed | The filing extraction budget began after parsing. Start before parsing; a fake clock proves MD&A is withheld once parsing/Item 1A exhausts the budget. This is a between-phase soft budget, not parser preemption. |
+| A10 | Confirmed billing fallback defect; fixed | Rebuilt billed errors lost presumed-spend and execution metadata when an adapter omitted its settlement callback. Preserve both fields; regression verifies ledger/artifact contents. |
+| A11 | Confirmed usability defects; fixed | Watchlist deletion failures were silent and load failures looked empty. Show safe error/retry text and distinguish unavailable from successfully empty data. |
+| A12 | Confirmed chart/accessibility defects; fixed | Lines bridged unknown values; faint text had 3.16–3.56:1 contrast. Preserve gap positions, stop bridging, and raise faint text to 5.19–5.86:1 on the three principal backgrounds. |
+| A13 | Confirmed build inefficiency; repaired | External Gemini/Chrome discovery caused whole-project tracing warnings. Narrow runtime annotations keep those user-installed programs external; the final build passes without those warnings. No speedup is claimed. |
+| A14 | Confirmed comparison defect; fixed | Verdict comparison removed punctuation like fuzzy title matching, hiding a change from −10% to +10%. Compare narrative with whitespace/case normalization while preserving financial punctuation; title matching stays unchanged. |
+| A15 | Confirmed provenance display defect; fixed | Isolated browser generation showed EDGAR available for a reserved fixture that makes no provider calls. Expected fixture omissions now remain excluded from incident counts while EDGAR reads missing, XBRL skipped and forensics provisional. |
+| A16 | Confirmed financial defect; fixed | ROIC, ROTE and DuPont averaged closing capital with a balance two years earlier or from a short transition stub. Require the existing 300–430-day fiscal-continuity range; otherwise use the disclosed single-period fallback with a warning. 364/371-day fiscal years still average. Independent case changes erroneous 80/600 ROIC to 80/1,000 = 8%. |
+| D01 | Confirmed documentation defect | EDGAR-hosted issuer filings were incorrectly described as US government works with no license restrictions. Replaced with SEC dissemination guidance and the distinction between public access and authorship. |
+| D02 | Confirmed financial explanations; fixed | Finance-lease amortization is within EBIT and added back in EBITDA; interest is below EBIT. FCFF is before debt service. Tangible leverage is not guaranteed below CET1. Currency mismatch withholds quote comparisons while model-currency per-share values can remain. Numeric model conventions stay unchanged. |
+
+Focused report tests: five original regressions failed, then 56 tests passed
+after repair. One existing watchlist test seeded a DEMO body under AAPL; corrected
+the fixture identity while preserving its grade/quote assertions. No production
+validation or coverage threshold was weakened. Independent review caught an
+export rollback edge case: a locked partial file masked the original disk-write
+error and stopped sibling cleanup. A failing regression preceded best-effort
+per-file cleanup; locked partial files can still remain, without replacing
+pre-existing files.
+
+Financial reference case: cash flows 300 and 480, terminal cash flow 470.016,
+discount rate 10%, terminal growth 2%, 100 shares give per-share value
+`300/1.1/100 + (480 + 470.016/0.08)/1.1²/100 = 55.249586776859495`.
+Reverse valuation now recovers the generating +60% growth bound. Missing-month
+cases independently count 23 and 58 valid adjacent return pairs. The standard
+DEMO fixture's numeric output is unchanged: five repinned historical-comparison
+paths contain the spec version and four corrected lease disclosures only;
+the former EDGAR-available delta is removed because reserved fixtures have no
+EDGAR evidence. Numeric outputs remain unchanged.
+Report 1.7.0 and payload 1.8.0 separate prior calculation conventions; old saved
+reports retain their bytes and remain readable under compatibility rules.
+
+## UI comparison
+
+`public/audit-ui/index.html` is an offline simulation with a simplified current
+layout, Research workspace and Decision brief. All share fictional DEMO/DBNK,
+baseline/critical-gap/stale/data-only conditions and report, evidence, history,
+AI-settings and export interactions. No provider request, personal-data storage
+or production redesign is performed by the demos. Selection remains pending.
+
+| Option | Benefit | Tradeoff |
+| --- | --- | --- |
+| Current terminal | Familiar compact panels and dense metrics | More reading density; evidence requires expansion |
+| Research workspace | Reading and source context together, clearer snapshot hierarchy | More space; source rail stacks on narrow screens |
+| Decision brief | Research question, disconfirming evidence and gaps first | Detailed metrics need more scrolling |
+
+The current demo approximates the existing design; it is not a pixel-identical
+replica. All options use the same illustrative workflow and data conditions.
+Keyboard interaction, cancellation, history selection, the PDF preview dialog
+and 390px alternatives were checked in the in-app browser. No actual PDF print
+job was dispatched. Production redesign awaits the owner's explicit selection.
+
+An isolated copy also exercised the real app: home, DEMO/DBNK company views,
+data-only generation and persistence, saved reports, two-report history/diff,
+AI-off settings, the synthetic sample and print page. Markdown/print-HTML
+endpoints returned 200; regenerated DEMO displayed EDGAR missing in both UI and
+exports. AI steps were skipped with $0 and no fallback. The copy used temporary
+data/AI directories, blank provider settings and an external-fetch block. Its
+linked dependencies needed temporary Turbopack-root/Tailwind-source settings
+after harness compilation failures; these are not production edits. The smoke
+server was stopped; the separate comparison demo remains available locally.
+
+## Sources and applicability
+
+- [Node 24 file-system flags](https://nodejs.org/docs/latest-v24.x/api/fs.html#file-system-flags):
+  exclusive creation prevents replacement of an existing destination, including
+  link aliases. Applied to A02's synchronous local export; no claim of atomic
+  two-file publication across power loss or network filesystems.
+- [SEC dissemination and access policy](https://www.sec.gov/about/privacy-information)
+  and [17 USC 105](https://www.copyright.gov/title17/92chap1.html#105): support D01's
+  corrected description; do not treat hosting as government authorship.
+- [FRED terms](https://fred.stlouisfed.org/legal/): include series-specific rights
+  and AI-development/training restrictions. Applicability to each inference use
+  is unresolved; documentation discloses this instead of asserting permission.
+- [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing):
+  current published Opus 5.5, Sonnet 5.5 and Fable 5.1 prices/cache rates match
+  the checked-in registry. No live inference or account access inferred.
+- [ALFRED growth formulas](https://alfred.stlouisfed.org/help#growth_formulas):
+  lag indices represent periods, supporting A08. Truly absent irregular CSV
+  rows remain a separate frequency-inference limitation.
+- [Morningstar equity data definitions](https://morningstardirect.morningstar.com/clientcomm/DataDefinitions_EquityandExecutive.pdf):
+  monthly return/window reference for A03; the 24-observation minimum and log
+  returns remain Thesis house choices, not exact vendor equivalence.
+- [FASB ASC 842 update](https://storage.fasb.org/ASU_2016-02_Section_A.pdf),
+  section 842-20-45-4, and [Damodaran on financial firms](https://pages.stern.nyu.edu/~adamodar/pdfiles/papers/finfirm09.pdf):
+  support the finance-lease and FCFF explanation corrections. No new model
+  calibration or investment conclusion is inferred.
+- OpenAI [sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
+  and [models/inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+  were checked against the existing OAuth/Responses implementation; no paid API
+  substitution or live account-grant claim.
+
+## Cleanup, documentation and limits
+
+Removed only the unused direct `@eslint/eslintrc` development dependency:
+reference search found the historical flat-config comment, while current config
+imports Next's native flat arrays. `npm ls` confirms ESLint still uses the same
+3.3.6 transitive package. No resolved dependency changes. The comparison-lock
+hash metadata is updated; historical base/source/fixture/projection hashes stay
+pinned. No obsolete production module was established safe to delete. Retained
+legacy report readers, timestamp aliases, the local Next glob adapter, synthetic
+fixtures and historical audits because their callers, tests or compatibility
+purpose remain. No private data/settings/credentials were deleted.
+
+| Maintained Markdown | Reconciliation |
+| --- | --- |
+| README | Generated command table matches export refusal; routing description permits corroborated financial-label refinement; source-evidence wording avoids a universal completeness claim. Existing 270-line limit retained. |
+| CHANGELOG | Current audit added; earlier development batches explicitly dated/historical guidance. |
+| CLAUDE-USAGE | Checked registry/official pricing, fallback-only dual-model reserve, per-request admission, reconciliation versus persisted report costs. |
+| PRIVACY | Corrected public peer/benchmark payload scope, request-origin conditions and Gemini's Chrome requirement. |
+| DATA-RIGHTS | Corrected EDGAR authorship; distinguish access from Yahoo/FMP redistribution permission; disclose FRED restrictions and unresolved inference applicability. |
+| METHODOLOGY | Seven grades, lease/FCFF/CET1 explanations reconciled with code. |
+| RESEARCH | Beta calendar conventions, Altman fallback, Piotroski asset history and SEC ticker-map/SIC distinction corrected. Historical empirical studies not independently replicated. |
+| DECISIONS | D-35 records the present changes; later entries override dated model defaults. |
+| REMEDIATION-REPORT | Historical banner; initial offline work distinguished from later recorded paid experiments. |
+| 2026-09-06 audit | Historical banner; dated counts/models/findings remain evidence. |
+| Four design specs (2026-08-07, 08-09, and two 09-02) | Each explicitly historical; superseding implementation/deviation notes distinguish plans from current behavior. |
+| This audit | Current coverage, evidence, dispositions and remaining limits. |
+
+Link sweep of 39 external endpoints returned 31 HTTP 200 responses; the GitHub
+advisory-creation link redirects to login. FRED API-key/terms requests timed out;
+FMP terms, SEC policy/API docs/two issuer filings, and ChatGPT usage returned 403.
+These are unverified by that sweep, not proven dead links. SEC policy and FRED
+terms content were separately readable through research tools. Reachability
+does not verify page claims, login-only content or URL fragments. Repository
+doc checks validate generated sections and local heading/reference contracts.
+
+## Review depth, deferred work and verification limits
+
+All 163 first-party source files, 12 script files, build/CI configuration and
+test/fixture inventories were considered. Runtime ownership covered complete
+module bodies; financial and Stage C review combined body reads with function
+outlines and focused high-risk paths. Large financial modules received uneven
+depth: some assumption/history/provider-parser branches were sampled. A second
+pass read every executable body in forensics, returns, sector routing and
+EDGAR statements; report schema/history/diff/completeness/legacy safety, both
+export renderers, surface manifest and watchlist received full body review. This is
+a repository-wide review, not exhaustive line-by-line proof. Tests were read
+deeply around changes and contracts; not every existing assertion was manually
+reviewed. Independent review covers the changed finance/persistence code and
+the coordinator reviewed the runtime and UI changes.
+
+Deferred recommendations and limits:
+
+- Mobile shell still reserves a fixed 256px rail; responsive restructuring is
+  tied to the pending UI choice. Numeric provenance tooltips, small type,
+  below-xl section navigation, canvas alternatives and more live announcements
+  remain usability recommendations, not a full accessibility certification.
+- Existing beta day-26 completion heuristic and frequency inference for truly
+  absent FRED rows merit calendar-aware follow-up; no new failure case beyond
+  the repaired explicit-gap inputs is claimed here.
+- Additional targeted cases for invalid as-of strings, irregular growth labels
+  and incomplete statement components are recommended. Credential-file shape
+  validation, multi-process stale-lock stress and malicious local cache
+  decompression limits are hardening hypotheses, not reproduced exploits.
+  Standalone forensic restatement alignment and future IPO dates also remain
+  hypotheses pending integrated issuer cases; historic coefficients/static ADR
+  assumptions were not all independently refreshed from primary sources.
+- Lower-priority presentation follow-ups: the judge note says cases were
+  "capped" even when protected structure exceeds its target (the detailed cap
+  disclosure records that excess); scenario-card observation dates and some
+  catalyst/risk citation metadata could be exposed more fully. Duplicate
+  scenario names remain schema-permitted and explicitly diagnosed by comparison.
+- No live provider entitlement/invoice reconciliation, OAuth approval, Gemini
+  inference, broad cross-issuer reconciliation or empirical financial-model
+  calibration was performed. Existing keyless history remains an approximation,
+  not a point-in-time backtest. House assumptions remain disclosed choices.
+- Windows is the local execution platform. CI will exercise Linux/Windows;
+  macOS credential storage and every filesystem failure cannot be certified
+  from this run. Locked export remnants and power-loss two-file publication
+  remain limitations; existing destination bytes are protected.
+- Future Vite native-loader notices are pre-existing and unsuppressed. Model
+  quality, screen-reader usability and every browser/OS combination remain
+  unverified. No paid API inference, merge or deployment occurred.
+
+## Final local verification
+
+`npm run verify` exited 0 on the repaired code after the integrated run exposed
+four test-contract failures. Two were stale version assertions; two export
+fixtures violated the newly enforced issuer boundary. Updated coherent fixture
+identities retain the malicious rendering payloads, and a new test explicitly
+rejects poisoned issuer symbols. No check was disabled or threshold lowered.
+
+| Gate | Final evidence | Baseline comparison |
+| --- | --- | --- |
+| Dependency shape, TypeScript, ESLint | Passed | Same gates |
+| Product | 198 files, 4,504 passed, two opt-in live checks skipped; 31.07s | +42 passing tests, two new files |
+| Integration | Four passed; 2.70s | Same four checks |
+| Core coverage | 96.45% statements, 90.65% branches, 99.10% functions, 97.53% lines | All at or above baseline |
+| Risk coverage | 94.23% statements, 87.20% branches, 96.90% functions, 96.17% lines | All at or above baseline; per-file floors passed |
+| Production build | Passed; tracing warnings removed | Compile 3.9s versus 1.945s; single observations, no performance claim |
+| Dependency security audit | Zero reported vulnerabilities, including dev dependencies | Same result; point-in-time package advisory check |
+
+Local detailed logs are in ignored `tmp/audit-baseline.log`,
+`tmp/audit-final-verify2.log`, and the reviewer `tmp/audit-*.md` records. This
+tracked document preserves the reviewable summary and limitations. UI selection
+is the remaining user decision; remote CI is separate from these local results.
+No guaranteed accuracy or absence of regressions is claimed.

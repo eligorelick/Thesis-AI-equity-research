@@ -2563,30 +2563,6 @@
           }
         },
         {
-          "path": "stageB.valuation.multiples.enterpriseValue",
-          "beforeMissing": true,
-          "after": {
-            "value": 6700000000,
-            "excludingLeases": 6700000000,
-            "includingLeases": 6700000000,
-            "leaseLiability": null,
-            "totalLeaseLiability": 100000000,
-            "financeLeaseLiability": null,
-            "includeLeases": false,
-            "basis": "Enterprise value EXCLUDES the OPERATING-lease liability (house default; set THESIS_EV_INCLUDE_LEASES=1 to keep it). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments; a total lease liability of 100000000 is disclosed but its operating slice is not, so no lease adjustment was made and EV is reported as-is. EV/EBITDA uses this same EV. Under US GAAP (ASC 842) operating-lease cost stays in operating expenses, so EBIT and EBITDA are already AFTER it, so removing the operating-lease liability keeps numerator and denominator on the same basis. Finance-lease cost is NOT in EBIT: it is right-of-use amortisation (added back in EBITDA) plus interest (below EBIT), so the finance-lease liability is debt in both frames and is never removed. EV excluding the operating-lease liability 6700000000; EV as reported 6700000000."
-          }
-        },
-        {
-          "path": "stageB.valuation.multiples.multiples.1.basis",
-          "before": "EV (mcap + totalDebt + preferred + minority - cash&STI, latest quarterly balance sheet 2025-12-31) / (operatingIncome + D&A), latest annual FY 2025-12-31 — TTM suppressed-computed — vendor ebitda field not trusted",
-          "after": "EV / (operatingIncome + D&A), latest annual FY 2025-12-31 — TTM suppressed-computed — vendor ebitda field not trusted. Enterprise value EXCLUDES the OPERATING-lease liability (house default; set THESIS_EV_INCLUDE_LEASES=1 to keep it). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments; a total lease liability of 100000000 is disclosed but its operating slice is not, so no lease adjustment was made and EV is reported as-is. EV/EBITDA uses this same EV. Under US GAAP (ASC 842) operating-lease cost stays in operating expenses, so EBIT and EBITDA are already AFTER it, so removing the operating-lease liability keeps numerator and denominator on the same basis. Finance-lease cost is NOT in EBIT: it is right-of-use amortisation (added back in EBITDA) plus interest (below EBIT), so the finance-lease liability is debt in both frames and is never removed. EV excluding the operating-lease liability 6700000000; EV as reported 6700000000. Balance basis: latest quarterly balance sheet 2025-12-31."
-        },
-        {
-          "path": "stageB.valuation.multiples.multiples.2.basis",
-          "before": "EV / revenue (latest annual FY 2025-12-31 — TTM suppressed)",
-          "after": "EV / revenue (latest annual FY 2025-12-31 — TTM suppressed). Enterprise value EXCLUDES the OPERATING-lease liability (house default; set THESIS_EV_INCLUDE_LEASES=1 to keep it). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments; a total lease liability of 100000000 is disclosed but its operating slice is not, so no lease adjustment was made and EV is reported as-is. EV/EBITDA uses this same EV. Under US GAAP (ASC 842) operating-lease cost stays in operating expenses, so EBIT and EBITDA are already AFTER it, so removing the operating-lease liability keeps numerator and denominator on the same basis. Finance-lease cost is NOT in EBIT: it is right-of-use amortisation (added back in EBITDA) plus interest (below EBIT), so the finance-lease liability is debt in both frames and is never removed. EV excluding the operating-lease liability 6700000000; EV as reported 6700000000."
-        },
-        {
           "path": "stageB.valuation.multiples.notes.3",
           "beforeMissing": true,
           "after": "cash-flow-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)"
@@ -3087,11 +3063,6 @@
             "reason": "peer multiples not supplied to the valuation stage — peer medians unavailable (not evaluated)",
             "severity": "info"
           }
-        },
-        {
-          "path": "stageB.valuation.multiples.notes.0",
-          "before": "income-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
-          "after": "Enterprise value EXCLUDES the OPERATING-lease liability (house default; set THESIS_EV_INCLUDE_LEASES=1 to keep it). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments; a total lease liability of 100000000 is disclosed but its operating slice is not, so no lease adjustment was made and EV is reported as-is. EV/EBITDA uses this same EV. Under US GAAP (ASC 842) operating-lease cost stays in operating expenses, so EBIT and EBITDA are already AFTER it, so removing the operating-lease liability keeps numerator and denominator on the same basis. Finance-lease cost is NOT in EBIT: it is right-of-use amortisation (added back in EBITDA) plus interest (below EBIT), so the finance-lease liability is debt in both frames and is never removed. EV excluding the operating-lease liability 6700000000; EV as reported 6700000000."
         },
         {
           "path": "stageB.valuation.multiples.notes.1",
@@ -4723,16 +4694,6 @@
       "reason": "EDGAR readiness now recognizes the report's positive filing evidence despite individual unavailable SEC feeds. The ROTE note names income available to common, and the P/TBV basis explicitly deducts preferred equity. This nonfinancial DEMO fixture has no preferred claims, so all numerical figures remain unchanged; readiness and these two explanatory records move. The ROTE object is reclassified because its previously pinned note changed, not because its existing numerical series changed. Report spec 1.6.0 (following D-29 through D-31) identifies the new D-34 financial calculation conventions; saved reports retain their original versions.",
       "deltas": [
         {
-          "path": "report.meta.dataCompleteness.edgar",
-          "before": "missing",
-          "after": "available"
-        },
-        {
-          "path": "report.meta.specVersion",
-          "before": "1.2.0",
-          "after": "1.6.0"
-        },
-        {
           "path": "stageB.returns.rote",
           "beforeMissing": true,
           "after": {
@@ -4763,6 +4724,49 @@
           "path": "stageB.valuation.multiples.multiples.5.basis",
           "before": "marketCap / (equity - goodwill - intangibleAssets) (latest quarterly balance sheet 2025-12-31)",
           "after": "marketCap / (equity - goodwill - intangibleAssets - preferredStock) (latest quarterly balance sheet 2025-12-31; undisclosed preferred assumed zero)"
+        }
+      ]
+    },
+    {
+      "name": "repository-audit-2026-10-03",
+      "decisions": [
+        "D-35"
+      ],
+      "reason": "Repository audit D-35: spec 1.7.0 distinguishes corrected beta calendar windows, FRED missing-period lags, annual-capital continuity and inclusive reverse-DCF roots. The four valuation paths correct finance-lease prose: amortisation is within EBIT and added back in EBITDA; interest is below EBIT. DEMO numerical outputs are unchanged from the pre-audit tree. The immutable historical financial projection is preserved.",
+      "deltas": [
+        {
+          "path": "report.meta.specVersion",
+          "before": "1.2.0",
+          "after": "1.7.0"
+        },
+        {
+          "path": "stageB.valuation.multiples.enterpriseValue",
+          "beforeMissing": true,
+          "after": {
+            "value": 6700000000,
+            "excludingLeases": 6700000000,
+            "includingLeases": 6700000000,
+            "leaseLiability": null,
+            "totalLeaseLiability": 100000000,
+            "financeLeaseLiability": null,
+            "includeLeases": false,
+            "basis": "Enterprise value EXCLUDES the OPERATING-lease liability (house default; set THESIS_EV_INCLUDE_LEASES=1 to keep it). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments; a total lease liability of 100000000 is disclosed but its operating slice is not, so no lease adjustment was made and EV is reported as-is. EV/EBITDA uses this same EV. Under US GAAP (ASC 842) operating-lease cost stays in operating expenses, so EBIT and EBITDA are already AFTER it, so removing the operating-lease liability keeps numerator and denominator on the same basis. Finance-lease right-of-use amortisation is included in EBIT and added back in EBITDA; finance-lease interest is below EBIT. The finance-lease liability remains financing debt in both frames and is never removed. EV excluding the operating-lease liability 6700000000; EV as reported 6700000000."
+          }
+        },
+        {
+          "path": "stageB.valuation.multiples.multiples.1.basis",
+          "before": "EV (mcap + totalDebt + preferred + minority - cash&STI, latest quarterly balance sheet 2025-12-31) / (operatingIncome + D&A), latest annual FY 2025-12-31 — TTM suppressed-computed — vendor ebitda field not trusted",
+          "after": "EV / (operatingIncome + D&A), latest annual FY 2025-12-31 — TTM suppressed-computed — vendor ebitda field not trusted. Enterprise value EXCLUDES the OPERATING-lease liability (house default; set THESIS_EV_INCLUDE_LEASES=1 to keep it). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments; a total lease liability of 100000000 is disclosed but its operating slice is not, so no lease adjustment was made and EV is reported as-is. EV/EBITDA uses this same EV. Under US GAAP (ASC 842) operating-lease cost stays in operating expenses, so EBIT and EBITDA are already AFTER it, so removing the operating-lease liability keeps numerator and denominator on the same basis. Finance-lease right-of-use amortisation is included in EBIT and added back in EBITDA; finance-lease interest is below EBIT. The finance-lease liability remains financing debt in both frames and is never removed. EV excluding the operating-lease liability 6700000000; EV as reported 6700000000. Balance basis: latest quarterly balance sheet 2025-12-31."
+        },
+        {
+          "path": "stageB.valuation.multiples.multiples.2.basis",
+          "before": "EV / revenue (latest annual FY 2025-12-31 — TTM suppressed)",
+          "after": "EV / revenue (latest annual FY 2025-12-31 — TTM suppressed). Enterprise value EXCLUDES the OPERATING-lease liability (house default; set THESIS_EV_INCLUDE_LEASES=1 to keep it). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments; a total lease liability of 100000000 is disclosed but its operating slice is not, so no lease adjustment was made and EV is reported as-is. EV/EBITDA uses this same EV. Under US GAAP (ASC 842) operating-lease cost stays in operating expenses, so EBIT and EBITDA are already AFTER it, so removing the operating-lease liability keeps numerator and denominator on the same basis. Finance-lease right-of-use amortisation is included in EBIT and added back in EBITDA; finance-lease interest is below EBIT. The finance-lease liability remains financing debt in both frames and is never removed. EV excluding the operating-lease liability 6700000000; EV as reported 6700000000."
+        },
+        {
+          "path": "stageB.valuation.multiples.notes.0",
+          "before": "income-derived multiples use the latest ANNUAL statement — TTM was suppressed (incomplete quarterly data)",
+          "after": "Enterprise value EXCLUDES the OPERATING-lease liability (house default; set THESIS_EV_INCLUDE_LEASES=1 to keep it). EV = market cap + total debt + preferred stock + minority interest − cash and short-term investments; a total lease liability of 100000000 is disclosed but its operating slice is not, so no lease adjustment was made and EV is reported as-is. EV/EBITDA uses this same EV. Under US GAAP (ASC 842) operating-lease cost stays in operating expenses, so EBIT and EBITDA are already AFTER it, so removing the operating-lease liability keeps numerator and denominator on the same basis. Finance-lease right-of-use amortisation is included in EBIT and added back in EBITDA; finance-lease interest is below EBIT. The finance-lease liability remains financing debt in both frames and is never removed. EV excluding the operating-lease liability 6700000000; EV as reported 6700000000."
         }
       ]
     }

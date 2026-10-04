@@ -1,5 +1,15 @@
 # Provider and Temporal Integrity Remediation Design
 
+> **Historical design record; guidance reviewed 2026-10-03.** The status below
+> records the August implementation, which already differed from this plan's
+> proposed architecture. The eight defects and original verification contract
+> remain evidence of that work, not instructions to rerun the old four
+> workstreams or a fresh verification of today's tree. Current setup is in the
+> [README](../../../README.md); observation-date and source semantics are
+> maintained in the [methodology](../../METHODOLOGY.md) and
+> [provider source](../../../src/providers). Recheck current source and tests
+> before relying on a proposed interface or an example date from this record.
+
 **Date:** 2026-08-09
 
 **Audited commit:** `7b2eb51`

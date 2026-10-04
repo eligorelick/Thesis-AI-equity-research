@@ -122,24 +122,29 @@ function HomeWatchRow({ row }: { row: WatchlistRowView }) {
 
 async function HomeWatchlistPanel({ fixtureMode }: { fixtureMode: boolean }) {
   let rows: WatchlistRowView[] = [];
+  let loadFailed = false;
   try {
     rows = await getWatchlistView();
   } catch {
-    rows = [];
+    loadFailed = true;
   }
   return (
     <Panel
       title="watchlist"
       right={
         <span className="mono text-[10px] text-faint">
-          {rows.length} {rows.length === 1 ? "ticker" : "tickers"}
+          {loadFailed ? "unavailable" : `${rows.length} ${rows.length === 1 ? "ticker" : "tickers"}`}
         </span>
       }
     >
       <div className="mb-2">
         <AddTicker />
       </div>
-      {rows.length === 0 ? (
+      {loadFailed ? (
+        <p role="alert" className="px-1 py-3 text-[12px] text-neg">
+          Could not load watchlist. Reload this page to try again.
+        </p>
+      ) : rows.length === 0 ? (
         <p className="px-1 py-3 text-[12px] text-muted">
           No tickers yet. Add one above, or{" "}
           <Link

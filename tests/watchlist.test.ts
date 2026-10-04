@@ -95,12 +95,14 @@ function stubFmp(opts: {
   } as unknown as FmpClient;
 }
 
-/** Seed a `done` report row carrying the DEMO sample report JSON. */
+/** Seed a `done` report from the sample with a matching row/body identity. */
 function seedReport(symbol: string, createdAt: string, verificationRate: number): void {
-  const reportJson = readFileSync(
+  const fixture = ReportSchema.parse(JSON.parse(readFileSync(
     path.join(process.cwd(), "fixtures", "report", "DEMO-sample.json"),
     "utf8",
-  );
+  )));
+  fixture.meta.symbol = symbol;
+  const reportJson = JSON.stringify(fixture);
   handle.db
     .insert(reports)
     .values({

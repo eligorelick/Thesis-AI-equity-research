@@ -713,6 +713,16 @@ export function reconcilePresumedCostsAgainstReportedTotals(
         });
       }
     }
+    // Cost totals are snapshot truth. SSE and its client suppress unchanged
+    // revisions, so every corrected job needs one committed invalidation.
+    for (const jobId of new Set(applied.map((row) => row.jobId))) {
+      mutateJobSnapshotInTransaction(tx as ThesisDb, {
+        jobId,
+        now,
+        forceRevision: true,
+        mutate: () => ({}),
+      });
+    }
     return applied;
   }, { behavior: "immediate" });
 }

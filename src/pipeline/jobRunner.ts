@@ -1377,6 +1377,8 @@ function billedAttemptFromError(err: unknown): BilledPassAttempt | null {
         fallbackUsed: candidate.fallbackUsed,
         usage: candidate.usage,
         webSearches: candidate.webSearches,
+        ...(candidate.presumed === undefined ? {} : { presumed: candidate.presumed }),
+        ...(candidate.execution === undefined ? {} : { execution: candidate.execution }),
       }
     : null;
 }

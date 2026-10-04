@@ -277,10 +277,12 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 
 /**
  * Parse a fredgraph.csv body. Header row: `observation_date,SERIES_ID`.
- * Missing values ("." or empty cells) are skipped. Returns null when the body
+ * Missing values ("." or empty cells) are skipped by default. The transform
+ * path preserves their period slots internally as NaN, so lag indices do not
+ * move to a different period. Returns null when the body
  * is not recognizable CSV (e.g. an HTML 404 page for an unknown series id).
  */
-export function parseFredCsv(csv: string): FredObservation[] | null {
+export function parseFredCsv(csv: string, preserveMissing = false): FredObservation[] | null {
   const lines = csv.split(/\r?\n/);
   const header = lines[0]?.trim() ?? "";
   if (!header.toLowerCase().startsWith("observation_date")) return null;
@@ -293,7 +295,10 @@ export function parseFredCsv(csv: string): FredObservation[] | null {
     const date = line.slice(0, comma).trim();
     const raw = line.slice(comma + 1).trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-    if (raw === "." || raw === "") continue; // missing observation
+    if (raw === "." || raw === "") {
+      if (preserveMissing) out.push({ date, value: Number.NaN });
+      continue;
+    }
     const value = Number(raw);
     if (!Number.isFinite(value)) continue;
     out.push({ date, value });
@@ -329,7 +334,8 @@ export function inferObsPerYear(rows: readonly FredObservation[]): number {
 /**
  * Apply a FRED `units` transformation client-side (official ALFRED formulas).
  * Used only in keyless CSV mode; the keyed API transforms server-side.
- * Rows must be ascending by date with missing observations already removed.
+ * Rows must be ascending by date, retaining missing period slots as NaN.
+ * Neither a missing current value nor a missing lag value forms a change.
  */
 export function applyFredUnits(
   rows: readonly FredObservation[],
@@ -345,6 +351,7 @@ export function applyFredUnits(
   for (let i = lag; i < rows.length; i++) {
     const x = rows[i].value;
     const prev = rows[i - lag].value;
+    if (!Number.isFinite(x) || !Number.isFinite(prev)) continue;
     let value: number;
     switch (units) {
       case "chg":
@@ -546,7 +553,7 @@ export async function series(
     const via = config.apiKey ? "FRED API and fredgraph.csv fallback both failed" : "fredgraph.csv (keyless mode) failed";
     return { ok: false, gap: gap(seriesId, `${via}: ${res.failure ?? "unknown failure"}`, "warn") };
   }
-  const parsed = parseFredCsv(res.text);
+  const parsed = parseFredCsv(res.text, units !== "lin");
   if (parsed === null) {
     return {
       ok: false,

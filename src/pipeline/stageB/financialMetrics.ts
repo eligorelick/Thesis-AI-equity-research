@@ -576,7 +576,7 @@ function bankMetrics(
             basis:
               `(equity − goodwill − other intangibles − preferred) ${t.equity} / (total assets − goodwill − other ` +
               `intangibles) ${denom} × 100. A LEVERAGE ratio standing in for CET1: it does not risk-weight assets, ` +
-              "so it is not comparable to a regulatory capital ratio and is always the more conservative read.",
+              "so it is not comparable to a regulatory capital ratio and has no guaranteed ordering relative to CET1.",
             sources: [
               "statements:balance.totalStockholdersEquity",
               "statements:balance.totalAssets",

@@ -42,7 +42,7 @@ const THEME = {
   borderStrong: "#2b3648",
   fg: "#d5dce6",
   fgMuted: "#8494a8",
-  fgFaint: "#5c6b80",
+  fgFaint: "#7f8fa4",
   accent: "#3ba7f5",
   pos: "#2ecc8f",
   neg: "#f0525f",
@@ -242,8 +242,8 @@ export function RevenueTrendChart({ rows, currency }: { rows: readonly RevenueRo
               dataKey="yoyGrowthPct"
               stroke={THEME.pos}
               strokeWidth={1.5}
-              dot={false}
-              connectNulls
+              dot={{ r: 2 }}
+              connectNulls={false}
               isAnimationActive={false}
             />
           </ComposedChart>
@@ -286,9 +286,9 @@ export function MarginTrendChart({ rows }: { rows: readonly MarginRow[] }) {
               cursor={{ stroke: THEME.fgFaint, strokeDasharray: "3 3" }}
               content={themedTooltip(tipFormat)}
             />
-            <Line type="monotone" dataKey="grossPct" stroke={THEME.accent} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
-            <Line type="monotone" dataKey="operatingPct" stroke={THEME.warn} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
-            <Line type="monotone" dataKey="netPct" stroke={THEME.pos} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
+            <Line type="monotone" dataKey="grossPct" stroke={THEME.accent} strokeWidth={1.5} dot={{ r: 2 }} connectNulls={false} isAnimationActive={false} />
+            <Line type="monotone" dataKey="operatingPct" stroke={THEME.warn} strokeWidth={1.5} dot={{ r: 2 }} connectNulls={false} isAnimationActive={false} />
+            <Line type="monotone" dataKey="netPct" stroke={THEME.pos} strokeWidth={1.5} dot={{ r: 2 }} connectNulls={false} isAnimationActive={false} />
           </ComposedChart>
         </ResponsiveContainer>
       )}
@@ -353,8 +353,8 @@ export function FcfChart({ rows, currency }: { rows: readonly FcfRow[]; currency
               dataKey="conversionPct"
               stroke={THEME.warn}
               strokeWidth={1.5}
-              dot={false}
-              connectNulls
+              dot={{ r: 2 }}
+              connectNulls={false}
               isAnimationActive={false}
             />
           </ComposedChart>
@@ -442,6 +442,9 @@ export function FundamentalsChartGrid({ data }: { data: FundamentalsChartData })
       <MarginTrendChart rows={data.margins} />
       <FcfChart rows={data.fcf} currency={data.currency} />
       <ShareCountChart rows={data.shareCount} />
+      <p className="text-[10px] text-muted md:col-span-2">
+        Gaps indicate missing observations; trend lines do not interpolate across them.
+      </p>
     </div>
   );
 }

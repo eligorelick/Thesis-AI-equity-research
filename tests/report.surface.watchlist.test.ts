@@ -56,7 +56,7 @@ vi.mock("@/watchlist/watchlist", async (importOriginal) => {
 });
 
 import Home from "@/app/page";
-import { Sidebar } from "@/components/watchlist/Sidebar";
+import { Sidebar, WatchlistSidebar } from "@/components/watchlist/Sidebar";
 import { getWatchlistView } from "@/watchlist/watchlist";
 
 const EXPECTED_TITLES = ["F: A", "V: B", "T: C", "BS: D", "Q: F", "L: D", "M: A"];
@@ -88,6 +88,32 @@ function renderAsync(node: ReturnType<typeof createElement>): Promise<string> {
 describe("manifest-driven watchlist renderers", () => {
   beforeEach(() => {
     vi.mocked(getWatchlistView).mockResolvedValue([WATCH_ROW]);
+  });
+
+  it("discloses a failed sidebar load without claiming an empty watchlist or a zero count", async () => {
+    vi.mocked(getWatchlistView).mockRejectedValue(new Error("database unavailable"));
+    const html = renderToStaticMarkup(await WatchlistSidebar({}));
+    expect(html).toContain('role="alert"');
+    expect(html).toMatch(/could not load/i);
+    expect(html).toMatch(/reload/i);
+    expect(html).not.toMatch(/no tickers yet/i);
+    expect(html).not.toMatch(/>0<\/span>/);
+    expect(html).not.toContain("database unavailable");
+  });
+
+  it("keeps a successful empty sidebar distinct from a failed load", async () => {
+    vi.mocked(getWatchlistView).mockResolvedValue([]);
+    const html = renderToStaticMarkup(await WatchlistSidebar({}));
+    expect(html).toMatch(/no tickers yet/i);
+    expect(html).not.toContain('role="alert"');
+  });
+
+  it("discloses failed loads in both Home surfaces without an empty-state onboarding suggestion", async () => {
+    vi.mocked(getWatchlistView).mockRejectedValue(new Error("database unavailable"));
+    const html = await renderAsync(await Home());
+    expect(html.match(/role="alert"/g) ?? []).toHaveLength(2);
+    expect(html).not.toMatch(/no tickers yet|start with DEMO|0 tickers/i);
+    expect(html).not.toContain("database unavailable");
   });
 
   it("renders all seven persisted grades through the actual Sidebar in canonical order", () => {

@@ -12,6 +12,7 @@ import {
   validateStoredReportInReadMode,
 } from "@/report/legacyEntitySafety";
 import type { Report } from "@/report/schema";
+import { normalizeSymbol, sameEntitySymbol } from "@/symbol";
 
 export interface CorrectedCliArguments {
   dbFile: string;
@@ -26,6 +27,37 @@ export interface CorrectedCliSummary extends CorrectedCliArguments {
   provenanceCoverage: Report["meta"]["provenanceCoverage"];
   dataCompleteness: Report["meta"]["dataCompleteness"];
   execution: Report["meta"]["execution"];
+}
+
+/** Reserve both new files before writing; never truncate user data or aliases. */
+function writeNewExportFiles(files: readonly { path: string; content: string }[]): void {
+  const opened: { path: string; fd: number }[] = [];
+  try {
+    for (const file of files) {
+      try {
+        opened.push({ path: file.path, fd: fs.openSync(file.path, "wx") });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new Error(`Export destination already exists (file or directory): ${file.path}`, { cause: error });
+        }
+        throw error;
+      }
+    }
+    for (let index = 0; index < files.length; index++) {
+      fs.writeFileSync(opened[index]!.fd, files[index]!.content, "utf8");
+    }
+  } catch (error) {
+    // Only files exclusively created by this invocation are eligible for cleanup.
+    // A locked file must not prevent cleanup of its sibling or mask the write
+    // failure with a second close. Filesystem cleanup is necessarily best effort.
+    for (const file of opened.splice(0)) {
+      try { fs.closeSync(file.fd); } catch { /* Preserve the original failure. */ }
+      try { fs.unlinkSync(file.path); } catch { /* A locked partial file may remain. */ }
+    }
+    throw error;
+  } finally {
+    for (const file of opened) fs.closeSync(file.fd);
+  }
 }
 
 function argument(argv: readonly string[], name: string): string {
@@ -58,7 +90,7 @@ export function runCorrectedExport({
   try {
     const row = sqlite
       .prepare(
-        `SELECT r."reportJson", r."createdAt", r."model", j."id" AS "runId",
+        `SELECT r."symbol", r."reportJson", r."createdAt", r."model", j."id" AS "runId",
                 j."createdAt" AS "runStartedAt", j."updatedAt" AS "runCompletedAt"
            FROM "reports" r
            LEFT JOIN "jobs" j ON j."reportId" = r."id"
@@ -66,6 +98,7 @@ export function runCorrectedExport({
       )
       .get(reportId) as
       | {
+          symbol: string;
           reportJson: string | null;
           createdAt: string;
           model: string;
@@ -83,6 +116,13 @@ export function runCorrectedExport({
       throw new Error(`Report ${reportId} does not match a supported report schema`);
     }
     const report: Report = safety.report;
+    if (
+      normalizeSymbol(row.symbol) === null ||
+      normalizeSymbol(report.meta.symbol) === null ||
+      !sameEntitySymbol(row.symbol, report.meta.symbol)
+    ) {
+      throw new Error(`Report ${reportId} row and embedded issuer identity do not match`);
+    }
     const costs = row.runId
       ? (sqlite
           .prepare(
@@ -190,7 +230,6 @@ export function runCorrectedExport({
     }
 
     fs.mkdirSync(path.dirname(outputHtml), { recursive: true });
-    fs.writeFileSync(outputHtml, reportToPrintHtml(validated), "utf8");
     // Replacing an .html/.htm suffix only works when there is one. Without this
     // guard an `--out` like "corrected-report" makes the replace a no-op, so the
     // JSON write lands on the path the HTML was just written to and destroys the
@@ -198,11 +237,10 @@ export function runCorrectedExport({
     const outputJson = /\.html?$/i.test(outputHtml)
       ? outputHtml.replace(/\.html?$/i, ".json")
       : `${outputHtml}.json`;
-    fs.writeFileSync(
-      outputJson,
-      `${JSON.stringify(validated, null, 2)}\n`,
-      "utf8",
-    );
+    writeNewExportFiles([
+      { path: outputHtml, content: reportToPrintHtml(validated) },
+      { path: outputJson, content: `${JSON.stringify(validated, null, 2)}\n` },
+    ]);
     return {
       dbFile,
       reportId,

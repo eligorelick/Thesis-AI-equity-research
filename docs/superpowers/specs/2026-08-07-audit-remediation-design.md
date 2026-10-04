@@ -1,5 +1,16 @@
 # Audit Remediation Design
 
+> **Historical design record; guidance reviewed 2026-10-03.** The status,
+> dependency targets, branch names, test counts, and verification requirements
+> below describe the August remediation. They are not current installation
+> instructions or evidence that today's tree passes. Use the
+> [README](../../../README.md), [methodology](../../METHODOLOGY.md), and
+> [current package scripts](../../../package.json) for maintained guidance.
+> Later AI connection workflows and dependency versions supersede this
+> design's original provider and dependency scope. Preserve its findings as
+> historical evidence; the missing external audit and unobserved branch
+> protection are limitations of that recorded review.
+
 **Date:** 2026-08-07
 
 **Audit:** `../Thesis-AI-equity-research-AUDIT_REPORT.md`

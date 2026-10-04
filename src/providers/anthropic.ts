@@ -1664,6 +1664,14 @@ class ResumptionFailedError extends Error {
   }
 }
 
+/** A refused resumption has no new request to settle, but keeps earlier usage. */
+class ResumptionAdmissionError extends Error {
+  constructor(readonly cause: unknown, readonly billableMessages: BetaMessage[]) {
+    super(errorMessageOf(cause));
+    this.name = "ResumptionAdmissionError";
+  }
+}
+
 function errorMessageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -1836,11 +1844,15 @@ async function resumeIfPausedWithUsage(
     // on its own rather than riding the first request's reservation.
     let permit: RequestPermit | null = null;
     if (admission !== undefined && opts !== undefined) {
-      permit = await admission.reserve({
-        attempt,
-        kind: "resume",
-        maximumUsd: requestReservationUsd(opts),
-      });
+      try {
+        permit = await admission.reserve({
+          attempt,
+          kind: "resume",
+          maximumUsd: requestReservationUsd(opts),
+        });
+      } catch (error) {
+        throw new ResumptionAdmissionError(error, billableMessages);
+      }
     }
     const snapshot: StreamedUsageSnapshot = { model: null, usage: null };
     try {
@@ -2271,6 +2283,12 @@ export function runPassStreaming(opts: RunPassOptions): StreamingPassHandle {
         signalFirst("end"); // only reachable pre-signal if the stream emitted no events
         return interpretPassMessages(final, opts, [...billedFailedAttempts, ...billableMessages]);
       } catch (err) {
+        if (err instanceof ResumptionAdmissionError) {
+          signalFirst("error");
+          return admissionRefusedResult(
+            opts, err.cause, [...billedFailedAttempts, ...err.billableMessages], attempt,
+          );
+        }
         // A failed resumption has already settled its own permit and carries
         // the attempt's completed messages (incl. the streamed first message,
         // whose permit settled when it arrived) plus its own usage snapshot;

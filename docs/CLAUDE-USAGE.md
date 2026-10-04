@@ -68,8 +68,9 @@ unbounded automatic model routing. A fallback can involve multiple models;
 its per-attempt usage must be kept separate from the final attempt's top-level
 usage. [Fallback behavior and billing](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback).
 
-Thesis reserves for both configured attempts, including up to ten sampling
-inputs per search-enabled model, and labels charges as presumed when the
+When a server-side fallback is configured, Thesis reserves for both the
+primary and fallback model, including up to ten sampling inputs per
+search-enabled model, and labels charges as presumed when the
 response lacks billing evidence. Interrupted search or fallback requests
 retain their request bound until reconciliation. These conservative reserves
 can require a much larger cap than a typical report's actual cost. Anthropic's
@@ -77,6 +78,11 @@ can require a much larger cap than a typical report's actual cost. Anthropic's
 is the basis for this bound. Rate-limited retries honor
 `Retry-After`; enforced monthly spend limits stop immediately. None of these
 changes automatically starts or retries a stored report.
+
+Each transport retry or paused-turn resumption needs its own admitted request
+reservation. A cap refusal stops the next request and keeps completed usage
+and costs recorded. Correcting presumed costs also refreshes the job's
+progress snapshot; existing saved reports retain their persisted cost figures.
 
 `npm run models:refresh` checks public model/pricing information without
 inference; registry changes still need review. Regenerate the README's price

@@ -82,7 +82,7 @@ const THEME = {
   bgPanel: "#0f141c",
   border: "#1f2937",
   fg: "#d5dce6",
-  fgFaint: "#5c6b80",
+  fgFaint: "#7f8fa4",
   pos: "#2ecc8f",
   neg: "#f0525f",
   accent: "#3ba7f5",

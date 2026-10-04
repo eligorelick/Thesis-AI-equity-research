@@ -1,5 +1,11 @@
 # Remediation report
 
+> Historical remediation and release-review record. Statements below describe
+> the dated batches, including their original deferrals, model choices and test
+> counts. For the current audit and disposition, see
+> [2026-10-03 repository audit](2026-10-03-repository-audit.md); current setup is
+> in the [README](../../README.md). Subsequent releases supersede earlier choices.
+
 What the 2026-09-02 audit asked for, what was built, and what was not. Every
 claim here is checkable against a commit; where a criterion was not met the
 reason is stated rather than the criterion quietly dropped.
@@ -113,7 +119,8 @@ are recorded per workstream below.
 **The gate** is `npm run verify`: dependency shape, typecheck, lint, the product
 suite, the database CLI suite, both coverage contracts, a production build and
 the security audit. The product suite is offline whatever `.env` contains, and
-no paid or live provider call was made at any point in this work.
+no paid or live provider call was made during the initial offline remediation.
+Separately authorized later live runs are recorded below.
 
 ## Status by workstream
 

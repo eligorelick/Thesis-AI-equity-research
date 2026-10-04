@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createFmpClient, resetFmpPlanLimits, type CachedFetchFn, type FmpClientConfig } from "@/providers/fmp";
-import { FMP_ACCESS_TTL_MS, parseFmpRestriction, resetFmpAccess } from "@/providers/fmpAccess";
+import { FMP_ACCESS_TTL_MS, FmpAccessError, parseFmpRestriction, resetFmpAccess, withFmpAccess } from "@/providers/fmpAccess";
 import { makeLimiter } from "@/providers/http";
 
 const ENDPOINT_DENIED = "Restricted Endpoint: This endpoint is not available under your current subscription. Please visit our subscription page to upgrade your plan.";
@@ -137,6 +137,41 @@ describe("FMP response-driven subscription access", () => {
     resetFmpAccess();
     expect((await c.quote("AAPL")).ok).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("bounds remembered refusals and clears expired observations during later requests", async () => {
+    let clock = Date.parse("2026-10-03T12:00:00Z");
+    const request = (endpoint: string) => ({ key: "bounded-access-test", endpoint, now: () => clock });
+    const denied = async () => { throw new FmpAccessError("endpoint", 402); };
+    // The documented 2,048-entry bound must make an old refusal probeable
+    // again without erasing the newest learned refusal.
+    for (let index = 0; index <= 2_048; index++) {
+      await expect(withFmpAccess(request(`endpoint-${index}`), denied)).rejects.toBeInstanceOf(FmpAccessError);
+    }
+    const allowed = vi.fn(async () => "available");
+    await expect(withFmpAccess(request("endpoint-0"), allowed)).resolves.toBe("available");
+    await expect(withFmpAccess(request("endpoint-2048"), allowed)).rejects.toBeInstanceOf(FmpAccessError);
+    expect(allowed).toHaveBeenCalledTimes(1);
+
+    clock += FMP_ACCESS_TTL_MS;
+    // A different endpoint triggers housekeeping before the old one is read.
+    await withFmpAccess(request("new-endpoint"), allowed);
+    await expect(withFmpAccess(request("endpoint-2048"), allowed)).resolves.toBe("available");
+    expect(allowed).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps requests working when the bounded probe-coordination table is full", async () => {
+    const releaseOwners = Promise.withResolvers<string>();
+    const request = (endpoint: string) => ({ key: "probe-capacity-test", endpoint, now: () => 0 });
+    const owners = Array.from({ length: 256 }, (_, index) =>
+      withFmpAccess(request(`held-${index}`), () => releaseOwners.promise));
+    try {
+      // Additional endpoints proceed while the 256 existing owners are held.
+      await expect(withFmpAccess(request("overflow"), async () => "available")).resolves.toBe("available");
+    } finally {
+      releaseOwners.resolve("owner completed");
+      await Promise.all(owners);
+    }
   });
 
   it.each([200, 402, 403])("classifies an explicit JSON error message at HTTP %s", async (status) => {

@@ -36,6 +36,7 @@ export const RISK_SOURCE_MANIFEST = [
   "src/providers/finnhub.ts",
   "src/providers/finra.ts",
   "src/providers/fmp.ts",
+  "src/providers/fmpAccess.ts",
   "src/providers/fred.ts",
   "src/providers/http.ts",
   "src/providers/yahoo.ts",

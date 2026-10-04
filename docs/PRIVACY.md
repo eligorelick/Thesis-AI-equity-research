@@ -201,4 +201,28 @@ DPAPI; owner-only files on macOS/Linux). Disconnect stops local requests and
 attempts ChatGPT session revocation. Google disconnect clears Thesis's CLI
 state; revoke the Google grant from your Google Account if desired. See
 [Privacy](PRIVACY.md). The OAuth paths have offline regression coverage;
-live account sign-in/inference has not been verified for this release.
+live inference has not been verified for this release.
+
+### Model and speed controls
+
+ChatGPT model choices refresh for the selected account. GPT-6.1 Sol can also
+be requested explicitly if the account catalog has not listed it yet; that
+choice is marked as access unconfirmed and can still be rejected by OpenAI.
+ChatGPT reasoning and Standard/Fast speed are saved with the connection.
+Fast is opt-in and consumes more allowance; see [OpenAI's current speed
+rules](https://learn.chatgpt.com/docs/agent-configuration/speed).
+Reports, exports and history retain actual provider model and usage evidence;
+the requested speed is shown separately from the returned tier. Missing or
+inconsistent provider evidence stays unknown. Gemini reports every observed
+model when its CLI uses several, without guessing which wrote the final response.
+
+## Limited FMP access
+
+A configured key does not establish paid access. Thesis learns explicit FMP
+endpoint and symbol restrictions from responses, suppresses repeat refused
+requests for 15 minutes, then rechecks. Restrictions are scoped to the key and
+endpoint; a symbol refusal never blocks other symbols. Successful cached data
+keeps its original freshness labels. The first request is still necessary to
+discover access, and source outages or unavailable endpoints remain disclosed
+gaps. Configure a real `EDGAR_CONTACT` even with a free FMP key so SEC statement
+fallbacks can run. Restrictions are held in memory and reset on server restart.

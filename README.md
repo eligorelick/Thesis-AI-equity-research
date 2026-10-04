@@ -1,7 +1,6 @@
 # Thesis
 
-Thesis is a local-first equity research application. Enter a ticker to validate
-market data, compute financial metrics and optionally run grounded AI analysis.
+Thesis is a local-first equity research app with financial calculations and optional AI.
 Saved reports give every number a source path and an as-of date.
 
 > **Informational only — not investment advice.** Grades and price targets are
@@ -47,26 +46,14 @@ labelled synthetic throughout; any other symbol is a live request.
 
 ## AI connections
 
-In **Settings → AI connections**, connect an account, choose a model and save.
-ChatGPT uses official plan OAuth; Gemini uses the separately installed official
-CLI **0.36.x**. Claude API remains optional and separately billed. Sign-in runs
-no inference, and failed connections never switch to paid API usage.
-ChatGPT opens normal Chrome; make Chrome the default browser for Gemini.
-Only one running Thesis server per OS user can use these account connections.
-Plan allowances and provider credit settings apply; API dollar caps do not
-measure subscription usage. Live inference remains unverified.
-See [connection setup, privacy and limits](docs/PRIVACY.md#ai-connection-setup).
-
-ChatGPT model choices refresh for the selected account. GPT-6.1 Sol can also
-be requested explicitly if the account catalog has not listed it yet; that
-choice is marked as access unconfirmed and can still be rejected by OpenAI.
-ChatGPT reasoning and Standard/Fast speed are saved with the connection.
-Fast is opt-in and consumes more allowance; see [OpenAI's current speed
-rules](https://learn.chatgpt.com/docs/agent-configuration/speed).
-Reports, exports and history retain actual provider model and usage evidence;
-the requested speed is shown separately from the returned tier. Missing
-provider evidence stays unknown. Gemini reports every observed model when its
-CLI uses several, without guessing which wrote the final response.
+In **Settings → AI connections**, connect ChatGPT through official plan OAuth
+or Google through the separately installed Gemini CLI **0.36.x**, then save.
+ChatGPT supports account model refresh, GPT-6.1 Sol with an access notice,
+reasoning choices and opt-in Fast speed. Reports retain actual execution details.
+Sign-in runs no inference; failures never switch to paid API usage. Claude API
+remains separately billed. Plan allowances and credit settings apply; API dollar
+caps do not measure them. See [setup, controls and limits](docs/PRIVACY.md#ai-connection-setup).
+Live inference remains unverified.
 
 ## Configuration
 
@@ -107,8 +94,7 @@ carries the long form of each one, so the two cannot drift apart.
 
 <!-- END GENERATED: config -->
 
-Stored settings beat environment variables, which beat defaults; reset the
-stored ones with `npm run settings:reset -- --yes`.
+Stored settings beat environment variables, which beat defaults; reset with `npm run settings:reset -- --yes`.
 
 ## Where the numbers come from
 
@@ -119,14 +105,8 @@ rest from keyless sources. Five fiscal years still support the growth, returns,
 forensic, DCF and scoring modules; the own-history multiple rank needs eight
 quarters and waits for them.
 
-A configured key does not establish paid access. Thesis learns explicit FMP
-endpoint and symbol restrictions from responses, suppresses repeat refused
-requests for 15 minutes, then rechecks. Restrictions are scoped to the key and
-endpoint; a symbol refusal never blocks other symbols. Successful cached data
-keeps its original freshness labels. The first request is still necessary to
-discover access, and source outages or unavailable endpoints remain disclosed
-gaps. Configure a real `EDGAR_CONTACT` even with a free FMP key so SEC statement
-fallbacks can run.
+Configure `EDGAR_CONTACT` even with a free FMP key. Thesis learns explicit access
+restrictions and skips repeat refusals for 15 minutes; see [fallback limits](docs/PRIVACY.md#limited-fmp-access).
 
 With no key at all, set `EDGAR_CONTACT` and real US filers still produce a full
 report: statements, share counts and public float from SEC EDGAR XBRL company

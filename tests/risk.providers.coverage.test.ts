@@ -1309,7 +1309,7 @@ describe("Stage C provider adapter branches", () => {
     });
     const result = await pipelinePasses.runAnalystPass!({ analysisModel: model, connectionId: "google-account", payload: emptyPayload() }, "bull");
     expect(result).toMatchObject({ model, costUsd: 0, data: { priceTarget: { value: 100 } } });
-    expect(provider).toHaveBeenCalledWith(expect.objectContaining({ model }), "google-account");
+    expect(provider).toHaveBeenCalledWith(expect.objectContaining({ model }), "google-account", undefined);
     expect(provider.mock.calls[0][0].tools).toBeUndefined();
   });
 

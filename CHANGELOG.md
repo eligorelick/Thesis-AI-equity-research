@@ -15,6 +15,9 @@ README and the current usage/methodology documents for present guidance.
   withhold affected changes; holiday and sparse-frequency limits are disclosed.
 - Withhold current-day and future beta bars until the next UTC day, since daily
   history can contain an unfinished final-session bar; quote/chart bars remain.
+- Add independent normalized statement references for six issuers across twelve
+  annual periods, with source/basis notes, absolute-unit anchors and sector-policy
+  checks. These strengthen regression detection, not forecasts or parser coverage.
 - Stamp report 1.9.0 / payload 1.10.0 to separate the financial conventions while
   preserving saved reports and their original values.
 - Record the critical review of all seven recommendations, evidence, alternatives

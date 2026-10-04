@@ -23,7 +23,8 @@
  *    never instead of it, so a reader sees both and knows which one any
  *    downstream WACC used.
  *
- * Pure and deterministic.
+ * Pure and deterministic. Without an observation-day cutoff, callers must
+ * supply historical daily bars that are already settled.
  */
 import type { ManifestEntry } from "@/types/core";
 
@@ -164,12 +165,34 @@ function calendarMonth(isoDate: string): number {
 export function estimateBeta(
   symbolCloses: readonly ClosePoint[],
   benchmarkCloses: readonly ClosePoint[],
-  opts: { maxMonths?: number; minMonths?: number } = {},
+  opts: {
+    maxMonths?: number;
+    minMonths?: number;
+    /**
+     * UTC observation day (YYYY-MM-DD). Daily sources do not identify whether
+     * today's bar is settled, so only earlier dates enter beta, even after
+     * market close. Omit only for already-settled historical inputs.
+     */
+    asOf?: string;
+  } = {},
 ): BetaEstimate {
   const maxMonths = opts.maxMonths ?? BETA_MAX_MONTHS;
   const minMonths = opts.minMonths ?? BETA_MIN_MONTHS;
-  const symbolEndsAll = monthEndCloses(symbolCloses);
-  const benchEndsAll = monthEndCloses(benchmarkCloses);
+  const cutoff = opts.asOf;
+  const cutoffMs = typeof cutoff === "string" && /^\d{4}-\d{2}-\d{2}$/.test(cutoff)
+    ? Date.parse(`${cutoff}T00:00:00Z`)
+    : NaN;
+  const cutoffValid = Number.isFinite(cutoffMs) && new Date(cutoffMs).toISOString().slice(0, 10) === cutoff;
+  // Filter before selecting each month-end; a current/future bar must neither
+  // become a completed monthly level nor choose the calendar window's end.
+  // Invalid explicit cutoffs fail closed instead of exposing every bar.
+  const earlierBars = (points: readonly ClosePoint[]): readonly ClosePoint[] =>
+    cutoff === undefined ? points : cutoffValid ? points.filter(point => point.date < cutoff) : [];
+  const symbolEndsAll = monthEndCloses(earlierBars(symbolCloses));
+  const benchEndsAll = monthEndCloses(earlierBars(benchmarkCloses));
+  const cutoffNote = cutoff === undefined ? "" : cutoffValid
+    ? `; observations dated on or after ${cutoff} UTC withheld because daily bars have no settled-session signal; current-day bars remain withheld until the next UTC day, even after market close`
+    : "; invalid UTC observation-day cutoff; all beta observations withheld";
   // Neither a partial current month nor an older month missing its final
   // session is a completed monthly observation. Require the actual same
   // regular US month-end session on both sides; never fill missing closes.
@@ -235,10 +258,11 @@ export function estimateBeta(
     standardError: null,
     betaBlume: null,
     basis,
-    note: `beta not estimated: ${reason}${missingMonthNote}${partialMonthNote}${calendarNote}`,
-    gap: { field: "profile.beta", reason: `${reason}${missingMonthNote}`, severity: "warn", attemptedSources: ["computed:beta(monthly OLS vs SPY)"] },
+    note: `beta not estimated: ${reason}${missingMonthNote}${partialMonthNote}${calendarNote}${cutoffNote}`,
+    gap: { field: "profile.beta", reason: `${reason}${missingMonthNote}${cutoffNote}`, severity: "warn", attemptedSources: ["computed:beta(monthly OLS vs SPY)"] },
     disclosure: null,
   });
+  if (cutoff !== undefined && !cutoffValid) return fail("invalid UTC observation-day cutoff; expected a real Gregorian YYYY-MM-DD");
   if (months < minMonths) {
     return fail(`only ${months} monthly returns shared with the benchmark; ${minMonths} required for a beta estimate`);
   }
@@ -268,7 +292,7 @@ export function estimateBeta(
     `beta ${beta.toFixed(3)}` +
     (standardError === null ? "" : ` ± ${standardError.toFixed(3)} (OLS standard error)`) +
     `, Blume-adjusted ${betaBlume.toFixed(3)}, from ${months} monthly log returns of ${priceNote} vs the benchmark ` +
-    `(${windowStart} → ${windowEnd}); a ${maxMonths}-calendar-month window convention${missingMonthNote}${partialMonthNote}${calendarNote}`;
+    `(${windowStart} → ${windowEnd}); a ${maxMonths}-calendar-month window convention${missingMonthNote}${partialMonthNote}${calendarNote}${cutoffNote}`;
   return {
     beta,
     months,
@@ -288,7 +312,7 @@ export function estimateBeta(
         (standardError === null ? "" : `; standard error ${standardError.toFixed(3)}`) +
         (rSquared === null ? "" : `, R² ${rSquared.toFixed(3)}`) +
         `; the Blume mean-reversion adjustment (${BLUME_RAW_WEIGHT.toFixed(3)}×raw + ${BLUME_MARKET_WEIGHT.toFixed(3)}) gives ` +
-        `${betaBlume.toFixed(3)} and is reported beside the raw slope, not in place of it`,
+        `${betaBlume.toFixed(3)} and is reported beside the raw slope, not in place of it${cutoffNote}`,
       severity: basis === "dividend-adjusted close" ? "info" : "warn",
       attemptedSources: ["computed:beta(monthly OLS vs SPY)"],
       ...(basis === "dividend-adjusted close" ? { expected: true } : {}),

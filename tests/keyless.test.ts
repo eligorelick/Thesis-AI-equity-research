@@ -763,6 +763,22 @@ describe("applyKeylessFallbacks", () => {
     expect(note).toMatch(/\(R² \d\.\d{2}\)$/);
   });
 
+  it.each([
+    ["2026-08-31", "2026-07-31"],
+    ["2026-09-01", "2026-08-31"],
+  ])("keyless beta at UTC observation day %s uses completed prior-day bars through %s", async (today, betaEnd) => {
+    const out = await applyKeylessFallbacks(inputs({ today }));
+    const note = out.notes.find(n => /^profile: beta /.test(n));
+    expect(note).toContain(`→ ${betaEnd}`);
+    expect(note).toMatch(/even after market close/);
+    expect(out.gaps.find(g => g.field === "profile.beta.method")?.reason).toContain(`${today} UTC`);
+    // The conservative observation-day rule is local to beta. Quote and chart
+    // consumers retain the same newest vendor data, including today's bar.
+    expect(out.members.eodPrices.ok).toBe(true);
+    if (out.members.eodPrices.ok) expect(out.members.eodPrices.value.data.rows.some(row => row.date === "2026-08-31")).toBe(true);
+    expect(out.members.quote.ok).toBe(true);
+  });
+
   it("classifies an ETF from Yahoo's instrumentType so the instrument guard refuses it", async () => {
     // SPY, QQQ and the closed-end trusts are SEC registrants with tickers and
     // 10-K filings, so they clear the issuer gate and the whole keyless

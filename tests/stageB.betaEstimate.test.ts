@@ -52,6 +52,53 @@ function nextMonthStub(lastIso: string): [string, string] {
 }
 
 describe("estimateBeta", () => {
+  it("withholds unfinished final-session bars until the next UTC observation day", () => {
+    const { symbol, bench } = series(40, 1.3);
+    const liveSymbol = [...symbol, { date: "2024-05-31", close: symbol.at(-1)!.close * 0.8 }];
+    const liveBench = [...bench, { date: "2024-05-31", close: bench.at(-1)!.close * 1.02 }];
+    const result = estimateBeta(liveSymbol, liveBench, { asOf: "2024-05-31" });
+    expect(result.beta).toBeCloseTo(1.3, 10);
+    expect(result.months).toBe(39);
+    expect(result.windowEnd).toBe("2024-04-30");
+    expect(result.disclosure?.reason).toMatch(/2024-05-31.*UTC.*withheld/);
+    expect(result.note).toMatch(/even after market close/);
+
+    // On the next UTC day the final-session bar is admissible. Its changed
+    // price can then legitimately affect beta, rather than remaining hidden.
+    const nextDay = estimateBeta(liveSymbol, liveBench, { asOf: "2024-06-01" });
+    expect(nextDay.months).toBe(40);
+    expect(nextDay.windowEnd).toBe("2024-05-31");
+    expect(nextDay.beta).toBeCloseTo(estimateBeta(liveSymbol, liveBench).beta!, 10);
+    expect(nextDay.beta).not.toBeCloseTo(1.3, 2);
+  });
+
+  it("excludes future final-session observations before choosing the beta window", () => {
+    const { symbol, bench } = series(44, 1.3);
+    const result = estimateBeta(symbol, bench, { asOf: "2024-05-31" });
+    expect(result.months).toBe(39);
+    expect(result.windowEnd).toBe("2024-04-30");
+    expect(result.beta).toBeCloseTo(1.3, 10);
+  });
+
+  it.each(["symbol", "benchmark"])("excludes today's final-session bar present only on the %s side", side => {
+    const { symbol, bench } = series(40, 1.3);
+    const todaySymbol = [...symbol, { date: "2024-05-31", close: symbol.at(-1)!.close * 0.8 }];
+    const todayBench = [...bench, { date: "2024-05-31", close: bench.at(-1)!.close * 1.02 }];
+    const result = estimateBeta(side === "symbol" ? todaySymbol : symbol, side === "benchmark" ? todayBench : bench, { asOf: "2024-05-31" });
+    expect(result.beta).toBeCloseTo(1.3, 10);
+    expect(result.windowEnd).toBe("2024-04-30");
+    expect(result.disclosure?.reason).toMatch(/2024-05-31.*UTC.*withheld/);
+  });
+
+  it.each(["2024-02-30", "2024-05-31T12:00:00Z", "not-a-date"])("fails closed on invalid UTC observation cutoff %s", asOf => {
+    const { symbol, bench } = series(40, 1.3);
+    const result = estimateBeta(symbol, bench, { asOf });
+    expect(result.beta).toBeNull();
+    expect(result.months).toBe(0);
+    expect(result.gap?.reason).toMatch(/invalid.*cutoff/);
+    expect(result.windowEnd).toBeNull();
+  });
+
   it("excludes a late-month stub before the actual final session", () => {
     const { symbol, bench } = series(40, 1.3);
     const s = symbol.at(-1)!;

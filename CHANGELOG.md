@@ -13,6 +13,8 @@ README and the current usage/methodology documents for present guidance.
 - Use completed regular US month-end sessions for beta and calendar lag periods
   for monthly, quarterly and annual keyless FRED transformations. Missing periods
   withhold affected changes; holiday and sparse-frequency limits are disclosed.
+- Withhold current-day and future beta bars until the next UTC day, since daily
+  history can contain an unfinished final-session bar; quote/chart bars remain.
 - Stamp report 1.9.0 / payload 1.10.0 to separate the financial conventions while
   preserving saved reports and their original values.
 - Record the critical review of all seven recommendations, evidence, alternatives

@@ -18,7 +18,8 @@ Follow-up to the merged repository audit: assess all seven recommendations,
 implement independently justified changes sequentially, and retain explicit
 deferrals where outcome evidence or an end-to-end contract is missing. The
 [critical review and verification ledger](2026-10-04-recommendations.md) records
-alternatives, acceptance evidence and limitations. Completed-session beta and
+alternatives, acceptance evidence and limitations. Regular final-session dates,
+conservative current-day withholding for keyless beta, and
 calendar-aligned monthly/quarterly/annual FRED lags require report 1.9.0 and
 payload 1.10.0; saved reports remain unchanged and older partial AI passes do
 not resume under the new financial conventions. No forecast probability or AI

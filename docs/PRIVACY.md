@@ -69,6 +69,15 @@ provider.
 
 ## Where local data is kept
 
+**Settings → Appearance** stores only `current` or `workspace` in the browser's
+`thesis-ui-design` cookie for 180 days (`Path=/`, `SameSite=Lax`, and `Secure`
+on HTTPS). It is sent to the local Thesis host, never to a provider. Cookies
+are scoped by host, not port, so Thesis instances on the same host share it.
+Choosing Current restores the default; clearing this cookie also
+resets the design. If the browser refuses storage, the choice applies for the
+current visit and Settings displays a warning. This preference does not change
+the database, AI connection, model, reasoning effort, reports or exports.
+
 The SQLite database holds reports, caches and ordinary settings. Its default location is the OS
 application-data directory (`src/db/paths.ts`):
 

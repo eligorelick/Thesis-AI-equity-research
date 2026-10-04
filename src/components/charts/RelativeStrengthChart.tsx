@@ -29,6 +29,8 @@ import {
 } from "lightweight-charts";
 
 import { rebaseTo100, type DatedClose } from "./format";
+import { useUiDesign } from "@/appearance/UiDesignProvider";
+import { chartPalette, type ChartPalette } from "./palette";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -152,18 +154,19 @@ interface ResolvedSeries extends RsSeries {
 }
 
 /** Assign colors: first series (or any role:"primary") → accent; rest cycle greys. */
-export function resolveSeriesColors(series: readonly RsSeries[]): ResolvedSeries[] {
+export function resolveSeriesColors(series: readonly RsSeries[], palette?: ChartPalette): ResolvedSeries[] {
+  const colors = palette ? [palette.fgMuted, palette.fgFaint, palette.warn] : BENCHMARK_COLORS;
   let benchIdx = 0;
   return series.map((s, i) => {
     const isPrimary = s.role === "primary" || (s.role === undefined && i === 0);
     const color = isPrimary
-      ? THEME.accent
-      : BENCHMARK_COLORS[benchIdx++ % BENCHMARK_COLORS.length];
+      ? (palette?.accent ?? THEME.accent)
+      : colors[benchIdx++ % colors.length];
     return { ...s, color };
   });
 }
 
-function chartOptions(height: number): DeepPartial<ChartOptions> {
+function chartOptions(height: number, THEME: ChartPalette): DeepPartial<ChartOptions> {
   return {
     height,
     layout: {
@@ -192,16 +195,18 @@ function chartOptions(height: number): DeepPartial<ChartOptions> {
 // ---------------------------------------------------------------------------
 
 export function RelativeStrengthChart({ series, height = 300 }: RelativeStrengthChartProps) {
+  const { design } = useUiDesign();
+  const THEME = chartPalette(design);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const resolved = useMemo(() => resolveSeriesColors(series), [series]);
+  const resolved = useMemo(() => resolveSeriesColors(series, THEME), [series, THEME]);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const chart = createChart(container, {
-      ...chartOptions(height),
+      ...chartOptions(height, THEME),
       width: container.clientWidth,
     });
     chartRef.current = chart;
@@ -240,7 +245,7 @@ export function RelativeStrengthChart({ series, height = 300 }: RelativeStrength
       chart.remove();
       chartRef.current = null;
     };
-  }, [resolved, height]);
+  }, [resolved, height, THEME]);
 
   const anyData = resolved.some((s) => s.rows.length > 0);
 

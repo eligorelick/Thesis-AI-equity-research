@@ -1,7 +1,8 @@
 # Repository audit — 2026-10-03
 
-Status: repository review, repairs and local verification complete; UI selection
-pending. The PR remains a draft until that choice is resolved. Earlier dated
+Status: repository review, repairs and required local verification complete;
+the owner's choice is implemented: current design by default with an optional
+Research workspace in Settings. Isolated browser follow-up passed. Earlier dated
 audits and decisions remain historical evidence. No merge or deployment is authorized.
 
 ## Scope and baseline
@@ -42,11 +43,11 @@ passing coverage percentages do not prove financial correctness.
 | --- | --- | --- |
 | Providers, EDGAR, Stage A/B, compute, keyless/data bundle | Financial reviewer: dates, units, currencies, shares, formulas, access and provenance | Reviewed; targeted fixes and independent calculation cases |
 | AI, model registry, scheduler/jobs, persistence/cache/settings, routes/security | Runtime reviewer: billing, identity, abort/recovery, request boundaries | Complete body review of assigned modules; focused regressions pass |
-| Pages/components/charts | UI reviewer: source clarity, missing values, accessibility, navigation | Reviewed; bounded error/contrast/gap repairs |
+| Pages/components/charts | UI reviewer: source clarity, missing values, accessibility, navigation | Reviewed; error/contrast/gap repairs and selected optional workspace |
 | Reports, exports, history, watchlist, Stage C, tooling/CI | Coordinator plus cross-review: integrity, evidence checks, escaping, release gates | Review and local integration checks complete |
 | Markdown | Financial methodology/research, historical records, current setup/rights/privacy | All 14 existing documents reviewed; reconciliation below |
-| UI choice | Current + two standalone interactive alternatives | Awaiting explicit user selection |
-| Integration and delivery | Final checks, independent diff review, local smoke, PR | Local gates passed; draft PR delivery, UI choice pending |
+| UI choice | Current + two standalone interactive alternatives | Implemented current default plus optional Research workspace |
+| Integration and delivery | Final checks, independent diff review, local smoke, PR | Local gates passed after UI follow-up; initial Linux/Windows CI passed |
 
 ## Findings and evidence
 
@@ -98,7 +99,8 @@ reports retain their bytes and remain readable under compatibility rules.
 layout, Research workspace and Decision brief. All share fictional DEMO/DBNK,
 baseline/critical-gap/stale/data-only conditions and report, evidence, history,
 AI-settings and export interactions. No provider request, personal-data storage
-or production redesign is performed by the demos. Selection remains pending.
+or production redesign is performed by the demos. The owner selected the current
+design as default, with Research workspace available through Settings.
 
 | Option | Benefit | Tradeoff |
 | --- | --- | --- |
@@ -110,7 +112,30 @@ The current demo approximates the existing design; it is not a pixel-identical
 replica. All options use the same illustrative workflow and data conditions.
 Keyboard interaction, cancellation, history selection, the PDF preview dialog
 and 390px alternatives were checked in the in-app browser. No actual PDF print
-job was dispatched. Production redesign awaits the owner's explicit selection.
+job was dispatched. Decision brief remains a comparison prototype only.
+
+Selected implementation: Settings → Appearance offers Current (default) and
+Research workspace. A `thesis-ui-design` cookie stores only the enumerated design
+for 180 days, scoped to the browser host; server rendering reads it to avoid an
+initial wrong-design flash. The choice applies immediately. A blocked write is
+reported as visit-only, with a warning that reload may restore the prior design.
+The workspace adds light panels, responsive navigation and an evidence rail
+derived from the same report, including recorded gaps, dates and section links.
+Canvas chart palettes and SVG tokens follow the design without changing values.
+Analysis settings, saved report bytes and print/export renderers stay independent.
+No appearance action launches inference or refreshes financial inputs.
+
+Eighteen new unit/SSR cases cover default/malformed preferences, persistence and
+refusal, initial rendering, rail isolation, disclosures and unchanged chart values.
+The new pure-display modules are explicitly classified outside risk coverage;
+existing risk sources and thresholds remain intact. Independent review covered
+119 distinct passing tests across ten files. It found and corrected a test-only
+fixture construction error before final verification. Palette calculations give
+workspace secondary text 5.22–5.94:1 contrast on its three main backgrounds,
+and sidebar secondary text 5.38–7.45:1 on its two backgrounds. Browser review
+also caught hardcoded warning/error hues bypassing those tokens; workspace-only
+CSS maps them to the darker warning/error palette. These checks do not constitute
+an accessibility certification.
 
 An isolated copy also exercised the real app: home, DEMO/DBNK company views,
 data-only generation and persistence, saved reports, two-report history/diff,
@@ -122,12 +147,34 @@ linked dependencies needed temporary Turbopack-root/Tailwind-source settings
 after harness compilation failures; these are not production edits. The smoke
 server was stopped; the separate comparison demo remains available locally.
 
+After the selection, the isolated preview was restarted with the final UI and
+left available at `http://127.0.0.1:4318/settings`, with Current selected. The
+in-app browser disconnected; a fresh Chrome tab exercised only that temporary
+app, without inspecting unrelated tabs or browser stores. Switching, saved
+feedback, reload, client navigation and restoration to Current passed. Workspace
+rendered the same saved DEMO gaps/dates, with expandable details and a working
+Appendix keyboard link; the desktop rail scrolls within the viewport. At
+390×844 the page had no horizontal overflow and navigation toggled by keyboard
+with matching `aria-expanded`. Existing canvas charts and known SVG points
+rendered. DBNK retained missing-assessment/unknown-completeness disclosures.
+New DEMO report #4 remained data-only with $0, skipped AI and no paid fallback;
+history comparison to #3 remained unchanged. Twenty isolated HTTP route checks
+returned 200 across both designs; malformed design values fell back to Current.
+Markdown was identical across choices and the print page stayed white with no
+shell or evidence rail. Actual PDF printing and real cookie-blocking browser
+configuration were not exercised; blocked writes have unit/render tests.
+
 ## Sources and applicability
 
 - [Node 24 file-system flags](https://nodejs.org/docs/latest-v24.x/api/fs.html#file-system-flags):
   exclusive creation prevents replacement of an existing destination, including
   link aliases. Applied to A02's synchronous local export; no claim of atomic
   two-file publication across power loss or network filesystems.
+- [Next.js cookies](https://nextjs.org/docs/app/api-reference/functions/cookies)
+  and [MDN document.cookie](https://developer.mozilla.org/en-US/docs/Web/API/Document/cookie):
+  server cookie reads support initial appearance selection; browser writes store
+  this non-secret preference. Reading cookies in the root layout makes its pages
+  dynamically rendered, a tradeoff for showing the selected design immediately.
 - [SEC dissemination and access policy](https://www.sec.gov/about/privacy-information)
   and [17 USC 105](https://www.copyright.gov/title17/92chap1.html#105): support D01's
   corrected description; do not treat hosting as government authorship.
@@ -166,14 +213,14 @@ purpose remain. No private data/settings/credentials were deleted.
 
 | Maintained Markdown | Reconciliation |
 | --- | --- |
-| README | Generated command table matches export refusal; routing description permits corroborated financial-label refinement; source-evidence wording avoids a universal completeness claim. Existing 270-line limit retained. |
+| README | Appearance option documented; generated command table matches export refusal; routing description permits corroborated financial-label refinement; source-evidence wording avoids a universal completeness claim. Existing 270-line limit retained. |
 | CHANGELOG | Current audit added; earlier development batches explicitly dated/historical guidance. |
 | CLAUDE-USAGE | Checked registry/official pricing, fallback-only dual-model reserve, per-request admission, reconciliation versus persisted report costs. |
-| PRIVACY | Corrected public peer/benchmark payload scope, request-origin conditions and Gemini's Chrome requirement. |
+| PRIVACY | Corrected public peer/benchmark payload scope, request-origin conditions and Gemini's Chrome requirement; appearance cookie scope, lifetime, clearing and blocked-save behavior documented. |
 | DATA-RIGHTS | Corrected EDGAR authorship; distinguish access from Yahoo/FMP redistribution permission; disclose FRED restrictions and unresolved inference applicability. |
 | METHODOLOGY | Seven grades, lease/FCFF/CET1 explanations reconciled with code. |
 | RESEARCH | Beta calendar conventions, Altman fallback, Piotroski asset history and SEC ticker-map/SIC distinction corrected. Historical empirical studies not independently replicated. |
-| DECISIONS | D-35 records the present changes; later entries override dated model defaults. |
+| DECISIONS | D-35 records audit changes, D-36 records the owner's UI selection and storage tradeoffs; later entries override dated model defaults. |
 | REMEDIATION-REPORT | Historical banner; initial offline work distinguished from later recorded paid experiments. |
 | 2026-09-06 audit | Historical banner; dated counts/models/findings remain evidence. |
 | Four design specs (2026-08-07, 08-09, and two 09-02) | Each explicitly historical; superseding implementation/deviation notes distinguish plans from current behavior. |
@@ -189,8 +236,10 @@ doc checks validate generated sections and local heading/reference contracts.
 
 ## Review depth, deferred work and verification limits
 
-All 163 first-party source files, 12 script files, build/CI configuration and
-test/fixture inventories were considered. Runtime ownership covered complete
+All 163 original first-party source files, 12 script files, build/CI configuration
+and test/fixture inventories were considered. The selected UI follow-up adds six
+source files, bringing the source inventory to 169; an independent reviewer read
+all six, both new test files and all changed UI/chart/CSS code. Runtime ownership covered complete
 module bodies; financial and Stage C review combined body reads with function
 outlines and focused high-risk paths. Large financial modules received uneven
 depth: some assumption/history/provider-parser branches were sampled. A second
@@ -204,8 +253,8 @@ the coordinator reviewed the runtime and UI changes.
 
 Deferred recommendations and limits:
 
-- Mobile shell still reserves a fixed 256px rail; responsive restructuring is
-  tied to the pending UI choice. Numeric provenance tooltips, small type,
+- The retained Current design still reserves a fixed 256px rail; Research
+  workspace adds responsive navigation. Numeric provenance tooltips, small type,
   below-xl section navigation, canvas alternatives and more live announcements
   remain usability recommendations, not a full accessibility certification.
 - Existing beta day-26 completion heuristic and frequency inference for truly
@@ -227,7 +276,7 @@ Deferred recommendations and limits:
   inference, broad cross-issuer reconciliation or empirical financial-model
   calibration was performed. Existing keyless history remains an approximation,
   not a point-in-time backtest. House assumptions remain disclosed choices.
-- Windows is the local execution platform. CI will exercise Linux/Windows;
+- Windows is the local execution platform. Initial CI passed Linux/Windows;
   macOS credential storage and every filesystem failure cannot be certified
   from this run. Locked export remnants and power-loss two-file publication
   remain limitations; existing destination bytes are protected.
@@ -246,15 +295,16 @@ rejects poisoned issuer symbols. No check was disabled or threshold lowered.
 | Gate | Final evidence | Baseline comparison |
 | --- | --- | --- |
 | Dependency shape, TypeScript, ESLint | Passed | Same gates |
-| Product | 198 files, 4,504 passed, two opt-in live checks skipped; 31.07s | +42 passing tests, two new files |
-| Integration | Four passed; 2.70s | Same four checks |
+| Product | 200 files, 4,522 passed, two opt-in live checks skipped; 28.39s | +60 passing tests, four new files |
+| Integration | Four passed; 2.64s | Same four checks |
 | Core coverage | 96.45% statements, 90.65% branches, 99.10% functions, 97.53% lines | All at or above baseline |
 | Risk coverage | 94.23% statements, 87.20% branches, 96.90% functions, 96.17% lines | All at or above baseline; per-file floors passed |
-| Production build | Passed; tracing warnings removed | Compile 3.9s versus 1.945s; single observations, no performance claim |
+| Production build | Passed; tracing warnings removed | Compile 2.2s versus 1.945s; single observations, no performance claim |
 | Dependency security audit | Zero reported vulnerabilities, including dev dependencies | Same result; point-in-time package advisory check |
 
 Local detailed logs are in ignored `tmp/audit-baseline.log`,
-`tmp/audit-final-verify2.log`, and the reviewer `tmp/audit-*.md` records. This
-tracked document preserves the reviewable summary and limitations. UI selection
-is the remaining user decision; remote CI is separate from these local results.
+`tmp/audit-final-verify2.log`, `tmp/audit-workspace-verify.log` (final selected UI),
+and the reviewer `tmp/audit-*.md` records. The final production build occurred
+after the workspace status-color correction. This tracked document preserves
+the reviewable summary and limitations; remote CI is separate from local results.
 No guaranteed accuracy or absence of regressions is claimed.

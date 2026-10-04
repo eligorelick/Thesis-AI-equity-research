@@ -21,8 +21,10 @@ README and the current usage/methodology documents for present guidance.
   failures, improve secondary-text contrast, and retain chart gaps and isolated
   observations. Remove the unused direct legacy ESLint compatibility dependency.
 - Report spec 1.7.0 and payload 1.8.0 distinguish corrected calculations while
-  preserving historical report bytes. Add an offline UI comparison lab; applying
-  a production concept remains subject to the owner's selection.
+  preserving historical report bytes. Retain the current UI by default and add
+  the owner-selected Research workspace in Settings → Appearance, with a saved
+  browser preference, lighter responsive layout and report evidence sidebar.
+  Keep the offline comparison lab for the design rationale.
 - Reconcile methodology, provider-rights guidance and historical-document status.
   See the [audit evidence and limits](docs/audit/2026-10-03-repository-audit.md).
 

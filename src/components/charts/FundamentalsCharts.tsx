@@ -28,6 +28,7 @@ import {
   YAxis,
   type TooltipContentProps,
 } from "recharts";
+import { SVG_CHART_THEME } from "./palette";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 
 import { compactMoneyIn, compactNumber, currencyAxisTickIn, fiscalYear, pct, signedPct } from "./format";
@@ -36,18 +37,7 @@ import { compactMoneyIn, compactNumber, currencyAxisTickIn, fiscalYear, pct, sig
 // Theme
 // ---------------------------------------------------------------------------
 
-const THEME = {
-  bgRaised: "#151c26",
-  border: "#1f2937",
-  borderStrong: "#2b3648",
-  fg: "#d5dce6",
-  fgMuted: "#8494a8",
-  fgFaint: "#7f8fa4",
-  accent: "#3ba7f5",
-  pos: "#2ecc8f",
-  neg: "#f0525f",
-  warn: "#e8b339",
-} as const;
+const THEME = SVG_CHART_THEME;
 
 const CHART_HEIGHT = 220;
 const AXIS_FONT = 10;

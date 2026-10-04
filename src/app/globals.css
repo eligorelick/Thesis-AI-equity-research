@@ -69,3 +69,104 @@ pre {
 ::-webkit-scrollbar-track {
   background: var(--bg-panel);
 }
+
+/* Optional Research workspace. The original palette/layout remains the
+   default, and paper/exports do not render AppShell so stay independent. */
+.thesis-nav-toggle { display: none; }
+body[data-ui-design="workspace"] .thesis-shell {
+  --bg: #ecf1f4;
+  --bg-panel: #ffffff;
+  --bg-raised: #f2f7f8;
+  --border: #bacbd3;
+  --border-strong: #819ca7;
+  --fg: #17333d;
+  --fg-muted: #526770;
+  --fg-faint: #526770;
+  --accent: #0b6671;
+  --pos: #17624b;
+  --neg: #a23642;
+  --warn: #896000;
+  --grade-a: #17624b;
+  --grade-b: #476719;
+  --grade-c: #896000;
+  --grade-d: #9c4d12;
+  --grade-f: #a23642;
+  font-size: 14px;
+  line-height: 1.6;
+}
+body[data-ui-design="workspace"] .thesis-header { height: 56px; padding-inline: 24px; }
+body[data-ui-design="workspace"] .thesis-sidebar {
+  --bg: #183a43;
+  --bg-panel: #183a43;
+  --bg-raised: #29505a;
+  --border: #517078;
+  --border-strong: #6f8b92;
+  --fg: #edf8fa;
+  --fg-muted: #bdcdd4;
+  --fg-faint: #bdcdd4;
+  --accent: #7ce5da;
+  --pos: #74dfb0;
+  --neg: #ff98a0;
+  --warn: #f3c45c;
+  --grade-a: #74dfb0;
+  --grade-b: #bde080;
+  --grade-c: #f3c45c;
+  --grade-d: #ffb781;
+  --grade-f: #ff98a0;
+  width: 235px;
+  color: var(--fg);
+}
+body[data-ui-design="workspace"] .thesis-main { scrollbar-color: #819ca7 #ecf1f4; }
+body[data-ui-design="workspace"] .thesis-main > div { padding: 24px; }
+body[data-ui-design="workspace"] .thesis-panel {
+  border-radius: 10px;
+  box-shadow: 0 3px 10px #183a4305;
+}
+body[data-ui-design="workspace"] .thesis-panel-heading { padding: 12px 16px; flex-wrap: wrap; }
+body[data-ui-design="workspace"] .thesis-panel-heading h2 { font-size: 12px; }
+body[data-ui-design="workspace"] .thesis-panel-body { padding: 16px; }
+body[data-ui-design="workspace"] .thesis-shell .text-red-500 { color: var(--neg); }
+body[data-ui-design="workspace"] .thesis-shell .text-amber-500 { color: var(--warn); }
+body[data-ui-design="workspace"] .thesis-shell :is(button, input, select) { border-radius: 5px; }
+body[data-ui-design="workspace"] .thesis-shell :is(button, input, select, a, summary):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+body[data-ui-design="workspace"] .thesis-report { max-width: 1550px; gap: 18px; }
+body[data-ui-design="workspace"] .report-columns { gap: 24px; align-items: flex-start; }
+body[data-ui-design="workspace"] .report-anchor-nav { display: none; }
+.workspace-evidence-rail {
+  position: sticky;
+  top: 60px;
+  flex: 0 0 270px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  overflow-wrap: anywhere;
+  max-height: calc(100dvh - 130px);
+  overflow-y: auto;
+}
+@media (max-width: 1200px) {
+  body[data-ui-design="workspace"] .report-columns { flex-direction: column; }
+  body[data-ui-design="workspace"] .workspace-evidence-rail { position: static; width: 100%; flex-basis: auto; max-height: none; overflow-y: visible; }
+  body[data-ui-design="workspace"] .report-columns > div { width: 100%; }
+}
+@media (max-width: 800px) {
+  body[data-ui-design="workspace"] .thesis-frame { flex-direction: column; }
+  body[data-ui-design="workspace"] .thesis-nav-toggle {
+    display: block;
+    flex-shrink: 0;
+    padding: 9px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
+    color: var(--accent);
+    text-align: left;
+  }
+  body[data-ui-design="workspace"] .thesis-sidebar { display: none; width: 100%; max-height: 35vh; border-right: 0; border-bottom: 1px solid var(--border); }
+  body[data-ui-design="workspace"] .thesis-sidebar[data-mobile-expanded="true"] { display: flex; }
+  body[data-ui-design="workspace"] .thesis-main > div { padding: 16px; }
+  body[data-ui-design="workspace"] .thesis-header { padding-inline: 16px; }
+  body[data-ui-design="workspace"] .thesis-panel-body { padding: 12px; overflow-x: auto; }
+}

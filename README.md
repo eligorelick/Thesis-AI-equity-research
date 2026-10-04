@@ -1,7 +1,7 @@
 # Thesis
 
 Thesis is a local-first equity research app with financial calculations and optional AI.
-Saved reports expose source paths, observation dates and missing evidence.
+Saved reports expose source paths, observation dates and missing evidence. **Settings → Appearance** switches between the default Current design and optional Research workspace; the choice is saved in this browser.
 
 > **Informational only — not investment advice.** Grades and price targets are
 > model outputs from disclosed data and assumptions, not human recommendations.

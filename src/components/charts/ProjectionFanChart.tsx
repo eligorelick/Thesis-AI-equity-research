@@ -22,6 +22,7 @@ import {
   YAxis,
   type TooltipContentProps,
 } from "recharts";
+import { SVG_CHART_THEME } from "./palette";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 
 import type { ProjectionSeries } from "@/report/schema";
@@ -33,17 +34,7 @@ import {
   type ProjectionPath,
 } from "@/report/surfaceManifest";
 
-const THEME = {
-  border: "#1f2937",
-  fg: "#d5dce6",
-  fgMuted: "#8494a8",
-  fgFaint: "#7f8fa4",
-  accent: "#3ba7f5",
-  pos: "#2ecc8f",
-  neg: "#f0525f",
-  bgRaised: "#151c26",
-  borderStrong: "#2b3648",
-} as const;
+const THEME = SVG_CHART_THEME;
 
 const CHART_HEIGHT = 200;
 const AXIS_FONT = 10;

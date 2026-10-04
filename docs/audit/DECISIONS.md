@@ -12,6 +12,23 @@ reversibility, the choice, and why. Reversible and disclosed beats clever.
 
 Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
 
+## D-36 (UI selection 2026-10-03) Keep current default; offer Research workspace
+
+- **Options**: replace the default with one of the two interactive concepts,
+  retain only the current UI, or offer Research workspace as a saved option.
+- **Choice**: the owner explicitly selected the current default plus Research
+  workspace in Settings. Decision brief remains a demonstration.
+- **Architecture**: store an enumerated, non-secret browser appearance cookie;
+  read it for server rendering and update the selected presentation immediately.
+  Keep financial data, analysis model/effort settings and credentials independent.
+- **Risks and reversibility**: browser storage may be refused or cleared; show a
+  save failure rather than claiming persistence. Cookie reads make app pages
+  dynamic. Current remains the fallback and can be selected again. The workspace
+  consumes the same report, retains missing-data disclosures and adds evidence
+  context; print and downloadable report formats keep their existing rendering.
+- **Disclosure**: Settings and privacy guidance identify browser-local storage.
+  Verification and usability limitations belong in the current audit.
+
 ## D-35 (repository audit 2026-10-03) Preserve evidence at calculation and file boundaries
 
 - **Choice**: count beta returns only between adjacent completed calendar months

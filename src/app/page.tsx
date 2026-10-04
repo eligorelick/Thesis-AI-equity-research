@@ -73,7 +73,7 @@ function HomeGradeStrip({ grades }: { grades: WatchlistGrades | null | undefined
       {GRADE_SURFACES.map((descriptor) => {
         const grade = grades[descriptor.key];
         return grade === undefined ? null : (
-          <span key={descriptor.id} className="flex flex-col items-center gap-px" title={`${descriptor.shortLabel}: ${grade}`}>
+          <span key={descriptor.id} className="flex flex-col items-center gap-px" title={`${descriptor.shortLabel}: ${grade ?? "not assessed"}`}>
             <span className="text-[7px] leading-none text-faint">{descriptor.shortLabel}</span>
             <GradeChip grade={grade} />
           </span>

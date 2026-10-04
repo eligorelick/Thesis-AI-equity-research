@@ -116,6 +116,19 @@ describe("manifest-driven watchlist renderers", () => {
       .map((match) => match[1])).toEqual([...EXPECTED_TITLES, ...EXPECTED_TITLES]);
   });
 
+  it("renders unassessed saved grades neutrally in both sidebar and dashboard while retaining supported letters", async () => {
+    vi.mocked(getWatchlistView).mockResolvedValue([{ ...WATCH_ROW,
+      grades: { ...WATCH_ROW.grades, quality: null, valuation: null, moat: null },
+    }]);
+    const html = await renderAsync(await Home());
+    for (const label of ["Q", "V", "M"]) {
+      expect(html.match(new RegExp(`title="${label}: not assessed"`, "g")) ?? []).toHaveLength(2);
+    }
+    expect(html.match(/aria-label="not assessed"/g)).toHaveLength(6);
+    expect(html.match(/title="F: A"/g)).toHaveLength(2);
+    expect(html).not.toMatch(/title="(?:Q|V|M): (?:null|[ABCDF])"/);
+  });
+
   it("renders a legacy Home through both surfaces without fabricating optional balance", async () => {
     vi.mocked(getWatchlistView).mockResolvedValue([{ ...WATCH_ROW, grades: legacyGrades() }]);
     const html = await renderAsync(await Home());

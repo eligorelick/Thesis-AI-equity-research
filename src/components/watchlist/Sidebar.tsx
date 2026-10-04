@@ -182,9 +182,9 @@ function GradeStrip({ grades }: { grades: WatchlistGrades | null }) {
  * Reuses GradeChip's --grade-* coloring for the letter; the section label keeps
  * the strip legible in the narrow rail.
  */
-function MiniGrade({ label, grade }: { label: string; grade: Grade }) {
+function MiniGrade({ label, grade }: { label: string; grade: Grade | null }) {
   return (
-    <span className="flex flex-col items-center gap-px" title={`${label}: ${grade}`}>
+    <span className="flex flex-col items-center gap-px" title={`${label}: ${grade ?? "not assessed"}`}>
       <span className="text-[7px] leading-none text-faint">{label}</span>
       <GradeChip grade={grade} />
     </span>

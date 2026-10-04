@@ -20,7 +20,7 @@ vi.mock("server-only", () => ({}));
 
 import { createDatabase, setDbForTests, type DatabaseHandle } from "@/db";
 import { reports, watchlist } from "@/db/schema";
-import { REPORT_SPEC_VERSION } from "@/report/schema";
+import { ReportSchema, REPORT_SPEC_VERSION } from "@/report/schema";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
 import type {
   FmpClient,
@@ -187,6 +187,35 @@ describe("add / remove / list", () => {
  * ------------------------------------------------------------------------ */
 
 describe("getWatchlistView", () => {
+  it.each(["current", "legacy"])("withholds unsupported grades from a saved %s data-only report without rewriting its evidence", async (format) => {
+    addToWatchlist("DEMO");
+    const report = ReportSchema.parse(JSON.parse(readFileSync(
+      path.join(process.cwd(), "fixtures", "report", "DEMO-sample.json"), "utf8",
+    )));
+    report.appendix.missingData.push({ field: "analysis.llm", reason: "No completed analyst assessment", severity: "critical" });
+    report.verdict.gradeStrip.quality.grade = "A";
+    report.verdict.gradeStrip.quality.oneLineWhy = "Deterministic score 96/100 (band A) on 10% of intended signals; no analyst pass ran.";
+    report.verdict.gradeStrip.moat.grade = "D";
+    report.verdict.gradeStrip.moat.oneLineWhy = "Not scored — no applicable signals. The letter D is a placeholder, not an assessment.";
+    report.verdict.gradeStrip.valuation.grade = "F";
+    report.verdict.gradeStrip.valuation.oneLineWhy = "Not graded — Stage B did not run.";
+    if (format === "current") {
+      report.verdict.gradeStrip.quality.assessmentStatus = "limited-evidence";
+      report.verdict.gradeStrip.moat.assessmentStatus = "not-assessed";
+      report.verdict.gradeStrip.valuation.assessmentStatus = "not-assessed";
+    }
+    const storedBytes = JSON.stringify(ReportSchema.parse(report));
+    handle.db.insert(reports).values({ symbol: "DEMO", createdAt: report.meta.generatedAt,
+      model: report.meta.model, status: "done", reportJson: storedBytes, specVersion: REPORT_SPEC_VERSION }).run();
+
+    const [row] = await getWatchlistView({ fmp: stubFmp({}), now: NOW });
+    expect(row?.grades).toMatchObject({ quality: null, moat: null, valuation: null,
+      fundamentals: report.verdict.gradeStrip.fundamentals.grade,
+      technicals: report.verdict.gradeStrip.technicals.grade });
+    expect(row?.lastReportAt).toBe(report.meta.generatedAt);
+    expect(handle.db.select({ reportJson: reports.reportJson }).from(reports).get()?.reportJson).toBe(storedBytes);
+  });
+
   it("returns an empty array when the watchlist is empty", async () => {
     const view = await getWatchlistView({ fmp: stubFmp({}), now: NOW });
     expect(view).toEqual([]);

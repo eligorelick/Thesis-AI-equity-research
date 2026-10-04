@@ -446,6 +446,31 @@ describe("fred parseFredCsv", () => {
 });
 
 describe("fred client-side units transforms (keyless mode)", () => {
+  it("preserves missing CSV periods when calculating year-ago changes", async () => {
+    const csv = "observation_date,CPIAUCSL\n" + Array.from({ length: 14 }, (_, i) => {
+      const date = new Date(Date.UTC(2025, i, 1)).toISOString().slice(0, 10);
+      return `${date},${i === 5 ? "." : 100 + i}`;
+    }).join("\n");
+    const result = await series("CPIAUCSL", { units: "pc1" }, {
+      fetchImpl: async () => new Response(csv), minRequestIntervalMs: 0, retryDelaysMs: [],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.data).toHaveLength(2);
+    expect(result.value.data[0].date).toBe("2026-01-01");
+    expect(result.value.data[0].value).toBeCloseTo(12, 10); // 112 / 100 − 1
+    expect(result.value.data[1].value).toBeCloseTo((113 / 101 - 1) * 100, 10);
+  });
+
+  it("does not present a change across a missing CSV period as a one-period change", async () => {
+    const result = await series("PAYEMS", { units: "chg" }, {
+      fetchImpl: async () => new Response("observation_date,PAYEMS\n2025-01-01,100\n2025-02-01,.\n2025-03-01,104\n2025-04-01,105"),
+      minRequestIntervalMs: 0, retryDelaysMs: [],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.data).toEqual([{ date: "2025-04-01", value: 1 }]);
+  });
+
   const monthly = [
     { date: "2025-01-01", value: 100 },
     { date: "2025-02-01", value: 102 },

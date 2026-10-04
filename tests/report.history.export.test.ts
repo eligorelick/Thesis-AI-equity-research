@@ -1116,6 +1116,21 @@ describe("parseReportId", () => {
  * ======================================================================== */
 
 describe("getReportRecordById", () => {
+  it("withholds a different embedded issuer from direct ID reads without rewriting stored bytes", () => {
+    const bytes = JSON.stringify(loadFixtureReport());
+    const id = seedReport({ symbol: "MSFT", createdAt: "2026-07-05T00:00:00.000Z", reportJson: bytes });
+    expect(getReportRecordById(id).kind).toBe("unparseable");
+    expect(getReportById(id)).toBeNull();
+    expect(handle.db.select().from(reports).get()?.reportJson).toBe(bytes);
+  });
+
+  it("accepts dot/hyphen aliases for the same embedded issuer", () => {
+    const report = loadFixtureReport();
+    report.meta.symbol = "BRK.B";
+    const id = seedReport({ symbol: "BRK-B", createdAt: "2026-07-05T00:00:00.000Z", reportJson: JSON.stringify(report) });
+    expect(getReportRecordById(id).kind).toBe("ok");
+  });
+
   it("returns kind 'ok' with row + parsed report for a valid id", () => {
     const report = loadFixtureReport();
     const id = seedReport({ createdAt: "2026-07-05T00:00:00.000Z", report });
@@ -1306,7 +1321,7 @@ describe("loadReportPairForSymbol — cross-company scoping for the diff page", 
     });
 
     const genericRead = getReportById(badId);
-    expect(genericRead?.report.meta.symbol).toBe("MSFT");
+    expect(genericRead).toBeNull();
     expect(loadReportPair(badId, goodId)).toBeNull();
     expect(loadReportPairForSymbol(badId, goodId, "AAPL")).toBeNull();
     expect(listReportsForSymbol("AAPL").find((row) => row.id === badId)).toEqual(
@@ -1388,6 +1403,27 @@ describe("loadReportPairForSymbol — cross-company scoping for the diff page", 
  * ======================================================================== */
 
 describe("diffReports smoke on tweaked fixtures", () => {
+  it.each([
+    ["Operating margin is -10%.", "Operating margin is 10%."],
+    ["Operating margin is 1.0%.", "Operating margin is 10%."],
+  ])("detects financially meaningful punctuation changes in verdicts: %s → %s", (from, to) => {
+    const older = loadFixtureReport();
+    const newer = clone(older);
+    older.verdict.synthesis = from;
+    newer.verdict.synthesis = to;
+    const diff = diffReports(older, newer, persistedVersions(older, newer));
+    expect(diff.verdictChanged).toBe(true);
+    expect(diff.verdictChange).toMatchObject({ from, to });
+  });
+
+  it("ignores only case and whitespace changes in verdicts", () => {
+    const older = loadFixtureReport();
+    const newer = clone(older);
+    older.verdict.synthesis = "Operating margin is -10%.";
+    newer.verdict.synthesis = "  OPERATING  margin\nis -10%.  ";
+    expect(diffReports(older, newer, persistedVersions(older, newer)).verdictChanged).toBe(false);
+  });
+
   it("detects grade, target, catalyst/risk, verdict, and cost deltas", () => {
     const older = loadFixtureReport();
     const newer = clone(older);

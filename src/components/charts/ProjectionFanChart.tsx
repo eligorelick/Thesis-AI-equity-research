@@ -22,6 +22,7 @@ import {
   YAxis,
   type TooltipContentProps,
 } from "recharts";
+import { SVG_CHART_THEME } from "./palette";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 
 import type { ProjectionSeries } from "@/report/schema";
@@ -33,17 +34,7 @@ import {
   type ProjectionPath,
 } from "@/report/surfaceManifest";
 
-const THEME = {
-  border: "#1f2937",
-  fg: "#d5dce6",
-  fgMuted: "#8494a8",
-  fgFaint: "#5c6b80",
-  accent: "#3ba7f5",
-  pos: "#2ecc8f",
-  neg: "#f0525f",
-  bgRaised: "#151c26",
-  borderStrong: "#2b3648",
-} as const;
+const THEME = SVG_CHART_THEME;
 
 const CHART_HEIGHT = 200;
 const AXIS_FONT = 10;
@@ -94,8 +85,7 @@ function buildData(series: ProjectionSeries): { data: FanDatum[]; firstForward: 
       ? [Math.min(bull, bear), Math.max(bull, bear)]
       : null;
     return { period: row.period, hist, band, base, weighted, bull, bear };
-  }).filter((row) => row.hist !== null || row.bull !== null || row.base !== null
-    || row.bear !== null || row.weighted !== null);
+  }); // Keep all-null periods: removing them would hide gaps on the time axis.
   const firstForwardIndex = data.findIndex((row) => row.bull !== null || row.base !== null
     || row.bear !== null || row.weighted !== null);
   const firstForward = firstForwardIndex < 0 ? null : data[firstForwardIndex]!.period;
@@ -195,17 +185,20 @@ export function ProjectionFanChart({ series }: { series: ProjectionSeries }) {
             fill={THEME.accent}
             fillOpacity={0.12}
             isAnimationActive={false}
-            connectNulls
+            connectNulls={false}
           />
           {/* Scenario edges (faint) so the range reads even if the band fill is subtle. */}
-          <Line dataKey="bull" stroke={THEME.pos} strokeWidth={1} dot={false} strokeOpacity={0.6} isAnimationActive={false} connectNulls />
-          <Line dataKey="bear" stroke={THEME.neg} strokeWidth={1} dot={false} strokeOpacity={0.6} isAnimationActive={false} connectNulls />
+          <Line dataKey="bull" stroke={THEME.pos} strokeWidth={1} dot={{ r: 2 }} strokeOpacity={0.6} isAnimationActive={false} connectNulls={false} />
+          <Line dataKey="bear" stroke={THEME.neg} strokeWidth={1} dot={{ r: 2 }} strokeOpacity={0.6} isAnimationActive={false} connectNulls={false} />
           {/* Weighted expected path. */}
-          <Line dataKey="weighted" stroke={THEME.accent} strokeWidth={2} strokeDasharray="4 2" dot={false} isAnimationActive={false} connectNulls />
+          <Line dataKey="weighted" stroke={THEME.accent} strokeWidth={2} strokeDasharray="4 2" dot={{ r: 2 }} isAnimationActive={false} connectNulls={false} />
           {/* Historical actuals. */}
-          <Line dataKey="hist" stroke={THEME.fg} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+          <Line dataKey="hist" stroke={THEME.fg} strokeWidth={2} dot={{ r: 2 }} isAnimationActive={false} connectNulls={false} />
         </ComposedChart>
       </ResponsiveContainer>
+      <p className="mt-1 text-[10px] text-muted">
+        Gaps indicate missing observations; paths do not interpolate across them.
+      </p>
     </div>
   );
 }

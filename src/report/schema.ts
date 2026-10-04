@@ -63,7 +63,9 @@ import type { Grade, ClaimLabel, ManifestEntry } from "@/types/core";
 // their stored stamp and are not compared as the same financial convention.
 // 1.6.0 (D-34): financial common-equity basis, disclosed assessment coverage,
 // and durable observed OAuth execution. Previously saved reports remain readable.
-export const REPORT_SPEC_VERSION = "1.6.0" as const;
+// 1.7.0 (audit 2026-10-03): calendar-adjacent monthly beta observations and
+// inclusive reverse-DCF endpoint solutions. Saved reports keep their own stamps.
+export const REPORT_SPEC_VERSION = "1.7.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Legacy-read leniency

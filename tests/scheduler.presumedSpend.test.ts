@@ -244,6 +244,26 @@ describe("a paid lease that expires without settling", () => {
 });
 
 describe("reconciling presumed spend downward", () => {
+  it("versions a reconciled job snapshot once so clients receive its corrected total", () => {
+    seedJob(first.db, "job-reconciled", "AAPL");
+    const { lease } = reserve(first.db, "job-reconciled", "attempt-reconciled", 12.5);
+    settleRequestCost(lease, requestSettlement(9, true), NOW, first.db);
+    const before = getJobSnapshot("job-reconciled")!;
+    expect(before.totalCostUsd).toBe(9);
+
+    const bucket = {
+      startTime: NOW.toISOString(),
+      endTime: new Date(NOW.getTime() + 60_000).toISOString(),
+      reportedUsd: 0.4,
+    };
+    reconcilePresumedCostsAgainstReportedTotals([bucket], NOW, second.db);
+    const after = getJobSnapshot("job-reconciled")!;
+    expect(after.totalCostUsd).toBe(0.4);
+    expect(after.revision).toBe(before.revision + 1);
+    reconcilePresumedCostsAgainstReportedTotals([bucket], NOW, second.db);
+    expect(getJobSnapshot("job-reconciled")!.revision).toBe(after.revision);
+  });
+
   it("replaces the presumed maximum with measured usage when a late settlement arrives", () => {
     seedJob(first.db, "job-d", "AAPL");
     const { lease } = reserve(first.db, "job-d", "attempt-1", 12.5);

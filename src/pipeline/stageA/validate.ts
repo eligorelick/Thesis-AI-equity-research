@@ -1041,7 +1041,7 @@ function checkCurrencyConsistency(bundle: ValidatableBundle, c: Collector): void
     name: "Reporting vs trading currency",
     status: mismatch ? "warn" : "pass",
     detail: mismatch
-      ? `statements reported in ${reportingCurrency} but the security trades in ${tradingCurrency} — per-share/multiples figures mix currencies (ADR/foreign issuer). Stage B suppresses the DCF family on this signal; read multiples with FX caveats.`
+      ? `statements reported in ${reportingCurrency} but the security trades in ${tradingCurrency} — quote comparisons are withheld when currencies are not comparable; per-share values that do not use the quote can remain in the model currency. No FX conversion is applied.`
       : `statements and quote are both in ${tradingCurrency}.`,
   });
 
@@ -1053,7 +1053,7 @@ function checkCurrencyConsistency(bundle: ValidatableBundle, c: Collector): void
     c.gaps.push(
       gapEntry(
         "validation.currencyMismatch",
-        `reporting currency ${reportingCurrency} ≠ trading currency ${tradingCurrency} — per-share/multiples figures mix currencies; the DCF family is suppressed downstream`,
+        `reporting currency ${reportingCurrency} ≠ trading currency ${tradingCurrency} — quote comparisons, price multiples and reverse valuation are withheld; per-share values that do not use the quote can remain in the model currency`,
         "warn",
       ),
     );

@@ -237,7 +237,9 @@ export function getReportRecordById(id: number): ReportRecordResult {
   const row = getDb().select().from(reports).where(eq(reports.id, id)).get();
   if (row === undefined) return { kind: "missing" };
   const report = parseStoredReport(row.reportJson);
-  if (report === null) return { kind: "unparseable", row };
+  if (report === null || !rowMatchesEmbeddedReport(row, report)) {
+    return { kind: "unparseable", row };
+  }
   return { kind: "ok", row, report };
 }
 

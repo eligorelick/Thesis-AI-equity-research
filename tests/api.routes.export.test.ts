@@ -79,11 +79,11 @@ function seedReport(
 }
 
 /** Seed a raw row (possibly corrupt/null reportJson); returns its id. */
-function seedRawRow(reportJson: string | null, status = "done"): number {
+function seedRawRow(reportJson: string | null, status = "done", symbol = "AAPL"): number {
   const row = handle.db
     .insert(reports)
     .values({
-      symbol: "AAPL",
+      symbol,
       createdAt: "2026-07-05T00:00:00.000Z",
       model: "claude-opus-4-8",
       status,
@@ -145,6 +145,21 @@ function viewReq(reportId: string): [Request, { params: Promise<{ reportId: stri
  * ------------------------------------------------------------------------ */
 
 describe("GET /api/export/[reportId]", () => {
+  it("withholds another issuer's embedded content from direct export and compact view routes", async () => {
+    const bytes = JSON.stringify(loadFixtureReport());
+    const id = seedRawRow(bytes, "done", "MSFT");
+    for (const format of ["md", "pdf"]) {
+      const exported = await exportGET(...exportReq(String(id), format));
+      expect(exported.status).toBe(422);
+      expect(exported.headers.get("content-disposition")).toBeNull();
+    }
+    const view = await viewGET(...viewReq(String(id)));
+    expect(view.status).toBe(200);
+    expect(await view.json()).toMatchObject({ symbol: "MSFT", companyName: "MSFT", synthesis: "Report content unavailable.", grades: [], missingData: null });
+    const stored = handle.sqlite.prepare('SELECT "reportJson" FROM "reports" WHERE "id" = ?').get(id) as { reportJson: string };
+    expect(stored.reportJson).toBe(bytes);
+  });
+
   function unsafeLegacyReportJson(): string {
     const entityConflict = "TRIUMPH evaluates Foundayo";
     const report = clone(loadFixtureReport());
@@ -190,7 +205,7 @@ describe("GET /api/export/[reportId]", () => {
   it("applies immutable legacy entity safety to the Markdown API read", async () => {
     const entityConflict = "TRIUMPH evaluates Foundayo";
     const insertedJsonByteForByte = unsafeLegacyReportJson();
-    const id = seedRawRow(insertedJsonByteForByte);
+    const id = seedRawRow(insertedJsonByteForByte, "done", "LLY");
 
     const markdownResponse = await exportGET(...exportReq(String(id), "md"));
     expect(markdownResponse.status).toBe(200);
@@ -208,7 +223,7 @@ describe("GET /api/export/[reportId]", () => {
   it("applies immutable legacy entity safety to the print API read", async () => {
     const entityConflict = "TRIUMPH evaluates Foundayo";
     const insertedJsonByteForByte = unsafeLegacyReportJson();
-    const id = seedRawRow(insertedJsonByteForByte);
+    const id = seedRawRow(insertedJsonByteForByte, "done", "LLY");
 
     const printResponse = await exportGET(...exportReq(String(id), "pdf"));
     expect(printResponse.status).toBe(200);
@@ -317,21 +332,14 @@ describe("GET /api/export/[reportId]", () => {
     );
   });
 
-  it("SANITIZES an unsafe symbol into the download filename (no path/quote injection)", async () => {
+  it("refuses an invalid issuer identity before rendering a download filename", async () => {
     const report = clone(loadFixtureReport());
     // A malicious/awkward symbol must never reach the header verbatim.
     report.meta.symbol = 'A/A"PL ..\\evil';
     const id = seedReport(report);
     const res = await exportGET(...exportReq(String(id)));
-    expect(res.status).toBe(200);
-    const cd = res.headers.get("content-disposition") ?? "";
-    // Every filesystem/header-hostile character collapsed to "-": the only
-    // double-quotes left are the two wrapping the filename value.
-    expect(cd).not.toContain("/");
-    expect(cd).not.toContain("\\");
-    expect((cd.match(/"/g) ?? []).length).toBe(2);
-    // slug(): [^A-Za-z0-9._-]+ → "-"; the "." run is kept, giving A-A-PL-..-evil.
-    expect(cd).toBe(`attachment; filename="A-A-PL-..-evil-report-${id}.md"`);
+    expect(res.status).toBe(422);
+    expect(res.headers.get("content-disposition")).toBeNull();
   });
 });
 
@@ -493,7 +501,7 @@ describe("GET /api/report/view/[reportId]", () => {
     report.meta.companyName = "Eli Lilly and Company";
     report.verdict.synthesis = entityConflict;
     const insertedJsonByteForByte = JSON.stringify(ReportSchema.parse(report));
-    const id = seedRawRow(insertedJsonByteForByte);
+    const id = seedRawRow(insertedJsonByteForByte, "done", "LLY");
 
     const response = await viewGET(...viewReq(String(id)));
 

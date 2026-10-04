@@ -21,6 +21,7 @@ import {
   SPREADS_2026_01,
   computeDupont,
   computeRoic,
+  computeRote,
   computeRoicVsWaccSpread,
   computeWacc,
   lookupSyntheticSpread,
@@ -1408,6 +1409,55 @@ describe("audit 2026-09-06 — invested capital and the WACC debt leg share the 
     expect(notes).toMatch(/NET_DEBT_V1/);
     expect(notes).not.toMatch(/§2\.2/);
   });
+});
+
+describe("annual returns require adjacent opening and closing balances", () => {
+  const income = (date: string): ReturnsIncomeRow => ({
+    date, revenue: 1000, operatingIncome: 100, incomeBeforeTax: 100,
+    incomeTaxExpense: 20, netIncome: 80,
+  });
+  const balance = (date: string, equity: number): ReturnsBalanceRow => ({
+    date, totalDebt: 100, totalStockholdersEquity: equity,
+    cashAndCashEquivalents: 0, shortTermInvestments: 0, totalAssets: equity + 100,
+    goodwill: 0, intangibleAssets: 0, preferredStock: 0,
+  });
+
+  it.each(["2023-12-31", "2025-06-30"])(
+    "discloses a missing year or short stub instead of averaging against %s",
+    (priorDate) => {
+      const inc = [income("2025-12-31"), income(priorDate)];
+      const bal = [balance("2025-12-31", 900), balance(priorDate, 100)];
+      const roic = computeRoic(inc, bal);
+      const rote = computeRote(inc, bal);
+      const dupont = computeDupont(inc, bal);
+      expect(roic.series.at(-1)?.investedCapitalAvg).toBe(1000);
+      expect(roic.latestRoicPct).toBe(8);
+      expect(rote.series.at(-1)?.tangibleCommonEquityAvg).toBe(900);
+      expect(rote.latestRotePct).toBeCloseTo(80 / 900 * 100, 12);
+      expect(dupont.latest?.assetTurnover).toBe(1);
+      expect(dupont.latest?.roePct).toBeCloseTo(80 / 900 * 100, 12);
+      for (const result of [roic, rote, dupont]) {
+        expect(result.gaps.some((g) => /fiscalContinuity/.test(g.field))).toBe(true);
+      }
+    },
+  );
+
+  it.each(["2024-12-28", "2024-12-21"])(
+    "retains averaging for the 52/53-week fiscal calendar ending %s",
+    (priorDate) => {
+      const inc = [income("2025-12-27"), income(priorDate)];
+      const bal = [balance("2025-12-27", 900), balance(priorDate, 100)];
+      const roic = computeRoic(inc, bal);
+      const rote = computeRote(inc, bal);
+      const dupont = computeDupont(inc, bal);
+      expect(roic.series.at(-1)?.investedCapitalAvg).toBe(600);
+      expect(rote.series.at(-1)?.tangibleCommonEquityAvg).toBe(500);
+      expect(dupont.latest?.assetTurnover).toBeCloseTo(1000 / 600, 12);
+      for (const result of [roic, rote, dupont]) {
+        expect(result.gaps.some((g) => /fiscalContinuity/.test(g.field))).toBe(false);
+      }
+    },
+  );
 });
 
 describe("audit 2026-09-06 — restated fiscal years are collapsed before any returns series is built", () => {

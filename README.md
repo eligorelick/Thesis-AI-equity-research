@@ -1,7 +1,7 @@
 # Thesis
 
 Thesis is a local-first equity research app with financial calculations and optional AI.
-Saved reports give every number a source path and an as-of date.
+Saved reports expose source paths, observation dates and missing evidence. **Settings → Appearance** switches between the default Current design and optional Research workspace; the choice is saved in this browser.
 
 > **Informational only — not investment advice.** Grades and price targets are
 > model outputs from disclosed data and assumptions, not human recommendations.
@@ -15,7 +15,7 @@ Saved reports give every number a source path and an as-of date.
 - Computes growth, returns, capital structure, valuation, scenarios,
   technicals, grades and forensic indicators in deterministic TypeScript, on a
   sector route drawn from the industry label and SIC code and checked against
-  what the filer actually tags — tags decide only where those are silent.
+  filed facts, which can refine broad financial-industry labels when corroborated.
 - Optionally runs separate bull and bear analyses and a judge
   pass, verifies every cited number without another model call, and turns
   missing inputs into disclosed gaps rather than fabricated values.
@@ -234,7 +234,7 @@ repository's [private advisory form](https://github.com/eligorelick/Thesis-AI-eq
 | `npm run test:integration` | The database CLI suite, which runs in its own process. |
 | `npm run test:coverage` | Both coverage contracts, core and risk. |
 | `npm run test:watch` | The product suite in watch mode. |
-| `npm run export:corrected` | Write a corrected report export from a stored run. |
+| `npm run export:corrected` | Write corrected HTML/JSON from a stored run; requires new output filenames. |
 | `npm run settings:reset` | Delete stored settings rows so .env takes precedence again. Needs --yes. |
 | `npm run db:push` | Apply the Drizzle schema to the configured database. |
 | `npm run check:dependencies` | Assert the dependency tree's shape. |

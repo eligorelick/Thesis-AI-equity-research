@@ -15,7 +15,7 @@
     "generator": {
       "helperSha256": "48af864a1d2a5bb165eb2832871bc2651f34a5951959450d2074512e4a7a26d7",
       "basePackageLockBlob": "66f7242846b6d20cfe99e21400d2dada27bbfbfd",
-      "comparisonPackageLockBlob": "07d10784cdf4da6db1504066087eea89f76fb4a0",
+      "comparisonPackageLockBlob": "83b2d7b725742ef010ef9427a6e3ed4fb7cc8c96",
       "generationNode": "v24.11.1",
       "generationNpm": "11.6.2",
       "command": "in detached 524d09e: npm ci; provider env blank; NODE_OPTIONS=--conditions=react-server; NODE_PATH=<base>/node_modules; AUDIT_FIXTURE_EMIT=1; node <base>/node_modules/tsx/dist/cli.mjs - < <remediation>/tests/helpers/auditFixtureComparison.ts"

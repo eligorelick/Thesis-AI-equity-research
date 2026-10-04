@@ -57,6 +57,7 @@ function seedReportDatabase(
   dbFile: string,
   reportJson?: string,
   withLedger = false,
+  rowSymbol = "DEMO",
 ): string {
   const storedBytes = reportJson ?? readFileSync(REPORT_FIXTURE, "utf8");
   const sqlite = new Database(dbFile);
@@ -64,6 +65,7 @@ function seedReportDatabase(
     sqlite.exec(`
       CREATE TABLE reports (
         id INTEGER PRIMARY KEY,
+        symbol TEXT NOT NULL,
         reportJson TEXT,
         createdAt TEXT NOT NULL,
         model TEXT NOT NULL
@@ -85,10 +87,11 @@ function seedReportDatabase(
     `);
     sqlite
       .prepare(
-        "INSERT INTO reports (id, reportJson, createdAt, model) VALUES (?, ?, ?, ?)",
+        "INSERT INTO reports (id, symbol, reportJson, createdAt, model) VALUES (?, ?, ?, ?, ?)",
       )
       .run(
         7,
+        rowSymbol,
         storedBytes,
         "2026-08-08T00:00:00.000Z",
         "fixture-model",
@@ -117,6 +120,22 @@ function seedReportDatabase(
 }
 
 describe("corrected report CLI", () => {
+  it("refuses a different embedded issuer before creating output and preserves the database", async () => {
+    const cli = await loadCli();
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "thesis-corrected-identity-"));
+    const dbFile = path.join(tempDir, "source.db");
+    const outputHtml = path.join(tempDir, "output", "report.html");
+    try {
+      seedReportDatabase(dbFile, undefined, false, "MSFT");
+      const original = readFileSync(dbFile);
+      expect(() => cli.runCorrectedExport({ dbFile, reportId: 7, outputHtml })).toThrow(/identity/i);
+      expect(existsSync(path.dirname(outputHtml))).toBe(false);
+      expect(readFileSync(dbFile)).toEqual(original);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("is import-safe and exposes callable parsing/export entry points", async () => {
     const tempRoot = path.join(ROOT, "tmp");
     mkdirSync(tempRoot, { recursive: true });

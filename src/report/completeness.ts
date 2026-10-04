@@ -1,5 +1,6 @@
 import type { ManifestEntry } from "@/types/core";
 import type { DataCompleteness as PersistedDataCompleteness } from "@/report/schema";
+import { RESERVED_FIXTURE_MANIFEST_FIELD } from "@/providers/reservedSymbols";
 
 export interface DataCompleteness {
   state: "complete" | "degraded" | "blocked";
@@ -19,6 +20,9 @@ export function buildDataCompleteness(
   // provider failures. Exclude them from headline completeness states while
   // retaining them in the report's detailed manifest.
   const actionableGaps = gaps.filter((gap) => gap.expected !== true);
+  // Reserved runs intentionally make no provider requests. Excluding their
+  // expected omissions from incident counts must not imply successful checks.
+  const fixtureOnly = gaps.some((gap) => gap.field.startsWith(`${RESERVED_FIXTURE_MANIFEST_FIELD}(`));
   const criticalCount = actionableGaps.filter((gap) => gap.severity === "critical").length;
   const warningCount = actionableGaps.filter((gap) => gap.severity === "warn").length;
   // A `keyless.*` entry reports on the EDGAR + Yahoo SUBSTITUTION layer, not on
@@ -48,12 +52,12 @@ export function buildDataCompleteness(
         gap.reason,
       ),
   );
-  const xbrl = xbrlGaps.length === 0
+  const xbrl = fixtureOnly ? "skipped" as const : xbrlGaps.length === 0
     ? "checked" as const
     : xbrlCheckFailed
       ? "failed" as const
       : "skipped" as const;
-  const edgar = edgarGaps.length > 0 ? "missing" as const : "available" as const;
+  const edgar = fixtureOnly || edgarGaps.length > 0 ? "missing" as const : "available" as const;
 
   return {
     state: criticalCount > 0 ? "blocked" : actionableGaps.length > 0 ? "degraded" : "complete",

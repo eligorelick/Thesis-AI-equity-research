@@ -16,6 +16,7 @@ import {
 } from "@/settings/writeQueue";
 import { ResumeQueueControl } from "./ResumeQueueControl";
 import { AiConnections } from "./AiConnections";
+import { AppearanceSettings } from "./AppearanceSettings";
 
 /**
  * Labels come from the model registry, which is also where the options come
@@ -97,6 +98,7 @@ export function SettingsPageView({
           </div>
         )}
 
+        <AppearanceSettings />
         <AiConnections />
         <Panel title="Claude API model (used only when selected above)" right={saveBadge}>
           {settings === null && state.status === "loading" ? (

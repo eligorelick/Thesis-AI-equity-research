@@ -1,6 +1,6 @@
 /**
  * ReportView — the centerpiece renderer for a persisted {@link Report}
- * (src/report/schema.ts). Renders the full report (report sections 1–13)
+ * (src/report/schema.ts). Renders the full report (report sections 1–14)
  * as a dense, navigable, terminal-grade page:
  *
  *   - a sticky top bar holding the current 7-grade strip (Fundamentals,
@@ -29,6 +29,8 @@
  */
 
 import type { ReactNode } from "react";
+import { WorkspaceOnly } from "@/appearance/UiDesignProvider";
+import { ReportEvidenceRail } from "./ReportEvidenceRail";
 
 import type { Report } from "@/report/schema";
 import { deriveReportCompletenessPresentation } from "@/report/completeness";
@@ -75,7 +77,7 @@ export function isDataOnlyReport(report: Report): boolean {
 
 function AnchorNav() {
   return (
-    <nav className="sticky top-4 hidden max-h-[calc(100vh-6rem)] w-48 shrink-0 flex-col gap-0.5 overflow-y-auto xl:flex">
+    <nav className="report-anchor-nav sticky top-4 hidden max-h-[calc(100vh-6rem)] w-48 shrink-0 flex-col gap-0.5 overflow-y-auto xl:flex">
       <div className="mono px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-faint">
         sections
       </div>
@@ -170,7 +172,7 @@ export function ReportView({
   };
 
   return (
-    <div className="mx-auto flex max-w-[1400px] flex-col gap-3 p-4">
+    <div className="thesis-report mx-auto flex max-w-[1400px] flex-col gap-3 p-4">
       {/* Sticky grade strip — clickable, deep-links to each graded section. */}
       <div className="sticky top-0 z-20 -mx-4 border-b border-edge bg-bg/95 px-4 py-2 backdrop-blur">
         <GradeStripBar gradeStrip={report.verdict.gradeStrip} compact />
@@ -180,7 +182,7 @@ export function ReportView({
 
       {completeness.bannerText && <DataOnlyBanner text={completeness.bannerText} />}
 
-      <div className="flex gap-4">
+      <div className="report-columns flex gap-4">
         {/* Main column */}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           {REPORT_SECTION_MANIFEST.map((section) => (
@@ -190,6 +192,7 @@ export function ReportView({
 
         {/* Right-rail anchor nav (denser than tabs). */}
         <AnchorNav />
+        <WorkspaceOnly><ReportEvidenceRail report={report} /></WorkspaceOnly>
       </div>
     </div>
   );

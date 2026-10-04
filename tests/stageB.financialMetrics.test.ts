@@ -193,6 +193,9 @@ describe("bank route metrics", () => {
     expect(proxy.proxy).toBe(true);
     expect(proxy.label).toBe("tangible common equity / tangible assets");
     expect(proxy.basis).toContain("does not risk-weight");
+    // Risk-weighted assets can exceed tangible assets, and the regulatory
+    // numerator differs too: there is no guaranteed ordering versus CET1.
+    expect(proxy.basis).toContain("no guaranteed ordering");
   });
 
   it("uses a reported CET1 when the filer tags one, normalising a filed fraction", () => {

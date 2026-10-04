@@ -93,6 +93,28 @@ describe("estimateBeta", () => {
     expect(result.gap?.reason).toMatch(/variance/);
   });
 
+  it("does not count a return across a missing calendar month toward the minimum sample", () => {
+    const { symbol, bench } = series(26, 1.3);
+    const missingMonth = symbol.filter((row) => !row.date.startsWith("2022-01"));
+    const result = estimateBeta(missingMonth, bench);
+    // 25 monthly intervals minus both intervals touching the missing level.
+    expect(result.months).toBe(23);
+    expect(result.beta).toBeNull();
+    expect(result.gap?.reason).toMatch(/23 monthly returns.*24/);
+    expect(result.note).toMatch(/non-monthly interval.*excluded/);
+  });
+
+  it("bounds the window by calendar months even when shared levels are missing", () => {
+    const { symbol, bench } = series(80, 1.3);
+    const missingMonth = bench.filter((row) => !row.date.startsWith("2024-01"));
+    const result = estimateBeta(symbol, missingMonth);
+    expect(result.windowStart?.slice(0, 7)).toBe("2022-08");
+    expect(result.windowEnd?.slice(0, 7)).toBe("2027-08");
+    expect(result.months).toBe(58);
+    expect(result.beta).toBeCloseTo(1.3, 6);
+    expect(result.disclosure?.reason).toMatch(/non-monthly interval.*excluded/);
+  });
+
   it("monthEndCloses keeps the last trading day of each month, newest first", () => {
     const { symbol } = series(3, 1.0);
     const ends = monthEndCloses(symbol);

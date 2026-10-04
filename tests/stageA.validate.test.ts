@@ -200,6 +200,8 @@ describe("currency consistency (audit 2026-07-11 #6)", () => {
     const report = validateBundle(withCurrencies("USD", "TWD"), { now: NOW });
     const cc = report.checks.find((c) => c.id === "currencyConsistency");
     expect(cc?.status).toBe("warn");
+    expect(cc?.detail).toContain("quote comparisons are withheld");
+    expect(cc?.detail).toContain("model currency");
     expect(report.gaps.some((g) => g.field === "validation.currencyMismatch" && g.severity === "warn")).toBe(true);
   });
 

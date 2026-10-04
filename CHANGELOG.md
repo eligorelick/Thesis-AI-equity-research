@@ -1,5 +1,33 @@
 # Changelog
 
+Entries below the current repository audit record earlier development batches.
+Their model defaults, prices and migration advice describe those dates; use
+README and the current usage/methodology documents for present guidance.
+
+## Unreleased — repository audit (2026-10-03)
+
+- Count only adjacent monthly observations within five calendar years for beta;
+  recognize reverse-DCF solutions at the inclusive search bounds.
+- Preserve missing FRED periods before lagging; include parsing in the shared
+  filing-extraction budget. Reserved demo reports no longer claim EDGAR evidence.
+- Require adjacent fiscal years when averaging capital for ROIC, ROTE and
+  DuPont; disclose the existing single-period fallback for gaps and short stubs.
+- Withhold saved report content whose issuer disagrees with its database row.
+- Corrected CLI exports now refuse existing HTML/JSON destinations. Choose new
+  filenames; the source database, linked files and existing exports are preserved.
+- Preserve billing evidence when a paused continuation is refused; update job
+  revisions after cost reconciliation; preserve UTF-8 across Gemini stream chunks.
+- Preserve financial punctuation in verdict comparisons. Surface watchlist
+  failures, improve secondary-text contrast, and retain chart gaps and isolated
+  observations. Remove the unused direct legacy ESLint compatibility dependency.
+- Report spec 1.7.0 and payload 1.8.0 distinguish corrected calculations while
+  preserving historical report bytes. Retain the current UI by default and add
+  the owner-selected Research workspace in Settings → Appearance, with a saved
+  browser preference, lighter responsive layout and report evidence sidebar.
+  Keep the offline comparison lab for the design rationale.
+- Reconcile methodology, provider-rights guidance and historical-document status.
+  See the [audit evidence and limits](docs/audit/2026-10-03-repository-audit.md).
+
 ## Unreleased — AI execution, current Claude models and limited FMP access
 
 - Refresh ChatGPT account models automatically, preserve saved selections, and
@@ -121,7 +149,7 @@ provider conventions are tabled in
   EPS or share-count field that matches the filer's restated value for the same
   field, are used as they are; a field the filer does not state is withheld.
 
-## Unreleased — currency integrity (2026-09-28 to 2026-09-30)
+## Included development batch — currency integrity (2026-09-28 to 2026-09-30)
 
 Money figures now carry only a currency their own evidence establishes, and
 nothing combines figures across currencies. The conventions are D-28 and D-29
@@ -158,7 +186,7 @@ in [`docs/audit/DECISIONS.md`](docs/audit/DECISIONS.md).
   cash-flow row's currency**, and never shows a history across a currency
   change.
 
-## Unreleased — full codebase audit of 2026-09-06
+## Included development batch — full codebase audit of 2026-09-06
 
 Every source file, test and document was read against the others; 232
 findings from independent reviewers were verified one by one, and the slices

@@ -239,7 +239,9 @@ export interface ContextPayload {
 // A pass stored under 1.5.0 must not resume with these changed conventions.
 // 1.7.0 (D-34): bank evidence routing, common-equity/return pairing, and
 // financial-route metric applicability. Older analyst work must be regenerated.
-export const PAYLOAD_VERSION = "1.7.0" as const;
+// Calendar-bounded beta and inclusive reverse-DCF roots change financial evidence.
+// Partial analyst work from the prior conventions must not be reused.
+export const PAYLOAD_VERSION = "1.8.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Small pure helpers

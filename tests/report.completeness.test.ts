@@ -6,8 +6,18 @@ import {
 } from "@/report/completeness";
 import type { DataCompleteness } from "@/report/schema";
 import type { ManifestEntry } from "@/types/core";
+import { reservedFixtureManifestEntry, reservedProviderGap } from "@/providers/reservedSymbols";
 
 describe("report data completeness", () => {
+  it("does not turn intentionally absent fixture providers into successful EDGAR or XBRL checks", () => {
+    expect(buildDataCompleteness([
+      reservedFixtureManifestEntry("DEMO"),
+      reservedProviderGap("edgar.companyFacts(DEMO)", "DEMO", ["fixtures/edgar"]),
+    ])).toEqual({
+      state: "complete", criticalCount: 0, warningCount: 0,
+      edgar: "missing", xbrl: "skipped", forensicValidation: "provisional",
+    });
+  });
   it("does not turn XBRL routing evidence into a failed statement cross-check", () => {
     const routeConflict: ManifestEntry = { field: "route.evidence.conflict", reason: "XBRL companyfacts tags suggest bank while industry/sector routed to general", severity: "warn" };
     expect(buildDataCompleteness([routeConflict])).toMatchObject({ xbrl: "checked", edgar: "available" });

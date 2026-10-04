@@ -353,6 +353,33 @@ describe("sensitivityGrid", () => {
 // ---------------------------------------------------------------------------
 
 describe("reverseDcf", () => {
+  it("recognises an exact growth root at the upper search boundary", () => {
+    const a = explicitAssumptions({ growthPath: [60, 60], ebitMarginPath: [30, 30], salesToCapital: 10, midYear: false });
+    const opts = { waccPct: 10, netDebt: 0, dilutedShares: 100 };
+    // Revenue 1600/2560, NOPAT 360/576, investment 60/96,
+    // FCFF 300/480; terminal FCFF 470.016 and Gordon spread 8%.
+    const referencePrice = (300 / 1.1 + 480 / 1.1 ** 2 + (470.016 / 0.08) / 1.1 ** 2) / 100;
+    const price = runDcf(a, opts).perShare!;
+    expect(price).toBeCloseTo(referencePrice, 10);
+    const result = reverseDcf(price, a, opts);
+    expect(result.method).toBe("growth");
+    expect(result.impliedRevenueGrowthPct).toBe(60);
+  });
+
+  it("recognises an exact terminal-margin root at the upper search boundary", () => {
+    const a = explicitAssumptions({ growthPath: [0, 0], ebitMarginPath: [-10, 10], salesToCapital: 10, midYear: false });
+    const opts = { waccPct: 10, netDebt: 0, dilutedShares: 100 };
+    const target = { ...a, ebitMarginPath: { value: [-10, 60], basis: "test" } };
+    // Y1 loss 100 offsets Y2 EBIT 600: tax 125, FCFF 475.
+    // Terminal FCFF = 1000 × 1.02 × .60 × .75 × .80 = 367.2.
+    const referencePrice = (-100 / 1.1 + 475 / 1.1 ** 2 + (367.2 / 0.08) / 1.1 ** 2) / 100;
+    const price = runDcf(target, opts).perShare!;
+    expect(price).toBeCloseTo(referencePrice, 10);
+    const result = reverseDcf(price, a, opts);
+    expect(result.method).toBe("margin");
+    expect(result.impliedTerminalMarginPct).toBe(60);
+  });
+
   it("round-trips: run DCF at g=8%, feed perShare as price -> implied ~8% (within 5bp)", () => {
     // Constant 8% growth over 10y (no fade), roicTerm=WACC so FCFF>0.
     const a = explicitAssumptions({
@@ -1937,6 +1964,7 @@ describe("valueCompany dispatch", () => {
       // multiples for bank route suppress EV multiples
       const ev = r.multiples.multiples.find((m) => m.key === "evToEbitda");
       expect(ev?.current).toBeNull();
+      expect(r.gaps.find((g) => g.field === "valuation.dcf")?.reason).not.toContain("subtracts debt service");
     }
   });
 
@@ -2438,7 +2466,8 @@ describe("multiplesFramework — EV bridge and THESIS_EV_INCLUDE_LEASES", () => 
   };
   // EV as reported = 10000 + 2000 + 50 + 100 - 500 = 11,650.
   // EV less the OPERATING lease liability = 11,650 - 220 = 11,430. The 80 of
-  // finance leases STAYS: EBIT and EBITDA are both before finance-lease cost.
+  // finance leases STAYS: its interest is below EBIT, and EBITDA adds back
+  // the right-of-use amortisation included in EBIT.
   // EBITDA = 1000 + 200 = 1200.
   const EV_INC = 11_650;
   const EV_EX = 11_430;
@@ -2459,7 +2488,7 @@ describe("multiplesFramework — EV bridge and THESIS_EV_INCLUDE_LEASES", () => 
     expect(r.enterpriseValue.basis).toContain("EV as reported 11650");
     // Both earnings frames are stated, and it is the SAME EV the multiple divides.
     expect(r.enterpriseValue.basis).toContain("EBIT and EBITDA are already AFTER it");
-    expect(r.enterpriseValue.basis).toContain("Finance-lease cost is NOT in EBIT");
+    expect(r.enterpriseValue.basis).toContain("Finance-lease right-of-use amortisation is included in EBIT");
     const evEbitda = r.multiples.find((m) => m.key === "evToEbitda");
     expect(evEbitda?.current).toBeCloseTo(EV_EX / 1200, 12);
     expect(evEbitda?.basis).toContain("EXCLUDES the OPERATING-lease liability");
@@ -2555,12 +2584,13 @@ describe("valueCompany — the DCF equity bridge follows the same lease conventi
     const a = withLeases.dcf?.perShare as number;
     const b = exLeases.dcf?.perShare as number;
     // Net debt 500 as reported, 410 less the 90 of OPERATING leases, over 100
-    // shares. The 30 of finance leases stays: EBIT is before finance-lease cost.
+    // shares. The 30 of finance leases stays as financing debt.
     expect(b - a).toBeCloseTo(90 / 100, 9);
     expect(exLeases.notes.some((n) => n.includes("REMOVING the operating-lease liability of 90"))).toBe(true);
     expect(withLeases.notes.some((n) => n.includes("KEEPING the operating-lease liability of 90"))).toBe(true);
     expect(exLeases.notes.some((n) => n.includes("Net debt as reported 500; less the OPERATING lease liability 410"))).toBe(true);
     expect(exLeases.notes.some((n) => n.includes("the finance-lease liability of 30 stays in net debt on both bases"))).toBe(true);
+    expect(exLeases.notes.some((n) => n.includes("right-of-use amortisation is inside EBIT"))).toBe(true);
   });
 
   it("makes NO lease adjustment when only the combined lease figure is known", () => {

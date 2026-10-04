@@ -36,6 +36,8 @@ import {
 } from "lightweight-charts";
 
 import { smaSeries, type DatedClose } from "./format";
+import { useUiDesign } from "@/appearance/UiDesignProvider";
+import { chartPalette, type ChartPalette } from "./palette";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -78,19 +80,7 @@ export interface PriceChartProps {
 // Theme (kept in sync with globals.css)
 // ---------------------------------------------------------------------------
 
-const THEME = {
-  bgPanel: "#0f141c",
-  border: "#1f2937",
-  fg: "#d5dce6",
-  fgFaint: "#5c6b80",
-  pos: "#2ecc8f",
-  neg: "#f0525f",
-  accent: "#3ba7f5",
-  warn: "#e8b339",
-  sma50: "#3ba7f5", // accent
-  sma200: "#e8b339", // warn
-  volume: "#2b3648", // border-strong, dim
-} as const;
+const THEME = chartPalette("current");
 
 // ---------------------------------------------------------------------------
 // Pure helpers (data shaping)
@@ -147,6 +137,7 @@ function lineDataFrom(
 /** Omit unavailable volume points without removing their price/candlestick bars. */
 export function toVolumeHistogramData(
   bars: readonly PriceBar[],
+  palette: ChartPalette = THEME,
 ): HistogramData<Time>[] {
   const out: HistogramData<Time>[] = [];
   for (const b of bars) {
@@ -156,13 +147,13 @@ export function toVolumeHistogramData(
     out.push({
       time: barDate(b) as Time,
       value: b.volume,
-      color: b.close >= b.open ? `${THEME.pos}55` : `${THEME.neg}55`,
+      color: b.close >= b.open ? `${palette.pos}55` : `${palette.neg}55`,
     });
   }
   return out;
 }
 
-function chartOptions(height: number): DeepPartial<ChartOptions> {
+function chartOptions(height: number, THEME: ChartPalette): DeepPartial<ChartOptions> {
   return {
     height,
     layout: {
@@ -207,6 +198,8 @@ export function PriceChart({
   showSma50 = true,
   showSma200 = true,
 }: PriceChartProps) {
+  const { design } = useUiDesign();
+  const THEME = chartPalette(design);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
@@ -219,7 +212,7 @@ export function PriceChart({
     if (!container) return;
 
     const chart = createChart(container, {
-      ...chartOptions(height),
+      ...chartOptions(height, THEME),
       width: container.clientWidth,
     });
     chartRef.current = chart;
@@ -251,7 +244,7 @@ export function PriceChart({
       priceLineVisible: false,
       lastValueVisible: false,
     });
-    const volData = toVolumeHistogramData(bars);
+    const volData = toVolumeHistogramData(bars, THEME);
     volume.setData(volData);
     chart.priceScale("volume").applyOptions({
       scaleMargins: { top: 0.78, bottom: 0 },
@@ -313,7 +306,7 @@ export function PriceChart({
       chart.remove();
       chartRef.current = null;
     };
-  }, [bars, crosses, height, showSma50, showSma200]);
+  }, [bars, crosses, height, showSma50, showSma200, THEME]);
 
   const has200 = bars.length >= 200;
 

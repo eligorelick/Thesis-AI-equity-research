@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Thesis · UI comparison lab</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to research</a>
+  <header class="lab">
+    <div class="lab-heading"><strong>THESIS <span>Interface lab</span></strong><span class="lab-badge">SIMULATION · SYNTHETIC DATA ONLY</span></div>
+    <div class="lab-controls">
+      <div class="designs" role="group" aria-label="Choose interface design">
+        <button data-design="current" aria-pressed="true">01 · Current</button>
+        <button data-design="workspace" aria-pressed="false">02 · Research workspace</button>
+        <button data-design="brief" aria-pressed="false">03 · Decision brief</button>
+      </div>
+      <label>Data condition<select id="condition"><option value="baseline">Baseline demo</option><option value="gaps">Critical data gaps</option><option value="stale">Stale snapshot</option><option value="dataonly">AI unavailable / data only</option></select></label>
+    </div>
+    <p id="design-note">A simplified reproduction of the current dark terminal layout. No production UI changes.</p>
+    <p class="lab-fine">Compare the same fictional DEMO / DBNK case across designs. Navigation, report runs, AI settings, and exports work locally in this simulation. Nothing connects to a provider or saves settings. Reload resets the demo.</p>
+  </header>
+  <div id="app" data-design="current"></div>
+  <p id="announcement" class="sr-only" role="status" aria-live="polite"></p>
+  <dialog id="export-dialog" aria-labelledby="export-title">
+    <div class="dialog-bar"><h2 id="export-title">Synthetic report export</h2><button id="close-export" aria-label="Close export preview">Close</button></div>
+    <p>This is a local preview of synthetic data. Print opens your browser’s print dialog; choose Save as PDF.</p>
+    <pre id="export-preview"></pre>
+    <button id="print-export">Print / Save as PDF</button>
+  </dialog>
+  <noscript>This interactive comparison needs JavaScript. It makes no provider requests.</noscript>
+</body>
+</html>

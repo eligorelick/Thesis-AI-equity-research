@@ -1,5 +1,16 @@
 # Analysis quality — design
 
+> **Historical design and live-run record; guidance reviewed 2026-10-03.**
+> The issuer prices, valuation outputs, model choices, costs, and validation
+> below describe the September 2 experiments and are not current market data
+> or recommendations. Some approaches have since been replaced: section 8
+> records the superseded growth anchor, and the predecessor-history limitation
+> in section 3 predates the successor support now present in
+> [successor resolution](../../../src/edgar/successor.ts). Use the
+> [README](../../../README.md), [methodology](../../METHODOLOGY.md), and
+> [audit decisions](../../audit/DECISIONS.md) for maintained guidance. Original
+> findings and measurements remain intact as dated evidence.
+
 **Date:** 2026-09-02
 **Status:** implemented (2026-09-02). Every change below is covered by unit
 tests, the audited fixture baseline carries dated allowlist entries for the

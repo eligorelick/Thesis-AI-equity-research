@@ -28,6 +28,7 @@ import { isFiniteNumber } from "@/pipeline/stageB/growth";
 import { comparePriceCurrency } from "@/pipeline/stageB/priceCurrency";
 import { resolveNetDebt } from "@/pipeline/stageB/netDebt";
 import { normalizeQuarterRows } from "@/pipeline/stageB/quarterWindows";
+import { CONSECUTIVE_FISCAL_PERIOD_DAYS } from "@/pipeline/stageB/forensics";
 
 // ---------------------------------------------------------------------------
 // SPREADS_2026_01 — Damodaran synthetic-rating spread table (verbatim)
@@ -1201,6 +1202,31 @@ function findBalanceForDate(
   return bestDelta <= BALANCE_MATCH_TOLERANCE_DAYS ? best : null;
 }
 
+/** A missing fiscal year or a transition stub is not an opening annual balance. */
+function findPriorAnnualBalance(
+  balances: ReadonlyArray<ReturnsBalanceRow>,
+  current: ReturnsBalanceRow,
+  priorIncomeDate: string | null,
+  metric: "roic" | "rote" | "dupont",
+  notes: string[],
+  gaps: ManifestEntry[],
+): ReturnsBalanceRow | null {
+  if (priorIncomeDate === null) return null;
+  const prior = findBalanceForDate(balances, priorIncomeDate);
+  if (prior === null) return null;
+  const elapsedDays = (Date.parse(current.date) - Date.parse(prior.date)) / 86_400_000;
+  if (
+    elapsedDays >= CONSECUTIVE_FISCAL_PERIOD_DAYS[0] &&
+    elapsedDays <= CONSECUTIVE_FISCAL_PERIOD_DAYS[1]
+  ) return prior;
+  const reason = `${current.date}: balance ${prior.date} is ${elapsedDays} days earlier, outside the ` +
+    `${CONSECUTIVE_FISCAL_PERIOD_DAYS[0]}–${CONSECUTIVE_FISCAL_PERIOD_DAYS[1]} day consecutive-annual range — ` +
+    "single-period capital used instead of averaging nonconsecutive balances";
+  notes.push(reason);
+  gaps.push({ field: `returns.${metric}.fiscalContinuity`, reason, severity: "warn" });
+  return null;
+}
+
 /** Observed effective tax fraction for a single year, clamped [0, 0.35]. */
 function yearTaxRate(row: ReturnsIncomeRow, notes: string[]): number | null {
   const pretax = row.incomeBeforeTax;
@@ -1440,7 +1466,7 @@ export function computeRote(
     const cur = findBalanceForDate(bal, row.date);
     if (!cur) continue;
     const priorDate = inc[i + 1]?.date ?? null;
-    const prior = priorDate !== null ? findBalanceForDate(bal, priorDate) : null;
+    const prior = findPriorAnnualBalance(bal, cur, priorDate, "rote", notes, gaps);
     const tce = tangibleCommonEquity(cur);
     const tcePrior = prior ? tangibleCommonEquity(prior) : null;
     const avg = tce !== null && tcePrior !== null ? (tce + tcePrior) / 2 : tce;
@@ -1596,9 +1622,9 @@ export function computeRoic(
     const icNow = investedCapital(balNow, yearNotes, includeOperatingLeases);
     if (icNow === null) continue;
 
-    // Previous-period balance for averaging: the next-older income date, else nearest older balance.
+    // Average only against an adjacent annual balance; missing years use the disclosed single-period fallback.
     const prevIncomeDate = i + 1 < inc.length ? inc[i + 1].date : null;
-    const balPrev = prevIncomeDate !== null ? findBalanceForDate(bal, prevIncomeDate) : null;
+    const balPrev = findPriorAnnualBalance(bal, balNow, prevIncomeDate, "roic", yearNotes, gaps);
     let icAvg: number;
     if (balPrev !== null && balPrev !== balNow) {
       const icPrev = investedCapital(balPrev, yearNotes, includeOperatingLeases);
@@ -1702,7 +1728,7 @@ export function computeDupont(
       continue;
     }
     const prevIncomeDate = i + 1 < inc.length ? inc[i + 1].date : null;
-    const balPrev = prevIncomeDate !== null ? findBalanceForDate(bal, prevIncomeDate) : null;
+    const balPrev = findPriorAnnualBalance(bal, balNow, prevIncomeDate, "dupont", yearNotes, gaps);
 
     const avgOf = (
       now: number | null | undefined,

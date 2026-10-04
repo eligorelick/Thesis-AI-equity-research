@@ -6,6 +6,10 @@ README and the current usage/methodology documents for present guidance.
 
 ## Unreleased — evidence-qualified recommendations (2026-10-04)
 
+- Replace stale-PID credential-lock deletion with a permanent, marker-only
+  SQLite mutex using native process ownership. Preserve credential envelopes;
+  upgrades/downgrades require stopped servers and the documented legacy-lock
+  migration in [Privacy](docs/PRIVACY.md).
 - Use completed regular US month-end sessions for beta and calendar lag periods
   for monthly, quarterly and annual keyless FRED transformations. Missing periods
   withhold affected changes; holiday and sparse-frequency limits are disclosed.
@@ -23,7 +27,8 @@ README and the current usage/methodology documents for present guidance.
   these conventions; saved reports retain their original bytes.
 - Validate consumed credential-store fields before mutation and clean owned
   locks/descriptors after acquisition I/O failures. Preserve historical valid
-  selections and unknown metadata. Concurrent stale-lock recovery remains open.
+  selections and unknown metadata. Concurrent stale-lock recovery remained open
+  in this batch; the later recommendations batch replaces that locking protocol.
 - Report exact judge-case excess and actual shortening, including escaped text
   and partially recorded historical metadata. Protected citations remain intact.
 - Expose scenario target provenance and clearer catalyst/risk dates, direction,

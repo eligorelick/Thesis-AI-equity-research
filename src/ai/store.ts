@@ -6,6 +6,7 @@ import path from "node:path";
 import os from "node:os";
 import { z } from "zod";
 import { CHATGPT_EFFORTS, validModelId, type AiSelection } from "./contracts";
+import { withAiMutex } from "./mutex";
 
 export interface ChatGptProfile {
   id: string;
@@ -126,38 +127,10 @@ function writeAiStore(store: AiStore): void {
 /** Cross-process exclusion protects rotating refresh tokens as well as settings writes. */
 export async function withAiStore<T>(fn: (store: AiStore) => Promise<T> | T): Promise<T> {
   ensurePrivateDirectory(aiDirectory());
-  const lock = path.join(aiDirectory(), "connections.lock");
-  const started = Date.now();
-  for (;;) {
-    let acquiredFd: number | undefined;
-    try {
-      acquiredFd = fs.openSync(lock, "wx", 0o600);
-      fs.writeFileSync(acquiredFd, String(process.pid)); fs.closeSync(acquiredFd);
-      break;
-    } catch (error) {
-      if (acquiredFd !== undefined) {
-        // Opening succeeded, so a PID write/close failure is ours to clean up.
-        // Preserve the original failure even if best-effort cleanup also fails.
-        try { fs.closeSync(acquiredFd); } catch { /* already closed or unavailable */ }
-        try { fs.rmSync(lock, { force: true }); } catch { /* filesystem failure */ }
-        throw error;
-      }
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try {
-        const pid = Number(fs.readFileSync(lock, "utf8"));
-        if (Number.isInteger(pid) && pid > 0) {
-          try { process.kill(pid, 0); }
-          catch (e) { if ((e as NodeJS.ErrnoException).code === "ESRCH") { fs.rmSync(lock); continue; } }
-        }
-      } catch { /* Another writer may be creating or removing the lock. */ }
-      if (Date.now() - started > 40_000) throw new Error("AI credentials are busy; retry shortly");
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  try {
+  return withAiMutex(path.join(aiDirectory(), "connections.lock"), async () => {
     const store = readAiStore() ?? { version: 1, hostId: `urn:uuid:${randomUUID()}`, profiles: [], gemini: null, selection: { provider: "none" } };
     const result = await fn(store);
     writeAiStore(store);
     return result;
-  } finally { fs.rmSync(lock, { force: true }); }
+  });
 }

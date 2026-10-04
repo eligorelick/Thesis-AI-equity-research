@@ -23,6 +23,7 @@ const EXPECTED_RISK_SOURCES = [
   "src/ai/contracts.ts",
   "src/ai/fingerprint.ts",
   "src/ai/gemini.ts",
+  "src/ai/mutex.ts",
   "src/ai/store.ts",
   "src/ai/transport.ts",
   "src/app/api/ai/connections/route.ts",

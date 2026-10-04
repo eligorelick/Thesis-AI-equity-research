@@ -630,7 +630,7 @@ describe("FMP↔XBRL cross-check", () => {
     expect(report.gaps.some((g) => g.field === "validation.xbrlCrossCheck")).toBe(true);
   });
 
-  it("records an identity pass, and no gap, when the statements are themselves XBRL-sourced", () => {
+  it("discloses a skipped independent check when statements are themselves XBRL-sourced", () => {
     // Keyless path: the income statements were built FROM companyfacts, so
     // cross-checking them against companyfacts compares a number with itself.
     const bundle = makeBundle({
@@ -640,14 +640,14 @@ describe("FMP↔XBRL cross-check", () => {
     const report = validateBundle(bundle, { now: NOW });
     const fy = report.checks.find((c) => c.id === "xbrlCrossCheck.FY");
     const q = report.checks.find((c) => c.id === "xbrlCrossCheck.Q");
-    expect(fy?.status).toBe("pass");
-    expect(q?.status).toBe("pass");
+    expect(fy?.status).toBe("skipped");
+    expect(q?.status).toBe("skipped");
     expect(fy?.detail).toMatch(/identity/);
-    // No per-field comparison ran, and nothing about the cross-check is missing.
+    // No independent per-field comparison ran; an identity is not verification.
     expect(report.checks.some((c) => c.id.startsWith("xbrlCrossCheck.revenue"))).toBe(false);
     expect(report.checks.some((c) => c.id.startsWith("xbrlCrossCheck.netIncome"))).toBe(false);
-    expect(report.gaps.some((g) => g.field.startsWith("validation.xbrlCrossCheck"))).toBe(false);
-    expect(buildDataCompleteness(report.gaps).xbrl).toBe("checked");
+    expect(report.gaps.find((g) => g.field === "validation.xbrlCrossCheck.identity")?.severity).toBe("info");
+    expect(buildDataCompleteness(report.gaps).xbrl).toBe("skipped");
   });
 
   it("treats FMP zero revenue as undisclosed and skips instead of comparing", () => {

@@ -22,6 +22,19 @@
   Preserve model changes in streams and valid content during continuation.
 - Stop retrying an enforced Claude spend cap and respect Retry-After during
   temporary throttling.
+- Recover completed ChatGPT output items when the terminal event omits them;
+  retain failed-pass usage and distinguish unknown model/usage from zero.
+- Display missing and sparse data-only assessments honestly across reports,
+  history and exports, and distinguish routing evidence from XBRL validation.
+- Use configured Finnhub news and upcoming-earnings fallbacks when FMP cannot
+  provide them, retaining provenance and genuine subscription limitations.
+- Preserve presumed billing and original model requests through pass settlement
+  and recovery; match Claude refusal billing to actual model transitions.
+- Disable redundant local HTTP compression that accumulated drain listeners.
+- Refine broad financial classifications using strong filing evidence, pair
+  common earnings with common equity, and withhold industrial cash-flow/EV
+  signals on financial routes. Report spec 1.6.0 and payload 1.7.0 preserve
+  historical reports while invalidating incompatible partial analysis.
 
 ## 0.1.0 — 2026-10-03
 

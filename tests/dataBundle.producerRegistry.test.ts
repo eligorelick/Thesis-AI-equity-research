@@ -156,9 +156,14 @@ describe("buildDataBundle producer registry", () => {
       });
     }
 
+    // A failed fallback is an attempted substitute, not another returned
+    // producer. It remains disclosed separately from the primary result.
+    const fallbackGaps = bundle.gaps.filter((gap) => gap.field.startsWith("dataFallback."));
+    expect(fallbackGaps.map((gap) => gap.field).sort()).toEqual(["dataFallback.earningsCalendarNext", "dataFallback.news"]);
+    expect(fallbackGaps.every((gap) => gap.attemptedSources?.includes("finnhub"))).toBe(true);
     const disclosedProducerGaps = new Set(
       bundle.gaps
-        .filter((gap) => !gap.field.startsWith("cache."))
+        .filter((gap) => !gap.field.startsWith("cache.") && !gap.field.startsWith("dataFallback."))
         .map((gap) => gap.field),
     );
     expect(disclosedProducerGaps).toEqual(new Set(failed.map(([, result]) => result.gap.field)));

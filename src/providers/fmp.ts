@@ -144,6 +144,8 @@ export interface FmpIncomeStatementRow extends FmpStatementRow {
   incomeBeforeTax?: number;
   incomeTaxExpense?: number;
   netIncome?: number;
+  /** SEC-derived earnings attributable to common, after preferred distributions/adjustments. */
+  netIncomeAvailableToCommon?: number;
   bottomLineNetIncome?: number;
   eps?: number;
   epsDiluted?: number;

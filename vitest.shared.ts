@@ -80,6 +80,7 @@ export const RISK_SOURCE_MANIFEST = [
   "src/pipeline/types.ts",
   "src/instrumentation.ts",
   "src/report/completeness.ts",
+  "src/report/assessment.ts",
   "src/report/execution.ts",
   "src/report/query.ts",
   "src/report/history.ts",

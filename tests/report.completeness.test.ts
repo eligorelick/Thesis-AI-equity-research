@@ -8,6 +8,12 @@ import type { DataCompleteness } from "@/report/schema";
 import type { ManifestEntry } from "@/types/core";
 
 describe("report data completeness", () => {
+  it("does not turn XBRL routing evidence into a failed statement cross-check", () => {
+    const routeConflict: ManifestEntry = { field: "route.evidence.conflict", reason: "XBRL companyfacts tags suggest bank while industry/sector routed to general", severity: "warn" };
+    expect(buildDataCompleteness([routeConflict])).toMatchObject({ xbrl: "checked", edgar: "available" });
+    expect(buildDataCompleteness([routeConflict, { field: "validation.xbrlCrossCheck.revenue.FY.2025-12-31", reason: "FMP and XBRL disagree on revenue by 8%", severity: "warn" }])).toMatchObject({ xbrl: "failed", edgar: "available" });
+    expect(buildDataCompleteness([routeConflict, { field: "validation.xbrlCrossCheck", reason: "XBRL cross-check skipped — no matching fact", severity: "info" }])).toMatchObject({ xbrl: "skipped" });
+  });
   it("blocks critical EDGAR gaps and marks forensic conclusions provisional", () => {
     expect(
       buildDataCompleteness([

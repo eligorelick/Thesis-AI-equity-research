@@ -20,6 +20,7 @@
  */
 
 import { formatExecutionMetadata } from "@/report/execution";
+import { gradeDisplayLabel, gradeForDisplay } from "@/report/assessment";
 import type {
   Appendix,
   BalanceSheet,
@@ -269,8 +270,8 @@ function gradeBlock(title: string, block: GradeBlock): string {
   const parts: string[] = [];
   parts.push(
     `<div class="gradehead"><span class="chip ${gradeClass(
-      block.grade,
-    )}">${esc(block.grade)}</span> <strong>${esc(
+      gradeForDisplay(block) ?? "unavailable",
+    )}">${esc(gradeDisplayLabel(block))}</span> <strong>${esc(
       title,
     )}</strong> <span class="conf">confidence: ${esc(block.confidence)}</span></div>`,
   );
@@ -346,7 +347,7 @@ function sectionVerdict(report: Report): string {
     ["Section", "Grade", "Why"],
     gradeSurfaceEntries(v.gradeStrip).map(({ descriptor, block }) => [
       esc(descriptor.label),
-      `<span class="chip ${gradeClass(block.grade)}">${esc(block.grade)}</span>`,
+      `<span class="chip ${gradeClass(gradeForDisplay(block) ?? "unavailable")}">${esc(gradeDisplayLabel(block))}</span>`,
       esc(block.oneLineWhy),
     ]),
   );
@@ -806,7 +807,7 @@ function sectionCompetitive(c: Competitive): string {
     <h3>Market-share direction</h3><p>${esc(c.marketShareDirection)}</p></section>`;
 }
 
-function sectionCatalystsRisks(cr: CatalystsRisks): string {
+function sectionCatalystsRisks(cr: CatalystsRisks, dataOnly = false): string {
   const catalysts = table(
     ["Catalyst", "Expected", "Direction", "Significance", "Note"],
     cr.catalysts.map((c) => [
@@ -827,7 +828,8 @@ function sectionCatalystsRisks(cr: CatalystsRisks): string {
       esc(r.reasoning.text),
     ]),
   );
-  return `<section class="block prominent">${sectionHeading("catalystsRisks")}<h3>Catalysts</h3>${catalysts}<h3>Risks</h3>${risks}</section>`;
+  const disclosure = dataOnly ? "<p>Not assessed — no completed analyst assessment is available. Empty lists do not establish that no catalysts or risks exist.</p>" : "";
+  return `<section class="block prominent">${sectionHeading("catalystsRisks")}${disclosure}<h3>Catalysts</h3>${catalysts}<h3>Risks</h3>${risks}</section>`;
 }
 
 function sectionOutlook(report: Report): string {
@@ -934,7 +936,9 @@ function sectionAppendix(
         ? DASH
         : `${(a.verificationRate * 100).toFixed(0)}%`
     }</strong> <span class="muted">— share of report figures traceable to a citation or payload value; a provenance check, not a correctness/accuracy check.</span></p>${
-      a.provenanceCoverage ? provenanceCoverageHtml(a.provenanceCoverage) : ""
+      a.missingData.some((gap) => gap.field === "analysis.llm")
+        ? "<p>No completed citation-check pass. Deterministic values retain their source paths; these paths do not establish independently checked factual claims.</p>"
+        : a.provenanceCoverage ? provenanceCoverageHtml(a.provenanceCoverage) : ""
     }${
       // WS7 (D-20): what was CHECKED, under its own heading so it is never read
       // as part of the coverage number above it.
@@ -1016,7 +1020,7 @@ export function reportToPrintBody(report: Report): string {
     technicals: sectionTechnicals(report.technicals),
     leadership: sectionLeadership(report.leadership),
     competitive: sectionCompetitive(report.competitive),
-    catalystsRisks: sectionCatalystsRisks(report.catalystsRisks),
+    catalystsRisks: sectionCatalystsRisks(report.catalystsRisks, report.appendix.missingData.some((gap) => gap.field === "analysis.llm")),
     outlook: sectionOutlook(report),
     projections: report.projections ? sectionProjections(report.projections) : "",
     macro: sectionMacro(report.macro),

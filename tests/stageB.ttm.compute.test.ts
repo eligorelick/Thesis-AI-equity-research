@@ -1138,8 +1138,9 @@ describe("runStageB wiring — excess-return CoE suppression + payout wiring (au
     // Hand-computed (dividends + net buybacks) / net income per year, 3y avg:
     //   2025: (30 + 20 - 10) / 150 = 40/150
     //   2024: (28 + 30 - 2)  / 140 = 56/140
-    //   2023: (26 + 13 - 0)  / 130 = 39/130
-    const expected = ((40 / 150 + 56 / 140 + 39 / 130) / 3) * 100;
+    //   2023 lacks a balance sheet to establish preferred claims, so it is
+    //   excluded unless the income statement directly reports common income.
+    const expected = ((40 / 150 + 56 / 140) / 2) * 100;
     expect(er.payoutRatioPct.value).toBeCloseTo(expected, 9);
     expect(er.payoutRatioPct.basis).toMatch(/caller-provided/i);
   });
@@ -1153,31 +1154,31 @@ describe("runStageB wiring — keyless excess-return and WACC fallbacks (task 8)
   // DuPont FY2025: net income 150 / average equity (500 + 450) / 2 = 475.
   const DUPONT_ROE_PCT = (150 / 475) * 100;
 
-  it("bank with no key-metrics TTM: current ROE falls back to the DuPont decomposition", () => {
+  it("bank uses matching annual tangible common equity and ROTE without vendor ROE", () => {
     const computed = runStageB(wiringBundle({ bank: true, noKeyMetricsTtm: true }));
     expect(computed.returns.dupont.latest?.roePct).toBeCloseTo(DUPONT_ROE_PCT, 9);
     expect(computed.valuation.kind).toBe("excess-return");
     if (computed.valuation.kind !== "excess-return") return;
     const er = computed.valuation.excessReturn;
     // The model RUNS on the statements-derived ROE instead of being suppressed.
-    expect(er.roePathPct.value[0]).toBeCloseTo(DUPONT_ROE_PCT, 9);
+    expect(er.roePathPct.value[0]).toBeCloseTo(computed.returns.rote.latestRotePct!, 9);
     expect(er.equityValue).not.toBeNull();
     expect(er.perShare).not.toBeNull();
     expect(er.gaps.some((g) => g.field === "valuation.excessReturn.currentRoe")).toBe(false);
     expect(computed.gaps.some((g) => g.field === "valuation.excessReturn.currentRoe")).toBe(false);
-    // The substituted basis is named rather than passed off as the TTM figure.
+    // The common-equity basis is named rather than passed off as total TTM ROE.
     expect(
       computed.valuation.notes.some(
-        (n) => /DuPont/i.test(n) && /key-metrics TTM unavailable/i.test(n),
+        (n) => /tangible common equity/i.test(n) && /FY 2025-12-31/i.test(n),
       ),
     ).toBe(true);
   });
 
-  it("control: the vendor key-metrics TTM ROE still wins when present, with no DuPont note", () => {
+  it("does not apply vendor total-equity ROE to a tangible common-equity valuation", () => {
     const computed = runStageB(wiringBundle({ bank: true }));
     expect(computed.valuation.kind).toBe("excess-return");
     if (computed.valuation.kind !== "excess-return") return;
-    expect(computed.valuation.excessReturn.roePathPct.value[0]).toBeCloseTo(12, 9);
+    expect(computed.valuation.excessReturn.roePathPct.value[0]).toBeCloseTo(computed.returns.rote.latestRotePct!, 9);
     expect(computed.valuation.notes.some((n) => /DuPont/i.test(n))).toBe(false);
   });
 
@@ -1193,8 +1194,63 @@ describe("runStageB wiring — keyless excess-return and WACC fallbacks (task 8)
     const computed = runStageB(bundle);
     expect(computed.valuation.kind).toBe("excess-return");
     if (computed.valuation.kind !== "excess-return") return;
-    expect(computed.valuation.excessReturn.roePathPct.value[0]).toBeCloseTo(DUPONT_ROE_PCT, 9);
-    expect(computed.valuation.excessReturn.roePathPct.basis).toMatch(/FY 2025-12-31 DuPont ROE/);
+    expect(computed.valuation.excessReturn.roePathPct.value[0]).toBeCloseTo(computed.returns.rote.latestRotePct!, 9);
+    expect(computed.valuation.excessReturn.roePathPct.basis).toMatch(/FY 2025-12-31 ROTE/);
+  });
+
+  it("values only common equity and common earnings for banks, insurers and mortgage REITs", () => {
+    for (const industry of ["Banks - Regional", "Insurance - Life", "REIT - Mortgage"]) {
+      const bundle = wiringBundle({ bank: true });
+      if (!bundle.profile.ok || !bundle.statements.incomeAnnual.ok || !bundle.statements.balanceAnnual.ok || !bundle.statements.cashflowAnnual.ok) throw new Error("fixture");
+      bundle.profile.value.data.rows[0].industry = industry;
+      for (const row of bundle.statements.balanceAnnual.value.data.rows) {
+        row.preferredStock = 50 * M;
+        row.goodwill = 30 * M;
+        row.intangibleAssets = 20 * M;
+      }
+      for (const row of bundle.statements.incomeAnnual.value.data.rows) row.netIncomeAvailableToCommon = row.netIncome! - 10 * M;
+      const computed = runStageB(bundle);
+      if (computed.valuation.kind !== "excess-return") throw new Error("expected financial valuation");
+      const er = computed.valuation.excessReturn;
+      const tangible = industry === "Banks - Regional";
+      const commonBase = (tangible ? 400 : 450) * M;
+      const commonAverage = (tangible ? 375 : 425) * M;
+      expect(er.openingBookValue.value).toBe(commonBase);
+      expect(er.roePathPct.value[0]).toBeCloseTo(140 * M / commonAverage * 100);
+      expect(er.openingBookValue.basis).toMatch(tangible ? /tangible common equity/ : /common equity/);
+      expect(er.payoutRatioPct.value).toBeCloseTo((40 / 140 + 56 / 130 + 39 / 120) / 3 * 100);
+      expect(computed.growth.fcfCagrs).toEqual([]);
+      expect(computed.capital.fcf.latestFcf).toBeNull();
+      expect(computed.returns.roic.latestRoicPct).toBeNull();
+      expect(computed.returns.roic.series).toEqual([]);
+      expect(computed.gaps.some((g) => g.field === "valuation.dcf.ebit" || g.field === "valuation.netDebt")).toBe(false);
+    }
+  });
+
+  it("withholds financial valuation when preferred is outstanding but common earnings cannot be established", () => {
+    const bundle = wiringBundle({ bank: true });
+    if (!bundle.statements.balanceAnnual.ok || !bundle.statements.cashflowAnnual.ok) throw new Error("fixture");
+    for (const row of bundle.statements.balanceAnnual.value.data.rows) row.preferredStock = 50 * M;
+    for (const row of bundle.statements.cashflowAnnual.value.data.rows) delete row.preferredDividendsPaid;
+    const computed = runStageB(bundle);
+    if (computed.valuation.kind !== "excess-return") throw new Error("expected financial valuation");
+    expect(computed.valuation.excessReturn.perShare).toBeNull();
+    expect(computed.valuation.excessReturn.equityValue).toBeNull();
+  });
+
+  it("withholds common-equity valuation when only aggregate dividend cash flows are known", () => {
+    const bundle = wiringBundle({ bank: true });
+    if (!bundle.statements.cashflowAnnual.ok) throw new Error("fixture");
+    for (const row of bundle.statements.cashflowAnnual.value.data.rows) {
+      row.netDividendsPaid = row.commonDividendsPaid;
+      delete row.commonDividendsPaid;
+    }
+    const computed = runStageB(bundle);
+    expect(computed.returns.rote.latestRotePct).not.toBeNull();
+    if (computed.valuation.kind !== "excess-return") throw new Error("expected financial valuation");
+    expect(computed.valuation.excessReturn.perShare).toBeNull();
+    expect(computed.valuation.excessReturn.gaps.some(g => g.field === "valuation.excessReturn.payout")).toBe(true);
+    expect(computed.gaps.some(g => g.field === "valuation.excessReturn.commonDividends")).toBe(true);
   });
 
   it("bank with an undisclosed interest expense: no historical cost-of-debt inference", () => {

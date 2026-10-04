@@ -57,7 +57,7 @@ import {
   ANTHROPIC_REQUEST_TIMEOUT_MS as REQUEST_TIMEOUT_MS,
   MODEL_STAGE_DEADLINE_MS,
 } from "@/pipeline/leaseTiming";
-import { modelSupportsEffort } from "@/report/execution";
+import { modelSupportsEffort, type ProviderExecution } from "@/report/execution";
 import {
   MODEL_REGISTRY,
   REGISTRY_SNAPSHOT_DATE,
@@ -1127,13 +1127,18 @@ function billingForMessage(message: BetaMessage, opts: RunPassOptions): { costUs
   const toolsUsd = webSearchCount(message) * WEB_SEARCH_USD_PER_SEARCH;
   if (hops !== null) {
     let presumed = false;
+    let nextBoundary = 0;
     const costUsd = hops.reduce((total, hop, index) => {
       const final = index === hops.length - 1;
-      const boundary = switches[index];
-      const details = final ? message.stop_details :
-        boundary?.from.model === hop.model && boundary?.to.model === hops[index + 1]?.model
-          ? boundary.trigger : undefined;
-      const billing = refusalBilling(hop.output_tokens, !final || message.stop_reason === "refusal", details);
+      const transition = !final && hop.model !== hops[index + 1].model;
+      // Server-tool sampling can add same-model iterations before a fallback.
+      // Content has one boundary per model transition, not one per iteration.
+      const boundaryIndex = transition ? switches.findIndex((boundary, i) =>
+        i >= nextBoundary && boundary.from.model === hop.model && boundary.to.model === hops[index + 1].model,
+      ) : -1;
+      if (boundaryIndex >= 0) nextBoundary = boundaryIndex + 1;
+      const details = final ? message.stop_details : switches[boundaryIndex]?.trigger;
+      const billing = refusalBilling(hop.output_tokens, transition || (final && message.stop_reason === "refusal"), details);
       presumed ||= billing.presumed;
       return total + (billing.free ? 0 : computeCostUsd(hop, hop.model));
     }, toolsUsd);
@@ -1416,6 +1421,8 @@ export interface PassError {
   costUsd?: number;
   presumed?: boolean;
   fallbackUsed?: boolean;
+  /** Original request settings, retained even when a fallback served the pass. */
+  execution?: ProviderExecution;
   /** Model that served the billed attempt(s), when known (kind "transport"). */
   model?: string;
   /** Web searches billed across failed attempt(s) ($0.01 each, kind "transport"). */
@@ -1441,6 +1448,8 @@ export interface PassOutcome {
   fallbackUsed: boolean;
   /** Model that actually produced the response (fallback model when one served it). */
   model: string;
+  /** Original request settings, retained even when a fallback served the pass. */
+  execution?: ProviderExecution;
 }
 
 /**
@@ -1465,6 +1474,15 @@ function gapEntry(opts: RunPassOptions, reason: string): ManifestEntry {
   };
 }
 
+/** Effort records what request construction sends, not a new model default. */
+function passExecution(opts: RunPassOptions, dispatched = true): ProviderExecution {
+  return {
+    requestedModel: opts.model,
+    requestedEffort: opts.effort ?? null,
+    effectiveEffort: dispatched && supportsEffort(opts.model) ? opts.effort ?? null : null,
+  };
+}
+
 function noKeyResult(opts: RunPassOptions): RunPassResult {
   return {
     ok: false,
@@ -1472,6 +1490,7 @@ function noKeyResult(opts: RunPassOptions): RunPassResult {
     error: {
       kind: "no_key",
       message: "ANTHROPIC_API_KEY is not set — Anthropic calls are disabled (pipeline dry-run)",
+      execution: passExecution(opts, false),
     },
   };
 }
@@ -1487,6 +1506,7 @@ function interpretPassMessages(
   const costUsd = billableMessages.reduce((sum, billedMessage) => sum + costForMessage(billedMessage, opts), 0);
   const accounting = {
     model: message.model,
+    execution: passExecution(opts),
     ...(billableMessages.some((billed) => billingForMessage(billed, opts).presumed) ? { presumed: true } : {}),
   };
   const fetchedUrls = [
@@ -2048,6 +2068,7 @@ function presumedRemainderResult(
       presumed: true,
       fallbackUsed: billedMessages.some(detectFallbackUsed),
       model: billedMessages[billedMessages.length - 1]?.model || opts.model,
+      execution: passExecution(opts),
       webSearches: billedMessages.reduce((sum, m) => sum + webSearchCount(m), 0),
     },
   };
@@ -2112,6 +2133,7 @@ function admissionRefusedResult(
     error: {
       kind: "transport",
       message: `spend admission refused request ${attempts}: ${raw}`,
+      execution: passExecution(opts, billed),
       ...(billed
         ? {
             usage: aggregateUsage(billedMessages),
@@ -2159,6 +2181,7 @@ function transportFailureResult(
       ...(billedMessages.some((m) => billingForMessage(m, opts).presumed) ? { presumed: true } : {}),
       fallbackUsed: billed ? billedMessages.some(detectFallbackUsed) : undefined,
       model: billed ? (billedMessages[billedMessages.length - 1].model || opts.model) : undefined,
+      execution: passExecution(opts),
       webSearches,
     },
   };

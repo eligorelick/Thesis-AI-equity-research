@@ -1,12 +1,13 @@
 /**
  * Finnhub client — deliberately thin .
  *
- * Server-only. Free tier justifies exactly ONE adapter:
+ * Server-only. Request only the configured key's available datasets:
  * - insiderSentiment (MSPR) — always on; unique derived signal FMP lacks.
  * - usptoPatents / lobbying / govSpending — optional sector-conditional
  *   modules behind `enableSectorModules` (default OFF).
  *
- * Everything else on Finnhub is redundant with FMP Ultimate or premium-gated.
+ * - companyNews / earningsCalendar — fallback when FMP cannot supply them.
+ * Access is determined by the response, never an assumed subscription tier.
  * Short interest was REMOVED from Finnhub entirely → see providers/finra.ts.
  *
  * Auth: `X-Finnhub-Token` header (keeps the key out of URLs/logs).
@@ -18,11 +19,14 @@ import "server-only";
 
 import { z } from "zod";
 import type { FetchResult, ManifestEntry, Sourced } from "@/types/core";
+import type { FmpEarningsRow, FmpNewsArticleRow, FmpPayload } from "@/providers/fmp";
 import { fetchWithRedirectPolicy } from "@/providers/http";
 import { sameEntitySymbol } from "@/symbol";
 
 /** Cache TTL for insider sentiment, seconds (24 h). */
 export const FINNHUB_TTL_SECONDS = 86400;
+/** News/calendar fallback observations refresh every six hours. */
+export const FINNHUB_FALLBACK_TTL_SECONDS = 6 * 3600;
 
 /** Cache TTL for sector modules (patents/lobbying/gov-spending), seconds (7 d). */
 export const FINNHUB_SECTOR_MODULE_TTL_SECONDS = 604800;
@@ -211,6 +215,89 @@ function assertIsoDate(value: string, param: string): void {
   if (!ISO_DATE.test(value)) {
     throw new TypeError(`finnhub: ${param} must be YYYY-MM-DD, got "${value}"`);
   }
+}
+
+const calendarDate = z.string().regex(ISO_DATE).refine((value) => {
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === value;
+});
+const articleSchema = z.object({
+  datetime: z.number().int().positive().max(8_640_000_000_000),
+  headline: z.string().trim().min(1),
+  related: z.string().optional(),
+  source: z.string().optional(),
+  summary: z.string().optional(),
+  url: z.url().refine((value) => /^https?:\/\//i.test(value)),
+});
+const earningsSchema = z.object({
+  earningsCalendar: z.array(z.object({
+    symbol: z.string().min(1),
+    date: calendarDate,
+    epsActual: z.number().finite().nullish(),
+    epsEstimate: z.number().finite().nullish(),
+    revenueActual: z.number().finite().nullish(),
+    revenueEstimate: z.number().finite().nullish(),
+  })),
+});
+
+function fallbackGap(field: string, endpoint: string, reason: string, expected = false): FetchResult<never> {
+  return { ok: false, gap: { field, reason, severity: expected ? "info" : "warn", attemptedSources: ["finnhub", endpoint], ...(expected ? { expected: true } : {}) } };
+}
+
+/** Finnhub's issuer-scoped news, adapted to the report's shared article shape. */
+export async function companyNews(
+  symbol: string, from: string, to: string, config: FinnhubConfig = {},
+): Promise<FetchResult<FmpPayload<FmpNewsArticleRow>>> {
+  const sym = symbol.trim().toUpperCase();
+  const field = `finnhub.companyNews(${sym})`;
+  const endpoint = "/company-news";
+  assertIsoDate(from, "from");
+  assertIsoDate(to, "to");
+  if (!config.apiKey) return fallbackGap(field, endpoint, "Finnhub key missing", true);
+  const response = await finnhubRequest(endpoint, { symbol: sym, from, to }, config);
+  if (!response.ok) return fallbackGap(field, endpoint, response.failure, response.status === 403);
+  const parsed = z.array(articleSchema).safeParse(response.body);
+  if (!parsed.success) return fallbackGap(field, endpoint, "Finnhub company news failed article/date/URL validation");
+  if (parsed.data.some((row) => row.related?.trim() && !row.related.split(",").some((related) => sameEntitySymbol(related.trim(), sym)))) {
+    return fallbackGap(field, endpoint, "Finnhub company news returned a different issuer");
+  }
+  const rows: FmpNewsArticleRow[] = parsed.data.map((row) => ({
+    symbol: sym,
+    publishedDate: new Date(row.datetime * 1000).toISOString(),
+    title: row.headline,
+    publisher: row.source,
+    text: row.summary,
+    url: row.url,
+  })).filter((row) => row.publishedDate!.slice(0, 10) >= from && row.publishedDate!.slice(0, 10) <= to)
+    .sort((a, b) => b.publishedDate!.localeCompare(a.publishedDate!)).slice(0, 50);
+  if (rows.length === 0) return fallbackGap(field, endpoint, "Finnhub returned no company news in the requested window", true);
+  return { ok: true, value: sourced({ rows, raw: response.body }, rows[0].publishedDate!.slice(0, 10), `${endpoint}?${new URLSearchParams({ symbol: sym, from, to })}`) };
+}
+
+/** Calendar observations do not replace historical earnings or analyst consensus. */
+export async function earningsCalendar(
+  symbol: string, from: string, to: string, config: FinnhubConfig = {},
+): Promise<FetchResult<FmpPayload<FmpEarningsRow>>> {
+  const sym = symbol.trim().toUpperCase();
+  const field = `finnhub.earningsCalendar(${sym})`;
+  const endpoint = "/calendar/earnings";
+  assertIsoDate(from, "from");
+  assertIsoDate(to, "to");
+  if (!config.apiKey) return fallbackGap(field, endpoint, "Finnhub key missing", true);
+  const response = await finnhubRequest(endpoint, { symbol: sym, from, to }, config);
+  if (!response.ok) return fallbackGap(field, endpoint, response.failure, response.status === 403);
+  const parsed = earningsSchema.safeParse(response.body);
+  if (!parsed.success) return fallbackGap(field, endpoint, "Finnhub earnings calendar failed date/value validation");
+  if (parsed.data.earningsCalendar.some((row) => !sameEntitySymbol(row.symbol, sym))) {
+    return fallbackGap(field, endpoint, "Finnhub earnings calendar returned a different issuer");
+  }
+  const rows: FmpEarningsRow[] = parsed.data.earningsCalendar.filter((row) => row.date >= from && row.date <= to).map((row) => ({
+    symbol: sym, date: row.date, epsActual: row.epsActual, epsEstimated: row.epsEstimate,
+    revenueActual: row.revenueActual, revenueEstimated: row.revenueEstimate,
+  }));
+  if (rows.length === 0) return fallbackGap(field, endpoint, "Finnhub returned no earnings dates in the requested window", true);
+  const observed = new Date().toISOString().slice(0, 10);
+  return { ok: true, value: sourced({ rows, raw: response.body }, observed, `${endpoint}?${new URLSearchParams({ symbol: sym, from, to })}`) };
 }
 
 // ---------------------------------------------------------------------------

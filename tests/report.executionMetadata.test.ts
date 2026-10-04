@@ -1,10 +1,36 @@
 import { describe, expect, it } from "vitest";
 
 import { buildExecutionMetadataEntry, formatExecutionMetadata, sharedModelFamilyOf, subscriptionExecutionModels } from "@/report/execution";
-import { ExecutionMetadataEntrySchema } from "@/report/schema";
+import { ExecutionMetadataEntrySchema, ProviderExecutionSchema } from "@/report/schema";
 import { explainAnalysisModel } from "@/settings/contracts";
 
 describe("per-step execution metadata", () => {
+  it("keeps requested subscription controls but does not turn unreported model and usage into observed execution", () => {
+    const entry = buildExecutionMetadataEntry({ step: "bull", requestedModel: "chatgpt/gpt-6.1-sol", effectiveModel: "chatgpt/gpt-6.1-sol",
+      requestedEffort: null, fallbackUsed: false, usage: { input_tokens: 0, output_tokens: 0 },
+      execution: { requestedModel: "chatgpt/gpt-6.1-sol", requestedEffort: "high", effectiveEffort: null,
+        requestedServiceTier: "fast", effectiveServiceTier: null, modelObserved: false, usageReported: false } });
+    expect(entry.effectiveModel).toBe("unknown");
+    expect(entry).not.toHaveProperty("inputTokens");
+    expect(entry).not.toHaveProperty("outputTokens");
+    expect(entry.note).toContain("ChatGPT plan");
+    expect(entry.note).toContain("usage was not reported");
+    expect(entry.note).not.toContain("allowance was used");
+    expect(formatExecutionMetadata(entry)).toContain("effective unknown");
+    expect(formatExecutionMetadata(entry)).not.toContain("tokens 0");
+    expect(subscriptionExecutionModels([entry])).toEqual([]);
+    expect(ProviderExecutionSchema.parse({ modelObserved: false, usageReported: false })).toEqual({ modelObserved: false, usageReported: false });
+    expect(ExecutionMetadataEntrySchema.parse(entry).effectiveModel).toBe("unknown");
+  });
+
+  it("preserves an observed model even when usage was not reported", () => {
+    const entry = buildExecutionMetadataEntry({ step: "bull", requestedModel: "gemini/auto-gemini-3", effectiveModel: "gemini/gemini-3-pro",
+      requestedEffort: null, fallbackUsed: false, usage: { input_tokens: 0, output_tokens: 0 },
+      execution: { modelObserved: true, usageReported: false } });
+    expect(entry.effectiveModel).toBe("gemini/gemini-3-pro");
+    expect(entry.inputTokens).toBeUndefined();
+    expect(entry.note).not.toContain("allowance was used");
+  });
   it("retains ChatGPT requested and reported reasoning, speed, and usage through stored report validation", () => {
     const entry = buildExecutionMetadataEntry({
       step: "bull", requestedModel: "chatgpt/gpt-6.1-sol", effectiveModel: "chatgpt/gpt-6.1-sol",

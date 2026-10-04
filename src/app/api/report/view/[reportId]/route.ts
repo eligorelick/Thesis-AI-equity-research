@@ -16,6 +16,7 @@
 import { NextResponse } from "next/server";
 import { getReportRecordById, parseReportId } from "@/report/history";
 import type { Report } from "@/report/schema";
+import { gradeForDisplay } from "@/report/assessment";
 import {
   gradeSurfaceEntries,
   type GradeSurfaceKey,
@@ -27,7 +28,7 @@ export const dynamic = "force-dynamic";
 /** A single grade in the compact strip. */
 export interface GradeStripCell {
   key: GradeSurfaceKey;
-  grade: string;
+  grade: string | null;
   oneLineWhy: string;
 }
 
@@ -77,7 +78,7 @@ export async function GET(
   const grades: GradeStripCell[] = report
     ? gradeSurfaceEntries(report.verdict.gradeStrip).map(({ descriptor, block }) => ({
         key: descriptor.key,
-        grade: block.grade,
+        grade: gradeForDisplay(block),
         oneLineWhy: block.oneLineWhy,
       }))
     : [];

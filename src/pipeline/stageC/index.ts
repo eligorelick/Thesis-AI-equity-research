@@ -295,6 +295,7 @@ function withJudgeOrder(passDeps: PassDeps): PassDeps {
  */
 function toPassResultLike<T>(r: PassResult<T>): PassResultLike<T> {
   return {
+    ...(r.presumed === undefined ? {} : { presumed: r.presumed }),
     data: r.output,
     model: r.model,
     costUsd: r.costUsd,
@@ -327,6 +328,7 @@ class PassRunError extends Error {
 function billedAttemptFromRun<T>(run: PassRun<T>): BilledPassAttempt | undefined {
   if (run.ok || run.costUsd === undefined || run.model === undefined) return undefined;
   return {
+    ...(run.presumed === undefined ? {} : { presumed: run.presumed }),
     model: run.model,
     costUsd: run.costUsd,
     fallbackUsed: run.fallbackUsed ?? false,

@@ -33,6 +33,7 @@ import {
   type CachedFetchResult,
   type FmpClient,
   type FmpEarningsRow,
+  type FmpNewsArticleRow,
   type FmpEodBarRow,
   type FmpPayload,
   type FmpRawRow,
@@ -85,6 +86,9 @@ import {
 } from "@/providers/fred";
 import {
   FINNHUB_TTL_SECONDS,
+  FINNHUB_FALLBACK_TTL_SECONDS,
+  companyNews as finnhubCompanyNews,
+  earningsCalendar as finnhubEarningsCalendar,
   insiderSentiment,
   type FinnhubConfig,
   type InsiderSentimentMonth,
@@ -464,6 +468,55 @@ export function makeCachedFinnhubInsiderSentiment(cfg: FinnhubConfig): FinnhubIn
   };
 }
 
+/** Cache only validated fallback data; a denial cannot replace last-good rows. */
+export function makeCachedFinnhubFallback<T>(
+  endpoint: string,
+  fetcher: (symbol: string, from: string, to: string, cfg: FinnhubConfig) => Promise<FetchResult<T>>,
+  cfg: FinnhubConfig,
+): (symbol: string, from: string, to: string) => Promise<FetchResult<T>> {
+  return async (symbol, from, to) => {
+    if (!cfg.apiKey) return fetcher(symbol, from, to, cfg);
+    const { cachedFetch } = await import("@/cache/apiCache");
+    try {
+      const cached = await cachedFetch<{ data: T; endpoint: string }>({
+        provider: "finnhub",
+        endpoint,
+        params: { symbol: symbol.trim().toUpperCase(), from, to },
+        ttlSeconds: FINNHUB_FALLBACK_TTL_SECONDS,
+        maxStaleSeconds: PROVIDER_MAX_STALE_SECONDS,
+        fetcher: async () => {
+          const result = await fetcher(symbol, from, to, cfg);
+          if (!result.ok) throw new ProviderGap(result.gap);
+          return { body: { data: result.value.data, endpoint: result.value.endpoint }, asOf: result.value.asOf };
+        },
+      });
+      return { ok: true, value: { data: cached.data.data, endpoint: cached.data.endpoint, source: "finnhub", asOf: cached.asOf, fetchedAt: cached.fetchedAt, ...(cached.stale ? { stale: true } : {}) } };
+    } catch (error) {
+      if (error instanceof ProviderGap) return { ok: false, gap: error.gap };
+      throw error;
+    }
+  };
+}
+
+async function resolveFinnhubFallback<T>(
+  primary: FetchResult<T>, fallback: () => Promise<FetchResult<T>>,
+  field: string, gaps: ManifestEntry[],
+): Promise<FetchResult<T>> {
+  if (primary.ok) return primary;
+  const secondary = await settle(field, fallback());
+  if (!secondary.ok) {
+    gaps.push({ ...secondary.gap, field: `dataFallback.${field}`, reason: `Finnhub fallback unavailable: ${secondary.gap.reason}` });
+    return primary;
+  }
+  gaps.push({
+    field: `dataFallback.${field}`,
+    reason: `Supplied by Finnhub because the primary source was unavailable: ${primary.gap.reason}`,
+    severity: "info", expected: true,
+    attemptedSources: [...(primary.gap.attemptedSources ?? []), "finnhub", secondary.value.endpoint],
+  });
+  return secondary;
+}
+
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
@@ -638,7 +691,7 @@ export function deriveNextEarnings(
 ): FetchResult<FmpEarningsRow> {
   const field = `earningsCalendarNext(${symbol})`;
   if (!earnings.ok) {
-    return gapResult(field, `earnings history unavailable: ${earnings.gap.reason}`, "info");
+    return gapResult(field, `earnings history unavailable: ${earnings.gap.reason}`, "info", earnings.gap.attemptedSources, earnings.gap.expected);
   }
   const dated = earnings.value.data.rows
     .map((r) => ({ row: r, date: typeof r.date === "string" ? r.date.slice(0, 10) : "" }))
@@ -733,6 +786,8 @@ async function buildTranscriptBundle(symbol: string, fmp: FmpClient): Promise<Tr
         `fmp.transcript(${symbol})`,
         `transcript dates unavailable: ${meta.gap.reason}`,
         "info",
+        meta.gap.attemptedSources,
+        meta.gap.expected,
       ),
     };
   }
@@ -1528,6 +1583,13 @@ export async function buildDataBundle(
     ...finnhubBase,
     signal: opts.signal ?? finnhubBase.signal,
   };
+  const finnhubNewsFetch = opts.finnhub !== undefined
+    ? (symbol: string, from: string, to: string) => finnhubCompanyNews(symbol, from, to, finnhubCfg)
+    : makeCachedFinnhubFallback("company-news", finnhubCompanyNews, finnhubCfg);
+  const finnhubCalendarFetch = opts.finnhub !== undefined
+    ? (symbol: string, from: string, to: string) => finnhubEarningsCalendar(symbol, from, to, finnhubCfg)
+    : makeCachedFinnhubFallback("calendar/earnings", finnhubEarningsCalendar, finnhubCfg);
+  const configuredFallbackGaps: ManifestEntry[] = [];
   const finraBase: FinraConfig = opts.finra ?? {};
   const finraCfg: FinraConfig = { ...finraBase, signal: opts.signal ?? finraBase.signal };
   const finraTrendFetch: FinraShortInterestTrendFetch = reserved
@@ -1692,7 +1754,12 @@ export async function buildDataBundle(
   const priceTargetSummary = await pPtSummary;
   const gradesConsensus = await pGrades;
   const earningsHistory = sortRows(await pEarnings);
-  const earningsCalendarNext = deriveNextEarnings(earningsHistory, today, sym);
+  let earningsCalendarNext = deriveNextEarnings(earningsHistory, today, sym);
+  if (!reserved && finnhubCfg.apiKey) {
+    earningsCalendarNext = await resolveFinnhubFallback(earningsCalendarNext, async () =>
+      deriveNextEarnings(await finnhubCalendarFetch(sym, today, isoDaysAgo(nowDate, -120)), today, sym),
+    "earningsCalendarNext", configuredFallbackGaps);
+  }
   const transcript = await pTranscript;
   const insiderTrades = sortRows(await pInsiderTrades, "transactionDate");
   const insiderStats = await pInsiderStats;
@@ -1721,7 +1788,10 @@ export async function buildDataBundle(
   let marketCapHistory = sortRows(await pMcapHist);
   let sharesFloat = await pFloat;
   const secFilings = sortRows(await pSecFilings, "filingDate");
-  const news = sortRows(await pNews, "publishedDate");
+  let news = sortRows(await pNews, "publishedDate");
+  if (!reserved && finnhubCfg.apiKey) {
+    news = await resolveFinnhubFallback<FmpPayload<FmpNewsArticleRow>>(news, () => finnhubNewsFetch(sym, newsFrom, today), "news", configuredFallbackGaps);
+  }
   const pressReleases = sortRows(await pPress, "publishedDate");
   let eodPrices = sortRows(await pEod);
   let spyPrices = sortRows(await pSpy);
@@ -2030,6 +2100,7 @@ export async function buildDataBundle(
       // Every keyless substitution and every keyless failure, disclosed beside
       // the provider gaps. Empty whenever the fallback layer was off or skipped.
       ...keylessGaps,
+      ...configuredFallbackGaps,
       // WS4 (D-11): one entry naming the whole reserved-symbol rule, so a
       // reader of a DEMO/DBNK report is told that nothing here came from a
       // provider — not merely that individual members are missing.

@@ -491,6 +491,22 @@ describe("grading — relative strength driver isolation", () => {
  * ------------------------------------------------------------------------ */
 
 describe("grading — sector routing", () => {
+  it("financial fundamentals exclude industrial FCF growth and operating-margin slopes", () => {
+    for (const base of ["bank", "insurer", "reit-mortgage"] as const) {
+      const input = makeInputs({ route: route(base), policy: metricPolicy(base) });
+      const before = computeScores(input).aspects.fundamentals;
+      const after = computeScores({
+        ...input,
+        growth: growth({ fcfCagrs: [{ ...cagr(3, -90), windowYears: 3 }], margins: {
+          ...input.growth.margins,
+          operating: { series: [], slopePctPtsPerYear: -20 },
+        } }),
+      }).aspects.fundamentals;
+      expect(after.score).toBe(before.score);
+      expect(before.drivers.map((d) => d.source)).not.toContain("fcfCagr");
+      expect(before.drivers.map((d) => d.source)).not.toContain("operatingMarginSlope");
+    }
+  });
   it("a bank route suppresses Altman/Beneish and marks balance sheet not-applicable", () => {
     const bankPolicy = policy(["evEbitda", "netDebt", "netDebtToEbitda", "fcfDcf", "altmanZ", "beneishM"]);
     const s = computeScores(
@@ -722,7 +738,9 @@ describe("grading — composite completeness excludes route-inapplicable evidenc
 
     // compWeight can never reach 100 on a bank: balanceSheet (10) is dropped and
     // quality/moat lose their suppressed signals. Hand-derived route-applicable
-    // weight = 15 + 22 + 26·0.22 + 15·0.75 + 7·0.75 + 5 = 64.22.
+    // weight = 15·0.55 + 22 + 26·0.22 + 15·0.75 + 7·0.75 + 5 = 57.47.
+    // Fundamentals retain revenue/EPS growth; industrial FCF growth and
+    // operating-margin slope are route-inapplicable, not missing evidence.
     //
     // Two 2026-08-31 changes moved this ceiling, and NEITHER changes the
     // property under test above: the shrink factor stays exactly 1, because
@@ -738,7 +756,7 @@ describe("grading — composite completeness excludes route-inapplicable evidenc
     //    "equity-only (CoE, never WACC)". Grading a spread against a WACC the
     //    valuation refuses to use is contradictory under either reading.
     //    roicLevel/roicStability deliberately REMAIN (see the moat test below).
-    expect(round2(compWeight)).toBe(64.22);
+    expect(round2(compWeight)).toBe(57.47);
 
     // The OLD denominator (a fixed 100) would have shrunk this identical bank
     // by ×0.7897 toward 50 — a structural cap the fix removes.

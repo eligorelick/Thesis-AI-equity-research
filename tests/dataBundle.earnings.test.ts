@@ -16,6 +16,11 @@ function earnings(rows: FmpEarningsRow[]): FetchResult<FmpPayload<FmpEarningsRow
 }
 
 describe("deriveNextEarnings", () => {
+  it("preserves expected access restrictions and attempted sources", () => {
+    expect(deriveNextEarnings({ ok: false, gap: { field: "fmp.earnings(SCHW)", reason: "subscription unavailable", severity: "warn", expected: true, attemptedSources: ["/stable/earnings?symbol=SCHW"] } }, "2026-10-03", "SCHW"))
+      .toMatchObject({ ok: false, gap: { expected: true, attemptedSources: ["/stable/earnings?symbol=SCHW"] } });
+  });
+
   it("ignores malformed dates instead of treating them as future events", () => {
     const result = deriveNextEarnings(
       earnings([

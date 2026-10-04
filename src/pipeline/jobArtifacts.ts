@@ -27,6 +27,7 @@ export const DURABLE_PASSES = ["bull", "bear", "synthesize", "verify"] as const;
 export type DurablePass = (typeof DURABLE_PASSES)[number];
 
 export interface PassTelemetry {
+  presumed?: boolean;
   execution?: ProviderExecution;
   model: string;
   inputTokens: number;
@@ -108,6 +109,7 @@ export interface CurrentGenerationPassArtifact<T = unknown>
 
 /** Structural result shared by reusable durable and legacy pass outputs. */
 export interface ReusablePassResult<T> {
+  presumed?: boolean;
   execution?: ProviderExecution;
   data: T;
   model: string;
@@ -302,6 +304,7 @@ export function parseLegacyAnalystSnapshot(json: string | null): ReusableAnalyst
   const parsedData = ANALYST_CASE_SCHEMA.safeParse(raw.data);
   const execution = raw.execution === undefined ? undefined : ProviderExecutionSchema.safeParse(raw.execution);
   if (execution !== undefined && !execution.success) return null;
+  if (raw.presumed !== undefined && typeof raw.presumed !== "boolean") return null;
   if (
     !parsedData.success ||
     typeof raw.model !== "string" ||
@@ -340,6 +343,7 @@ export function parseLegacyAnalystSnapshot(json: string | null): ReusableAnalyst
     : undefined;
   return {
     data: parsedData.data,
+    ...(raw.presumed === undefined ? {} : { presumed: raw.presumed as boolean }),
     model: raw.model,
     costUsd: raw.costUsd,
     fallbackUsed: raw.fallbackUsed,
@@ -364,6 +368,7 @@ function reusableResultFromArtifact<T>(
   }
   return {
     data: artifact.envelope.data as T,
+    ...(artifact.telemetry.presumed === undefined ? {} : { presumed: artifact.telemetry.presumed }),
     model: artifact.telemetry.model,
     costUsd: artifact.telemetry.costUsd,
     fallbackUsed: artifact.telemetry.fallbackUsed,
@@ -622,6 +627,7 @@ export function normalizePassTelemetry(value: PassTelemetry): PassTelemetry {
     "billable",
     "fetchedUrls",
     ...(value.execution === undefined ? [] : ["execution"]),
+    ...(value.presumed === undefined ? [] : ["presumed"]),
   ])) {
     throw new Error("jobArtifacts: unexpected telemetry fields");
   }
@@ -634,6 +640,7 @@ export function normalizePassTelemetry(value: PassTelemetry): PassTelemetry {
   if (typeof value.fallbackUsed !== "boolean" || typeof value.billable !== "boolean") {
     throw new Error("jobArtifacts: invalid telemetry flags");
   }
+  if (value.presumed !== undefined && typeof value.presumed !== "boolean") throw new Error("jobArtifacts: invalid presumed billing flag");
   if (!Array.isArray(value.fetchedUrls) || value.fetchedUrls.some((url) => typeof url !== "string")) {
     throw new Error("jobArtifacts: invalid telemetry fetchedUrls");
   }
@@ -655,6 +662,7 @@ export function normalizePassTelemetry(value: PassTelemetry): PassTelemetry {
     costUsd: value.costUsd,
     fallbackUsed: value.fallbackUsed,
     billable: value.billable,
+    ...(value.presumed === undefined ? {} : { presumed: value.presumed }),
     fetchedUrls,
     ...(value.execution === undefined ? {} : { execution: ProviderExecutionSchema.parse(value.execution) }),
   };
@@ -837,7 +845,8 @@ function matchingCost(
     row.cacheReadTokens === telemetry.cacheReadTokens &&
     row.cacheWriteTokens === telemetry.cacheWriteTokens &&
     row.webSearches === telemetry.webSearches &&
-    row.costUsd === telemetry.costUsd &&
+    (row.costUsd === telemetry.costUsd || (telemetry.presumed === true && row.settlementKind === "presumed" && row.presumedAttemptId === row.attemptId && row.reconciledAt !== null && row.costUsd >= 0 && row.costUsd <= telemetry.costUsd)) &&
+    (telemetry.presumed !== true || (row.settlementKind === "presumed" && row.presumedAttemptId === row.attemptId)) &&
     row.fallbackUsed === telemetry.fallbackUsed;
 }
 
@@ -899,6 +908,7 @@ export function reconcilePresumedCostFromSettlement(
 
 export function serializeLegacyAnalystProjection<T>(data: T, telemetry: PassTelemetry): string {
   return JSON.stringify({
+    ...(telemetry.presumed === undefined ? {} : { presumed: telemetry.presumed }),
     data,
     model: telemetry.model,
     costUsd: telemetry.costUsd,
@@ -981,6 +991,10 @@ export function persistPassSettlementInTransaction<T>(
     })
     .run();
 
+  // Remove an expired-lease presumption before inserting the settlement. The
+  // settlement may itself be an explicitly presumed bound; keep that new row
+  // available to the billing reconciler instead of deleting it afterward.
+  reconcilePresumedCostFromSettlement(tx, input);
   if (prepared.telemetry.billable) {
     tx.insert(costLog)
       .values({
@@ -996,24 +1010,13 @@ export function persistPassSettlementInTransaction<T>(
         webSearches: prepared.telemetry.webSearches,
         costUsd: prepared.telemetry.costUsd,
         fallbackUsed: prepared.telemetry.fallbackUsed,
-        settlementKind: "actual",
-        presumedAttemptId: null,
+        settlementKind: prepared.telemetry.presumed === true ? "presumed" : "actual",
+        presumedAttemptId: prepared.telemetry.presumed === true ? input.attemptId : null,
         reconciledAt: null,
         createdAt: input.settledAt ?? new Date().toISOString(),
       })
       .run();
   }
-
-  // A settlement is evidence, so it supersedes any presumed maximum written
-  // for this attempt when its lease expired (DECISIONS D-07). Deleting inside
-  // the same transaction means no admission window ever counts both, and an
-  // unbillable settlement still clears the presumption it replaces.
-  reconcilePresumedCostFromSettlement(tx, {
-    jobId: input.jobId,
-    runGeneration: input.runGeneration,
-    attemptId: input.attemptId,
-    pass: input.pass,
-  });
 
   let currentGeneration = false;
   if (

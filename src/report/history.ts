@@ -35,6 +35,7 @@ import {
   sameEntitySymbol,
 } from "@/symbol";
 import type { Grade } from "@/types/core";
+import { gradeForDisplay } from "@/report/assessment";
 
 /* ------------------------------------------------------------------------ *
  * Grade extraction — one compact strip summary per graded section.
@@ -47,7 +48,7 @@ export type GradeStripKey = GradeSurfaceKey;
 /** One cell of the compact grade strip shown in the history table. */
 export interface GradeStripCell {
   key: GradeStripKey;
-  grade: Grade;
+  grade: Grade | null;
 }
 
 /**
@@ -57,7 +58,7 @@ export interface GradeStripCell {
 export function extractGradeStrip(report: Report): GradeStripCell[] {
   return gradeSurfaceEntries(report.verdict.gradeStrip).map(({ descriptor, block }) => ({
     key: descriptor.key,
-    grade: block.grade,
+    grade: gradeForDisplay(block),
   }));
 }
 

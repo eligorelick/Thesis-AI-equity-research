@@ -73,6 +73,55 @@ describe("provider dispatch and catalog lifecycle", () => {
   });
 });
 describe("response validation boundaries", () => {
+  const stream = (...events: unknown[]) => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""));
+  it("uses completed output items when OAuth's terminal response omits output", async () => {
+    const item = { type: "message", role: "assistant", status: "completed", phase: "final_answer", content: [{ type: "output_text", text: '{"ok":true}' }] };
+    const result = await consumeChatGptStream(stream(
+      { type: "response.output_text.delta", delta: '{"ok":' },
+      { type: "response.output_item.done", output_index: 0, item },
+      { ...completed, response: { ...completed.response, output: [] } },
+    ));
+    expect(result).toMatchObject({ text: '{"ok":true}', model: "example", input: 3, output: 2 });
+  });
+  it("keeps output order, replaces repeated done events, and excludes commentary", async () => {
+    const item = (text: string, phase = "final_answer") => ({ type: "message", role: "assistant", status: "completed", phase, content: [{ type: "output_text", text }] });
+    const result = await consumeChatGptStream(stream(
+      { type: "response.output_item.done", output_index: 0, item: item("Working", "commentary") },
+      { type: "response.output_item.done", output_index: 2, item: item("second") },
+      { type: "response.output_item.done", output_index: 1, item: item("first") },
+      { type: "response.output_item.done", output_index: 1, item: item("first") },
+      { ...completed, response: { ...completed.response, output: [] } },
+    ));
+    expect(result.text).toBe("first\nsecond");
+  });
+  it("never accepts partial text, an incomplete item, or an unterminated stream", async () => {
+    const done = { type: "response.output_item.done", output_index: 0, item: { type: "message", role: "assistant", status: "incomplete", content: [{ type: "output_text", text: "{}" }] } };
+    await expect(consumeChatGptStream(stream({ type: "response.output_text.done", text: "{}" }, { ...completed, response: { ...completed.response, output: [] } }))).rejects.toThrow();
+    await expect(consumeChatGptStream(stream(done, { ...completed, response: { ...completed.response, output: [] } }))).rejects.toThrow();
+    await expect(consumeChatGptStream(stream({ ...done, item: { ...done.item, status: "completed" } }))).rejects.toThrow("before completion");
+  });
+  it("preserves observed model and usage when a terminal response has no usable content", async () => {
+    remote.mockResolvedValueOnce(event({ ...completed, response: { ...completed.response, model: "actual-model", output: [], reasoning: { effort: "high" }, service_tier: "priority" } }));
+    const result = await runSubscriptionPass(args, "account", { serviceTier: "fast" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatchObject({ model: "chatgpt/actual-model", usage: { input_tokens: 3, output_tokens: 2 }, costUsd: 0,
+      execution: { requestedModel: "chatgpt/example", effectiveEffort: "high", effectiveServiceTier: "priority" } });
+  });
+  it("preserves valid failure-event usage without accepting the output as success", async () => {
+    remote.mockResolvedValueOnce(event({ type: "response.incomplete", response: { ...completed.response, model: "actual-model", status: "incomplete" } }));
+    const result = await runSubscriptionPass(args, "account");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatchObject({ model: "chatgpt/actual-model", usage: { input_tokens: 3, output_tokens: 2 } });
+  });
+  it("explicitly records unknown model and usage when the request fails before output", async () => {
+    remote.mockResolvedValueOnce(new Response("", { status: 401 }));
+    const result = await runSubscriptionPass(args, "account");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.usage).toBeUndefined();
+      expect(result.error.execution).toMatchObject({ requestedModel: args.model, modelObserved: false, usageReported: false });
+    }
+  });
   it.each([401, 403, 500])("rejects HTTP %i without using response contents", async (status) => {
     await expect(consumeChatGptStream(new Response("private contents", { status }))).rejects.toThrow("ChatGPT");
   });

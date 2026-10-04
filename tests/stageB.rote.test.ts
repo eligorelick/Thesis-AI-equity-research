@@ -56,6 +56,15 @@ describe("tangibleCommonEquity", () => {
 });
 
 describe("computeRote", () => {
+  it("uses filed earnings available to common without subtracting preferred distributions twice", () => {
+    const r = computeRote([
+      { ...income(100, "2025-12-31", -4), netIncomeAvailableToCommon: 94 },
+      { ...income(90, "2024-12-31", null), netIncomeAvailableToCommon: 84 },
+    ], [balance(), balance({ totalStockholdersEquity: 900 }, "2024-12-31")]);
+    expect(r.latestRotePct).toBeCloseTo(94 / 775 * 100, 9);
+    expect(r.series[0].rotePct).toBeCloseTo(84 / 725 * 100, 9);
+  });
+
   it("divides net income by AVERAGE tangible common equity", () => {
     const r = computeRote(
       [income(100), income(90, "2024-12-31")],

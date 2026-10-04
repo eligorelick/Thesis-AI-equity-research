@@ -5,6 +5,15 @@ import { runGemini } from "./gemini";
 import { CHATGPT_EFFORTS, parseSubscriptionModel, subscriptionModel, validModelId, type ChatGptEffort, type ChatGptModelChoice, type ChatGptRunOptions } from "./contracts";
 
 const MAX_RESPONSE_BYTES = 4_000_000;
+interface ChatGptObservation {
+  model?: string;
+  usage?: { input_tokens: number; output_tokens: number };
+  effort?: ChatGptEffort;
+  serviceTier?: string;
+}
+class ChatGptStreamError extends Error {
+  constructor(message: string, readonly observed: ChatGptObservation) { super(message); }
+}
 function chatGptFailure(error: unknown): string | null {
   if (!error || typeof error !== "object") return null;
   const { code, param } = error as Record<string, unknown>;
@@ -37,6 +46,8 @@ export async function consumeChatGptStream(response: Response): Promise<{ text: 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = ""; let bytes = 0;
+  const completedItems = new Map<number, unknown>();
+  const observed: ChatGptObservation = {};
   try {
     for (;;) {
       const chunk = await reader.read();
@@ -51,15 +62,42 @@ export async function consumeChatGptStream(response: Response): Promise<{ text: 
         const raw = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
         if (!raw || raw === "[DONE]") continue;
         const event = JSON.parse(raw);
+        const responseData = event.response;
+        if (responseData && typeof responseData === "object") {
+          if (validModelId(responseData.model)) observed.model = responseData.model;
+          const usage = responseData.usage;
+          if (Number.isSafeInteger(usage?.input_tokens) && Number.isSafeInteger(usage?.output_tokens) && usage.input_tokens >= 0 && usage.output_tokens >= 0) {
+            observed.usage = { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens };
+          }
+          if (CHATGPT_EFFORTS.includes(responseData.reasoning?.effort)) observed.effort = responseData.reasoning.effort;
+          if (["default", "fast", "priority", "flex", "scale", "ultrafast"].includes(responseData.service_tier)) observed.serviceTier = responseData.service_tier;
+        }
+        // OAuth can put the full answer only in output_item.done and return an
+        // empty terminal output array. Keep completed items by index, never
+        // accept uncompleted deltas, and still require response.completed.
+        if (event.type === "response.output_item.done" && Number.isSafeInteger(event.output_index) && event.output_index >= 0 && event.output_index < 10_000) {
+          completedItems.set(event.output_index, event.item);
+        }
         if (["error", "response.failed", "response.incomplete"].includes(event.type)) {
           throw new Error(chatGptFailure(event.response?.error ?? event.error ?? event) ?? "ChatGPT did not complete the pass. Check your model access and plan allowance. No paid fallback was attempted.");
         }
         if (event.type === "response.completed") {
           const data = event.response;
           if (data?.status !== "completed" || !Array.isArray(data.output)) throw new Error("Invalid completed ChatGPT response");
-          const text = data.output.flatMap((item: { type?: string; content?: { type?: string; text?: string }[] }) =>
-            item.type === "message" ? item.content?.filter((c) => c.type === "output_text").map((c) => c.text ?? "") ?? [] : []).join("\n");
-          if (!text.trim() || !validModelId(data.model)) throw new Error("ChatGPT returned no usable report content");
+          const streamed = data.output.length === 0;
+          const output: unknown[] = streamed ? [...completedItems].sort(([a], [b]) => a - b).map(([, item]) => item) : data.output;
+          const text = output.flatMap((value) => {
+            if (!value || typeof value !== "object") return [];
+            const item = value as { type?: string; role?: string; status?: string; phase?: string; content?: unknown[] };
+            if (item.type !== "message" || (item.role !== undefined && item.role !== "assistant") || (item.phase !== undefined && item.phase !== "final_answer") || (streamed ? item.status !== "completed" : item.status !== undefined && item.status !== "completed") || !Array.isArray(item.content)) return [];
+            return item.content.flatMap((part) => {
+              if (!part || typeof part !== "object") return [];
+              const content = part as { type?: string; text?: unknown };
+              return content.type === "output_text" && typeof content.text === "string" ? [content.text] : [];
+            });
+          }).join("\n");
+          if (!validModelId(data.model)) throw new Error("ChatGPT response omitted a valid model identifier");
+          if (!text.trim()) throw new Error("ChatGPT returned no usable report content");
           const usage = data.usage;
           if (!Number.isSafeInteger(usage?.input_tokens) || !Number.isSafeInteger(usage?.output_tokens) || usage.input_tokens < 0 || usage.output_tokens < 0) throw new Error("ChatGPT response omitted valid usage accounting");
           return { text, model: data.model, input: usage.input_tokens, output: usage.output_tokens,
@@ -70,6 +108,9 @@ export async function consumeChatGptStream(response: Response): Promise<{ text: 
       }
     }
     throw new Error("ChatGPT stream ended before completion");
+  } catch (error) {
+    const reason = error instanceof Error && /^(ChatGPT|Invalid completed)/.test(error.message) ? error.message : "ChatGPT stream failed or was canceled. No paid fallback was attempted.";
+    throw new ChatGptStreamError(reason, observed);
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
@@ -132,18 +173,22 @@ export async function runSubscriptionPass(args: RunPassArgs, connectionId: strin
     const model = subscriptionModel(parsed.provider, result.model);
     return { ok: true, value: { data: { model, usage, costUsd: 0, fallbackUsed: false, fetchedUrls: [],
       execution: { requestedModel: args.model, requestedEffort: parsed.provider === "chatgpt" ? options.effort ?? null : null,
+        modelObserved: true, usageReported: true,
         effectiveEffort: result.effort ?? null,
         ...(result.observedModels === undefined ? {} : { observedModels: result.observedModels }),
         ...(parsed.provider === "chatgpt" ? { requestedServiceTier: options.serviceTier ?? "default", effectiveServiceTier: result.serviceTier ?? null } : {}),
       },
       message: { model, usage, stop_reason: "end_turn", content: [{ type: "text", text: result.text.replace(/^\s*```(?:json)?\s*\n([\s\S]*?)\n```\s*$/, "$1") }] } } } };
   } catch (error) {
+    const observed = error instanceof ChatGptStreamError ? error.observed : undefined;
     const reason = error instanceof Error && /^(ChatGPT|Gemini|Invalid completed|Invalid subscription)/.test(error.message)
       ? error.message : `${parsed.provider} pass failed or was canceled. No paid fallback was attempted.`;
     return { ok: false, gap: { field, reason, severity: "critical", attemptedSources: [parsed.provider] },
-      error: { kind: "transport", message: reason, model: args.model, costUsd: 0, fallbackUsed: false, aborted: args.signal?.aborted === true,
-        execution: { requestedModel: args.model, requestedEffort: parsed.provider === "chatgpt" ? options.effort ?? null : null, effectiveEffort: null,
-          ...(parsed.provider === "chatgpt" ? { requestedServiceTier: options.serviceTier ?? "default", effectiveServiceTier: null } : {}),
+      error: { kind: "transport", message: reason, model: observed?.model ? subscriptionModel(parsed.provider, observed.model) : args.model, costUsd: 0, fallbackUsed: false, aborted: args.signal?.aborted === true,
+        ...(observed?.usage ? { usage: observed.usage } : {}),
+        execution: { requestedModel: args.model, requestedEffort: parsed.provider === "chatgpt" ? options.effort ?? null : null, effectiveEffort: observed?.effort ?? null,
+          modelObserved: observed?.model !== undefined, usageReported: observed?.usage !== undefined,
+          ...(parsed.provider === "chatgpt" ? { requestedServiceTier: options.serviceTier ?? "default", effectiveServiceTier: observed?.serviceTier ?? null } : {}),
         },
       } };
   }

@@ -14,7 +14,7 @@
  */
 
 import { comparePriceCurrency } from "@/pipeline/stageB/priceCurrency";
-import type { ManifestEntry } from "@/types/core";
+import type { ManifestEntry, SectorRoute } from "@/types/core";
 import { deriveFcf } from "@/pipeline/stageB/financialValues";
 import {
   IRREGULAR_SPACING_TOLERANCE_YEARS,
@@ -101,6 +101,8 @@ export interface QuoteInput {
  * number that is off by the FX rate or the ADS ratio.
  */
 export interface CapitalOptions {
+  /** Banks, insurers and mortgage REITs have no industrial FCF/debt diagnostics. */
+  route?: SectorRoute;
   /** Statements' reported currency (e.g. inc0.reportedCurrency). */
   reportedCurrency?: string | null;
   /** Trading currency of the quote and the market-cap history (e.g. profile.currency). */
@@ -974,7 +976,7 @@ export function computeCapital(
     }
   }
 
-  return {
+  const result: CapitalResult = {
     asOf,
     fcf: {
       series: fcfSeries,
@@ -1013,4 +1015,19 @@ export function computeCapital(
     notes,
     gaps,
   };
+  if (options.route === "bank" || options.route === "insurer" || options.route === "reit-mortgage") {
+    const reason = "Not applicable to financial companies: funding liabilities and financial assets are operating inputs; industrial free cash flow, debt/EBITDA and EBIT interest coverage are not meaningful.";
+    result.fcf = { series: [], latestFcf: null, latestFcfBeforeSbc: null, latestSbc: null,
+      latestConversion: null, latestConversionBeforeSbc: null, basis: reason };
+    result.maintenanceVsGrowthCapex = { capexToDALatest: null, capexToDA5yAvg: null,
+      impliedMaintenanceCapex: null, impliedGrowthCapex: null, note: reason };
+    result.netDebtToEbitda = { value: null, netDebt: null, ebitda: null, asOf,
+      resolution: { ...result.netDebtToEbitda.resolution, value: null, reason }, note: reason };
+    result.interestCoverage = { value: null, ebit: null, interestExpense: null, note: reason };
+    result.sbc = { ...sbc, pctOfFcf: null, note: "SBC/revenue retained; SBC/FCF is not applicable to financial companies." };
+    result.notes = notes.filter((note) => !/free cash flow|FCF|maintenance capex/i.test(note));
+    result.notes.push(reason);
+    result.gaps = gaps.filter((gap) => !/^capital\.(?:fcf|maintenanceCapex|interestCoverage|netDebtToEbitda)(?:\.|$)/.test(gap.field));
+  }
+  return result;
 }

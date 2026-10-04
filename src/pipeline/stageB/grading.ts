@@ -612,13 +612,13 @@ export function computeScores(inputs: ScoringInputs): Scoring {
     "fundamentals",
     [
       { name: "revenueCagr", raw: bestCagr(growth.revenueCagrs), unit: "%", weight: 0.35, band: CAGR_BAND },
-      { name: "operatingMarginSlope", raw: growth.margins.operating.slopePctPtsPerYear, unit: "pp/yr", weight: 0.3, band: MARGIN_SLOPE_BAND },
+      { name: "operatingMarginSlope", raw: growth.margins.operating.slopePctPtsPerYear, unit: "pp/yr", weight: 0.3, band: MARGIN_SLOPE_BAND, suppressedBy: "operatingMargin" },
       // GAAP EPS growth is suppressed on routes where it is non-economic (REITs:
       // real-estate depreciation swamps net income, so FFO/AFFO growth leads).
       // Tagged so the route policy drops it instead of scoring fundamentals on a
       // metric the policy forbids displaying.
       { name: "epsCagr", raw: bestCagr(growth.epsDilutedCagrs), unit: "%", weight: 0.2, band: CAGR_BAND, suppressedBy: "epsGrowth" },
-      { name: "fcfCagr", raw: bestCagr(growth.fcfCagrs), unit: "%", weight: 0.15, band: CAGR_BAND },
+      { name: "fcfCagr", raw: bestCagr(growth.fcfCagrs), unit: "%", weight: 0.15, band: CAGR_BAND, suppressedBy: "fcfGrowth" },
     ],
     weights.fundamentals,
     inputs.asOf,

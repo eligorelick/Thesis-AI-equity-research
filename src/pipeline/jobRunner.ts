@@ -152,6 +152,7 @@ import {
  * cost-related is optional so a mock or a degraded pass can omit it.
  */
 export interface PassResultLike<T> {
+  presumed?: boolean;
   execution?: ProviderExecution;
   /** The parsed structured output for this pass. */
   data: T;
@@ -171,6 +172,7 @@ export interface PassResultLike<T> {
 
 /** Billed telemetry from a pass attempt that did not produce valid output. */
 export interface BilledPassAttempt {
+  presumed?: boolean;
   execution?: ProviderExecution;
   model: string;
   costUsd: number;
@@ -844,6 +846,7 @@ function telemetryFromPassResult<T>(
     costUsd: pass.costUsd,
     fallbackUsed: pass.fallbackUsed,
     billable,
+    ...(pass.presumed === undefined ? {} : { presumed: pass.presumed }),
     fetchedUrls: canonicalFetchedUrls(pass.fetchedUrls),
     ...(pass.execution === undefined ? {} : { execution: pass.execution }),
   };
@@ -863,6 +866,7 @@ function telemetryFromAttempt(
     costUsd: attempt?.costUsd ?? 0,
     fallbackUsed: attempt?.fallbackUsed ?? false,
     billable: attempt !== null,
+    ...(attempt?.presumed === undefined ? {} : { presumed: attempt.presumed }),
     fetchedUrls: [],
     ...(attempt?.execution === undefined ? {} : { execution: attempt.execution }),
   };
@@ -3247,7 +3251,7 @@ export async function runJob<TPayload = unknown>(
           field: "llm.judge",
           reason: detail,
           severity: "critical",
-          attemptedSources: judgeProviderAttempted ? ["anthropic"] : [],
+          attemptedSources: judgeProviderAttempted ? [parseSubscriptionModel(analysisModel)?.provider ?? "anthropic"] : [],
         });
         return persistDataOnly(state, bundle, validation, computed, now, hasKey);
       }
@@ -3401,7 +3405,7 @@ export async function runJob<TPayload = unknown>(
             reason: errMessage(err),
             severity: "critical",
             attemptedSources:
-              analystCheckpoint.wasLaunched() || billedAttempt !== null ? ["anthropic"] : [],
+              analystCheckpoint.wasLaunched() || billedAttempt !== null ? [parseSubscriptionModel(analysisModel)?.provider ?? "anthropic"] : [],
           });
           markSkipped(state, "synthesize", "upstream bull/bear pass failed");
           markSkipped(state, "verify", "upstream bull/bear pass failed");
@@ -3699,7 +3703,7 @@ export async function runJob<TPayload = unknown>(
           field: `llm.${side}`,
           reason: sideError ?? errMessage(err),
           severity: "critical",
-          attemptedSources: launched ? ["anthropic"] : [],
+          attemptedSources: launched ? [parseSubscriptionModel(analysisModel)?.provider ?? "anthropic"] : [],
         });
       }
       markSkipped(state, "synthesize", "upstream bull/bear pass failed");
@@ -3949,7 +3953,7 @@ function persistDataOnly(
     computed,
     costBreakdown: buildCostBreakdown(state),
     presumed: presumedSpendDisclosure(state.jobId),
-    execution: disclosure.execution ?? readSuccessfulExecutions(state.jobId, model),
+    execution: disclosure.execution ?? readSuccessfulExecutions(state.jobId, model, true),
     gaps: disclosure.gaps,
     reason: disclosure.reason ?? (hasKey ? LLM_FAILURE_DATA_ONLY_REASON : NO_KEY_SKIP_REASON),
   };
@@ -4070,10 +4074,10 @@ function persistReport(
           },
           appendix: {
             ...parsed.data.appendix,
-            costBreakdown: reconcilePersistedCostBreakdown(
+            costBreakdown: [...reconcilePersistedCostBreakdown(
               parsed.data.appendix.costBreakdown,
               ledger,
-            ),
+            ), ...readPlanCostBreakdown(state.jobId, db)],
           },
         }
       : report;
@@ -4221,7 +4225,7 @@ function readDiscardedAttempts(jobId: string): DiscardedAttempt[] {
 
 function buildCostBreakdown(state: RunState): CostBreakdownEntry[] {
   const discarded = readDiscardedAttempts(state.jobId);
-  return readCostLedger(state.jobId).map((row) => {
+  const entries: CostBreakdownEntry[] = readCostLedger(state.jobId).map((row) => {
     const match = discarded.find((attempt) => costRowBelongsToAttempt(row.attemptId, attempt.attemptId));
     return {
       step: row.step,
@@ -4230,6 +4234,24 @@ function buildCostBreakdown(state: RunState): CostBreakdownEntry[] {
       ...(match === undefined ? {} : { discarded: true, discardedReason: match.reason }),
     };
   });
+  return [...entries, ...readPlanCostBreakdown(state.jobId)];
+}
+
+function readPlanCostBreakdown(jobId: string, db: ThesisDb = getDb()): CostBreakdownEntry[] {
+  const entries: CostBreakdownEntry[] = [];
+  // Plan-allowance attempts intentionally have no API-charge ledger row.
+  // Their durable artifacts still belong in the report, including failures.
+  try {
+    for (const artifact of readJobPassArtifactLineage(jobId, db)) {
+      if (artifact.telemetry.billable || !parseSubscriptionModel(artifact.telemetry.model)) continue;
+      const failure = artifact.envelope.outcome === "failure" ? artifact.envelope.failure : null;
+      entries.push({ step: artifact.pass, model: artifact.telemetry.execution?.modelObserved === false
+        ? `unknown (requested ${artifact.telemetry.execution.requestedModel ?? artifact.telemetry.model})` : artifact.telemetry.model, costUsd: 0,
+        ...(failure === null ? {} : { discarded: true, discardedReason: readerSafeFailureText(failure) }),
+      });
+    }
+  } catch { /* Invalid artifacts must not replace verified API accounting. */ }
+  return entries;
 }
 
 /**
@@ -4286,25 +4308,30 @@ function readCostLedger(jobId: string): CostLedgerRow[] {
 }
 
 /** OAuth passes have no API-charge row; their durable artifacts retain execution evidence. */
-function readSuccessfulExecutions(jobId: string, requestedModel: string): ExecutionMetadataEntry[] {
+function readSuccessfulExecutions(jobId: string, requestedModel: string, includeFailures = false): ExecutionMetadataEntry[] {
   // Reuse resume's authoritative fold: a newer failed/corrupt pass supersedes
   // an older success, and newer upstream work invalidates old downstream work.
   const cohort = getDb().transaction((db) => readStoredJobResumeInTransaction(db, jobId)?.artifacts);
   if (cohort === undefined) return [];
   return ["bull", "bear", "synthesize"].flatMap((step) => {
     const artifacts = cohort.currentArtifacts.filter((artifact) =>
-      artifact.pass === step && artifact.envelope.outcome === "success");
-    if (artifacts.length !== 1 || cohort.corruptPasses.some((pass) => pass === step)) return [];
-    const artifact = artifacts[0]!;
-    return [buildExecutionMetadataEntry({
-      step,
+      artifact.pass === step && (includeFailures || artifact.envelope.outcome === "success"));
+    if ((!includeFailures && artifacts.length !== 1) || cohort.corruptPasses.some((pass) => pass === step)) return [];
+    return artifacts.map((artifact, index) => {
+    const execution = buildExecutionMetadataEntry({
+      step: artifacts.length > 1 ? `${step} attempt ${index + 1}` : step,
       requestedModel: artifact.telemetry.execution?.requestedModel ?? requestedModel,
       effectiveModel: artifact.telemetry.model,
       requestedEffort: null,
       fallbackUsed: artifact.telemetry.fallbackUsed,
       execution: artifact.telemetry.execution,
       usage: { input_tokens: artifact.telemetry.inputTokens, output_tokens: artifact.telemetry.outputTokens },
-    })];
+    });
+    if (artifact.envelope.outcome === "failure") {
+      execution.note = `${execution.note ? `${execution.note} ` : ""}${step}: no usable analysis was completed; the execution and usage above describe the failed attempt.`;
+    }
+    return execution;
+    });
   });
 }
 
@@ -4535,14 +4562,14 @@ function reconcileRecoveredVerifyReport(
     requestedEffort: null,
     fallbackUsed: verify.fallbackUsed,
   }));
-  const costBreakdown = ledger.map((row) => ({
+  const costBreakdown = [...ledger.map((row) => ({
     step: row.step,
     model: row.model,
     costUsd: row.costUsd,
     // This is the only execution option cost_log persists per attempt. Do not
     // infer requested model/effort or derived adjustments for appendix rows.
     fallbackUsed: row.fallbackUsed,
-  }));
+  })), ...readPlanCostBreakdown(state.jobId)];
   const report = costBreakdown.length === 0
     ? {
         ...verify.data,
@@ -4660,14 +4687,15 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
   // ran and a schema placeholder when it did not; "ungraded" (before the
   // 2026-09-06 audit, F170) contradicted the band shown next to it.
   const flagClaim = {
-    text: `LLM analysis did not run — ${input.reason}. This section is data-only: no analyst grade exists, and any letter shown is the deterministic score band or a placeholder stated as such.`,
+    text: `No completed analysis is available — ${input.reason.replace(/[.!?]+$/, "")}. This section is data-only: no analyst grade exists; any displayed score band comes from deterministic calculations.`,
     label: "JUDGMENT" as const,
     source: "pipeline",
     asOf: null,
   };
   const grade = (): Report["verdict"]["gradeStrip"]["fundamentals"] => ({
     grade: "F",
-    oneLineWhy: "Not graded — Stage B did not run, so no score band exists; F is the schema's placeholder letter, not an assessment (LLM analysis did not run either).",
+    assessmentStatus: "not-assessed",
+    oneLineWhy: "Not assessed — deterministic calculations and completed AI analysis are unavailable.",
     reasoning: [flagClaim],
     confidence: "low",
     keyNumbers: [],
@@ -4718,7 +4746,7 @@ export function buildDataOnlyReport(input: DataOnlyInput): Report {
     },
     verdict: {
       synthesis:
-        "Data-only report: the grounded LLM analysis passes did not run, so no synthesis, grades, or scenarios are available. The appendix lists the fetched sources and every disclosed data gap.",
+        "Data-only report: no completed AI analysis is available, so no synthesis, analyst grades, or scenarios are shown. The appendix lists the fetched sources and every disclosed data gap.",
       gradeStrip: {
         fundamentals: grade(),
         valuation: grade(),

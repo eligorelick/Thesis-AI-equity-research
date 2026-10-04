@@ -162,6 +162,7 @@ export interface PassMessage {
 
 /** The success branch of the provider's Sourced<PassOutcome>. */
 export interface PassOutcomeLike {
+  presumed?: boolean;
   execution?: ProviderExecution;
   message: PassMessage;
   fetchedUrls?: string[];
@@ -174,6 +175,7 @@ export interface PassOutcomeLike {
 /** Structural mirror of the provider's typed PassError (kinds incl. the
  * Stage-C-fabricated parse/schema/transport — see PassErrorKind docs). */
 export interface PassErrorLike {
+  presumed?: boolean;
   execution?: ProviderExecution;
   kind:
     | "no_key"
@@ -294,6 +296,7 @@ export interface PassDeps {
 
 /** Successful pass output plus its usage/cost provenance. */
 export interface PassResult<T> {
+  presumed?: boolean;
   execution?: ProviderExecution;
   output: T;
   usage: PassUsage;
@@ -336,6 +339,7 @@ export type PassRun<T> =
        * between converging and re-rolling the dice on weaker models.
        */
       rawText?: string;
+      presumed?: boolean;
       execution?: ProviderExecution;
       usage?: PassUsage;
       costUsd?: number;
@@ -629,6 +633,7 @@ function finishStructuredPass<T>(
       usage,
       ...(outcome.error.execution === undefined ? {} : { execution: { requestedModel, ...outcome.error.execution } }),
       costUsd: outcome.error.costUsd,
+      ...(outcome.error.presumed === undefined ? {} : { presumed: outcome.error.presumed }),
       fallbackUsed: outcome.error.fallbackUsed,
       model: outcome.error.model ?? (outcome.error.costUsd !== undefined ? requestedModel : undefined),
       webSearches: outcome.error.webSearches ?? (usage ? webSearchesOf(usage) : undefined),
@@ -638,6 +643,7 @@ function finishStructuredPass<T>(
   const attemptedSources = [parseSubscriptionModel(data.model)?.provider ?? "anthropic"];
   const text = extractText(data.message);
   const billedAttempt = {
+    ...(data.presumed === undefined ? {} : { presumed: data.presumed }),
     ...(data.execution === undefined ? {} : { execution: { requestedModel, ...data.execution } }),
     usage: data.usage,
     costUsd: data.costUsd,
@@ -675,6 +681,7 @@ function finishStructuredPass<T>(
     ok: true,
     result: {
       output: parsed.value,
+      ...(data.presumed === undefined ? {} : { presumed: data.presumed }),
       usage: data.usage,
       costUsd: data.costUsd,
       fallbackUsed: data.fallbackUsed,
@@ -855,6 +862,7 @@ function telemetryFromPassRun<T>(
     costUsd: run.ok ? run.result.costUsd : (run.costUsd ?? 0),
     fallbackUsed: run.ok ? run.result.fallbackUsed : (run.fallbackUsed ?? false),
     billable: !parseSubscriptionModel(requestedModel) && (run.ok || run.costUsd !== undefined),
+    ...((run.ok ? run.result.presumed : run.presumed) === undefined ? {} : { presumed: run.ok ? run.result.presumed : run.presumed }),
     ...((run.ok ? run.result.execution : run.execution) === undefined ? {} : { execution: run.ok ? run.result.execution : run.execution }),
     fetchedUrls,
   };
@@ -1072,11 +1080,11 @@ function failureMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function hardFailure(field: string, err: unknown): PassRun<AnalystCase> {
+function hardFailure(field: string, err: unknown, model: string): PassRun<AnalystCase> {
   const reason = failureMessage(err);
   return {
     ok: false,
-    gap: { field, reason, severity: "critical", attemptedSources: ["anthropic"] },
+    gap: { field, reason, severity: "critical", attemptedSources: [parseSubscriptionModel(model)?.provider ?? "anthropic"] },
     error: { kind: "transport", message: reason },
   };
 }
@@ -1170,7 +1178,7 @@ function bearNotLaunched(reason: string): PassRun<AnalystCase> {
   const message = `bear pass not launched because bull stream did not reach a first token (${reason})`;
   return {
     ok: false,
-    gap: { field: "llm.bear", reason: message, severity: "critical", attemptedSources: ["anthropic"] },
+    gap: { field: "llm.bear", reason: message, severity: "critical", attemptedSources: [] },
     error: { kind: "transport", message, notLaunched: true },
   };
 }
@@ -1239,7 +1247,7 @@ export async function runBullThenBear(
     });
     const bullRun = tapFinish(bullHandle.result, hooks, "bull").then(
       (outcome) => finishStructuredPass(outcome, parseAnalystCase, "llm.bull", deps.model),
-      (error: unknown) => hardFailure("llm.bull", error),
+      (error: unknown) => hardFailure("llm.bull", error, deps.model),
     );
     // Attached before bear is launched, so an already-doomed bull hands bear a
     // signal that is aborted the moment its request is created.
@@ -1336,7 +1344,7 @@ export async function runBullThenBear(
     }
     const bearRun = tapFinish(bearHandle.result, hooks, "bear").then(
       (outcome) => finishStructuredPass(outcome, parseAnalystCase, "llm.bear", deps.model),
-      (error: unknown) => hardFailure("llm.bear", error),
+      (error: unknown) => hardFailure("llm.bear", error, deps.model),
     );
     void bearRun.then(
       (run) => {
@@ -1772,7 +1780,13 @@ export async function runJudgePass(
     const request = buildJudgeRunPassArgs(deps, payload, bull, bear, validationFeedback, order);
     deps.validateRunPass?.(request);
     const outcome = await deps.runPass(request);
-    return finishStructuredPass(outcome, parseJudgeOutput, "llm.judge", judgeModel);
+    const finished = finishStructuredPass(outcome, parseJudgeOutput, "llm.judge", judgeModel);
+    if (judgeModel === deps.model) return finished;
+    // The provider sees the internally floored request. Keep the original
+    // selection in durable evidence so a resumed run still discloses the floor.
+    return finished.ok
+      ? { ...finished, result: { ...finished.result, execution: { ...finished.result.execution, requestedModel: deps.model } } }
+      : { ...finished, execution: { ...finished.execution, requestedModel: deps.model } };
   };
 
   await beforeProviderLaunch?.();
@@ -1882,10 +1896,11 @@ function mergeJudgeBilling(
   const provider = parseSubscriptionModel(primary.model)?.provider;
   let execution = primary.execution;
   let model = primary.model;
-  // A transport failure's model is merely the requested model. Only a
-  // received response with usage can add evidence about actual execution.
-  if (provider !== undefined && usage !== undefined) {
+  // Missing usage is itself relevant when the transport explicitly reports
+  // that absence. Legacy failures without evidence retain the primary record.
+  if (provider !== undefined && (usage !== undefined || mirroredExecution?.modelObserved !== undefined || mirroredExecution?.usageReported !== undefined)) {
     const observed = (effectiveModel: string | undefined, evidence: ProviderExecution | undefined): string[] => {
+      if (evidence?.modelObserved === false) return [];
       if (evidence?.observedModels !== undefined) return evidence.observedModels;
       const parsed = effectiveModel === undefined ? null : parseSubscriptionModel(effectiveModel);
       return parsed === null || parsed.model === "multiple-models" ? [] : [parsed.model];
@@ -1897,6 +1912,10 @@ function mergeJudgeBilling(
     if (primary.model !== mirroredModel || observedModels.length > 1) model = subscriptionModel(provider, "multiple-models");
     execution = {
       ...(primary.execution?.requestedModel === undefined ? {} : { requestedModel: primary.execution.requestedModel }),
+      ...(primary.execution?.modelObserved !== undefined || mirroredExecution?.modelObserved !== undefined
+        ? { modelObserved: primary.execution?.modelObserved !== false && mirroredExecution?.modelObserved !== false } : {}),
+      ...(primary.execution?.usageReported !== undefined || mirroredExecution?.usageReported !== undefined
+        ? { usageReported: primary.execution?.usageReported !== false && mirroredExecution?.usageReported !== false } : {}),
       requestedEffort: primary.execution?.requestedEffort === mirroredExecution?.requestedEffort
         ? primary.execution?.requestedEffort ?? null : null,
       effectiveEffort: primary.execution?.effectiveEffort === mirroredExecution?.effectiveEffort
@@ -1913,6 +1932,8 @@ function mergeJudgeBilling(
   return {
     ...primary,
     model,
+    ...(primary.presumed === true || (mirrored.ok ? mirrored.result.presumed : mirrored.presumed) === true
+      ? { presumed: true } : {}),
     ...(execution === undefined ? {} : { execution }),
     usage: {
       input_tokens: add(primary.usage.input_tokens, usage?.input_tokens),

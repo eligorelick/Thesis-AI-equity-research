@@ -581,14 +581,18 @@ function checkFmpXbrlCross(bundle: ValidatableBundle, c: Collector): void {
   const isXbrlSourced = (result: FetchResult<unknown>): boolean =>
     result.ok && result.value.source === "edgar";
   const identityDetail =
-    "statements are XBRL-sourced (EDGAR companyfacts); the cross-check is an identity";
+    "statements are XBRL-sourced (EDGAR companyfacts); the cross-check is an identity, so independent verification was skipped";
+
+  if (isXbrlSourced(bundle.statements.incomeAnnual) || isXbrlSourced(bundle.statements.incomeQuarterly)) {
+    c.gaps.push(gapEntry("validation.xbrlCrossCheck.identity", identityDetail, "info"));
+  }
 
   const annual = bundle.statements.incomeAnnual;
   if (isXbrlSourced(annual)) {
     c.checks.push({
       id: "xbrlCrossCheck.FY",
       name: "FMP↔XBRL cross-check (latest FY)",
-      status: "pass",
+      status: "skipped",
       detail: identityDetail,
     });
   } else if (annual.ok && annual.value.data.rows.length > 0) {
@@ -607,7 +611,7 @@ function checkFmpXbrlCross(bundle: ValidatableBundle, c: Collector): void {
     c.checks.push({
       id: "xbrlCrossCheck.Q",
       name: "FMP↔XBRL cross-check (latest quarter)",
-      status: "pass",
+      status: "skipped",
       detail: identityDetail,
     });
   } else if (quarterly.ok && quarterly.value.data.rows.length > 0) {

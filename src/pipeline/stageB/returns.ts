@@ -1115,6 +1115,8 @@ export interface ReturnsIncomeRow {
   date: string;
   /** Preferred dividends for the period; nets out of the ROTE numerator. */
   preferredDividendsPaid?: number | null;
+  /** Filed common earnings already reflect preferred distributions and other adjustments. */
+  netIncomeAvailableToCommon?: number | null;
   revenue?: number | null;
   operatingIncome?: number | null;
   ebit?: number | null;
@@ -1394,6 +1396,16 @@ export function tangibleCommonEquity(b: ReturnsBalanceRow): number | null {
   return Number.isFinite(tce) ? tce : null;
 }
 
+/** Earnings belonging to common holders, shared by returns and common-equity valuation. */
+export function incomeAvailableToCommon(row: ReturnsIncomeRow, preferredStock: number | null | undefined): number | null {
+  if (isFiniteNumber(row.netIncomeAvailableToCommon)) return row.netIncomeAvailableToCommon;
+  if (!isFiniteNumber(row.netIncome)) return null;
+  const hasPreferred = isFiniteNumber(preferredStock) && preferredStock > 0;
+  const distribution = isFiniteNumber(row.preferredDividendsPaid) ? Math.abs(row.preferredDividendsPaid) : null;
+  if (distribution !== null && (distribution > 0 || !hasPreferred)) return row.netIncome - distribution;
+  return hasPreferred ? null : row.netIncome;
+}
+
 /**
  * Return on tangible common equity — the standard profitability measure for
  * banks, insurers and mortgage REITs, and the metric the bank route already
@@ -1439,7 +1451,6 @@ export function computeRote(
     // exactly the issuers (banks) this metric exists for. Fail closed when
     // preferred is present but its dividend is unavailable, rather than
     // silently returning the unadjusted ratio.
-    const niTotal = isFiniteNumber(row.netIncome) ? row.netIncome : null;
     const prefDivRaw = isFiniteNumber(row.preferredDividendsPaid)
       ? Math.abs(row.preferredDividendsPaid)
       : null;
@@ -1449,21 +1460,13 @@ export function computeRote(
     // of nothing: preferred that is outstanding pays. Treating it as disclosed
     // credited the whole preferred coupon to common on exactly the issuers
     // (banks) this metric exists for.
-    const prefDiv = prefDivRaw === 0 && hasPreferred ? null : prefDivRaw;
-    let ni: number | null;
-    if (niTotal === null) {
-      ni = null;
-    } else if (prefDiv !== null) {
-      ni = niTotal - prefDiv;
-    } else if (hasPreferred) {
-      ni = null;
+    const ni = incomeAvailableToCommon(row, cur.preferredStock);
+    if (ni === null && hasPreferred && isFiniteNumber(row.netIncome)) {
       notes.push(
         `${row.date}: preferred stock is outstanding but preferred dividends are ${
           prefDivRaw === 0 ? "reported as 0 (treated as undisclosed — vendor zero-for-undisclosed)" : "unavailable"
         } — ROTE withheld rather than crediting preferred earnings to common`,
       );
-    } else {
-      ni = niTotal;
     }
 
     // A non-positive tangible base makes the ratio meaningless, not merely
@@ -1491,13 +1494,13 @@ export function computeRote(
   if (series.length > 0 && series.every((y) => y.rotePct === null)) {
     gaps.push({
       field: "returns.rote",
-      reason: "return on tangible common equity not computable (net income or a positive tangible base missing)",
+      reason: "return on tangible common equity not computable (common earnings, the preferred-dividend adjustment, or a positive tangible base is missing)",
       severity: "warn",
     });
   }
   if (series.length > 0) {
     notes.push(
-      "ROTE = net income / average tangible common equity (equity − goodwill − other intangibles − preferred).",
+      "ROTE = income available to common / average tangible common equity (equity − goodwill − other intangibles − preferred). Filed common earnings are used directly; otherwise net income is reduced by disclosed preferred dividends.",
     );
   }
 

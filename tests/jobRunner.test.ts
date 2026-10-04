@@ -154,6 +154,7 @@ import {
   DURABLE_PASSES,
   PASS_ARTIFACT_ENVELOPE_VERSION,
   parsePassArtifactEnvelope,
+  parseLegacyAnalystSnapshot,
   persistPassSettlement,
   readCurrentGenerationPassArtifacts,
 } from "@/pipeline/jobArtifacts";
@@ -6100,7 +6101,7 @@ describe("runJob — full pipeline with mock passes", () => {
     expect(repRow?.symbol).toBe("AAPL");
     expect(repRow?.status).toBe("done");
     expect(repRow?.verificationRate).toBe(1);
-    expect(repRow?.specVersion).toBe("1.5.0");
+    expect(repRow?.specVersion).toBe("1.6.0");
     expect(repRow?.costUsd).toBeCloseTo(totalCost, 6);
     const parsed = ReportSchema.safeParse(JSON.parse(repRow?.reportJson ?? "{}"));
     expect(parsed.success).toBe(true);
@@ -6611,6 +6612,50 @@ describe("runJob — no-key degraded path", () => {
  * ------------------------------------------------------------------------ */
 
 describe("runJob — LLM pass failure", () => {
+  it("keeps presumed pass-mode charges reconcilable and disclosed after successful output", async () => {
+    configMocks.getConfig.mockReturnValue({ ...configMocks.getConfig(), reservationMode: "pass" });
+    const { jobId } = createJob("AAPL");
+    const { passes } = mockPasses();
+    const original = passes.runBullThenBear;
+    passes.runBullThenBear = (deps, hooks, settlements) => original(deps, hooks, { ...settlements,
+      bull: async (settlement) => settlements?.bull?.({ ...settlement, telemetry: { ...settlement.telemetry, presumed: true } }),
+    });
+    const result = await runJob(jobId, passes, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW });
+    const costs = handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all();
+    const bull = costs.find((row) => row.step === "bull")!;
+    expect(bull).toMatchObject({ settlementKind: "presumed", presumedAttemptId: bull.attemptId, costUsd: 0.9 });
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    expect(JSON.parse(row.reportJson!).meta.presumedCostUsd).toBe(0.9);
+    expect(readCurrentGenerationPassArtifacts(jobId).find((artifact) => artifact.pass === "bull")?.telemetry.presumed).toBe(true);
+    const storedJob = handle.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    expect(parseLegacyAnalystSnapshot(storedJob.bullJson)?.presumed).toBe(true);
+    expect(parseLegacyAnalystSnapshot(JSON.stringify({ ...JSON.parse(storedJob.bullJson!), presumed: "true" }))).toBeNull();
+    handle.db.update(costLog).set({ costUsd: 0.4, reconciledAt: NOW().toISOString() }).where(eq(costLog.id, bull.id)).run();
+    expect(() => readCurrentGenerationPassArtifacts(jobId)).not.toThrow();
+  });
+  it("retains failed OAuth execution and allowance usage in a data-only report", async () => {
+    vi.mocked(resolveModel).mockResolvedValueOnce({ model: "chatgpt/gpt-6-astra", resolvedFrom: "explicit" });
+    const { jobId } = createJob("AAPL");
+    const { passes } = mockPasses();
+    passes.runBullThenBear = async (_deps, hooks, settlements) => {
+      await launchTestAnalystSide(hooks, "bull");
+      await settlements?.bull?.({ outcome: "failure", failure: { name: "Error", message: "ChatGPT returned no usable report content", kind: "transport" }, telemetry: {
+        model: "chatgpt/gpt-6-astra", inputTokens: 200, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0,
+        costUsd: 0, fallbackUsed: false, billable: false, fetchedUrls: [],
+        execution: { requestedModel: "chatgpt/gpt-6-astra", requestedEffort: null, effectiveEffort: "medium", requestedServiceTier: "default", effectiveServiceTier: "default" },
+      } });
+      throw new Error("ChatGPT returned no usable report content");
+    };
+    const result = await runJob(jobId, passes, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW });
+    expect(result.dataOnly).toBe(true);
+    const row = handle.db.select().from(reports).where(eq(reports.id, result.reportId!)).get()!;
+    const report = ReportSchema.parse(JSON.parse(row.reportJson!));
+    expect(report.meta.execution).toEqual([expect.objectContaining({ step: "bull", effectiveModel: "chatgpt/gpt-6-astra", inputTokens: 200, outputTokens: 50, effectiveEffort: "medium" })]);
+    expect(report.appendix.costBreakdown).toEqual([expect.objectContaining({ step: "bull", model: "chatgpt/gpt-6-astra", costUsd: 0, discarded: true })]);
+    expect(report.appendix.missingData.find((gap) => gap.field === "llm.bull")?.attemptedSources).toEqual(["chatgpt"]);
+    expect(report.appendix.missingData.find((gap) => gap.field === "llm.bear")?.attemptedSources).toEqual([]);
+    expect(handle.db.select().from(costLog).where(eq(costLog.jobId, jobId)).all()).toEqual([]);
+  });
   it("marks bull/bear error, skips downstream, persists a data-only report", async () => {
     const { jobId } = createJob("AAPL");
     const { passes } = mockPasses();

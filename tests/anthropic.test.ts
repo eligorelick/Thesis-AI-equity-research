@@ -844,6 +844,51 @@ describe("interpretPassMessage", () => {
     },
   );
 
+  it.each(["cyber", "general_harms", "bio"])(
+    "matches fallback category %s after ordinary sampling iterations", (category) => {
+      const result = interpretPassMessage(syntheticMessage({
+        model: "claude-fable-5",
+        content: [{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" }, trigger: { type: "refusal", category } }],
+        usage: syntheticUsage({ input_tokens: 2_000, output_tokens: 100, iterations: [
+          { type: "message", model: "claude-fable-5", input_tokens: 500, output_tokens: 0 },
+          { type: "message", model: "claude-fable-5", input_tokens: 1_000, output_tokens: 0 },
+          { type: "fallback_message", model: "claude-opus-4-8", input_tokens: 2_000, output_tokens: 100 },
+        ] as never }),
+      }), { ...baseOpts, model: "claude-fable-5", effort: "high" });
+      if (!result.ok) throw new Error("expected success");
+      // The ordinary sampling iteration is paid; only the declining iteration
+      // inherits the transition's free pre-output refusal category.
+      expect(result.value.data.costUsd).toBeCloseTo(0.005 + (category === "bio" ? 0.01 : 0) + 0.0125, 10);
+      expect(result.value.data.presumed).toBeUndefined();
+      expect(result.value.data.execution).toMatchObject({
+        requestedModel: "claude-fable-5", requestedEffort: "high", effectiveEffort: "high",
+      });
+    },
+  );
+
+  it.each(["end_turn", "refusal", "max_tokens", "model_context_window_exceeded", "pause_turn"] as const)(
+    "preserves requested model and effort for completed stop reason %s", (stop_reason) => {
+      const result = interpretPassMessage(syntheticMessage({ stop_reason }), {
+        ...baseOpts, model: "claude-fable-5", effort: "high",
+      });
+      const outcome = result.ok ? result.value.data : result.error;
+      expect(outcome.model).toBe("claude-opus-4-8");
+      expect(outcome.execution).toMatchObject({
+        requestedModel: "claude-fable-5", requestedEffort: "high", effectiveEffort: "high",
+      });
+    },
+  );
+
+  it("records requested effort separately when the requested model strips it", () => {
+    const result = interpretPassMessage(syntheticMessage({ model: "claude-haiku-4-5" }), {
+      ...baseOpts, model: "claude-haiku-4-5", effort: "high",
+    });
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value.data.execution).toMatchObject({
+      requestedModel: "claude-haiku-4-5", requestedEffort: "high", effectiveEffort: null,
+    });
+  });
+
   it('returns a typed "refusal" error with category and files a gap', () => {
     const message = syntheticMessage({
       stop_reason: "refusal",
@@ -1159,12 +1204,15 @@ describe("runPass resumes a paused turn end-to-end", () => {
 describe("runPass without a key", () => {
   it('returns the "no Anthropic key" gap instead of throwing', async () => {
     _resetAnthropicForTests(null);
-    const result = await runPass({ ...baseOpts, field: "llm.judge" });
+    const result = await runPass({ ...baseOpts, field: "llm.judge", effort: "high" });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.gap.reason).toBe("no Anthropic key");
     expect(result.gap.field).toBe("llm.judge");
     expect(result.error.kind).toBe("no_key");
+    expect(result.error.execution).toMatchObject({
+      requestedModel: baseOpts.model, requestedEffort: "high", effectiveEffort: null,
+    });
   });
 
   it("gaps on the streaming path too, with firstToken resolving immediately", async () => {
@@ -1175,6 +1223,21 @@ describe("runPass without a key", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.gap.reason).toBe("no Anthropic key");
+  });
+
+  it("retains the request when spend admission stops it before dispatch", async () => {
+    const { client, calls } = fakeCreateClient([syntheticMessage()]);
+    _resetAnthropicForTests(client);
+    const result = await runPass({ ...baseOpts, model: "claude-fable-5", effort: "high", admission: {
+      reserve: async () => { throw new Error("spend cap reached"); },
+      settle: async () => { throw new Error("nothing dispatched"); },
+      release: async () => { throw new Error("nothing admitted"); },
+    } });
+    expect(calls).toHaveLength(0);
+    if (result.ok) throw new Error("expected admission failure");
+    expect(result.error.execution).toMatchObject({
+      requestedModel: "claude-fable-5", requestedEffort: "high", effectiveEffort: null,
+    });
   });
 });
 
@@ -1725,6 +1788,9 @@ describe("runPassStreaming transport retry", () => {
     expect(result.error.usage?.output_tokens).toBe(8_000 * PASS_TRANSPORT_MAX_ATTEMPTS);
     expect(result.error.model).toBe("claude-opus-4-8");
     expect(result.error.webSearches).toBe(2 * PASS_TRANSPORT_MAX_ATTEMPTS);
+    expect(result.error.execution).toMatchObject({
+      requestedModel: streamingOpts.model, requestedEffort: null, effectiveEffort: null,
+    });
     expect(result.error.costUsd).toBeCloseTo(
       PASS_TRANSPORT_MAX_ATTEMPTS * computeCostUsd(attemptBilledUsage, "claude-opus-4-8", 2),
       10,
@@ -2038,6 +2104,9 @@ describe("stream idle timeout", () => {
     expect(result.error.costUsd).toBeCloseTo(0.02 + 0.02 + 0.14001, 6);
     expect(result.error.usage).toMatchObject({ input_tokens: 10_000, output_tokens: 2_000 });
     expect(result.error.model).toBe("claude-sonnet-5");
+    expect(result.error.execution).toMatchObject({
+      requestedModel: idleOpts.model, requestedEffort: "low", effectiveEffort: "low",
+    });
   }, 15_000);
 
   it("does not fire while the stream keeps producing events", async () => {

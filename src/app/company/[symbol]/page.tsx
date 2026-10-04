@@ -221,7 +221,7 @@ function QuoteHeader({ bundle, computed }: { bundle: DataBundle; computed: Compu
         {quoteSourced?.stale ? <Badge tone="warn">quote stale</Badge> : null}
         {computed.gaps.some((g) => g.severity === "critical") ? (
           <Badge tone="neg">
-            {computed.gaps.filter((g) => g.severity === "critical").length} critical gaps
+            {computed.gaps.filter((g) => g.severity === "critical").length} critical data gaps · report analysis gaps counted separately
           </Badge>
         ) : null}
       </div>

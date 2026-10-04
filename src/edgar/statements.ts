@@ -459,8 +459,8 @@ const INTEREST_EXPENSE_SPEC: ChainSpec = lineItemChain("interestExpense", "money
  * common field (the old alias) overstated common dividends at every
  * preferred-issuing filer — banks, utilities, REITs — by the preferred coupon.
  * The common element is tried first; then the total net of the preferred
- * element; and only when no preferred element is filed at all does the total
- * stand in, disclosed, because a filer with no preferred stock tags none.
+ * element; the final total fallback is rejected during row assembly when
+ * preferred stock is outstanding and the preferred cash payment is unknown.
  */
 const COMMON_DIVIDENDS_SPEC: ChainSpec = {
   kind: "chain",
@@ -574,6 +574,7 @@ const INCOME_CHAINS: Record<string, ChainSpec> = {
   incomeTaxExpense: lineItemChain("incomeTaxExpense", "money"),
   totalOtherIncomeExpensesNet: lineItemChain("totalOtherIncomeExpensesNet", "money"),
   netIncome: lineItemChain("netIncome", "money"),
+  netIncomeAvailableToCommon: lineItemChain("netIncomeAvailableToCommon", "money"),
   netIncomeFromContinuingOperations: lineItemChain("netIncomeFromContinuingOperations", "money"),
   netIncomeFromDiscontinuedOperations: lineItemChain("netIncomeFromDiscontinuedOperations", "money"),
   depreciationAndAmortization: DEPRECIATION_SPEC,
@@ -2095,6 +2096,8 @@ function buildStatementRows<TRow>(
         return r === null ? null : tidy(r.value, MONEY_DECIMALS);
       },
     });
+    // A withheld aggregate-dividend proxy has no common-dividend provenance.
+    if (def.statement === "cashflow" && values.commonDividendsPaid === null) resolutions.delete("commonDividendsPaid");
     for (const field of def.unsourced) values[field] ??= null;
 
     if (isForeignAnnualForm(anchor.point.form.trim()) || isForeignAnnualForm(anchor.reporter.form.trim())) {
@@ -2496,8 +2499,23 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
     state,
     balanceQuarterlyNotes,
   );
+  const cashflowDef: StatementDef = {
+    ...CASHFLOW_DEF,
+    compute(values, notes, date, context) {
+      CASHFLOW_DEF.compute(values, notes, date, context);
+      const common = context.resolved.get("commonDividendsPaid");
+      const aggregateOnly = common?.tags.length === 1 && common.tags[0] === "PaymentsOfDividends";
+      if (!aggregateOnly || values.commonDividendsPaid === 0) return;
+      const preferred = instantResolver(index, date)("PreferredStockValue", "money")?.value ?? null;
+      if (preferred === null || preferred <= 0) return;
+      const reason = "preferred stock is outstanding but only aggregate dividends paid are tagged; common dividends are withheld until the common or preferred CASH distribution is disclosed (earnings allocations are not cash payments)";
+      values.commonDividendsPaid = null;
+      notes.add(`commonDividendsPaid ${date}: ${reason}`);
+      notes.withhold("commonDividendsPaid", date, reason);
+    },
+  };
   const cashflowAnnual = buildStatementRows<FmpCashFlowRow>(
-    CASHFLOW_DEF,
+    cashflowDef,
     annualSlots((fy) => annualResolver(index, fy)),
     "annual",
     opts,
@@ -2506,7 +2524,7 @@ export function buildStatementsFromCompanyFacts(facts: CompanyFacts, opts: State
   );
   const cashflowQuarterlyNotes = createNoteSink();
   const cashflowQuarterly = buildStatementRows<FmpCashFlowRow>(
-    CASHFLOW_DEF,
+    cashflowDef,
     quarterSlots(true, cashflowQuarterlyNotes),
     "quarter",
     opts,

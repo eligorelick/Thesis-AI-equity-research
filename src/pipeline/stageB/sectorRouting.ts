@@ -402,7 +402,22 @@ export function routeCompany(
   const classificationDecidedNonFinancial =
     !baseMatched && industryLc !== null && !sicIsFinancial && !sectorIsFinancial;
 
-  if (
+  // Capital-markets and diversified-financial labels describe a broad sector,
+  // not whether the issuer funds an earning-asset book with deposits. Paired,
+  // recent deposit + loan/NII facts refine those labels; an explicit fee-based
+  // broker or a non-financial industry retains its existing conflict safeguard.
+  const broadFinancialClassification = base === "general" && (sectorIsFinancial || sicIsFinancial) &&
+    !(industryLc === null && sicNum !== null && sicNum >= 6400 && sicNum <= 6499) &&
+    (industryLc === null || /^(?:financial\s*-\s*)?(?:capital markets|financial conglomerates|financial services|diversified financial services)$/.test(industryLc));
+
+  if (broadFinancialClassification && evidenceSuggests === "bank" && evidence?.available) {
+    base = "bank";
+    baseMatched = true;
+    notes.push(
+      `broad financial classification '${industryRaw ?? sectorRaw ?? sicRaw}' refined to 'bank' by ` +
+        `corroborated XBRL evidence (${evidence.source}${evidenceAsOf}): ${evidence.basis ?? evidenceSignalsFor("bank")}.`,
+    );
+  } else if (
     !baseMatched &&
     evidenceSuggests !== null &&
     evidence !== null &&
@@ -1156,6 +1171,8 @@ export function metricPolicy(
   if (financialReturns) {
     suppress.add("roic");
     suppress.add("roicVsWacc");
+    suppress.add("fcfGrowth");
+    suppress.add("operatingMargin");
   } else {
     suppress.add("rote");
   }

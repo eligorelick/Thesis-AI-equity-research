@@ -1009,6 +1009,21 @@ describe("multiplesFramework", () => {
     expect(r.notes.some((n) => /EV multiples suppressed/i.test(n))).toBe(true);
   });
 
+  it("uses common tangible equity and withholds industrial multiples for financial companies", () => {
+    for (const financialRoute of ["bank", "insurer", "reit-mortgage"] as const) {
+      const r = multiplesFramework(financialRoute, {
+        ...baseInputs,
+        balance: { ...baseInputs.balance!, preferredStock: 500 },
+        incomeTtm: { ...baseInputs.incomeTtm!, depreciationAndAmortization: null },
+        cashFlowTtm: { ...baseInputs.cashFlowTtm!, depreciationAndAmortization: null },
+      });
+      expect(r.multiples.find((m) => m.key === "priceToTbv")?.current).toBeCloseTo(10000 / 2500);
+      expect(r.multiples.find((m) => m.key === "priceToFcf")?.current).toBeNull();
+      expect(r.enterpriseValue.value).toBeNull();
+      expect(r.gaps.some((g) => /ebitda|enterpriseValue/.test(g.field))).toBe(false);
+    }
+  });
+
   it("drops the own-history percentile for a multiple rendered n/m", () => {
     // Net cash exceeds market cap -> EV < 0 -> evToEbitda is negative and the
     // framework renders it n/m. The percentile was computed from that same

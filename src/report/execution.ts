@@ -10,6 +10,10 @@ export interface ProviderExecution {
   requestedServiceTier?: "default" | "fast";
   effectiveServiceTier?: string | null;
   observedModels?: string[];
+  /** False means a request id must not be represented as an observed model. */
+  modelObserved?: boolean;
+  /** False distinguishes unavailable usage from legacy telemetry's zero placeholders. */
+  usageReported?: boolean;
 }
 export type ExecutionAdjustment =
   | "model-floor"
@@ -78,20 +82,29 @@ export function buildExecutionMetadataEntry(input: {
   }
   const requestedEffort = input.execution?.requestedEffort !== undefined
     ? input.execution.requestedEffort : input.requestedEffort;
+  const effectiveModel = input.execution?.modelObserved === false ? "unknown" : input.effectiveModel;
+  const requestedModel = input.execution?.requestedModel ?? input.requestedModel;
+  const usage = input.execution?.usageReported === false ? undefined : input.usage;
   const effectiveEffort = input.execution?.effectiveEffort !== undefined
     ? input.execution.effectiveEffort
-    : requestedEffort !== null && modelSupportsEffort(input.effectiveModel)
+    : requestedEffort !== null && modelSupportsEffort(effectiveModel)
     ? requestedEffort
     : null;
   const adjustments: ExecutionAdjustment[] = [];
   const notes: string[] = [];
-  const subscription = parseSubscriptionModel(input.effectiveModel);
-  if (subscription) notes.push(`${input.step}: ${subscription.provider === "chatgpt" ? "ChatGPT plan" : "Google Gemini CLI"} allowance was used. $0 records API charges only, not free or unlimited usage. Provider limits and account credit settings apply. This pass used the supplied evidence without additional web search.`);
-  if (subscription && input.execution?.observedModels && input.execution.observedModels.length > 1) {
+  const subscription = parseSubscriptionModel(effectiveModel) ?? parseSubscriptionModel(requestedModel);
+  if (subscription) {
+    const provider = subscription.provider === "chatgpt" ? "ChatGPT plan" : "Google Gemini CLI";
+    notes.push(input.execution?.usageReported === false
+      ? `${input.step}: the request was configured for ${provider} usage. Provider usage was not reported, so allowance consumption is unknown. $0 records API charges only, not free or unlimited usage. Provider limits and account credit settings apply. No additional web search was configured.`
+      : `${input.step}: ${provider} allowance was used. $0 records API charges only, not free or unlimited usage. Provider limits and account credit settings apply. This pass used the supplied evidence without additional web search.`);
+  }
+  if (input.execution?.modelObserved === false) notes.push(`${input.step}: the provider did not report which model executed the request.`);
+  if (subscription && input.execution?.modelObserved !== false && input.execution?.observedModels && input.execution.observedModels.length > 1) {
     notes.push(`${input.step}: provider reported usage for ${input.execution.observedModels.join(", ")}; the combined usage is not attributed to a single model.`);
   }
   const requestedFamily = resolveRegistryModel(input.requestedModel)?.entry.family;
-  const effectiveFamily = resolveRegistryModel(input.effectiveModel)?.entry.family;
+  const effectiveFamily = resolveRegistryModel(effectiveModel)?.entry.family;
   // The floor is applied by the provider to the synthesize pass only, and to
   // the registry's `judgeFloorModelId` — the disclosure follows the same rule
   // rather than a hard-coded haiku→sonnet family pair, so moving the floor in
@@ -99,8 +112,8 @@ export function buildExecutionMetadataEntry(input: {
   // never be labelled with the judge's adjustment.
   const floored =
     input.step === "synthesize" &&
-    input.effectiveModel === judgeFloorModelId() &&
-    input.requestedModel !== input.effectiveModel &&
+    effectiveModel === judgeFloorModelId() &&
+    input.requestedModel !== effectiveModel &&
     requestedFamily !== effectiveFamily;
   if (input.fallbackUsed) {
     adjustments.push("fallback");
@@ -133,16 +146,16 @@ export function buildExecutionMetadataEntry(input: {
   }
   return {
     step: input.step,
-    requestedModel: input.execution?.requestedModel ?? input.requestedModel,
-    effectiveModel: input.effectiveModel,
+    requestedModel,
+    effectiveModel,
     requestedEffort,
     fallbackUsed: input.fallbackUsed,
     effectiveEffort,
     ...(input.execution?.requestedServiceTier === undefined ? {} : { requestedServiceTier: input.execution.requestedServiceTier }),
     ...(input.execution?.effectiveServiceTier === undefined ? {} : { effectiveServiceTier: input.execution.effectiveServiceTier }),
-    ...(input.usage?.input_tokens == null ? {} : { inputTokens: input.usage.input_tokens }),
-    ...(input.usage?.output_tokens == null ? {} : { outputTokens: input.usage.output_tokens }),
-    ...(input.execution?.observedModels === undefined ? {} : { observedModels: input.execution.observedModels }),
+    ...(usage?.input_tokens == null ? {} : { inputTokens: usage.input_tokens }),
+    ...(usage?.output_tokens == null ? {} : { outputTokens: usage.output_tokens }),
+    ...(input.execution?.observedModels === undefined || input.execution.modelObserved === false ? {} : { observedModels: input.execution.observedModels }),
     adjustments,
     ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
   };

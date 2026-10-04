@@ -2127,6 +2127,7 @@ export function multiplesFramework(
   const inc = inputs.incomeTtm;
   const cf = inputs.cashFlowTtm;
   const bal = inputs.balance;
+  const financialsRoute = route === "bank" || route === "insurer" || route === "reit-mortgage";
   // Every multiple here sets the quote (price, market cap, EV) against the
   // statements. Unless both are in one known currency none of them is a
   // figure, and neither is its rank in an own history built the same way:
@@ -2161,14 +2162,14 @@ export function multiplesFramework(
       : null;
   const ebitda =
     isNum(inc?.operatingIncome) && isNum(dAndA) ? inc.operatingIncome + dAndA : null;
-  if (inc && !isNum(dAndA)) {
+  if (!financialsRoute && inc && !isNum(dAndA)) {
     gaps.push(gapEntry("valuation.multiples.ebitda", "depreciationAndAmortization missing — EBITDA (computed) unavailable", "info"));
   }
   const fcf = deriveFcf(cf?.operatingCashFlow, cf?.capitalExpenditure);
   const equity = bal?.totalStockholdersEquity ?? null;
   const tbv =
     isNum(equity) && isNum(bal?.goodwill) && isNum(bal?.intangibleAssets)
-      ? equity - bal.goodwill - bal.intangibleAssets
+      ? equity - bal.goodwill - bal.intangibleAssets - (isNum(bal.preferredStock) ? bal.preferredStock : 0)
       : null;
   // WS6 (D-19): the EV bridge, computed BOTH ways and disclosed.
   // Base = market cap + total debt + preferred + minority interest − cash and
@@ -2232,19 +2233,19 @@ export function multiplesFramework(
       ? ""
       : ` EV excluding the operating-lease liability ${fmtNum(evExcludingLeases)}; EV as reported ${fmtNum(evIncludingLeases)}.`);
   const enterpriseValue: EnterpriseValueBridge = {
-    value: ev,
-    excludingLeases: evExcludingLeases,
-    includingLeases: evIncludingLeases,
-    leaseLiability,
-    totalLeaseLiability,
-    financeLeaseLiability,
+    value: financialsRoute ? null : ev,
+    excludingLeases: financialsRoute ? null : evExcludingLeases,
+    includingLeases: financialsRoute ? null : evIncludingLeases,
+    leaseLiability: financialsRoute ? null : leaseLiability,
+    totalLeaseLiability: financialsRoute ? null : totalLeaseLiability,
+    financeLeaseLiability: financialsRoute ? null : financeLeaseLiability,
     includeLeases,
-    basis: evBridgeBasis,
+    basis: financialsRoute ? "Enterprise value is not applicable to financial companies; funding liabilities are operating inputs." : evBridgeBasis,
   };
-  notes.push(evBridgeBasis);
-  if (ev === null) {
+  if (!financialsRoute) notes.push(evBridgeBasis);
+  if (!financialsRoute && ev === null) {
     gaps.push(gapEntry("valuation.multiples.enterpriseValue", "EV components missing (marketCap/totalDebt/cash) — EV multiples n/m", "info"));
-  } else if (leaseLiability === null) {
+  } else if (!financialsRoute && leaseLiability === null) {
     gaps.push(
       gapEntry(
         "valuation.multiples.enterpriseValue.leases",
@@ -2254,7 +2255,7 @@ export function multiplesFramework(
         "info",
       ),
     );
-  } else if (includeLeases) {
+  } else if (!financialsRoute && includeLeases && leaseLiability !== null) {
     gaps.push(
       gapEntry(
         "valuation.multiples.enterpriseValue.leases",
@@ -2264,7 +2265,6 @@ export function multiplesFramework(
     );
   }
 
-  const financialsRoute = route === "bank" || route === "insurer" || route === "reit-mortgage";
   if (financialsRoute) {
     notes.push("EV multiples suppressed for financials — debt is raw material, EV is meaningless (house rule; docs/METHODOLOGY.md, Financial-company routes)");
   }
@@ -2275,7 +2275,7 @@ export function multiplesFramework(
       price !== null && posOrNull(inc?.epsDiluted) !== null
         ? price / (inc?.epsDiluted as number)
         : safeDiv(mcap, posOrNull(inc?.netIncome)),
-    priceToFcf: safeDiv(mcap, posOrNull(fcf)),
+    priceToFcf: financialsRoute ? null : safeDiv(mcap, posOrNull(fcf)),
     priceToBook: safeDiv(mcap, posOrNull(equity)),
     priceToTbv: safeDiv(mcap, posOrNull(tbv)),
     evToEbitda: financialsRoute ? null : safeDiv(ev, posOrNull(ebitda)),
@@ -2311,12 +2311,13 @@ export function multiplesFramework(
   // Equity REITs are scored on P/FFO and P/AFFO alone, so those must be derived
   // for them; deriving them for every issuer would make the window scan chase
   // series no other route consumes.
-  const derivedKeys: readonly MultipleKey[] =
-    route === "reit" ? [...DERIVED_HISTORY_KEYS, "priceToFfo", "priceToAffo"] : DERIVED_HISTORY_KEYS;
+  const derivedKeys: readonly MultipleKey[] = financialsRoute
+    ? ["peTtm", "priceToBook"]
+    : route === "reit" ? [...DERIVED_HISTORY_KEYS, "priceToFfo", "priceToAffo"] : DERIVED_HISTORY_KEYS;
   // WS6 review (BLOCKER 2): the own-history EV must be built from the SAME
   // definition as the current one — the file's own invariant. `removeOperatingLease`
   // is true exactly when the current EV removed an operating-lease liability.
-  const removeOperatingLease = !includeLeases && leaseLiability !== null;
+  const removeOperatingLease = !financialsRoute && !includeLeases && leaseLiability !== null;
   const derived = deriveOwnHistory(
     inputs.quarterlyFundamentals,
     inputs.enterpriseValuesHistory,
@@ -2449,11 +2450,14 @@ export function multiplesFramework(
       "ranked in. The capital block's house-default free cash flow subtracts SBC and is a DIFFERENT figure; the two are never mixed (WS6 review, SHOULD-FIX 4)",
 
     priceToBook: `marketCap / totalStockholdersEquity (${balanceBasisLabel})`,
-    priceToTbv: `marketCap / (equity - goodwill - intangibleAssets) (${balanceBasisLabel})`,
+    priceToTbv: `marketCap / (equity - goodwill - intangibleAssets - preferredStock) (${balanceBasisLabel}; undisclosed preferred assumed zero)`,
     priceToFfo: "marketCap / FFO (approx., caller-provided)",
     priceToAffo: "marketCap / AFFO (rough, caller-provided)",
   };
   const multiples: MultipleStat[] = keys.map((key) => {
+    if (financialsRoute && (key === "priceToFcf" || key === "evToEbitda" || key === "evToSales")) {
+      return { key, current: null, basis: "Not applicable to financial companies: debt is an operating input and industrial free cash flow is not meaningful.", ownHistory: null, peers: null };
+    }
     const cur = current[key] ?? null;
     return {
       key,
@@ -2507,8 +2511,10 @@ export function multiplesFramework(
 // ---------------------------------------------------------------------------
 
 export interface ExcessReturnInputs {
-  /** BV0 = totalStockholdersEquity, latest (FMP name). */
+  /** BV0: equity on the same ownership/asset basis as currentRoePct. */
   bookValue: number | null;
+  /** Production financial routes value only the equity belonging to common holders. */
+  bookValueBasis?: "tangible-common-equity" | "common-equity";
   /** Current ROE, percent — TTM unless `currentRoeBasis` says otherwise. */
   currentRoePct: number | null;
   /**
@@ -2517,8 +2523,8 @@ export interface ExcessReturnInputs {
    * (net income / average fiscal-year equity), so the printed assumption must
    * not keep calling that "TTM ROE". Defaults to `"ttm"`.
    */
-  currentRoeBasis?: "ttm" | "fiscal-year-dupont";
-  /** Fiscal-year end the DuPont ROE is measured at; only read for that basis. */
+  currentRoeBasis?: "ttm" | "fiscal-year-dupont" | "fiscal-year-rote" | "fiscal-year-common-roe";
+  /** Fiscal-year end for any annual return basis. */
   currentRoeAsOf?: string | null;
   /**
    * Optional caller override of the TERMINAL ROE (percent). The default terminal
@@ -2899,7 +2905,9 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
     "payout ratio (pct)",
     notes,
   );
-  const payoutBasis = "caller-provided (dividends + net buybacks / net income, 3y avg upstream)";
+  const payoutBasis = inputs.bookValueBasis
+    ? "caller-provided (common dividends + net common buybacks / income available to common, up to 3-year average; at least 2 usable years upstream)"
+    : "caller-provided (dividends + net buybacks / net income, 3y avg upstream)";
 
   // Competitive fade: ROE fades to the cost of equity by the terminal year, so
   // terminal excess returns are zero — the equity-side analogue of the DCF
@@ -2936,7 +2944,11 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
     ? `caller-supplied terminal ROE ${fmtNum(endRoe)}% (persistent excess asserted)`
     : `cost of equity ${fmtNum(coe)}% (competitive fade — zero terminal excess)`;
   const startBasis =
-    inputs.currentRoeBasis === "fiscal-year-dupont"
+    inputs.currentRoeBasis === "fiscal-year-rote"
+      ? `FY ${inputs.currentRoeAsOf ?? "unknown"} ROTE (common earnings / average tangible common equity)`
+      : inputs.currentRoeBasis === "fiscal-year-common-roe"
+        ? `FY ${inputs.currentRoeAsOf ?? "unknown"} common-equity ROE (common earnings / average common equity)`
+        : inputs.currentRoeBasis === "fiscal-year-dupont"
       ? `${inputs.currentRoeAsOf != null ? `FY ${inputs.currentRoeAsOf} ` : ""}DuPont ROE`
       : "TTM ROE";
   const roeBasis = `linear fade from ${startBasis} ${fmtNum(roeStart)}% to ${endBasis} by year ${years}`;
@@ -3035,7 +3047,7 @@ export function excessReturnModel(inputs: ExcessReturnInputs): ExcessReturnResul
     },
     openingBookValue: {
       value: bv0,
-      basis: `opening book equity BV0 = latest total stockholders' equity ${bv0}${inputs.asOf != null ? ` as of ${inputs.asOf}` : ""}; each later year's book value compounds at ROE x retention`,
+      basis: `opening book equity BV0 = ${inputs.bookValueBasis === "tangible-common-equity" ? "tangible common equity (equity less goodwill, intangibles and preferred)" : inputs.bookValueBasis === "common-equity" ? "common equity (equity less preferred)" : "latest total stockholders' equity"} ${bv0}${inputs.asOf != null ? ` as of ${inputs.asOf}` : ""}; each later year's book value compounds at the matching equity return x retention`,
     },
     priceToTangibleBookVsRote: pTbvVsRote,
     bookValuePath,

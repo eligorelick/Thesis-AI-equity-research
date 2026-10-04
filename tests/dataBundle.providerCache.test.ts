@@ -6,9 +6,11 @@ import {
   makeCachedFredSeries,
   makeCachedFinraShortInterestTrend,
   makeCachedFinnhubInsiderSentiment,
+  makeCachedFinnhubFallback,
 } from "@/pipeline/dataBundle";
 import { createFmpClient } from "@/providers/fmp";
 import { makeLimiter } from "@/providers/http";
+import { companyNews } from "@/providers/finnhub";
 import { flushPendingRefreshes } from "@/cache/apiCache";
 import { createDatabase, setDbForTests, type DatabaseHandle } from "@/db";
 import { apiCache } from "@/db/schema";
@@ -39,6 +41,23 @@ function cacheRows() {
 }
 
 describe("dataBundle provider cache wrappers", () => {
+  it("caches validated Finnhub fallback data and preserves it with honest staleness after denial", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse([{ datetime: Date.parse("2026-10-02T12:00:00Z") / 1000, headline: "Schwab news", related: "SCHW", url: "https://example.com/schw" }]));
+    const fetchNews = makeCachedFinnhubFallback("company-news", companyNews, { apiKey: "offline-key", fetchImpl, maxRequestsPerMinute: 0, retryDelaysMs: [] });
+    const first = await fetchNews("SCHW", "2026-10-01", "2026-10-03");
+    expect(first.ok).toBe(true);
+    expect(await fetchNews("SCHW", "2026-10-01", "2026-10-03")).toEqual(first);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    handle.db.update(apiCache).set({ fetchedAt: new Date(Date.now() - 7 * 3600_000).toISOString() }).run();
+    fetchImpl.mockImplementation(async () => jsonResponse({ error: "denied" }, 403));
+    const stale = await fetchNews("SCHW", "2026-10-01", "2026-10-03");
+    expect(stale).toMatchObject({ ok: true, value: { stale: true, source: "finnhub" } });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await flushPendingRefreshes();
+    expect(cacheRows()).toHaveLength(1);
+    expect(warn).toHaveBeenCalled();
+  });
+
   it("does not overwrite last-good FMP cache data with a wrong-symbol object refresh", async () => {
     let calls = 0;
     const fetchImpl = vi.fn(async () => {

@@ -492,6 +492,25 @@ describe("judge case order (THESIS_JUDGE_ORDER)", () => {
       resolveJudgeOrder("random", payloadFingerprint(payload)).order,
     );
   });
+
+  it("retains the user's Haiku request when the provider records the internally floored Sonnet request", async () => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { model: "claude-sonnet-5-5", execution: {
+      requestedModel: "claude-sonnet-5-5", requestedEffort: "high", effectiveEffort: "high",
+    } });
+    let settled: unknown;
+    const run = await runJudgePass(makeDeps(mock, { model: "claude-haiku-4-5" }), payload,
+      analystCase("bull"), analystCase("bear"), undefined, (settlement) => { settled = settlement.telemetry; });
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.execution).toMatchObject({ requestedModel: "claude-haiku-4-5", effectiveEffort: "high" });
+    expect(settled).toMatchObject({ model: "claude-sonnet-5-5", execution: { requestedModel: "claude-haiku-4-5" } });
+    expect(buildExecutionMetadataEntry({ step: "synthesize", requestedModel: "claude-haiku-4-5", effectiveModel: run.result.model,
+      requestedEffort: "high", fallbackUsed: false, execution: run.result.execution })).toMatchObject({
+      requestedModel: "claude-haiku-4-5", adjustments: ["model-floor"],
+    });
+  });
 });
 
 /* ------------------------------------------------------------------------ *
@@ -564,6 +583,41 @@ describe("THESIS_JUDGE_ORDER=both", () => {
     expect(run.result.model).toBe("gemini/gemini-pro");
     expect(run.result.usage.input_tokens).toBe(1000);
     expect(run.result.execution?.observedModels).toEqual(["gemini-pro"]);
+  });
+
+  it.each([true, false])("does not turn an unobserved mirror model into an actual aggregate model (usage reported: %s)", async (usageReported) => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { model: "gemini/gemini-pro", execution: { modelObserved: true, usageReported: true } });
+    mock.on("llm.judge", { kind: "error", error: { kind: "transport", message: "model not reported", model: "gemini/auto", costUsd: 0,
+      ...(usageReported ? { usage: { input_tokens: 100, output_tokens: 20 } } : {}), execution: { modelObserved: false, usageReported } } });
+    const run = await runJudgePass(makeDeps(mock, { model: "gemini/auto", judgeOrder: "both" }), payload, analystCase("bull"), analystCase("bear"));
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.execution?.observedModels).toEqual(["gemini-pro"]);
+    expect(run.result.execution?.modelObserved).toBe(false);
+    expect(run.result.execution?.usageReported).toBe(usageReported);
+  });
+
+  it.each([0, 1])("retains a presumed billing bound from contributing judge request %s", async (presumedIndex) => {
+    const { payload } = buildInputs();
+    const mock = new MockRunPass();
+    mock.onJson("llm.judge", fakeJudgeOutput(), { costUsd: 0.4 });
+    mock.onJson("llm.judge", fakeJudgeOutput(), { costUsd: 0.6 });
+    const deps = makeDeps(mock, { judgeOrder: "both" });
+    let call = 0;
+    deps.runPass = async (args) => {
+      const outcome = await mock.runPass(args);
+      if (outcome.ok && call++ === presumedIndex) outcome.value.data.presumed = true;
+      return outcome;
+    };
+    let settled: unknown;
+    const run = await runJudgePass(deps, payload, analystCase("bull"), analystCase("bear"), undefined,
+      (settlement) => { settled = settlement.telemetry; });
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.result.presumed).toBe(true);
+    expect(settled).toMatchObject({ presumed: true, costUsd: 1 });
   });
 
   it("declares its cost as two judge passes and every other setting as one", () => {

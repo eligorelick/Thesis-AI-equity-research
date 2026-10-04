@@ -87,21 +87,23 @@ an arbitrary issuer; the selection rule is this project's, and the report names
 the variant it used. In order: a financial company gets no Z at all (§6.3); a
 manufacturer (SIC 2000–3999, or a manufacturing sector/industry string when no
 SIC is on file) uses `original`; everything else uses `z2`. A manufacturer
-whose quote is in a different currency from its statements cannot use
+whose quote currency is unknown or differs from its statement currency cannot use
 `original` (its X4 would divide two currencies) and falls back to `z′`, the
 book-equity variant, with the substitution and its zones named. A manufacturer
-whose market capitalisation is merely unavailable has its Z **withheld**, not
+with established matching currencies whose market capitalisation is merely
+unavailable has its Z **withheld**, not
 re-modelled: a missing quote is usually a transient fetch failure, a currency
 mismatch is a structural fact about the filings, and only the second justifies
-a silent change of model. `z2-em` exists in the code for an emerging-market
+a disclosed change of model. `z2-em` exists in the code for an emerging-market
 listing, but the pipeline derives no emerging-market flag from the profile, so
 it is never selected automatically.
 
 The currency check matters more than it sounds. For an ADR whose statements are
 in one currency and whose quote is in another, computing X4 as market cap over
 total liabilities silently divides two different currencies. There is no FX
-rate in the pipeline, so the report **withholds** the original-variant Z rather
-than publish a number that is wrong by an exchange rate.
+rate in the pipeline, so the report **withholds** the original-variant Z and
+substitutes the disclosed book-equity `z′` where its inputs are available. This
+avoids publishing an original-variant score that is wrong by an exchange rate.
 
 ---
 
@@ -418,7 +420,8 @@ could convey.
 ### 6.2 Short history
 
 **House rule.** The Piotroski signals ΔROA and Δasset turnover need three
-fiscal years, because they compare a change to the prior change. With only two
+fiscal years, because the current and prior ratios each use beginning-of-year
+assets: the prior ratio needs the third year's closing asset balance. With only two
 years available the score is reported **out of 7**, with the denominator stated
 and the two missing signals named. It is never reported out of 9 with the
 missing signals scored as zero, which would understate a company for having a
@@ -618,8 +621,9 @@ is also served on that plan, so a forward EPS exists for the issuer.
 
 **Cost.** Each peer's multiples need its quote and ratios (two FMP requests
 per peer, about sixteen on a run that makes forty), against a small daily
-quota; industry filtering needs each peer's SIC, which the EDGAR ticker map
-supplies for free. A fully keyless route (companyfacts per peer) is not
+quota; industry filtering needs each peer's SIC. The EDGAR ticker map resolves
+CIK, ticker and company name; SIC comes from each issuer's submissions metadata,
+requiring an additional cached SEC request per peer ([SEC API documentation](https://www.sec.gov/edgar/sec-api-documentation)). A fully keyless route (companyfacts per peer) is not
 viable per report. Bhojraj–Lee peer selection needs a cross-section this
 pipeline does not hold.
 
@@ -709,7 +713,9 @@ root of the number of firms (`pages.stern.nyu.edu/~adamodar`, *Estimating Risk
 Parameters*).
 
 **What the code has.** The keyless estimate is an OLS on 24–60 monthly
-returns that already reports its **standard error** and R², then the Blume
+log returns from adjacent shared month-ends within a 60-calendar-month window.
+Missing interior months do not form a return or extend the window. It already
+reports its **standard error** and R², then the Blume
 2/3–1/3 shrink (§7.1) — the same fixed weights whether SE is 0.05 or 0.40.
 The provider beta carries no SE at all.
 
@@ -802,7 +808,7 @@ would be a modest, well-evidenced extension; it is not a gap.
 | Rank | Candidate | Evidence for | Cost | Do |
 | --- | --- | --- | --- | --- |
 | 1 | Keyless sweep rerun (§8.6) | regression check on real filings | requests only | now |
-| 2 | Peer multiples, forward-earnings first, SIC-filtered (§8.1) | Liu–Nissim–Thomas; Alford; Demirakos et al. | ~16 FMP calls per run; SIC map free | next |
+| 2 | Peer multiples, forward-earnings first, SIC-filtered (§8.1) | Liu–Nissim–Thomas; Alford; Demirakos et al. | ~16 FMP calls per run plus cached SEC submissions for SIC | next |
 | 3 | Point-in-time backtest of weights, σ and fade (§8.2, §8.7) | Bradshaw et al.; Chan et al.; Bessembinder | Stage B only, no paid call | next |
 | 4 | Vasicek shrinkage with the regression's own SE (§8.4) | Vasicek; Klemkosky–Martin; Lally | small | after 3 |
 | 5 | Form 4 purchases vs sales, routine vs opportunistic (§8.5) | Lakonishok–Lee; Cohen–Malloy–Pomorski | medium (data set + classifier) | later |

@@ -36,11 +36,12 @@ What the selected AI provider's research payload contains, precisely
   each truncated to a disclosed character budget.
 - An excerpt of the latest earnings-call transcript, when one was retrieved.
 - The ticker context payload: the computed financial figures, ratios,
-  valuation inputs, and macro series for that company, each tagged with its
-  source and as-of date.
+  valuation inputs, macro series, and public peer-company comparisons used
+  for that company, each tagged with its source and as-of date.
 
-All of it is public company data plus figures derived from it. No file of
-yours, no watchlist, and no other symbol's data is included. The payload is
+All of it is public company data plus figures derived from it. Your private
+files and watchlist are not included. Public data for peers and market
+benchmarks can support the selected company's analysis. The payload is
 deterministic: the same inputs produce the same bytes.
 
 ## Keys
@@ -55,8 +56,9 @@ provider supports one, so keys stay out of logged URLs and out of the
 The `X-Thesis-Token` that non-browser clients use for mutating routes is not a
 credential for anything remote, and not a lock on the API either. It is a marker
 for clients that send no browser headers: `src/app/api/sameOrigin.ts` accepts a
-mutating request as soon as it carries browser Fetch Metadata or a matching
-`Origin`, so the token is asked for only when both are absent. That makes it a
+mutating request with an allowed Host and a matching `Origin`, or accepted
+non-cross-site Fetch Metadata when `Origin` is absent. The token is asked for
+only when both are absent. That makes it a
 cross-site-request-forgery guard for the browser — a page on another site cannot
 forge those headers — and not local access control: any process on this machine
 can set them by hand, and one with access to your account already has the
@@ -66,6 +68,15 @@ enforces file modes, never logged, and never sent to the browser or to any
 provider.
 
 ## Where local data is kept
+
+**Settings → Appearance** stores only `current` or `workspace` in the browser's
+`thesis-ui-design` cookie for 180 days (`Path=/`, `SameSite=Lax`, and `Secure`
+on HTTPS). It is sent to the local Thesis host, never to a provider. Cookies
+are scoped by host, not port, so Thesis instances on the same host share it.
+Choosing Current restores the default; clearing this cookie also
+resets the design. If the browser refuses storage, the choice applies for the
+current visit and Settings displays a warning. This preference does not change
+the database, AI connection, model, reasoning effort, reports or exports.
 
 The SQLite database holds reports, caches and ordinary settings. Its default location is the OS
 application-data directory (`src/db/paths.ts`):
@@ -88,6 +99,16 @@ with Windows DPAPI on Windows and restricted to its owner on macOS/Linux.
 It contains a stable installation ID, separate account registrations and
 tokens, and the selected report connection. Only account labels and status
 reach the browser. Tokens are excluded from reports, source control and logs.
+
+The v1 credential reader validates the fields connection code consumes before
+allowing a mutation. Malformed records produce a storage error and are left
+unchanged; they are never silently reset. Expired/signed-out registrations,
+historical valid model identifiers and unknown metadata remain compatible.
+Acquisition failures close newly opened lock descriptors and attempt to remove
+only the newly acquired lock, preserving the original error if cleanup fails.
+Concurrent recovery of a dead owner's lock remains a known race (see the
+[audit follow-up](audit/2026-10-03-repository-audit.md#follow-up--2026-10-04));
+the ordinary single-server ownership guard does not prove atomic stale recovery.
 
 Gemini stores its own OAuth state under an isolated `gemini-<id>` subdirectory
 owned by Thesis. Thesis does not read another app's Google credentials. CLI
@@ -169,9 +190,10 @@ also be switched off for data-only reports.
 | Gemini | Official Gemini CLI 0.36.x, installed separately; Google browser sign-in | Your Google CLI allowance and account settings |
 | Claude | Optional `ANTHROPIC_API_KEY` | Separately billed Anthropic API usage |
 
-ChatGPT sign-in opens normal Chrome, with a fallback link. Gemini's own CLI
-opens the system browser; use Chrome as the default browser for its saved
-sign-in/autofill. Thesis gives Gemini an isolated local home and disables
+ChatGPT sign-in opens normal Chrome, with a fallback link. Gemini sign-in
+requires Chrome, and Thesis passes its executable to the CLI as the browser,
+preserving the normal browser profile for sign-in/autofill. Thesis gives
+Gemini an isolated local home and disables
 tools, extensions, hooks, MCP and inherited API keys. CLI support is restricted
 to the reviewed 0.36 minor line; newer minor releases need compatibility review.
 Only one running Thesis server per OS user can manage or use AI connections;

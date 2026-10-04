@@ -909,9 +909,9 @@ function seedReport(report: Report): number {
   }).returning({ id: reports.id }).get().id;
 }
 
-function seedRawReport(reportJson: string | null): number {
+function seedRawReport(reportJson: string | null, symbol = "DEMO"): number {
   return handle.db.insert(reports).values({
-    symbol: "DEMO",
+    symbol,
     createdAt: "2026-08-08T00:00:00.000Z",
     model: "claude-opus-4-8",
     status: "done",
@@ -943,8 +943,11 @@ function expectSuccessHeaders(response: Response): void {
 }
 
 describe("persisted Markdown and PDF export boundaries", () => {
-  it("matches direct poison rendering byte-for-byte without mutating stored report JSON", async () => {
+  it("matches direct poison rendering for a valid issuer without mutating stored report JSON", async () => {
     const report = consumerReport(true);
+    // Persisted reads require a valid issuer identity. All other poisoned
+    // rendering fields remain; direct renderer tests above still cover symbols.
+    report.meta.symbol = "P30SYMBOL";
     const storedBytes = JSON.stringify(report);
     const id = seedReport(report);
     const expectedMarkdown = reportToMarkdown(report);
@@ -967,14 +970,14 @@ describe("persisted Markdown and PDF export boundaries", () => {
     expect(markdownResponse.status).toBe(200);
     expect(markdownResponse.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
     expect(markdownResponse.headers.get("content-disposition")).toBe(
-      `attachment; filename="P30SYMBOL-script-data-p30-symbol-bad-script-report-${id}.md"`,
+      `attachment; filename="P30SYMBOL-report-${id}.md"`,
     );
     expectSuccessHeaders(markdownResponse);
 
     expect(printResponse.status).toBe(200);
     expect(printResponse.headers.get("content-type")).toBe("text/html; charset=utf-8");
     expect(printResponse.headers.get("content-disposition")).toBe(
-      `inline; filename="P30SYMBOL-script-data-p30-symbol-bad-script-report-${id}.html"`,
+      `inline; filename="P30SYMBOL-report-${id}.html"`,
     );
     expectSuccessHeaders(printResponse);
   });
@@ -987,7 +990,7 @@ describe("persisted Markdown and PDF export boundaries", () => {
       "P30LEGACY <script data-p30=legacy>bad</script>\n# P30LEGACYHEADING";
     const storedBytes = JSON.stringify(legacy);
     expect(ReportSchema.safeParse(legacy).success).toBe(false);
-    const id = seedRawReport(storedBytes);
+    const id = seedRawReport(storedBytes, "LEGACY");
 
     const markdownResponse = await exportGET(...exportRequest(String(id), "md"));
     const printResponse = await exportGET(...exportRequest(String(id), "pdf"));
@@ -1013,6 +1016,19 @@ describe("persisted Markdown and PDF export boundaries", () => {
       .where(eq(reports.id, id))
       .get();
     expect(stored?.reportJson).toBe(storedBytes);
+  });
+
+  it("refuses poisoned issuer identities before rendering either persisted export", async () => {
+    const report = consumerReport(true);
+    const bytes = JSON.stringify(report);
+    const id = seedReport(report);
+    for (const format of ["md", "pdf"]) {
+      const response = await exportGET(...exportRequest(String(id), format));
+      expect(response.status).toBe(422);
+      expect(response.headers.get("content-disposition")).toBeNull();
+      expectNosniff(response);
+    }
+    expect(handle.db.select({ reportJson: reports.reportJson }).from(reports).where(eq(reports.id, id)).get()?.reportJson).toBe(bytes);
   });
 
   it.each([

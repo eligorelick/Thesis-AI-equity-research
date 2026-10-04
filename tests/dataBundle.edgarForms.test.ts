@@ -3,7 +3,8 @@
  * reserved fixture symbols that short-circuit every provider, so they cannot
  * stand in for an ordinary ticker in a test about provider behaviour.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as extractor from "@/edgar/extract";
 import type { Sourced } from "@/types/core";
 import {
   createEdgarClient,
@@ -90,6 +91,46 @@ describe("selectInterimFiling", () => {
 });
 
 describe("buildDataBundle EDGAR filing boundary", () => {
+  it("includes annual-document parsing in the section extraction budget", async () => {
+    let elapsed = 0;
+    const realParse = extractor.parseDocument;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => elapsed);
+    const parse = vi.spyOn(extractor, "parseDocument").mockImplementation((html) => {
+      elapsed += 1000;
+      return realParse(html);
+    });
+    const response = (body: string): EdgarTransportResponse => ({ status: 200, body, fetchedAt: "2026-07-06T00:00:00.000Z", fromCache: false, stale: false });
+    const transport: EdgarTransport = {
+      fetchText(url) {
+        if (url.includes("company_tickers.json")) return Promise.resolve(response(JSON.stringify({ "0": { cik_str: 1234567, ticker: "EXMP", title: "Example" } })));
+        if (url.includes("submissions/")) return Promise.resolve(response(JSON.stringify({
+          cik: "0001234567", name: "Example", tickers: ["EXMP"], exchanges: ["TEST"],
+          filings: { files: [], recent: {
+            accessionNumber: ["0001234567-26-000001"], filingDate: ["2026-03-01"], reportDate: ["2025-12-31"], form: ["10-K"], primaryDocument: ["annual.htm"],
+          } },
+        })));
+        if (url.includes("companyfacts/")) return Promise.resolve(response(JSON.stringify({ cik: 1234567, entityName: "Example", facts: {} })));
+        return Promise.resolve(response(`<html><body><h2>Item 1A. Risk Factors</h2><p>${"Our business faces substantial operational risks. ".repeat(100)}</p><h2>Item 1B. Unresolved Staff Comments</h2><p>None.</p><h2>Item 7. Management's Discussion and Analysis</h2><p>${"Revenue increased during the year. ".repeat(100)}</p><h2>Item 7A. Quantitative and Qualitative Disclosures</h2></body></html>`));
+      },
+    };
+    const noNetworkResponse = (): Promise<Response> => Promise.resolve(new Response("unavailable", { status: 404 }));
+    try {
+      const bundle = await buildDataBundle("EXMP", {
+        now: () => new Date("2026-07-06T00:00:00.000Z"), edgarSectionBudgetMs: 100,
+        fmp: createFmpClient({ apiKey: "" }), edgar: createEdgarClient({ transport }), keyless: false,
+        fred: { fetchImpl: noNetworkResponse, retryDelaysMs: [], minRequestIntervalMs: 0 },
+        finnhub: { fetchImpl: noNetworkResponse, retryDelaysMs: [] },
+        finra: { fetchImpl: noNetworkResponse, retryDelaysMs: [], minRequestIntervalMs: 0 },
+      });
+      expect(bundle.edgar.item1a.ok, JSON.stringify(bundle.edgar.item1a)).toBe(true);
+      expect(bundle.edgar.mdna.ok).toBe(false);
+      if (!bundle.edgar.mdna.ok) expect(bundle.edgar.mdna.gap.reason).toContain("exceeding the");
+    } finally {
+      parse.mockRestore();
+      clock.mockRestore();
+    }
+  });
+
   it("contains a malformed selected filing as typed critical gaps without requesting its URL", async () => {
     const calls: string[] = [];
     const response = (body: string): EdgarTransportResponse => ({

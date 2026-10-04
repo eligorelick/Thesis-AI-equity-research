@@ -11,25 +11,36 @@ Thesis.
 ## Per provider
 
 **Yahoo Finance** (the keyless price fallback). Yahoo's terms prohibit
-automated access and redistribution of its data, its quotes are delayed, and
+automated access without permission, its quotes can be delayed, and
 the chart endpoint Thesis uses is unofficial and undocumented — Yahoo can
-change or withdraw it without notice. Treat this path as personal, local,
-non-redistributable use.
+change or withdraw it without notice. Local or personal use does not itself
+grant permission for automated access or redistribution. Check the applicable
+[Yahoo terms](https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html).
 
 **Financial Modeling Prep.** Displaying or redistributing FMP data requires
-FMP's Data Display and Licensing Agreement. Using the data privately under your
+the rights granted by your FMP agreement. Using the data privately under your
 own subscription is not the same as putting it in front of others; if you plan
-to publish, sign the agreement first.
+to publish, confirm the relevant display and redistribution permissions first.
+See [FMP terms](https://site.financialmodelingprep.com/developer/docs/terms-of-service).
 
-**SEC EDGAR.** Filings are US government works in the public domain, so the
-content carries no license restriction. Access does: the SEC requires a
+**SEC EDGAR.** The SEC's [website dissemination policy](https://www.sec.gov/about/privacy-information)
+allows copying and distributing public information from its site without SEC
+permission and requests source attribution. Issuer-authored filings are not
+automatically US government works merely because EDGAR hosts them; do not infer
+unrestricted rights in every embedded third-party work from the government's
+[copyright exception](https://www.copyright.gov/title17/92chap1.html#105).
+Access also has conditions: the SEC requires a
 declared `User-Agent` naming a real contact and limits clients to at most 10
 requests per second. Thesis sends `EDGAR_CONTACT` on every request and does not
 run the live EDGAR path until you configure a real one.
 
 **FRED** (Federal Reserve Bank of St. Louis). FRED series carry their own terms
 of use, and some series are redistributed from third parties whose separate
-copyright terms apply. Check the terms for any series you intend to publish.
+copyright terms apply. Check the [current FRED terms](https://fred.stlouisfed.org/legal/)
+and series notices for your intended use. The terms also restrict development
+or training of AI systems using FRED content. This audit does not establish
+whether every Thesis inference use is permitted; that remains a provider-rights
+question, and source attribution alone does not resolve it.
 
 **Finnhub and FINRA.** Each has its own terms for the data it serves; the same
 rule applies — the MIT license does not extend to it.

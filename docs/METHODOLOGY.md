@@ -75,6 +75,13 @@ so roughly five fiscal years can carry their own rate.
 
 ## Growth anchor
 
+The separate **revenue acceleration** diagnostic is latest YoY growth minus
+the three-year revenue CAGR. Its benchmark must span three actual years within
+±0.05 years for fiscal-calendar variation. A degraded two-year CAGR or a four-year
+span cannot serve as that benchmark: the benchmark, difference and direction
+are withheld with a manifest explanation. The underlying CAGR series still
+discloses its available span; the valuation methods below keep their own rules.
+
 Near-term revenue growth is the **median of every method the data supports**,
 with the full range shown and each method's value named:
 
@@ -373,9 +380,9 @@ liability is not.** The option to keep the operating slice in is
 `THESIS_EV_INCLUDE_LEASES=1`. The split is the whole point. Under US GAAP
 (ASC 842) operating-lease cost stays in operating expenses, so EBIT and EBITDA
 are already *after* it and adding that liability to EV as well double-counts the
-leases in EV/EBITDA. Finance-lease cost is *not* in either figure: it is split
-between right-of-use amortisation, which EBITDA adds back, and interest, which
-sits below EBIT. The finance-lease liability is therefore debt in both frames
+leases in EV/EBITDA. Finance-lease cost is split between right-of-use
+amortisation, which is included in EBIT and added back in EBITDA, and interest,
+which sits below EBIT ([ASC 842, 842-20-45-4](https://storage.fasb.org/ASU_2016-02_Section_A.pdf)). The finance-lease liability remains financing debt in both frames
 and stays in enterprise value and in net debt, always. The provider's
 `totalDebt` contains both, so the default subtracts the operating slice back out
 and leaves the finance slice where it is.
@@ -412,6 +419,14 @@ lease-heavy issuer (a discount retailer: 6% on the inclusive base against 11%
 on the consistent one) and could push the effective rate below the acceptance
 band. Where no split is disclosed the ROIC notes say the provider's total
 debt, lease liabilities included, was used unadjusted.
+
+**Annual return denominators require adjacent balances.** ROIC, ROTE and
+DuPont average the closing balance with the balance matched to the next older
+annual income period only when the two balances are 300–430 days apart, the
+same fiscal-continuity range used by the forensic layer. This accommodates
+52/53-week calendars. A missing year or a shorter transition stub uses the
+existing single-period denominator and records a warning instead of silently
+averaging capital from nonconsecutive years.
 
 **The own-history enterprise value carries the same adjustment.** Each
 historical quarter window removes *its own* operating-lease liability whenever
@@ -618,7 +633,7 @@ in the notes and the missing-data manifest:
 
 | Withheld | Manifest key | Reason |
 | --- | --- | --- |
-| FCFF/WACC DCF | `valuation.dcf` | free cash flow to the firm subtracts debt service from an operating cash flow that here *is* financing activity |
+| FCFF/WACC DCF | `valuation.dcf` | FCFF is before debt service, but debt, cash and reinvestment cannot be separated reliably into operating and financing items for these balance sheets ([Damodaran](https://pages.stern.nyu.edu/~adamodar/pdfiles/papers/finfirm09.pdf)) |
 | FCFF reverse DCF | `valuation.reverseDcf` | inverts the same model; the growth or margin it solves for inherits the same category error |
 | EV/EBITDA | `valuation.evEbitda` | enterprise value adds debt and subtracts cash, both operating items here — a profitable bank can show a negative EV |
 | ROIC − WACC | `returns.roicVsWacc` | invested capital (debt + equity − cash) is undefined when deposits, policy reserves or repo fund the assets and cash is itself an earning asset |
@@ -761,7 +776,7 @@ every metric:
 | Net interest income / average total assets | the honest denominator that *is* available | published as a labeled stand-in beside a withheld NIM, stating that it sits below a true NIM |
 | Efficiency ratio | noninterest expense / (net interest income + noninterest income) | when the noninterest split is not tagged. This split exists in the filings even though vendor income statements omit it. |
 | CET1 | company-reported CET1 capital / risk-weighted assets | when no CET1 element is tagged (it is often only in the regulatory-capital footnote text) |
-| Tangible leverage | (equity − goodwill − intangibles − preferred) / (assets − goodwill − intangibles) | the labeled stand-in for CET1; it does **not** risk-weight assets, so it is not comparable to a regulatory capital ratio and is always the more conservative read |
+| Tangible leverage | (equity − goodwill − intangibles − preferred) / (assets − goodwill − intangibles) | the labeled stand-in for CET1; its numerator and denominator differ from regulatory CET1, so it is not comparable and has no guaranteed ordering relative to it. [Basel risk weights](https://www.bis.org/committees/bcbs/basel-framework/standard/cre/20/inforce/2023-01-01/published/2022-12-08) can exceed 100%. |
 | NPL ratio | nonaccrual loans / total loans | when nonaccrual loans are filed only by loan class (dimensional facts companyfacts does not expose as a total) |
 | Provisions / loans | provision for credit losses / total loans | when neither the provision element nor its component sum resolves |
 | Cost of deposits | interest expense on deposits / average deposits | when `InterestExpenseDeposits` is untagged — total interest expense covers borrowings too and would overstate it |
@@ -962,7 +977,7 @@ Every report carries this text verbatim:
 > data and assumptions disclosed here, and neither is a recommendation to buy,
 > sell, or hold any security.
 
-The disclaimer names what the report actually emits. It grades six aspects on
+The disclaimer names what the report actually emits. It grades seven aspects on
 an A–F scale and prints bull, base and bear scenario price targets; both are
 deterministic model outputs computed from the inputs disclosed above, and both
 are only as good as those inputs. Neither is a rating. The report contains no

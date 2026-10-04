@@ -1611,7 +1611,7 @@ const SIGNIFICANCE_TONE: Record<"high" | "medium" | "low", Tone> = {
  * (between Competitive and Outlook; it is NOT hoisted above the numbered
  * sections — audit 2026-09-06, F215). The weight comes from the border,
  * the significance chips and the two-column layout,
- * (ReportView places it above the numbered sections). Catalysts are a dated
+ * Catalysts are a dated
  * timeline with direction arrows + significance; risks are placed on a
  * severity × probability matrix and also listed with their sources.
  */
@@ -1685,6 +1685,7 @@ export function CatalystsRisksPanel({
                     }}
                   >
                     <span
+                      aria-hidden="true"
                       className={`mono mt-px shrink-0 text-[12px] ${
                         dir.tone === "pos"
                           ? "text-pos"
@@ -1696,16 +1697,17 @@ export function CatalystsRisksPanel({
                       {dir.glyph}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline justify-between gap-2">
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
                         <span className="text-[12px] font-medium text-fg">
                           {c.title}
                         </span>
                         <Badge tone={SIGNIFICANCE_TONE[c.significance]}>
-                          {c.significance}
+                          significance {c.significance}
                         </Badge>
                       </div>
                       <div className="mono text-[10px] text-faint">
-                        {c.expectedDate ?? "date TBD"}
+                        expected date {c.expectedDate?.trim() ? c.expectedDate : "not recorded"}
+                        <span className="ml-2">direction {c.direction}</span>
                       </div>
                       <div className="mt-1">
                         <ClaimList claims={[c.reasoning]} />
@@ -1732,16 +1734,19 @@ export function CatalystsRisksPanel({
                 key={i}
                 className="flex items-start gap-2 border border-edge bg-raised px-2 py-1.5"
               >
-                <Badge tone={SEVERITY_TONE[r.severity]}>{r.severity}</Badge>
+                <Badge tone={SEVERITY_TONE[r.severity]}>severity {r.severity}</Badge>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline justify-between gap-2">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <span className="text-[11px] font-medium text-fg">
                       {r.title}
                     </span>
                     <span className="text-[9px] uppercase tracking-[0.08em] text-faint">
-                      p·{r.probability}
+                      probability {r.probability}
                     </span>
                   </div>
+                  <p className="mono mt-0.5 break-words text-[10px] text-faint">
+                    risk source {r.source.trim() ? r.source : "not recorded"}
+                  </p>
                   <div className="mt-0.5">
                     <ClaimList claims={[r.reasoning]} />
                   </div>

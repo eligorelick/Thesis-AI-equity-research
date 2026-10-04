@@ -250,6 +250,33 @@ const passOpts = {
   reservationPass: "bull" as const,
 };
 
+describe("pause resumption admission", () => {
+  it("returns billed usage when the job budget refuses the next paused-turn request", async () => {
+    // One Sonnet request reserves $26.36. Its $0.012 measured charge leaves
+    // less than another request maximum beneath this cap.
+    seedJob(first.db, "job-pause-budget", "AAPL", 26.365);
+    const claim = claimNextQueuedJob("owner", NOW, LIMITS, first.db)!;
+    const { admission } = schedulerAdmission(claim, "bull", "pause-budget", first.db);
+    const paused = message({
+      stop_reason: "pause_turn",
+      usage: usage({ input_tokens: 1_000, output_tokens: 1_000 }),
+    });
+    _resetAnthropicForTests(fakeClient([{ events: [{ type: "message_start", message: paused }], final: paused }]));
+
+    await expect(runPass({ ...passOpts, admission })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "transport",
+        costUsd: 0.012,
+        usage: { input_tokens: 1_000, output_tokens: 1_000 },
+      },
+    });
+    const ledger = first.db.select().from(costLog).where(eq(costLog.jobId, claim.jobId)).all();
+    expect(ledger).toEqual([expect.objectContaining({ costUsd: 0.012, settlementKind: "actual" })]);
+    expect(first.db.select().from(jobLlmLeases).all()).toEqual([]);
+  });
+});
+
 describe("what one request may cost", () => {
   it("bounds a request by context at the cache-write price, the output ceiling and the search cap", () => {
     // Sonnet 5: up to 10 sampling iterations of 1M input at $2.50/MTok,

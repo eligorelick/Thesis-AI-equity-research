@@ -8,6 +8,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { SidebarNavigation } from "./SidebarNavigation";
 
 export function AppShell({
   sidebar,
@@ -17,9 +18,9 @@ export function AppShell({
   children: ReactNode;
 }) {
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-bg text-fg">
+    <div className="thesis-shell flex h-screen flex-col overflow-hidden bg-bg text-fg">
       {/* Header bar */}
-      <header className="flex h-10 shrink-0 items-center justify-between border-b border-edge bg-panel px-4">
+      <header className="thesis-header flex h-10 shrink-0 items-center justify-between border-b border-edge bg-panel px-4">
         <div className="flex items-baseline gap-3">
           <Link
             href="/"
@@ -42,11 +43,9 @@ export function AppShell({
       </header>
 
       {/* Sidebar + main */}
-      <div className="flex min-h-0 flex-1">
-        <aside className="flex w-64 shrink-0 flex-col overflow-y-auto border-r border-edge bg-panel">
-          {sidebar}
-        </aside>
-        <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
+      <div className="thesis-frame flex min-h-0 flex-1">
+        <SidebarNavigation>{sidebar}</SidebarNavigation>
+        <main className="thesis-main min-w-0 flex-1 overflow-y-auto">{children}</main>
       </div>
 
       {/* Global disclaimer footer — hard product requirement */}

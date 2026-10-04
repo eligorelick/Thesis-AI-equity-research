@@ -34,17 +34,18 @@ import { RunsDisclosure } from "./RunsDisclosure";
 
 /**
  * Async server component: loads the enriched view and renders the sidebar.
- * Degrades to an empty (but functional) sidebar if the view load throws, so a
- * transient DB/provider error never blanks the whole app chrome.
+ * Keeps the app chrome available when loading fails, while distinguishing
+ * unavailable data from a successfully loaded empty watchlist.
  */
 export async function WatchlistSidebar({ activeSymbol }: { activeSymbol?: string }) {
   let rows: WatchlistRowView[] = [];
+  let loadFailed = false;
   try {
     rows = await getWatchlistView();
   } catch {
-    rows = [];
+    loadFailed = true;
   }
-  return <Sidebar rows={rows} activeSymbol={activeSymbol} />;
+  return <Sidebar rows={rows} activeSymbol={activeSymbol} loadFailed={loadFailed} />;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -54,9 +55,11 @@ export async function WatchlistSidebar({ activeSymbol }: { activeSymbol?: string
 export function Sidebar({
   rows,
   activeSymbol,
+  loadFailed = false,
 }: {
   rows: WatchlistRowView[];
   activeSymbol?: string;
+  loadFailed?: boolean;
 }) {
   return (
     <div className="flex min-h-0 flex-col">
@@ -64,14 +67,18 @@ export function Sidebar({
         <span className="mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
           watchlist
         </span>
-        <span className="mono text-[10px] text-faint">{rows.length}</span>
+        <span className="mono text-[10px] text-faint">{loadFailed ? "unavailable" : rows.length}</span>
       </div>
 
       <div className="border-b border-edge p-2">
         <AddTicker />
       </div>
 
-      {rows.length === 0 ? (
+      {loadFailed ? (
+        <p role="alert" className="px-3 py-4 text-[11px] text-neg">
+          Could not load watchlist. Reload this page to try again.
+        </p>
+      ) : rows.length === 0 ? (
         <div className="px-3 py-6 text-center text-[11px] text-faint">
           no tickers yet
           <div className="mt-1 text-[10px] text-faint">add one above to track it</div>

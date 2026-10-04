@@ -771,14 +771,28 @@ export function routeCompany(
   const ipoRaw = normStr(profile.ipoDate);
   let recentByDate = false;
   let ipoDateVerified = false;
+  let ipoDateIssue: string | null = null;
   if (ipoRaw !== null) {
-    const ipoMs = parseIsoDateUtc(ipoRaw);
+    // Profile IPO dates are calendar dates; reject suffixes before using the
+    // shared parser, which also serves timestamp-bearing balance envelopes.
+    const ipoMs = /^\d{4}-\d{2}-\d{2}$/.test(ipoRaw) ? parseIsoDateUtc(ipoRaw) : null;
     if (ipoMs === null) {
-      notes.push(`ipoDate "${ipoRaw}" unparseable — IPO recency by date not evaluated.`);
+      ipoDateIssue = `ipoDate "${ipoRaw}" unparseable — IPO recency by date not evaluated.`;
+    } else if (ipoMs > todayMs) {
+      ipoDateIssue = `ipoDate ${ipoRaw} is in the future relative to ${opts.today} — no observed listing date is established; IPO recency not evaluated.`;
     } else {
       ipoDateVerified = true;
       recentByDate = addMonthsUtc(ipoMs, RECENT_IPO_WINDOW_MONTHS) >= todayMs;
     }
+  }
+  if (ipoDateIssue !== null) {
+    notes.push(ipoDateIssue);
+    gaps.push({
+      field: "route.overlays.recentIpo",
+      reason: ipoDateIssue,
+      severity: "warn",
+      attemptedSources: ["fmp:/stable/profile.ipoDate"],
+    });
   }
   const q = statements.availableQuarters;
   const qKnown = typeof q === "number" && Number.isFinite(q);
@@ -799,7 +813,9 @@ export function routeCompany(
     // degrade honestly without asserting a listing event that did not occur.
     const ipoContext = ipoDateVerified
       ? `verified ipoDate ${ipoRaw} is older than ${RECENT_IPO_WINDOW_MONTHS} months`
-      : "ipoDate is unavailable, so a recent listing cannot be confirmed";
+      : ipoDateIssue !== null
+        ? "ipoDate does not establish an observed listing, so a recent listing cannot be confirmed"
+        : "ipoDate is unavailable, so a recent listing cannot be confirmed";
     notes.push(
       `insufficient historical coverage: only ${q} quarterly statement(s) available ` +
         `(< ${RECENT_IPO_MIN_QUARTERS}), but ${ipoContext} — treated as incomplete data coverage, NOT a ` +

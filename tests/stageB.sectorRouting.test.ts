@@ -328,6 +328,25 @@ describe("routeCompany overlays", () => {
     expect(r.notes.some((n) => n.includes(`${RECENT_IPO_WINDOW_MONTHS} months`))).toBe(true);
   });
 
+  it.each(["2026-07-07", "2027-01-01"])("does not treat future IPO date %s as an observed recent listing", (ipoDate) => {
+    const result = route({ ipoDate }, { availableQuarters: 3 });
+    expect(result.overlays).not.toContain("recent-ipo");
+    expect(result.gaps).toContainEqual(expect.objectContaining({ field: "route.overlays.recentIpo", severity: "warn" }));
+    expect(result.notes.join(" ")).toMatch(/future/i);
+    expect(result.notes.join(" ")).not.toContain(`verified ipoDate ${ipoDate} is older`);
+    expect(result.gaps.some((entry) => entry.field === "route.insufficientHistory")).toBe(true);
+  });
+
+  it("still accepts a listing observed on today's date", () => {
+    expect(route({ ipoDate: TODAY }).overlays).toContain("recent-ipo");
+  });
+
+  it.each(["2026-06-31", "2026-07-05garbage", "2026-07-05T00:00:00+25:00"])("does not verify malformed IPO date %s", (ipoDate) => {
+    const result = route({ ipoDate });
+    expect(result.overlays).not.toContain("recent-ipo");
+    expect(result.notes.join(" ")).toContain("unparseable");
+  });
+
   it("recent-ipo date boundary: exactly 24 months ago is included, one day more is not", () => {
     expect(route({ ipoDate: "2024-07-06" }).overlays).toContain("recent-ipo");
     expect(route({ ipoDate: "2024-07-05" }).overlays).not.toContain("recent-ipo");

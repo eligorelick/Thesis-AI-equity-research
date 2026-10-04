@@ -21,6 +21,7 @@ import {
   SPREADS_2026_01,
   computeDupont,
   computeRoic,
+  computeRote,
   computeRoicVsWaccSpread,
   computeWacc,
   lookupSyntheticSpread,
@@ -58,6 +59,33 @@ function annualIncomeRows(
 // ===========================================================================
 
 describe("computeGrowth — CAGR exactness and windows", () => {
+  it.each([
+    ["two", [{ date: "2026-12-31", revenue: 144 }, { date: "2025-12-31", revenue: 110 }, { date: "2024-12-31", revenue: 100 }], 2],
+    ["four", [{ date: "2026-12-31", revenue: 144 }, { date: "2025-12-31", revenue: 110 }, { date: "2024-12-31", revenue: 105 }, { date: "2022-12-31", revenue: 100 }], 4],
+  ] as const)("withholds the 3-year acceleration benchmark when its requested window spans %s years", (_label, income, years) => {
+    const result = computeGrowth(income, [], { period: "annual" });
+    const degraded = result.revenueCagrs.find((point) => point.windowYears === 3)!;
+    expect(degraded.actualYears).toBeCloseTo(years, 2);
+    expect(degraded.cagrPct).toBeCloseTo((Math.pow(144 / 100, 1 / degraded.actualYears!) - 1) * 100, 10);
+    expect(result.revenueAcceleration.latestYoyPct).toBeCloseTo((144 / 110 - 1) * 100, 10);
+    expect(result.revenueAcceleration.threeYearCagrPct).toBeNull();
+    expect(result.revenueAcceleration.deltaPctPts).toBeNull();
+    expect(result.revenueAcceleration.accelerating).toBeNull();
+    expect(result.revenueAcceleration.note).toMatch(/actual.*span|spans/i);
+  });
+
+  it("retains the proper 3-year acceleration calculation across a 52/53-week calendar", () => {
+    const income = [
+      { date: "2025-12-27", revenue: 144 }, { date: "2024-12-28", revenue: 110 },
+      { date: "2023-12-30", revenue: 105 }, { date: "2022-12-31", revenue: 100 },
+    ];
+    const result = computeGrowth(income, [], { period: "annual" });
+    const expectedCagr = (Math.pow(144 / 100, 1 / 3) - 1) * 100;
+    const expectedYoy = (144 / 110 - 1) * 100;
+    expect(result.revenueAcceleration.threeYearCagrPct).toBeCloseTo(expectedCagr, 10);
+    expect(result.revenueAcceleration.deltaPctPts).toBeCloseTo(expectedYoy - expectedCagr, 10);
+  });
+
   it("computes exact CAGRs across all windows for clean 10% compounding", () => {
     const values = Array.from({ length: 11 }, (_, k) => ({ revenue: 100 * Math.pow(1.1, k) }));
     const income = annualIncomeRows(values);
@@ -1408,6 +1436,55 @@ describe("audit 2026-09-06 — invested capital and the WACC debt leg share the 
     expect(notes).toMatch(/NET_DEBT_V1/);
     expect(notes).not.toMatch(/§2\.2/);
   });
+});
+
+describe("annual returns require adjacent opening and closing balances", () => {
+  const income = (date: string): ReturnsIncomeRow => ({
+    date, revenue: 1000, operatingIncome: 100, incomeBeforeTax: 100,
+    incomeTaxExpense: 20, netIncome: 80,
+  });
+  const balance = (date: string, equity: number): ReturnsBalanceRow => ({
+    date, totalDebt: 100, totalStockholdersEquity: equity,
+    cashAndCashEquivalents: 0, shortTermInvestments: 0, totalAssets: equity + 100,
+    goodwill: 0, intangibleAssets: 0, preferredStock: 0,
+  });
+
+  it.each(["2023-12-31", "2025-06-30"])(
+    "discloses a missing year or short stub instead of averaging against %s",
+    (priorDate) => {
+      const inc = [income("2025-12-31"), income(priorDate)];
+      const bal = [balance("2025-12-31", 900), balance(priorDate, 100)];
+      const roic = computeRoic(inc, bal);
+      const rote = computeRote(inc, bal);
+      const dupont = computeDupont(inc, bal);
+      expect(roic.series.at(-1)?.investedCapitalAvg).toBe(1000);
+      expect(roic.latestRoicPct).toBe(8);
+      expect(rote.series.at(-1)?.tangibleCommonEquityAvg).toBe(900);
+      expect(rote.latestRotePct).toBeCloseTo(80 / 900 * 100, 12);
+      expect(dupont.latest?.assetTurnover).toBe(1);
+      expect(dupont.latest?.roePct).toBeCloseTo(80 / 900 * 100, 12);
+      for (const result of [roic, rote, dupont]) {
+        expect(result.gaps.some((g) => /fiscalContinuity/.test(g.field))).toBe(true);
+      }
+    },
+  );
+
+  it.each(["2024-12-28", "2024-12-21"])(
+    "retains averaging for the 52/53-week fiscal calendar ending %s",
+    (priorDate) => {
+      const inc = [income("2025-12-27"), income(priorDate)];
+      const bal = [balance("2025-12-27", 900), balance(priorDate, 100)];
+      const roic = computeRoic(inc, bal);
+      const rote = computeRote(inc, bal);
+      const dupont = computeDupont(inc, bal);
+      expect(roic.series.at(-1)?.investedCapitalAvg).toBe(600);
+      expect(rote.series.at(-1)?.tangibleCommonEquityAvg).toBe(500);
+      expect(dupont.latest?.assetTurnover).toBeCloseTo(1000 / 600, 12);
+      for (const result of [roic, rote, dupont]) {
+        expect(result.gaps.some((g) => /fiscalContinuity/.test(g.field))).toBe(false);
+      }
+    },
+  );
 });
 
 describe("audit 2026-09-06 — restated fiscal years are collapsed before any returns series is built", () => {

@@ -1383,11 +1383,15 @@ function prescanGrid(lo: number, hi: number): number[] {
 /** All sign-change brackets of f over the grid (skips non-evaluable points). */
 function findBrackets(xs: number[], fs: (number | null)[]): Bracket[] {
   const brackets: Bracket[] = [];
-  for (let i = 0; i < xs.length - 1; i++) {
+  for (let i = 0; i < xs.length; i++) {
     const a = fs[i];
-    const b = fs[i + 1];
-    if (a === null || b === null) continue;
+    if (a === null) continue;
+    // Exact grid roots include both boundaries, even beside an unevaluable
+    // point; they do not require a sign change in a neighbouring interval.
     if (a === 0) brackets.push({ lo: xs[i], hi: xs[i], fLo: a, fHi: a });
+    if (i === xs.length - 1) continue;
+    const b = fs[i + 1];
+    if (b === null) continue;
     if (a * b < 0) brackets.push({ lo: xs[i], hi: xs[i + 1], fLo: a, fHi: b });
   }
   return brackets;
@@ -1666,7 +1670,7 @@ export interface MultiplesBalance {
    * ONLY slice the EV bridge may remove. Under ASC 842 operating-lease cost
    * stays in operating expenses, so EBIT and EBITDA are already AFTER it;
    * finance-lease cost is split between right-of-use amortisation (added back
-   * in EBITDA) and interest (below EBIT), so EBIT and EBITDA are BEFORE it and
+   * in EBITDA but included in EBIT) and interest (below EBIT), and
    * the finance-lease liability is debt in both frames. Null when the split is
    * unavailable (the FMP route publishes one combined figure): enterprise value
    * is then reported as-is and the `enterpriseValue.leases` gap says so, rather
@@ -1769,8 +1773,8 @@ export interface MultiplesFrameworkInputs {
    * (ASC 842) the operating-lease cost stays in operating expenses, so EBIT and
    * EBITDA are already AFTER it — adding that liability to EV as well would
    * double-count the leases in EV/EBITDA. It never touches the FINANCE-lease
-   * liability (WS6 review, BLOCKER 1): EBIT and EBITDA are BEFORE finance-lease
-   * cost, so that liability is debt in every frame and never leaves EV.
+   * liability (WS6 review, BLOCKER 1): its interest is below EBIT, while EBITDA
+   * adds back its amortisation, so it remains financing debt in both frames.
    */
   includeLeasesInEv?: boolean;
 }
@@ -2185,9 +2189,9 @@ export function multiplesFramework(
       : null;
   // WS6 review (BLOCKER 1): ONLY the operating-lease liability may leave EV.
   // Under ASC 842 operating-lease cost sits in operating expenses, so EBIT and
-  // EBITDA are already AFTER it. Finance-lease cost is not: it is split between
-  // right-of-use amortisation (added back in EBITDA) and interest (below EBIT),
-  // so both earnings frames are BEFORE it and the finance-lease liability is
+  // EBITDA are already AFTER it. Finance-lease cost is split between
+  // right-of-use amortisation (inside EBIT, added back in EBITDA) and interest
+  // (below EBIT), and the finance-lease liability is
   // debt in both. Removing the combined figure understated net debt (Apple
   // FY2025: ~1.2bn of finance leases) and overstated equity value.
   const totalLeaseLiability =
@@ -2228,7 +2232,7 @@ export function multiplesFramework(
     (includeLeases
       ? ", and keeping the operating-lease liability in EV pairs a lease-INCLUSIVE numerator with a lease-EXPENSED denominator — not comparable to the default basis, and the caller's explicit choice."
       : ", so removing the operating-lease liability keeps numerator and denominator on the same basis.") +
-    " Finance-lease cost is NOT in EBIT: it is right-of-use amortisation (added back in EBITDA) plus interest (below EBIT), so the finance-lease liability is debt in both frames and is never removed." +
+    " Finance-lease right-of-use amortisation is included in EBIT and added back in EBITDA; finance-lease interest is below EBIT. The finance-lease liability remains financing debt in both frames and is never removed." +
     (evIncludingLeases === null || evExcludingLeases === null
       ? ""
       : ` EV excluding the operating-lease liability ${fmtNum(evExcludingLeases)}; EV as reported ${fmtNum(evIncludingLeases)}.`);
@@ -3252,8 +3256,8 @@ export interface ValuationBundleInputs {
   leaseLiability?: number | null;
   /**
    * WS6 review (BLOCKER 1): the OPERATING slice, the only one the equity bridge
-   * may net out of net debt. EBIT and EBITDA are before finance-lease cost
-   * (right-of-use amortisation + interest), so the finance-lease liability is
+   * may net out of net debt. Finance-lease interest is below EBIT and its
+   * right-of-use amortisation is added back in EBITDA, so its liability is
    * debt in both frames. Null when the split is unavailable ⇒ net debt is used
    * as reported.
    */
@@ -3358,7 +3362,7 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
     gaps.push(
       gapEntry(
         "valuation.dcf",
-        `FCFF DCF withheld on the '${route.base}' route: free cash flow to the firm subtracts debt service from an operating cash flow that, for a deposit-, float- or repo-funded balance sheet, IS financing activity — the equity excess-return model is used instead`,
+        `FCFF DCF withheld on the '${route.base}' route: FCFF is before debt service, but debt, cash and reinvestment cannot be separated reliably into operating and financing items for a deposit-, float- or repo-funded balance sheet — the equity excess-return model is used instead`,
         "info",
       ),
       gapEntry(
@@ -3567,8 +3571,8 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
       // slice back out and THESIS_EV_INCLUDE_LEASES=1 keeps it. Both bridges
       // are stated.
       // WS6 review (BLOCKER 1): only the OPERATING slice leaves net debt. The
-      // finance-lease liability stays, because EBIT and EBITDA are before
-      // finance-lease cost and the DCF's FCFF is built on that EBIT.
+      // finance-lease liability stays as financing debt: its interest is
+      // below EBIT; its amortisation is inside EBIT and added back in EBITDA.
       const totalLeaseLiability =
         isNum(inputs.leaseLiability) && inputs.leaseLiability !== 0 ? Math.abs(inputs.leaseLiability) : null;
       const leaseLiability =
@@ -3598,7 +3602,7 @@ export function valueCompany(route: CompanyRoute, inputs: ValuationBundleInputs)
                 (financeLeaseLiability === null || financeLeaseLiability === 0
                   ? ". "
                   : `; the finance-lease liability of ${fmtNum(financeLeaseLiability)} stays in net debt on both bases. `) +
-                "Operating-lease cost is inside the EBIT this DCF projects (ASC 842), so its liability is not debt here; finance-lease cost is right-of-use amortisation plus interest, both OUTSIDE that EBIT, so its liability is."),
+                "Operating-lease cost is inside the EBIT this DCF projects (ASC 842), so its liability is not debt here; finance-lease right-of-use amortisation is inside EBIT, while its interest is below EBIT, and its liability remains financing debt."),
         );
       }
       const runOpts: DcfRunOptions = {

@@ -1,7 +1,7 @@
 # Thesis
 
 Thesis is a local-first equity research app with financial calculations and optional AI.
-Saved reports give every number a source path and an as-of date.
+Saved reports expose source paths, observation dates and missing evidence. **Settings → Appearance** switches between the default Current design and optional Research workspace; the choice is saved in this browser.
 
 > **Informational only — not investment advice.** Grades and price targets are
 > model outputs from disclosed data and assumptions, not human recommendations.
@@ -15,7 +15,7 @@ Saved reports give every number a source path and an as-of date.
 - Computes growth, returns, capital structure, valuation, scenarios,
   technicals, grades and forensic indicators in deterministic TypeScript, on a
   sector route drawn from the industry label and SIC code and checked against
-  what the filer actually tags — tags decide only where those are silent.
+  filed facts, which can refine broad financial-industry labels when corroborated.
 - Optionally runs separate bull and bear analyses and a judge
   pass, verifies every cited number without another model call, and turns
   missing inputs into disclosed gaps rather than fabricated values.
@@ -143,8 +143,8 @@ other's output, and the bear prompt forbids assuming a bull case exists. A
 judge pass then reads both and writes the report. Which case it reads first is
 drawn from the job id rather than fixed, so first position is not a standing
 advantage, and the order is printed in the report header. Both cases share one
-character cap and the judge is told both lengths, so a longer case cannot win
-on volume; each analyst scores its own side 1-5 against a stated rubric, and
+character target; actual lengths and protected-content excess are disclosed.
+Each analyst scores its own side 1-5 against a stated rubric, and
 the judge may discount a side that scored itself low.
 `THESIS_JUDGE_ORDER=both` runs the judge twice with the cases swapped and
 reconciles every grade and probability, for two judge passes.
@@ -234,7 +234,7 @@ repository's [private advisory form](https://github.com/eligorelick/Thesis-AI-eq
 | `npm run test:integration` | The database CLI suite, which runs in its own process. |
 | `npm run test:coverage` | Both coverage contracts, core and risk. |
 | `npm run test:watch` | The product suite in watch mode. |
-| `npm run export:corrected` | Write a corrected report export from a stored run. |
+| `npm run export:corrected` | Write corrected HTML/JSON from a stored run; requires new output filenames. |
 | `npm run settings:reset` | Delete stored settings rows so .env takes precedence again. Needs --yes. |
 | `npm run db:push` | Apply the Drizzle schema to the configured database. |
 | `npm run check:dependencies` | Assert the dependency tree's shape. |
@@ -260,9 +260,9 @@ Contributions should preserve source tracing, add regressions and pass `npm run 
   narrative can be wrong even when its citations resolve.
 - Verification traces numbers against the registry only: a figure lifted from
   filing prose stays unverified, and each consistency check judges only the
-  claims whose figure it can locate. An analyst case over the length cap is
-  truncated before the judge sees it — what went is named in the manifest, but
-  the judge read less of it.
+  claims whose figure it can locate. Oversized analyst cases are shortened
+  before judging where possible; protected content may exceed the target.
+  The manifest names removed material and any excess that remains.
 
 ## License and data rights
 

@@ -1171,8 +1171,8 @@ async function buildEdgarBundle(
       if (doc.ok) {
         const docUrl = doc.value.endpoint;
         const html = doc.value.data;
-        const parsedDoc = parseDocument(html);
         const t0 = Date.now();
+        const parsedDoc = parseDocument(html);
         item1a = await runExtraction(
           edgar,
           cik,

@@ -1,11 +1,84 @@
 # Decisions
 
+Entries are dated design history, not a single current configuration. Later
+decisions and the [current audit](2026-10-03-repository-audit.md) supersede earlier
+choices. In particular, the current registry prefers Opus 5.5 for `auto` and
+uses Sonnet 5.5 for Haiku's judge; D-03/D-06 record their earlier defaults.
+
 Every behavior, cost, data, or security design choice is recorded here before it
 is implemented. Each entry lists the options considered, the risks across
 correctness, user cost, data integrity, security, backward compatibility and
 reversibility, the choice, and why. Reversible and disclosed beats clever.
 
 Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
+
+## D-37 (audit follow-up 2026-10-04) Validate evidence before presenting or rewriting it
+
+- **Financial evidence**: the acceleration diagnostic requires an actual
+  three-year benchmark (±0.05-year fiscal-calendar tolerance). Other disclosed
+  CAGR windows remain available. Invalid full observation timestamps fail
+  freshness checks; future/invalid IPO dates do not establish a recent listing.
+  Preserve the existing written-calendar-day age basis and balance/runway parser.
+- **Compatibility**: report 1.8.0 and payload 1.9.0 distinguish these conventions.
+  Stored report bytes and the immutable audit baseline remain unchanged. The
+  intended-delta group records DEMO's withheld acceleration and new gap; other
+  manifest entries merely shift positions, confirmed by comparing their fields.
+- **Credentials**: reject malformed fields consumed by v1 connection code before
+  callbacks can rewrite them. Preserve unknown metadata, historical valid model
+  identifiers and signed-out/expired registrations. No migration or silent reset.
+  Clean acquired descriptors and owned locks on PID write/close failures;
+  secondary cleanup errors must not replace the primary failure.
+- **Disclosure**: judge metadata records actual shortening, not just an attempt.
+  Show exact remaining excess while preserving protected content. Partially
+  recorded historical metadata retains the known side and identifies the missing
+  side. UI target provenance and catalyst/risk labels show only recorded evidence.
+- **Deferred**: a reproduced stale-recovery race requires an atomic cross-process
+  locking design; a stat/PID recheck alone cannot fix it. No cache decompression
+  cap is imposed without evidence for a compatible serialized-payload limit.
+
+## D-36 (UI selection 2026-10-03) Keep current default; offer Research workspace
+
+- **Options**: replace the default with one of the two interactive concepts,
+  retain only the current UI, or offer Research workspace as a saved option.
+- **Choice**: the owner explicitly selected the current default plus Research
+  workspace in Settings. Decision brief remains a demonstration.
+- **Architecture**: store an enumerated, non-secret browser appearance cookie;
+  read it for server rendering and update the selected presentation immediately.
+  Keep financial data, analysis model/effort settings and credentials independent.
+- **Risks and reversibility**: browser storage may be refused or cleared; show a
+  save failure rather than claiming persistence. Cookie reads make app pages
+  dynamic. Current remains the fallback and can be selected again. The workspace
+  consumes the same report, retains missing-data disclosures and adds evidence
+  context; print and downloadable report formats keep their existing rendering.
+- **Disclosure**: Settings and privacy guidance identify browser-local storage.
+  Verification and usability limitations belong in the current audit.
+
+## D-35 (repository audit 2026-10-03) Preserve evidence at calculation and file boundaries
+
+- **Choice**: count beta returns only between adjacent completed calendar months
+  inside the five-year window; include reverse-DCF search endpoints as possible
+  roots. Preserve missing FRED periods before applying calendar lags. Require
+  adjacent annual balances for return-ratio averaging; otherwise disclose the
+  existing single-period fallback. Keep the estimator, bounds and financial models.
+- **Compatibility**: report 1.7.0 and payload 1.8.0 identify these conventions;
+  legacy reports remain readable and their stored bytes remain unchanged.
+- **Persistence**: latest-report bodies must agree with their row's issuer,
+  including supported share-class aliases. Corrected exports create both output
+  files exclusively, refuse existing destinations and clean only their own new
+  files on a handled failure (best effort if the filesystem refuses cleanup).
+  Choose a new output name to repeat an export.
+- **Runtime**: retain received billing evidence on failed continuations and
+  presumed settlement metadata; advance snapshots after reconciliation; decode
+  streamed UTF-8 across chunk boundaries. No added provider request or paid API
+  fallback. Full evidence and remaining limits are in the current audit.
+- **Presentation**: narrative comparison preserves financial punctuation;
+  reserved fixtures cannot imply EDGAR/XBRL success. Charts retain gaps and
+  isolated points; failed watchlist operations remain visible and retryable.
+- **Cleanup**: remove the unused direct `@eslint/eslintrc` declaration after
+  checking source references and native flat-config use. ESLint still requires
+  the same resolved version transitively. Only the comparison-lock metadata
+  changes; historical source hashes and the financial baseline projection stay
+  pinned. No user data, credentials, settings or compatibility readers are deleted.
 
 ## D-34 (financial correctness 2026-10-03) Match common ownership and financial operating models
 

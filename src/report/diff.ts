@@ -1072,8 +1072,8 @@ export function diffReports(
   ];
 
   const verdictChanged =
-    normalizeTitle(fromReport.verdict.synthesis) !==
-    normalizeTitle(toReport.verdict.synthesis);
+    fromReport.verdict.synthesis.toLowerCase().trim().replace(/\s+/g, " ") !==
+    toReport.verdict.synthesis.toLowerCase().trim().replace(/\s+/g, " ");
   const verdictChange: VerdictChange | null = verdictChanged
     ? {
         from: fromReport.verdict.synthesis,

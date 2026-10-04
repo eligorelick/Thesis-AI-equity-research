@@ -62,6 +62,7 @@ const ALLOWED_MARKDOWN = new Set([
   "docs/superpowers/audits/2026-09-06-full-codebase-audit.md",
   "docs/audit/DECISIONS.md",
   "docs/audit/REMEDIATION-REPORT.md",
+  "docs/audit/2026-10-03-repository-audit.md",
   "docs/PRIVACY.md",
   "docs/CLAUDE-USAGE.md",
   "docs/DATA-RIGHTS.md",

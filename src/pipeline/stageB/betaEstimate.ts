@@ -4,8 +4,9 @@
  * profile beta.
  *
  * Method: ordinary least squares of the symbol's monthly log return on the
- * benchmark's over the last `maxMonths` (60) month-ends both series share,
- * i.e. the same 5-year-monthly convention vendors publish. Fewer than
+ * benchmark's over the last `maxMonths` (60) calendar months ending at their
+ * newest shared month-end. Only consecutive calendar months form a return.
+ * This follows a 5-year-monthly window convention. Fewer than
  * `minMonths` (24) shared returns is a disclosed gap, not a number.
  *
  * D-15 additions:
@@ -122,6 +123,10 @@ function adjustedOf(point: ClosePoint): number | null {
   return isFiniteNumber(point.adjClose) && point.adjClose > 0 ? point.adjClose : null;
 }
 
+function calendarMonth(isoDate: string): number {
+  return Number(isoDate.slice(0, 4)) * 12 + Number(isoDate.slice(5, 7)) - 1;
+}
+
 export function estimateBeta(
   symbolCloses: readonly ClosePoint[],
   benchmarkCloses: readonly ClosePoint[],
@@ -149,10 +154,12 @@ export function estimateBeta(
     partialMonths.size === 0
       ? ""
       : `; the partial month ${[...partialMonths].sort().join(", ")} in progress is excluded`;
-  // Shared month-ends, newest first, at most maxMonths + 1 levels (→ maxMonths returns).
-  const shared = symbolEnds
-    .filter((p) => benchByMonth.has(p.date.slice(0, 7)))
-    .slice(0, maxMonths + 1)
+  // A missing level must neither extend the calendar window nor turn a
+  // multi-month change into a monthly observation.
+  const sharedEnds = symbolEnds.filter((p) => benchByMonth.has(p.date.slice(0, 7)));
+  const newestMonth = sharedEnds[0] === undefined ? null : calendarMonth(sharedEnds[0].date);
+  const shared = sharedEnds
+    .filter((p) => newestMonth !== null && newestMonth - calendarMonth(p.date) <= maxMonths)
     .reverse(); // oldest → newest for return construction
 
   // The adjusted series is used only when EVERY level of BOTH series in the
@@ -166,9 +173,14 @@ export function estimateBeta(
   const priceOf = (p: ClosePoint): number => (adjustedThroughout ? adjustedOf(p)! : p.close);
 
   const returns: { s: number; b: number }[] = [];
+  let skippedIntervals = 0;
   for (let i = 1; i < shared.length; i++) {
     const s0 = shared[i - 1]!;
     const s1 = shared[i]!;
+    if (calendarMonth(s1.date) - calendarMonth(s0.date) !== 1) {
+      skippedIntervals++;
+      continue;
+    }
     const b0 = benchByMonth.get(s0.date.slice(0, 7))!;
     const b1 = benchByMonth.get(s1.date.slice(0, 7))!;
     returns.push({
@@ -179,6 +191,9 @@ export function estimateBeta(
   const months = returns.length;
   const windowStart = shared[0]?.date ?? null;
   const windowEnd = shared[shared.length - 1]?.date ?? null;
+  const missingMonthNote = skippedIntervals === 0
+    ? ""
+    : `; ${skippedIntervals} non-monthly interval${skippedIntervals === 1 ? "" : "s"} across missing shared month-ends excluded`;
   const fail = (reason: string): BetaEstimate => ({
     beta: null,
     months,
@@ -188,8 +203,8 @@ export function estimateBeta(
     standardError: null,
     betaBlume: null,
     basis,
-    note: `beta not estimated: ${reason}`,
-    gap: { field: "profile.beta", reason, severity: "warn", attemptedSources: ["computed:beta(monthly OLS vs SPY)"] },
+    note: `beta not estimated: ${reason}${missingMonthNote}${partialMonthNote}`,
+    gap: { field: "profile.beta", reason: `${reason}${missingMonthNote}`, severity: "warn", attemptedSources: ["computed:beta(monthly OLS vs SPY)"] },
     disclosure: null,
   });
   if (months < minMonths) {
@@ -221,7 +236,7 @@ export function estimateBeta(
     `beta ${beta.toFixed(3)}` +
     (standardError === null ? "" : ` ± ${standardError.toFixed(3)} (OLS standard error)`) +
     `, Blume-adjusted ${betaBlume.toFixed(3)}, from ${months} monthly log returns of ${priceNote} vs the benchmark ` +
-    `(${windowStart} → ${windowEnd}); vendor betas use the same 5-year-monthly convention${partialMonthNote}`;
+    `(${windowStart} → ${windowEnd}); a ${maxMonths}-calendar-month window convention${missingMonthNote}${partialMonthNote}`;
   return {
     beta,
     months,
@@ -237,7 +252,7 @@ export function estimateBeta(
       field: "profile.beta.method",
       reason:
         `beta ${beta.toFixed(3)} is the OLS slope of ${months} monthly log returns on the benchmark's, ` +
-        `${windowStart} to ${windowEnd}, built from ${priceNote}` +
+        `${windowStart} to ${windowEnd}, built from ${priceNote}${missingMonthNote}` +
         (standardError === null ? "" : `; standard error ${standardError.toFixed(3)}`) +
         (rSquared === null ? "" : `, R² ${rSquared.toFixed(3)}`) +
         `; the Blume mean-reversion adjustment (${BLUME_RAW_WEIGHT.toFixed(3)}×raw + ${BLUME_MARKET_WEIGHT.toFixed(3)}) gives ` +

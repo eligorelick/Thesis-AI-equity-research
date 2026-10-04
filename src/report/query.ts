@@ -15,7 +15,7 @@ import { getDb } from "@/db";
 import { reports } from "@/db/schema";
 import type { Report } from "@/report/schema";
 import { parseStoredReport } from "@/report/history";
-import { canonicalEntitySymbol } from "@/symbol";
+import { canonicalEntitySymbol, sameEntitySymbol } from "@/symbol";
 
 export interface LatestReport {
   reportId: number;
@@ -59,7 +59,11 @@ export function getLatestDoneReport(symbol: string): LatestReport | null {
   // Single parse authority: history.parseStoredReport (strict parse with the
   // legacy-read fallback), so the watchlist join renders reports saved under
   // earlier spec versions exactly like the history/view surfaces do.
-  const report: Report | null = parseStoredReport(row.reportJson);
+  const parsed = parseStoredReport(row.reportJson);
+  // Match the history boundary: valid JSON for another issuer must never
+  // supply this company's report or watchlist grades. Keep the stored bytes.
+  const report: Report | null = parsed !== null && sameEntitySymbol(row.symbol, parsed.meta.symbol)
+    ? parsed : null;
 
   return {
     reportId: row.id,

@@ -56,7 +56,7 @@ export const COMMAND_DESCRIPTIONS = {
   "audit:deltas": "Refresh the audited fixture comparison's intended-delta list.",
   "audit:security": "Dependency audit at the release threshold.",
   "check:dependencies": "Assert the dependency tree's shape.",
-  "export:corrected": "Write a corrected report export from a stored run.",
+  "export:corrected": "Write corrected HTML/JSON from a stored run; requires new output filenames.",
 };
 
 /** Commands that exist for the suite's own plumbing and are not user-facing. */

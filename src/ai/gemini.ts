@@ -1,6 +1,7 @@
 import "server-only";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 import fs from "node:fs";
 import path from "node:path";
 import { aiDirectory, claimAiRuntime, ensurePrivateDirectory, withAiStore } from "./store";
@@ -26,7 +27,8 @@ export function geminiExecutable(): string | null {
         const pkg = JSON.parse(fs.readFileSync(path.resolve(path.dirname(candidate), "..", "package.json"), "utf8"));
         const [major, minor] = String(pkg.version).split(".").map(Number);
         // Capability/configuration semantics are audited for this minor line.
-        if (pkg.name === "@google/gemini-cli" && major === 0 && minor === 36 && fs.existsSync(candidate)) return candidate;
+        // The user-installed CLI is resolved at runtime, outside the app bundle.
+        if (pkg.name === "@google/gemini-cli" && major === 0 && minor === 36 && fs.existsSync(/* turbopackIgnore: true */ candidate)) return candidate;
       } catch { /* Not a supported official CLI installation. */ }
     }
   }
@@ -134,12 +136,13 @@ export async function beginGemini(): Promise<void> {
   catch (error) { fail(); throw error; }
   const stop = () => { void stopGeminiChild(child).catch(fail); };
   let buffer = "";
+  const decoder = new StringDecoder("utf8");
   const timer = setTimeout(stop, 5 * 60_000); timer.unref();
   child.on("error", fail);
   child.on("close", () => { clearTimeout(timer); fail(); });
   const send = (id: number, method: string, params: unknown) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
   child.stdout.on("data", (data: Buffer) => {
-    buffer += data.toString("utf8");
+    buffer += decoder.write(data);
     if (buffer.length > 2_000_000) { stop(); return; }
     let newline: number;
     while ((newline = buffer.indexOf("\n")) !== -1) {
@@ -176,14 +179,16 @@ export async function runGemini(id: string, model: string, prompt: string, signa
   const child = launch(id, args, false);
   return new Promise((resolve, reject) => {
     let output = "";
+    const decoder = new StringDecoder("utf8");
     let canceled = false;
     const abort = () => { canceled = true; void stopGeminiChild(child).then(() => reject(new Error("Gemini request canceled")), reject); };
     signal?.addEventListener("abort", abort, { once: true });
     const timer = setTimeout(abort, 45 * 60_000); timer.unref();
-    child.stdout.on("data", (data: Buffer) => { output += data.toString("utf8"); if (output.length > 4_000_000) abort(); });
+    child.stdout.on("data", (data: Buffer) => { output += decoder.write(data); if (output.length > 4_000_000) abort(); });
     child.on("error", () => reject(new Error("Gemini CLI could not start")));
     child.on("close", (code) => {
       clearTimeout(timer); signal?.removeEventListener("abort", abort);
+      output += decoder.end();
       try {
         if (canceled || code !== 0) throw new Error();
         const data = JSON.parse(output);

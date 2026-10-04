@@ -1,8 +1,8 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import fs, { existsSync, linkSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runCorrectedExport } from "@/report/export/correctedCli";
 
@@ -22,6 +22,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -33,6 +34,7 @@ function seed(dbFile: string): void {
   sqlite.exec(`
     CREATE TABLE reports (
       id INTEGER PRIMARY KEY,
+      symbol TEXT NOT NULL,
       reportJson TEXT,
       createdAt TEXT NOT NULL,
       model TEXT NOT NULL
@@ -54,12 +56,46 @@ function seed(dbFile: string): void {
   `);
   const stored = readFileSync(REPORT_FIXTURE, "utf8");
   sqlite
-    .prepare("INSERT INTO reports (id, reportJson, createdAt, model) VALUES (?, ?, ?, ?)")
-    .run(7, stored, "2026-08-30T00:00:00.000Z", "claude-opus-4-8");
+    .prepare("INSERT INTO reports (id, symbol, reportJson, createdAt, model) VALUES (?, ?, ?, ?, ?)")
+    .run(7, "DEMO", stored, "2026-08-30T00:00:00.000Z", "claude-opus-4-8");
   sqlite.close();
 }
 
 describe("corrected export --out without an .html suffix", () => {
+  it("preserves the write error and continues cleanup when one partial output cannot be removed", () => {
+    const dbFile = path.join(tempDir, "source.db");
+    const out = path.join(tempDir, "corrected.html");
+    seed(dbFile);
+    const originalDb = readFileSync(dbFile);
+    const failure = new Error("disk full");
+    vi.spyOn(fs, "writeFileSync").mockImplementationOnce(() => { throw failure; });
+    const unlink = fs.unlinkSync;
+    vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+      if (file === out) throw new Error("output locked");
+      unlink(file);
+    });
+    expect(() => runCorrectedExport({ dbFile, reportId: 7, outputHtml: out })).toThrow(failure);
+    expect(existsSync(path.join(tempDir, "corrected.json"))).toBe(false);
+    expect(readFileSync(dbFile)).toEqual(originalDb);
+  });
+
+  it.each(["html", "json", "database", "hardlink"])("preserves an existing %s destination and leaves no partial export", (kind) => {
+    const dbFile = path.join(tempDir, "source.db");
+    seed(dbFile);
+    const originalDb = readFileSync(dbFile);
+    const out = kind === "database" ? dbFile : path.join(tempDir, "corrected.html");
+    const sidecar = kind === "database" ? `${out}.json` : path.join(tempDir, "corrected.json");
+    const occupied = kind === "json" ? sidecar : out;
+    if (kind === "hardlink") linkSync(dbFile, occupied);
+    else if (kind !== "database") writeFileSync(occupied, "existing user content");
+    const originalOutput = readFileSync(occupied);
+
+    expect(() => runCorrectedExport({ dbFile, reportId: 7, outputHtml: out })).toThrow();
+    expect(readFileSync(dbFile)).toEqual(originalDb);
+    expect(readFileSync(occupied)).toEqual(originalOutput);
+    expect(existsSync(kind === "json" ? out : sidecar)).toBe(false);
+  });
+
   it("writes the JSON beside the HTML instead of over it", () => {
     const dbFile = path.join(tempDir, "source.db");
     const out = path.join(tempDir, "corrected-report"); // no extension

@@ -26,7 +26,8 @@ export async function openChrome(url: string): Promise<boolean> {
   const executable = chromeExecutable();
   if (!executable) return false;
   return new Promise((resolve) => {
-    const child = spawn(executable, [url], { detached: true, stdio: "ignore", windowsHide: true, shell: false });
+    // Chrome belongs to the user's machine and must stay a runtime dependency.
+    const child = spawn(/* turbopackIgnore: true */ executable, [url], { detached: true, stdio: "ignore", windowsHide: true, shell: false });
     child.once("error", () => resolve(false));
     child.once("spawn", () => { child.unref(); resolve(true); });
   });

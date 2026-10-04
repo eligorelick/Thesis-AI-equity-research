@@ -124,6 +124,8 @@ const EXPECTED_RISK_SOURCES = [
  * so a new module has to be placed on purpose (audit 2026-09-06, F200).
  */
 const COVERAGE_EXEMPT_SOURCES: Record<string, string> = {
+  "src/appearance/preference.ts": "nonsecret browser display cookie only; parsing/write-failure tests in appearance.preference.test.ts; never controls research, spend or DB state",
+  "src/components/charts/palette.ts": "display colors for optional workspace; never changes chart values, research, spend or persistence",
   "src/app/company/[symbol]/format.ts": "display formatting for the company page; exercised by the page tests, not risk-bearing",
   "src/components/charts/format.ts": "chart label formatting; covered by tests/charts.format.test.ts, a wrong label is visible, never persisted",
   "src/components/charts/map.ts": "chart data mapping; covered by tests/charts.map.test.ts, a wrong point is visible, never persisted",

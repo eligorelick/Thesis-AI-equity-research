@@ -1774,6 +1774,24 @@ describe("runJob - durable paid-pass settlements", () => {
       .toEqual([expect.objectContaining({ costUsd: 0.123456 })]);
   });
 
+  it("retains presumed billing and provider execution when a judge error needs fallback settlement", async () => {
+    const { jobId } = createJob("AAPL");
+    const base = mockPasses();
+    const execution = { requestedModel: "claude-opus-4-8", requestedEffort: "high", effectiveEffort: "high" };
+    await runJob(jobId, {
+      ...base.passes,
+      runJudgePass: async () => {
+        throw Object.assign(new Error("provider disconnected before complete billing evidence"), {
+          billedAttempt: { model: "claude-opus-4-8", costUsd: 1, fallbackUsed: false, presumed: true, execution },
+        });
+      },
+    }, { bundle: fakeBundle(), hasAnthropicKey: true, now: NOW, maxJudgeRetries: 0 });
+    const row = handle.db.select().from(costLog).all().find((entry) => entry.step === "synthesize")!;
+    expect(row.settlementKind).toBe("presumed");
+    const artifact = handle.db.select().from(jobPassArtifacts).all().find((entry) => entry.pass === "synthesize")!;
+    expect(JSON.parse(artifact.telemetryJson)).toMatchObject({ presumed: true, execution });
+  });
+
   it("holds bear at the independent paid gate until bull settles when global capacity is one", async () => {
     const { jobId } = createJob("AAPL");
     const scheduler = await import("@/pipeline/jobScheduler");
@@ -6101,7 +6119,7 @@ describe("runJob — full pipeline with mock passes", () => {
     expect(repRow?.symbol).toBe("AAPL");
     expect(repRow?.status).toBe("done");
     expect(repRow?.verificationRate).toBe(1);
-    expect(repRow?.specVersion).toBe("1.6.0");
+    expect(repRow?.specVersion).toBe("1.8.0");
     expect(repRow?.costUsd).toBeCloseTo(totalCost, 6);
     const parsed = ReportSchema.safeParse(JSON.parse(repRow?.reportJson ?? "{}"));
     expect(parsed.success).toBe(true);

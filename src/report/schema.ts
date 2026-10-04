@@ -341,7 +341,7 @@ export type TracedNumber = z.infer<typeof TracedNumberSchema>;
 export const GradeBlockSchema = z
   .object({
     grade: GradeSchema,
-    /** Display status for deterministic data-only bands; absent on legacy/analyst grades. */
+    /** Pipeline-owned evidence limit for headline grades; raw letters remain auditable. */
     assessmentStatus: z.enum(["not-assessed", "limited-evidence", "deterministic"]).optional(),
     oneLineWhy: ratingSafeString(),
     reasoning: z.array(SourcedClaimSchema),

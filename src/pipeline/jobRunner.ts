@@ -70,6 +70,7 @@ import {
 import { buildDataCompleteness } from "@/report/completeness";
 import {
   annotateSharedModelFamily,
+  attributeJudgeProtocolDisclosures,
   buildExecutionMetadataEntry,
   sharedModelFamilyOf,
   type ProviderExecution,
@@ -4440,7 +4441,7 @@ function reconcileMeta(
           sharedModelFamilyOf(annotatedExecution),
         );
 
-  const missingData = [
+  const missingData = attributeJudgeProtocolDisclosures([
     ...report.appendix.missingData.filter(
       (gap) =>
         !RECONCILED_MANIFEST_FIELDS.has(gap.field) &&
@@ -4453,7 +4454,7 @@ function reconcileMeta(
     // belong HERE, with the cost breakdown they explain, so the two cannot
     // disagree — and so `dataCompleteness` below is computed over them.
     ...discarded,
-  ];
+  ], { execution: annotatedExecution, model: meta.model });
   // Both edits above CHANGE the manifest this metadata summarizes. Recomputing
   // is not optional: deriveReportCompletenessPresentation recomputes from the
   // manifest and reports "inconsistent" — which blanks state, counts, EDGAR,

@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { GradeReasoning } from "@/components/report/primitives";
 import { CatalystsRisksPanel, CompositeScorecard, GradeStripBar } from "@/components/report/sections";
-import { gradeDisplayLabel, gradeForDisplay } from "@/report/assessment";
+import { applyReportAssessmentStatus, gradeDisplayLabel, gradeForDisplay } from "@/report/assessment";
+import { parseStoredReportWithSafety } from "@/report/legacyEntitySafety";
 import { extractGradeStrip } from "@/report/history";
 import { diffReports } from "@/report/diff";
 import { reportToMarkdown } from "@/report/export/markdown";
@@ -12,6 +13,69 @@ import { judgeOutputToJsonSchema, ReportSchema } from "@/report/schema";
 import { task28SentinelReport } from "./helpers/task28Report";
 
 describe("assessment presentation", () => {
+  it("withholds sparse full-AI headlines on immutable stored reads across sections, history, and exports", () => {
+    const report = task28SentinelReport();
+    const narrative = "JUDGMENT: Retain the computed band, explicitly qualified by sparse coverage.";
+    report.verdict.gradeStrip.quality = { ...report.verdict.gradeStrip.quality, grade: "A", oneLineWhy: narrative };
+    report.quality.graded = { ...report.quality.graded, grade: "A", oneLineWhy: "A narrow favorable signal, not comprehensive quality assurance." };
+    report.balanceSheet.graded = { ...report.quality.graded, grade: "C", oneLineWhy: "Mandatory neutral placeholder, no computed band is available." };
+    report.verdict.gradeStrip.balanceSheet = { ...report.balanceSheet.graded };
+    report.scores!.aspects.quality = { ...report.scores!.aspects.quality, score: 96, band: "A", dataCompleteness: 0.05 };
+    report.scores!.aspects.balanceSheet = { ...report.scores!.aspects.balanceSheet, score: null, band: null, dataCompleteness: 0 };
+    report.scores!.aspects.moat = { ...report.scores!.aspects.moat, score: 80, band: "B", dataCompleteness: 0.1 };
+    const original = JSON.stringify(report);
+    expect(report.appendix.missingData.some((gap) => gap.field === "analysis.llm")).toBe(false);
+    const safe = parseStoredReportWithSafety(original)?.report;
+    expect(safe).toBeDefined();
+    if (!safe) return;
+    for (const [strip, section] of [
+      [safe.verdict.gradeStrip.quality, safe.quality.graded],
+      [safe.verdict.gradeStrip.balanceSheet!, safe.balanceSheet.graded!],
+      [safe.verdict.gradeStrip.moat, safe.competitive.moatGraded],
+    ]) {
+      expect(gradeForDisplay(strip!)).toBeNull();
+      expect(section!.assessmentStatus).toBe(strip!.assessmentStatus);
+      expect(renderToStaticMarkup(createElement(GradeReasoning, { title: "Assessment", block: section! }))).toContain('aria-label="not assessed"');
+    }
+    expect(safe.quality.graded).toEqual({ ...report.quality.graded, assessmentStatus: "limited-evidence" });
+    expect(safe.verdict.gradeStrip.quality).toEqual({ ...report.verdict.gradeStrip.quality, assessmentStatus: "limited-evidence" });
+    expect(safe.balanceSheet.graded?.assessmentStatus).toBe("not-assessed");
+    expect(safe.scores).toEqual(report.scores);
+    expect(extractGradeStrip(safe).filter((cell) => ["quality", "balanceSheet", "moat"].includes(cell.key)).every((cell) => cell.grade === null)).toBe(true);
+    for (const text of [reportToMarkdown(safe), reportToPrintBody(safe)]) {
+      expect(text).toContain("Not assessed — limited evidence");
+      expect(text).toContain(narrative);
+    }
+    expect(JSON.stringify(report)).toBe(original);
+    expect(applyReportAssessmentStatus(safe)).toEqual(safe);
+  });
+
+  it("keeps supported grades at the coverage boundary and never upgrades an existing withheld assessment", () => {
+    const report = task28SentinelReport();
+    report.scores!.aspects.quality.dataCompleteness = 0.5;
+    report.verdict.gradeStrip.quality.assessmentStatus = "not-assessed";
+    report.scores!.aspects.valuation.dataCompleteness = 0.5;
+    const safe = applyReportAssessmentStatus(report);
+    expect(safe.quality.graded.assessmentStatus).toBe("not-assessed");
+    expect(gradeForDisplay(safe.verdict.gradeStrip.valuation)).toBe(report.verdict.gradeStrip.valuation.grade);
+    delete report.scores;
+    expect(applyReportAssessmentStatus(report)).toEqual(report);
+  });
+
+  it("withholds when either deterministic score or band is unavailable without fabricating optional legacy blocks", () => {
+    const report = task28SentinelReport();
+    report.scores!.aspects.quality.band = null;
+    report.scores!.aspects.valuation.score = null;
+    report.scores!.aspects.balanceSheet.score = null;
+    delete report.verdict.gradeStrip.balanceSheet;
+    delete report.balanceSheet.graded;
+    const safe = applyReportAssessmentStatus(report);
+    expect(safe.quality.graded.assessmentStatus).toBe("not-assessed");
+    expect(safe.valuation.graded.assessmentStatus).toBe("not-assessed");
+    expect(safe.verdict.gradeStrip.balanceSheet).toBeUndefined();
+    expect(safe.balanceSheet.graded).toBeUndefined();
+  });
+
   it("withholds unsupported headline letters consistently in the live view, history and diff", () => {
     const report = task28SentinelReport();
     const block = { ...report.verdict.gradeStrip.quality, grade: "A" as const, assessmentStatus: "limited-evidence" as const,

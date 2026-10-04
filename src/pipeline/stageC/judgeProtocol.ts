@@ -546,7 +546,7 @@ export function recoveredJudgeProtocolDraft(args: {
           "either was truncated, and both analysts' self-assessed case strength are not recoverable " +
           "and are not reported.",
         severity: "warn",
-        attemptedSources: ["anthropic"],
+        attemptedSources: [],
       },
     ],
   };
@@ -563,7 +563,7 @@ export function buildJudgeProtocolDraft(
         field: `llm.${side}.length-cap`,
         reason: `The ${side} case was truncated before the judge saw it: ${capped.disclosure} Both sides share the same cap so neither can win on volume.`,
         severity: "warn",
-        attemptedSources: ["anthropic"],
+        attemptedSources: [],
       });
     }
   }
@@ -588,7 +588,7 @@ export function withReconciliation(
       field: "llm.judge.order-reconciliation",
       reason: reconciliation.note,
       severity: "warn",
-      attemptedSources: ["anthropic"],
+      attemptedSources: [],
     });
   } else if (!reconciliation.agreed) {
     for (const disagreement of reconciliation.disagreements) {
@@ -596,7 +596,7 @@ export function withReconciliation(
         field: `llm.judge.order-sensitive.${disagreement.field}`,
         reason: `Running the judge with the cases in the opposite order changed this field: ${disagreement.field} was "${disagreement.primary}" in the reported pass and "${disagreement.secondary}" in the mirrored pass. The reported pass stands; the field is order-sensitive.`,
         severity: "warn",
-        attemptedSources: ["anthropic"],
+        attemptedSources: [],
       });
     }
   }
@@ -651,7 +651,7 @@ export function judgeProtocolManifestEntries(protocol: JudgeProtocol): ManifestE
       field: "llm.judge.case-order",
       reason: protocol.note,
       severity: "info",
-      attemptedSources: ["anthropic"],
+      attemptedSources: [],
     },
   ];
   if (protocol.sharedModelFamily.shared) {
@@ -659,7 +659,7 @@ export function judgeProtocolManifestEntries(protocol: JudgeProtocol): ManifestE
       field: "llm.judge.model-family",
       reason: `The judge and both analyst passes ran on the ${protocol.sharedModelFamily.judgeFamily} model family, so the adjudication is not independent of the two cases it graded: the same family wrote and judged them.`,
       severity: "warn",
-      attemptedSources: ["anthropic"],
+      attemptedSources: [],
     });
   }
   return entries;

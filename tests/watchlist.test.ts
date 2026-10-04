@@ -187,6 +187,24 @@ describe("add / remove / list", () => {
  * ------------------------------------------------------------------------ */
 
 describe("getWatchlistView", () => {
+  it("withholds sparse grades in a completed AI report even when its prose retains a qualified letter", async () => {
+    addToWatchlist("DEMO");
+    const report = ReportSchema.parse(JSON.parse(readFileSync(
+      path.join(process.cwd(), "fixtures", "report", "DEMO-sample.json"), "utf8",
+    )));
+    report.verdict.gradeStrip.quality.grade = "A";
+    report.verdict.gradeStrip.quality.oneLineWhy = "Retain the computed band, explicitly qualified by sparse coverage.";
+    report.scores!.aspects.quality.dataCompleteness = 0.05;
+    report.scores!.aspects.balanceSheet.score = null;
+    report.scores!.aspects.balanceSheet.band = null;
+    const storedBytes = JSON.stringify(report);
+    handle.db.insert(reports).values({ symbol: "DEMO", createdAt: report.meta.generatedAt,
+      model: report.meta.model, status: "done", reportJson: storedBytes, specVersion: REPORT_SPEC_VERSION }).run();
+    const [row] = await getWatchlistView({ fmp: stubFmp({}), now: NOW });
+    expect(row?.grades).toMatchObject({ quality: null, balanceSheet: null, fundamentals: report.verdict.gradeStrip.fundamentals.grade });
+    expect(handle.db.select({ reportJson: reports.reportJson }).from(reports).get()?.reportJson).toBe(storedBytes);
+  });
+
   it.each(["current", "legacy"])("withholds unsupported grades from a saved %s data-only report without rewriting its evidence", async (format) => {
     addToWatchlist("DEMO");
     const report = ReportSchema.parse(JSON.parse(readFileSync(

@@ -33,6 +33,7 @@ import type { AnalystCase, JudgeOutput, Report } from "@/report/schema";
 import { ANALYST_CASE_SCHEMA, analystCaseToJsonSchema } from "@/report/schema";
 import {
   annotateSharedModelFamily,
+  attributeJudgeProtocolDisclosures,
   buildExecutionMetadataEntry,
   sharedModelFamilyOf,
 } from "@/report/execution";
@@ -1276,6 +1277,56 @@ describe("shared judge/analyst model family", () => {
  * ------------------------------------------------------------------------ */
 
 describe("judgement protocol reaches the rendered report", () => {
+  it.each([
+    ["claude-opus-4-8", "anthropic"],
+    ["chatgpt/gpt-6-astra", "chatgpt"],
+  ])("attributes completed judge disclosures to %s", (model, provider) => {
+    const { bundle, computed } = buildInputs();
+    const report = assembleReport({ symbol: "AAPL", bundle, computed,
+      judgeOutput: fakeJudgeOutput(), verify: { verificationRate: null, log: [] },
+      costEntries: ["bull", "bear", "synthesize"].map((step) => ({ step, model, costUsd: 0 })),
+      model,
+      judgeProtocol: buildJudgeProtocolDraft(buildJudgePresentation({
+        setting: "bull-first", seed: "provider-disclosure", bull: analystCase("bull"), bear: analystCase("bear"),
+      })),
+    }, GENERATED_AT);
+    for (const field of ["llm.judge.case-order", "llm.judge.model-family"]) {
+      expect(report.appendix.missingData.find((gap) => gap.field === field)?.attemptedSources).toEqual([provider]);
+    }
+  });
+
+  it("restamps only known protocol disclosures using explicit per-pass execution evidence", () => {
+    const fields = ["llm.judge.case-order", "llm.judge.model-family", "llm.judge.protocol-recovered",
+      "llm.judge.order-reconciliation", "llm.judge.order-sensitive.grade", "llm.bull.length-cap", "llm.bear.length-cap", "llm.judge.unrelated"];
+    const gaps = fields.map((field) => ({ field, reason: "preserved disclosure", severity: "warn" as const, attemptedSources: ["anthropic"] }));
+    const original = JSON.stringify(gaps);
+    const updated = attributeJudgeProtocolDisclosures(gaps, { model: "claude-opus-4-8", execution: [
+      { step: "bull", requestedModel: "chatgpt/gpt-6-astra", effectiveModel: "chatgpt/gpt-6-astra" },
+      { step: "bear", requestedModel: "gemini/auto", effectiveModel: "unknown" },
+      { step: "synthesize", requestedModel: "chatgpt/gpt-6-astra", effectiveModel: "chatgpt/gpt-6-astra" },
+    ] });
+    expect(updated.filter((gap) => gap.field.startsWith("llm.judge.") && !["llm.judge.model-family", "llm.judge.unrelated"].includes(gap.field))
+      .every((gap) => JSON.stringify(gap.attemptedSources) === '["chatgpt"]')).toBe(true);
+    expect(updated.find((gap) => gap.field === "llm.judge.model-family")?.attemptedSources).toEqual(["chatgpt", "gemini"]);
+    expect(updated.find((gap) => gap.field === "llm.bull.length-cap")?.attemptedSources).toEqual(["chatgpt"]);
+    expect(updated.find((gap) => gap.field === "llm.bear.length-cap")?.attemptedSources).toEqual(["gemini"]);
+    expect(updated.find((gap) => gap.field === "llm.judge.unrelated")).toBe(gaps.at(-1));
+    expect(JSON.stringify(gaps)).toBe(original);
+  });
+
+  it("uses the explicit report request before execution metadata exists and never guesses an unknown provider", () => {
+    const gaps = [{ field: "llm.judge.case-order", reason: "Order recorded", severity: "info" as const, attemptedSources: ["anthropic"] }];
+    expect(attributeJudgeProtocolDisclosures(gaps, { model: "chatgpt/gpt-6-astra" })[0].attemptedSources).toEqual(["chatgpt"]);
+    expect(attributeJudgeProtocolDisclosures(gaps, { model: "claude-opus-4-8" })[0].attemptedSources).toEqual(["anthropic"]);
+    expect(attributeJudgeProtocolDisclosures(gaps, {})[0].attemptedSources).toEqual([]);
+    expect(attributeJudgeProtocolDisclosures(gaps, { model: "unknown", execution: [
+      { step: "synthesize attempt 1", effectiveModel: "unknown", requestedModel: "unknown" },
+    ] })[0].attemptedSources).toEqual([]);
+    expect(attributeJudgeProtocolDisclosures(gaps, { execution: [
+      { step: "synthesize attempt 1", effectiveModel: "unknown", requestedModel: "chatgpt/gpt-6-astra" },
+    ] })[0].attemptedSources).toEqual(["chatgpt"]);
+  });
+
   it("prints the protocol sentence and the checks table in both exports", () => {
     const { bundle, computed } = buildInputs();
     const checks = {

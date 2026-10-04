@@ -24,8 +24,9 @@
   temporary throttling.
 - Recover completed ChatGPT output items when the terminal event omits them;
   retain failed-pass usage and distinguish unknown model/usage from zero.
-- Display missing and sparse data-only assessments honestly across reports,
-  history and exports, and distinguish routing evidence from XBRL validation.
+- Display missing and sparse assessments honestly across AI and data-only
+  reports, watchlists, history and exports; distinguish routing evidence from
+  XBRL validation and retain the actual provider in judge disclosures.
 - Use configured Finnhub news and upcoming-earnings fallbacks when FMP cannot
   provide them, retaining provenance and genuine subscription limitations.
 - Preserve presumed billing and original model requests through pass settlement

@@ -92,7 +92,8 @@ import {
   type EntityIssue,
 } from "@/pipeline/stageC/entityValidation";
 import { buildDataCompleteness } from "@/report/completeness";
-import { buildExecutionMetadataEntry, type ProviderExecution } from "@/report/execution";
+import { applyReportAssessmentStatus } from "@/report/assessment";
+import { attributeJudgeProtocolDisclosures, buildExecutionMetadataEntry, type ProviderExecution } from "@/report/execution";
 import { judgeFloorModelId, resolveRegistryModel } from "@/models/registry";
 import {
   SHARED_RULES_BLOCK,
@@ -2828,7 +2829,7 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
       ? undefined
       : completeJudgeProtocol(args.judgeProtocol, sharedModelFamilyOf(execution));
 
-  const missingData = dedupManifest([
+  const missingData = attributeJudgeProtocolDisclosures(dedupManifest([
     ...args.bundle.gaps,
     ...args.computed.gaps,
     ...(args.validationGaps ?? []),
@@ -2836,7 +2837,7 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
     ...(args.judgeProtocol?.disclosures ?? []),
     ...(judgeProtocol === undefined ? [] : judgeProtocolManifestEntries(judgeProtocol)),
     ...(args.verify.checks === undefined ? [] : consistencyManifestEntries(args.verify.checks)),
-  ]);
+  ]), { execution, model: args.model });
 
   const meta: ReportMeta = {
     symbol: args.symbol,
@@ -2938,7 +2939,7 @@ export function assembleReport(args: AssembleReportArgs, generatedAt?: string): 
       parsed.error.message,
     );
   }
-  return parsed.data;
+  return applyReportAssessmentStatus(parsed.data);
 }
 
 function firstProfileName(bundle: DataBundle): string | null {

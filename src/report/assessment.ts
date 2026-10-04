@@ -1,8 +1,37 @@
-import type { GradeBlock } from "@/report/schema";
+import type { GradeBlock, Report } from "@/report/schema";
+import { GRADE_SURFACES } from "@/report/surfaceManifest";
 import type { Grade } from "@/types/core";
 
 /** Presentation threshold only: raw scores and the composite calculation stay unchanged. */
 export const MIN_HEADLINE_EVIDENCE = 0.5;
+
+/**
+ * Apply the same evidence floor to every headline, including completed AI
+ * reports. Letters, narratives and scores remain intact for audit. Stored
+ * reports use this immutable view; no historical bytes need to be rewritten.
+ */
+export function applyReportAssessmentStatus(report: Report): Report {
+  // Truly older reports have no deterministic evidence map to evaluate.
+  if (report.scores === undefined) return report;
+  const normalized = structuredClone(report);
+  for (const { key, sectionKey } of GRADE_SURFACES) {
+    const aspect = report.scores.aspects[key];
+    const strip = normalized.verdict.gradeStrip[key];
+    const section = sectionKey === "competitive" ? normalized.competitive.moatGraded : normalized[sectionKey].graded;
+    const statuses = [strip?.assessmentStatus, section?.assessmentStatus];
+    const unavailable = aspect == null || aspect.score === null || aspect.band === null;
+    // Existing withheld assessments can become more restrictive, never less.
+    const status = unavailable || statuses.includes("not-assessed")
+      ? "not-assessed"
+      : aspect.dataCompleteness < MIN_HEADLINE_EVIDENCE || statuses.includes("limited-evidence")
+        ? "limited-evidence"
+        : undefined;
+    if (status === undefined) continue;
+    if (strip !== undefined) strip.assessmentStatus = status;
+    if (section !== undefined) section.assessmentStatus = status;
+  }
+  return normalized;
+}
 
 export function gradeForDisplay(block: GradeBlock): Grade | null {
   if (block.assessmentStatus === "not-assessed" || block.assessmentStatus === "limited-evidence") return null;

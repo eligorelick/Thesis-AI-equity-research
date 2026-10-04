@@ -1825,6 +1825,24 @@ describe("final assembled report verification", () => {
 });
 
 describe("assembleReport", () => {
+  it("attaches deterministic assessment limits to both full-AI grade surfaces without changing analyst output", () => {
+    const { bundle, computed } = buildInputs();
+    const output = judgeOutput();
+    output.balanceSheet.graded = { ...output.quality.graded, grade: "C" };
+    output.verdict.gradeStrip.balanceSheet = { ...output.balanceSheet.graded };
+    const original = JSON.stringify(output);
+    computed.scores!.aspects.quality = { ...computed.scores!.aspects.quality, score: 96, band: "A", dataCompleteness: 0.05 };
+    computed.scores!.aspects.balanceSheet = { ...computed.scores!.aspects.balanceSheet, score: null, band: null, dataCompleteness: 0 };
+    const report = assembleReport({ symbol: "AAPL", bundle, computed, judgeOutput: output,
+      verify: { verificationRate: 0.9, log: [] }, costEntries: [], model: "chatgpt/gpt-6.1-sol" }, GENERATED_AT);
+    expect(report.verdict.gradeStrip.quality).toEqual({ ...output.verdict.gradeStrip.quality, assessmentStatus: "limited-evidence" });
+    expect(report.quality.graded).toEqual({ ...output.quality.graded, assessmentStatus: "limited-evidence" });
+    expect(report.balanceSheet.graded?.assessmentStatus).toBe("not-assessed");
+    expect(report.verdict.gradeStrip.balanceSheet?.assessmentStatus).toBe("not-assessed");
+    expect(ReportSchema.safeParse(report).success).toBe(true);
+    expect(JSON.stringify(output)).toBe(original);
+  });
+
   it("preserves real source envelopes and deduplicates only identical tuples", () => {
     const bundle = fixtureBundle();
     const sources = buildSources(bundle);

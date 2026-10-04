@@ -1,5 +1,36 @@
 import { judgeFloorModelId, resolveRegistryModel } from "@/models/registry";
 import { parseSubscriptionModel, subscriptionModel, validModelId } from "@/ai/contracts";
+import type { ManifestEntry } from "@/types/core";
+
+/**
+ * Protocol construction is provider-independent. Attribute only its known
+ * disclosure fields once explicit execution/request evidence is available.
+ * Kept in this pure module so stored-report and CLI readers need no providers.
+ */
+export function attributeJudgeProtocolDisclosures(
+  entries: readonly ManifestEntry[],
+  context: {
+    model?: string;
+    execution?: readonly Pick<ExecutionMetadataEntry, "step" | "requestedModel" | "effectiveModel">[];
+  },
+): ManifestEntry[] {
+  const providerOf = (model: string | undefined): string | null => model === undefined ? null
+    : parseSubscriptionModel(model)?.provider ?? (model.startsWith("claude-") ? "anthropic" : null);
+  return entries.map((entry) => {
+    const lengthCap = /^llm\.(bull|bear)\.length-cap$/.exec(entry.field);
+    const judge = /^llm\.judge\.(case-order|model-family|protocol-recovered|order-reconciliation|order-sensitive\..+)$/.exec(entry.field);
+    if (!lengthCap && !judge) return entry;
+    const steps = lengthCap ? [lengthCap[1]] : judge?.[1] === "model-family" ? ["bull", "bear", "synthesize"] : ["synthesize"];
+    const sources = (context.execution ?? []).filter((execution) => steps.includes(execution.step.replace(/ attempt \d+$/, "")))
+      .flatMap((execution) => {
+        const provider = providerOf(execution.effectiveModel) ?? providerOf(execution.requestedModel);
+        return provider === null ? [] : [provider];
+      });
+    const fallback = providerOf(context.model);
+    if (sources.length === 0 && fallback !== null) sources.push(fallback);
+    return { ...entry, attemptedSources: [...new Set(sources)].sort() };
+  });
+}
 
 export type ExecutionEffort = "low" | "medium" | "high" | "xhigh" | "max";
 /** Provider evidence, retained on durable artifacts independently of API charges. */

@@ -1409,7 +1409,9 @@ export async function applyKeylessFallbacks(inputs: KeylessInputs): Promise<Keyl
         ["edgar:submissions"],
       );
     } else {
-      const beta = estimateBeta(closePoints(eodRows), closePoints(spyRows));
+      // Daily history may carry today's unfinished session. Keep quote/chart
+      // rows intact, but beta uses only dates before the UTC observation day.
+      const beta = estimateBeta(closePoints(eodRows), closePoints(spyRows), { asOf: inputs.today });
       if (beta.gap !== null) gaps.push(beta.gap);
       // D-15: a point estimate with no uncertainty attached invites a reader to
       // treat 1.2 ± 0.05 and 1.2 ± 0.40 as the same input to a discount rate,

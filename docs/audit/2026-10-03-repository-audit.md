@@ -1,7 +1,9 @@
 # Repository audit — 2026-10-03
 
 Status: initial repository audit, UI selection and verified 2026-10-04 fixes
-complete; F08 stale-lock recovery remains unresolved below. Current remains the default
+complete; F08 was unresolved at that checkpoint. The later
+[recommendations ledger](2026-10-04-recommendations.md) records its replacement
+protocol and current verification status. Current remains the default
 with optional Research workspace in Settings. Earlier dated
 audits and decisions remain historical evidence. The owner authorized merging
 pull request #5 into `main` on 2026-10-04 after verification. Deployment remains

@@ -190,10 +190,12 @@ export function TracedStat({
   label,
   n,
   tone = "neutral",
+  showSourceDetails = false,
 }: {
   label: ReactNode;
   n: TracedNumber;
   tone?: Tone;
+  showSourceDetails?: boolean;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5 border border-edge bg-raised px-2 py-1.5">
@@ -204,6 +206,7 @@ export function TracedStat({
       {n.asOf && (
         <div className="mono text-[9px] text-faint">as of {n.asOf}</div>
       )}
+      {showSourceDetails && <TracedNumberSourceDetails n={n} label={`${typeof label === "string" ? label : "Number"} provenance`} />}
     </div>
   );
 }
@@ -279,7 +282,7 @@ export function GradeReasoning({
               {block.keyNumbers.length > 0 && (
                 <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
                   {block.keyNumbers.map((n, i) => (
-                    <TracedStat key={i} label={n.source.split(/[.:/]/).pop() ?? "value"} n={n} />
+                    <TracedStat key={i} label={n.source.split(/[.:/]/).pop() ?? "value"} n={n} showSourceDetails />
                   ))}
                 </div>
               )}
@@ -304,20 +307,25 @@ const SCENARIO_META: Record<
   bear: { tone: "neg", label: "bear" },
 };
 
-/** Keyboard-accessible recorded target metadata; never infer an observation date. */
-function TargetSourceDetails({ n }: { n: TracedNumber }) {
+/** Opt-in recorded number evidence; dates and citation status are never inferred. */
+export function TracedNumberSourceDetails({ n, label = "Number provenance" }: { n: TracedNumber; label?: string }) {
   const fields = [
+    ["recorded value", String(n.value)],
+    ["unit", n.unit],
+    ...(n.currency !== undefined || /currency|usd|^[A-Z]{3}/.test(n.unit) ? [["currency", n.currency] as const] : []),
     ["source id", n.sourceId],
     ["source", n.source],
     ["as of", n.asOf],
     ["period", n.period],
+    ["citation status", n.verified === true ? "citation-traced" : n.verified === false ? "not citation-traced" : "not checked"],
+    ...(n.verificationNote ? [["citation note", n.verificationNote] as const] : []),
   ] as const;
   return (
-    <div className="border-b border-edge px-2.5 py-1.5">
-      <Disclosure trigger={<span className="text-[10px] text-faint hover:text-accent">Target provenance</span>}>
+    <div className="min-w-0">
+      <Disclosure trigger={<span className="text-[10px] text-faint hover:text-accent">{label}</span>}>
         <dl className="mono mt-1.5 flex flex-col gap-1 text-[10px] text-faint">
           {fields.map(([label, value]) => (
-            <div key={label} className="break-words">
+            <div key={label} className="break-all">
               <dt className="inline text-muted">{label}</dt>{" "}
               <dd className="inline">{value?.trim() ? value : "not recorded"}</dd>
             </div>
@@ -369,7 +377,7 @@ export function ScenarioCard({
         )}
         <span className="mono text-[10px] text-faint">{horizon}</span>
       </div>
-      {priceTarget && <TargetSourceDetails n={priceTarget} />}
+      {priceTarget && <div className="border-b border-edge px-2.5 py-1.5"><TracedNumberSourceDetails n={priceTarget} label="Target provenance" /></div>}
       {probability === null ? (
         <div className="border-b border-edge px-2.5 py-1 text-[10px] text-faint">
           scenario probability unavailable

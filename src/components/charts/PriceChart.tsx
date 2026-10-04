@@ -15,7 +15,7 @@
  * from the terminal theme (globals.css) so it reads as part of the panel.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useId, useMemo, useRef } from "react";
 import {
   CandlestickSeries,
   ColorType,
@@ -35,7 +35,9 @@ import {
   type Time,
 } from "lightweight-charts";
 
-import { smaSeries, type DatedClose } from "./format";
+import { barDate, preparePricePlotData } from "./plotData";
+import { ChartDataDisclosure } from "./ChartDataDisclosure";
+export { toSortedBars } from "./plotData";
 import { useUiDesign } from "@/appearance/UiDesignProvider";
 import { chartPalette, type ChartPalette } from "./palette";
 
@@ -85,54 +87,6 @@ const THEME = chartPalette("current");
 // ---------------------------------------------------------------------------
 // Pure helpers (data shaping)
 // ---------------------------------------------------------------------------
-
-function barDate(b: PriceBar): string {
-  const raw = b.date ?? b.time ?? "";
-  return raw.length > 10 ? raw.slice(0, 10) : raw;
-}
-
-/** Sanitize + sort ASC + de-dup by date (lightweight-charts requires strict ASC unique times). */
-export function toSortedBars(rows: readonly PriceBar[]): PriceBar[] {
-  const clean: PriceBar[] = [];
-  for (const b of rows) {
-    const d = barDate(b);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
-    if (
-      !Number.isFinite(b.open) ||
-      !Number.isFinite(b.high) ||
-      !Number.isFinite(b.low) ||
-      !Number.isFinite(b.close)
-    ) {
-      continue;
-    }
-    clean.push({ ...b, date: d });
-  }
-  clean.sort((a, b) => (barDate(a) < barDate(b) ? -1 : barDate(a) > barDate(b) ? 1 : 0));
-  // De-dup: keep the last bar for a given day.
-  const out: PriceBar[] = [];
-  for (const b of clean) {
-    const d = barDate(b);
-    if (out.length > 0 && barDate(out[out.length - 1]) === d) {
-      out[out.length - 1] = b;
-    } else {
-      out.push(b);
-    }
-  }
-  return out;
-}
-
-function lineDataFrom(
-  bars: readonly PriceBar[],
-  n: number,
-): LineData<Time>[] {
-  const closes: DatedClose[] = bars.map((b) => ({ date: barDate(b), close: b.close }));
-  const sma = smaSeries(closes, n);
-  const out: LineData<Time>[] = [];
-  for (const p of sma) {
-    if (p.value !== null) out.push({ time: p.date as Time, value: p.value });
-  }
-  return out;
-}
 
 /** Omit unavailable volume points without removing their price/candlestick bars. */
 export function toVolumeHistogramData(
@@ -202,10 +156,16 @@ export function PriceChart({
   const THEME = chartPalette(design);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const descriptionId = useId();
 
   // Sort/de-dup once per `rows` change; the effect (chart build) and the render
   // body (legend/SMA availability) both consume this instead of re-sorting.
-  const bars = useMemo(() => toSortedBars(rows), [rows]);
+  const model = useMemo(() => preparePricePlotData(rows, { showSma50, showSma200 }), [rows, showSma50, showSma200]);
+  const bars = model.bars;
+  const columns = ["Open", "High", "Low", "Close", "Volume", ...(model.sma50.length ? ["SMA50"] : []), ...(model.sma200.length ? ["SMA200"] : [])];
+  const tableRows = useMemo(() => model.rows.map((row) => ({ date: row.date,
+    values: [row.open, row.high, row.low, row.close, row.volume,
+      ...(model.sma50.length ? [row.sma50] : []), ...(model.sma200.length ? [row.sma200] : [])] })), [model]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -227,14 +187,7 @@ export function PriceChart({
       wickDownColor: THEME.neg,
       priceLineVisible: false,
     });
-    const candleData: CandlestickData<Time>[] = bars.map((b) => ({
-      time: barDate(b) as Time,
-      open: b.open,
-      high: b.high,
-      low: b.low,
-      close: b.close,
-    }));
-    candles.setData(candleData);
+    candles.setData(model.candles as CandlestickData<Time>[]);
 
     // --- Volume histogram (overlaid on its own scale, bottom band) ----------
     const volume = chart.addSeries(HistogramSeries, {
@@ -244,7 +197,11 @@ export function PriceChart({
       priceLineVisible: false,
       lastValueVisible: false,
     });
-    const volData = toVolumeHistogramData(bars, THEME);
+    const barsByDate = new Map(bars.map((bar) => [barDate(bar), bar]));
+    const volData = model.volume.map((point) => {
+      const bar = barsByDate.get(point.time)!;
+      return { ...point, time: point.time as Time, color: bar.close >= bar.open ? `${THEME.pos}55` : `${THEME.neg}55` };
+    });
     volume.setData(volData);
     chart.priceScale("volume").applyOptions({
       scaleMargins: { top: 0.78, bottom: 0 },
@@ -261,7 +218,7 @@ export function PriceChart({
         crosshairMarkerVisible: false,
         title: "SMA50",
       });
-      sma50.setData(lineDataFrom(bars, 50));
+      sma50.setData(model.sma50 as LineData<Time>[]);
     }
     if (showSma200 && bars.length >= 200) {
       const sma200 = chart.addSeries(LineSeries, {
@@ -272,7 +229,7 @@ export function PriceChart({
         crosshairMarkerVisible: false,
         title: "SMA200",
       });
-      sma200.setData(lineDataFrom(bars, 200));
+      sma200.setData(model.sma200 as LineData<Time>[]);
     }
 
     // --- Cross markers -------------------------------------------------------
@@ -306,7 +263,7 @@ export function PriceChart({
       chart.remove();
       chartRef.current = null;
     };
-  }, [bars, crosses, height, showSma50, showSma200, THEME]);
+  }, [model, bars, crosses, height, showSma50, showSma200, THEME]);
 
   const has200 = bars.length >= 200;
 
@@ -318,6 +275,7 @@ export function PriceChart({
         style={{ height }}
         role="img"
         aria-label="Price candlestick chart with moving-average overlays and volume"
+        aria-describedby={descriptionId}
       />
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[10px] text-faint">
         <LegendSwatch color={THEME.pos} label="up" />
@@ -332,6 +290,10 @@ export function PriceChart({
         )}
         <span className="ml-auto text-faint">volume · lower band</span>
       </div>
+      <p id={descriptionId} className="px-1 text-[10px] text-faint">Open Price data for exact dated values. Unavailable volume or moving averages remain unavailable.</p>
+      <ChartDataDisclosure label="Price data" columns={columns} rows={tableRows}
+        caption="Daily price observations; currency not recorded. Volume as reported."
+        basis="OHLC, volume and enabled moving averages as plotted; unavailable cells contain no plotted observation. Values are not rounded." />
     </div>
   );
 }

@@ -104,11 +104,24 @@ The v1 credential reader validates the fields connection code consumes before
 allowing a mutation. Malformed records produce a storage error and are left
 unchanged; they are never silently reset. Expired/signed-out registrations,
 historical valid model identifiers and unknown metadata remain compatible.
-Acquisition failures close newly opened lock descriptors and attempt to remove
-only the newly acquired lock, preserving the original error if cleanup fails.
-Concurrent recovery of a dead owner's lock remains a known race (see the
-[audit follow-up](audit/2026-10-03-repository-audit.md#follow-up--2026-10-04));
-the ordinary single-server ownership guard does not prove atomic stale recovery.
+Credential mutations use a separate, permanent `connections.lock` SQLite file
+containing only a format marker. A native write reservation covers the read,
+awaited mutation and JSON save; waiting yields to other async work. Process exit
+releases ownership without deleting the lock. The credential envelope and its
+encryption remain unchanged. A closed, marker-only `connections.lock.*.tmp`
+publication file can remain after a crash or failed cleanup; it contains no tokens.
+
+**Upgrade or downgrade with every Thesis server stopped.** Old numeric/partial
+locks and unknown lock formats are refused before credential mutation. If the
+error requests migration, stop every Thesis server, remove only
+`connections.lock` in the AI directory, then restart the intended version.
+Preserve `connections.v1.json` and every `gemini-*` directory. Never remove or
+replace a lock while a server is running, or mix old and new servers: an old
+in-flight stale-lock deletion cannot be fenced by the new protocol. Downgrading
+also requires this stopped-server lock removal. Local filesystem hard links and
+native SQLite locking are required; unsupported publication fails closed.
+Network filesystems are not supported by this locking guarantee. See the
+[locking decision and verification limits](audit/2026-10-04-recommendations.md#1-credential-locking--implemented).
 
 Gemini stores its own OAuth state under an isolated `gemini-<id>` subdirectory
 owned by Thesis. Thesis does not read another app's Google credentials. CLI

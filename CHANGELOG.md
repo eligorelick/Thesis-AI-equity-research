@@ -4,6 +4,28 @@ Entries below the current repository audit record earlier development batches.
 Their model defaults, prices and migration advice describe those dates; use
 README and the current usage/methodology documents for present guidance.
 
+## Unreleased — evidence-qualified recommendations (2026-10-04)
+
+- Replace stale-PID credential-lock deletion with a permanent, marker-only
+  SQLite mutex using native process ownership. Preserve credential envelopes;
+  upgrades/downgrades require stopped servers and the documented legacy-lock
+  migration in [Privacy](docs/PRIVACY.md).
+- Use completed regular US month-end sessions for beta and calendar lag periods
+  for monthly, quarterly and annual keyless FRED transformations. Missing periods
+  withhold affected changes; holiday and sparse-frequency limits are disclosed.
+- Withhold current-day and future beta bars until the next UTC day, since daily
+  history can contain an unfinished final-session bar; quote/chart bars remain.
+- Add independent normalized statement references for six issuers across twelve
+  annual periods, with source/basis notes, absolute-unit anchors and sector-policy
+  checks. These strengthen regression detection, not forecasts or parser coverage.
+- Add keyboard-accessible recorded grade/DCF provenance and optional 30-row
+  price/relative-strength tables in both designs. Tables and canvases share exact
+  prepared values; zero, missing observations and individual baselines stay distinct.
+- Stamp report 1.9.0 / payload 1.10.0 to separate the financial conventions while
+  preserving saved reports and their original values.
+- Record the critical review of all seven recommendations, evidence, alternatives
+  and justified deferrals in the [recommendations ledger](docs/audit/2026-10-04-recommendations.md).
+
 ## Unreleased — audit follow-up (2026-10-04)
 
 - Withhold three-year revenue acceleration when the observed history spans a
@@ -13,7 +35,8 @@ README and the current usage/methodology documents for present guidance.
   these conventions; saved reports retain their original bytes.
 - Validate consumed credential-store fields before mutation and clean owned
   locks/descriptors after acquisition I/O failures. Preserve historical valid
-  selections and unknown metadata. Concurrent stale-lock recovery remains open.
+  selections and unknown metadata. Concurrent stale-lock recovery remained open
+  in this batch; the later recommendations batch replaces that locking protocol.
 - Report exact judge-case excess and actual shortening, including escaped text
   and partially recorded historical metadata. Protected citations remain intact.
 - Expose scenario target provenance and clearer catalyst/risk dates, direction,

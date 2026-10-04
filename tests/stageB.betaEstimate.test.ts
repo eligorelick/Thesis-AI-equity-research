@@ -9,11 +9,13 @@ import {
 } from "@/pipeline/stageB/betaEstimate";
 
 /**
- * Daily closes for `months` COMPLETE calendar months (every weekday through
- * the month's last weekday) where the symbol's monthly log return is beta ×
+ * Daily closes for `months` COMPLETE calendar months (weekdays except the
+ * regular month-end holidays below) where the symbol's monthly log return is beta ×
  * benchmark's. Complete months matter: the estimator drops a month whose
  * last observation is not in the month's closing days (audit 2026-09-06).
  */
+const MONTH_END_HOLIDAYS = new Set(["2021-05-31", "2024-03-29", "2027-05-31"]);
+
 function series(months: number, beta: number, start = "2021-01-04") {
   const symbol: { date: string; close: number }[] = [];
   const bench: { date: string; close: number }[] = [];
@@ -24,7 +26,7 @@ function series(months: number, beta: number, start = "2021-01-04") {
     const benchReturn = ((m % 5) - 2) * 0.02; // −4%, −2%, 0, +2%, +4% pattern
     const month = d.getUTCMonth();
     while (d.getUTCMonth() === month) {
-      if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6) {
+      if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6 && !MONTH_END_HOLIDAYS.has(d.toISOString().slice(0, 10))) {
         const iso = d.toISOString().slice(0, 10);
         symbol.push({ date: iso, close: s });
         bench.push({ date: iso, close: b });
@@ -50,6 +52,96 @@ function nextMonthStub(lastIso: string): [string, string] {
 }
 
 describe("estimateBeta", () => {
+  it("withholds unfinished final-session bars until the next UTC observation day", () => {
+    const { symbol, bench } = series(40, 1.3);
+    const liveSymbol = [...symbol, { date: "2024-05-31", close: symbol.at(-1)!.close * 0.8 }];
+    const liveBench = [...bench, { date: "2024-05-31", close: bench.at(-1)!.close * 1.02 }];
+    const result = estimateBeta(liveSymbol, liveBench, { asOf: "2024-05-31" });
+    expect(result.beta).toBeCloseTo(1.3, 10);
+    expect(result.months).toBe(39);
+    expect(result.windowEnd).toBe("2024-04-30");
+    expect(result.disclosure?.reason).toMatch(/2024-05-31.*UTC.*withheld/);
+    expect(result.note).toMatch(/even after market close/);
+
+    // On the next UTC day the final-session bar is admissible. Its changed
+    // price can then legitimately affect beta, rather than remaining hidden.
+    const nextDay = estimateBeta(liveSymbol, liveBench, { asOf: "2024-06-01" });
+    expect(nextDay.months).toBe(40);
+    expect(nextDay.windowEnd).toBe("2024-05-31");
+    expect(nextDay.beta).toBeCloseTo(estimateBeta(liveSymbol, liveBench).beta!, 10);
+    expect(nextDay.beta).not.toBeCloseTo(1.3, 2);
+  });
+
+  it("excludes future final-session observations before choosing the beta window", () => {
+    const { symbol, bench } = series(44, 1.3);
+    const result = estimateBeta(symbol, bench, { asOf: "2024-05-31" });
+    expect(result.months).toBe(39);
+    expect(result.windowEnd).toBe("2024-04-30");
+    expect(result.beta).toBeCloseTo(1.3, 10);
+  });
+
+  it.each(["symbol", "benchmark"])("excludes today's final-session bar present only on the %s side", side => {
+    const { symbol, bench } = series(40, 1.3);
+    const todaySymbol = [...symbol, { date: "2024-05-31", close: symbol.at(-1)!.close * 0.8 }];
+    const todayBench = [...bench, { date: "2024-05-31", close: bench.at(-1)!.close * 1.02 }];
+    const result = estimateBeta(side === "symbol" ? todaySymbol : symbol, side === "benchmark" ? todayBench : bench, { asOf: "2024-05-31" });
+    expect(result.beta).toBeCloseTo(1.3, 10);
+    expect(result.windowEnd).toBe("2024-04-30");
+    expect(result.disclosure?.reason).toMatch(/2024-05-31.*UTC.*withheld/);
+  });
+
+  it.each(["2024-02-30", "2024-05-31T12:00:00Z", "not-a-date"])("fails closed on invalid UTC observation cutoff %s", asOf => {
+    const { symbol, bench } = series(40, 1.3);
+    const result = estimateBeta(symbol, bench, { asOf });
+    expect(result.beta).toBeNull();
+    expect(result.months).toBe(0);
+    expect(result.gap?.reason).toMatch(/invalid.*cutoff/);
+    expect(result.windowEnd).toBeNull();
+  });
+
+  it("excludes a late-month stub before the actual final session", () => {
+    const { symbol, bench } = series(40, 1.3);
+    const s = symbol.at(-1)!;
+    const b = bench.at(-1)!;
+    const result = estimateBeta(
+      [...symbol, { date: "2024-05-28", close: s.close * 0.8 }],
+      [...bench, { date: "2024-05-28", close: b.close * 1.02 }],
+    );
+    expect(result.months).toBe(39);
+    expect(result.beta).toBeCloseTo(1.3, 10);
+    expect(result.windowEnd).toBe("2024-04-30");
+  });
+
+  it.each(["symbol", "benchmark"])("withholds a month missing its final session on the %s side", (side) => {
+    const { symbol, bench } = series(41, 1.3);
+    const missingEnd = (points: typeof symbol) => points.filter((row) => row.date !== "2024-05-31");
+    const result = estimateBeta(side === "symbol" ? missingEnd(symbol) : symbol, side === "benchmark" ? missingEnd(bench) : bench);
+    expect(result.months).toBe(39);
+    expect(result.windowEnd).toBe("2024-04-30");
+    expect(result.note).toMatch(/2024-05.*excluded/);
+  });
+
+  it("does not bridge an older month whose final session is missing", () => {
+    const { symbol, bench } = series(40, 1.3);
+    const result = estimateBeta(symbol.filter((row) => row.date !== "2023-06-30"), bench);
+    expect(result.months).toBe(37); // both intervals touching June are absent
+    expect(result.beta).toBeCloseTo(1.3, 10);
+    expect(result.note).toMatch(/2023-06.*excluded/);
+    expect(result.note).toMatch(/non-monthly interval/);
+  });
+
+  it.each([
+    ["2024-05-28", false], ["2024-05-30", false], ["2024-05-31", true],
+    ["2021-05-27", false], ["2021-05-28", true], ["2021-05-31", false],
+    ["2024-03-27", false], ["2024-03-28", true], ["2024-03-29", false],
+    ["2024-11-29", true], ["2024-11-28", false],
+    ["2024-02-29", true], ["2024-02-28", false], ["2025-02-28", true],
+    ["2021-12-31", true], ["2021-12-30", false], ["2022-12-30", true], ["2027-12-31", true],
+    ["2025-02-29", false], ["2024-13-31", false],
+  ])("recognizes the regular NYSE month-end session %s: %s", (date, complete) => {
+    expect(isMonthComplete(date)).toBe(complete);
+  });
+
   it("recovers a known slope from monthly log returns", () => {
     const { symbol, bench } = series(40, 1.3);
     const result = estimateBeta(symbol, bench);
@@ -140,7 +232,7 @@ describe("estimateBeta", () => {
     expect(result.months).toBe(39);
     expect(result.beta!).toBeCloseTo(1.3, 6);
     expect(result.windowEnd).toBe(last);
-    expect(result.note).toMatch(new RegExp(`partial month ${d1.slice(0, 7)} in progress is excluded`));
+    expect(result.note).toMatch(new RegExp(`incomplete month ${d1.slice(0, 7)}.*excluded`));
   });
 
   it("keeps a month whose last observation falls in its closing days", () => {
@@ -174,7 +266,7 @@ describe("estimateBeta — D-15 basis, uncertainty and the Blume adjustment", ()
       const benchReturn = ((m % 5) - 2) * 0.02;
       const month = d.getUTCMonth();
       while (d.getUTCMonth() === month) {
-        if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6) {
+        if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6 && !MONTH_END_HOLIDAYS.has(d.toISOString().slice(0, 10))) {
           const iso = d.toISOString().slice(0, 10);
           symbol.push({ date: iso, close: sClose, adjClose: sAdj });
           // The benchmark's two bases move together, so only the symbol's choice

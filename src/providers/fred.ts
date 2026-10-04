@@ -331,10 +331,24 @@ export function inferObsPerYear(rows: readonly FredObservation[]): number {
   return 1; // annual
 }
 
+/** Calendar period for frequencies whose slots are independent of trading days. */
+function calendarPeriod(date: string, n: number): number | null {
+  if (n !== 12 && n !== 4 && n !== 1) return null;
+  const epoch = Date.parse(`${date}T00:00:00Z`);
+  if (!Number.isFinite(epoch) || new Date(epoch).toISOString().slice(0, 10) !== date) return null;
+  const year = Number(date.slice(0, 4));
+  const month = Number(date.slice(5, 7)) - 1;
+  return year * n + (n === 12 ? month : n === 4 ? Math.floor(month / 3) : 0);
+}
+
 /**
  * Apply a FRED `units` transformation client-side (official ALFRED formulas).
  * Used only in keyless CSV mode; the keyed API transforms server-side.
- * Rows must be ascending by date, retaining missing period slots as NaN.
+ * Monthly, quarterly and annual transformations select calendar lag slots,
+ * including when a date row is wholly absent. Other inferred frequencies
+ * retain observation-count conventions (daily 260 is not a calendar year).
+ * Frequency inference remains approximate for sparse/irregular series.
+ * Rows must be ascending by date, retaining explicit missing slots as NaN.
  * Neither a missing current value nor a missing lag value forms a change.
  */
 export function applyFredUnits(
@@ -347,10 +361,23 @@ export function applyFredUnits(
   }
   const n = inferObsPerYear(rows);
   const lag = units === "ch1" || units === "pc1" ? n : 1;
+  const calendarBased = n === 12 || n === 4 || n === 1;
+  const valuesByPeriod = new Map<number, number>();
+  if (calendarBased) {
+    for (const row of rows) {
+      const period = calendarPeriod(row.date, n);
+      if (period === null) continue;
+      // More than one row in a slot is ambiguous; do not choose by input order.
+      valuesByPeriod.set(period, valuesByPeriod.has(period) ? Number.NaN : row.value);
+    }
+  }
   const out: FredObservation[] = [];
-  for (let i = lag; i < rows.length; i++) {
+  for (let i = calendarBased ? 0 : lag; i < rows.length; i++) {
     const x = rows[i].value;
-    const prev = rows[i - lag].value;
+    const period = calendarBased ? calendarPeriod(rows[i].date, n) : null;
+    if (calendarBased && (period === null || !Number.isFinite(valuesByPeriod.get(period)))) continue;
+    const prev = calendarBased ? valuesByPeriod.get(period! - lag) : rows[i - lag].value;
+    if (prev === undefined) continue;
     if (!Number.isFinite(x) || !Number.isFinite(prev)) continue;
     let value: number;
     switch (units) {
@@ -566,7 +593,7 @@ export async function series(
   }
   const endpoint =
     `fred.stlouisfed.org/graph/fredgraph.csv?id=${seriesId}` +
-    (units !== "lin" ? ` (units=${units} computed client-side)` : "");
+    (units !== "lin" ? ` (units=${units} computed client-side; frequency inferred from spacing; monthly/quarterly/annual calendar lags, other frequencies observation lags)` : "");
   return { ok: true, value: sourced(rows, rows[rows.length - 1].date, endpoint) };
 }
 

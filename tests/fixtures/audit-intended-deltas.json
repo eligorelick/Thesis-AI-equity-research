@@ -4516,11 +4516,6 @@
           }
         },
         {
-          "path": "report.meta.specVersion",
-          "before": "1.2.0",
-          "after": "1.8.0"
-        },
-        {
           "path": "stageB.gaps.24.field",
           "before": "forensics.piotroski",
           "after": "growth.revenueAcceleration.threeYearCagr"
@@ -4804,6 +4799,20 @@
           "path": "stageB.growth.revenueAcceleration.threeYearCagrPct",
           "before": 9.108945117996182,
           "after": null
+        }
+      ]
+    },
+    {
+      "name": "calendar-session-lag-conventions",
+      "decisions": [
+        "D-38"
+      ],
+      "reason": "Completed regular US month-end beta and calendar-period FRED lags change financial conventions. The audited DEMO fixture has no affected beta/monthly macro inputs: only report.meta.specVersion moves to 1.9.0; its computed values and provenance remain unchanged.",
+      "deltas": [
+        {
+          "path": "report.meta.specVersion",
+          "before": "1.2.0",
+          "after": "1.9.0"
         }
       ]
     }

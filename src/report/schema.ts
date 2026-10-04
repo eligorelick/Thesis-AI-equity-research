@@ -68,7 +68,9 @@ import type { Grade, ClaimLabel, ManifestEntry } from "@/types/core";
 // 1.8.0 (audit follow-up 2026-10-04): require the actual three-year horizon
 // for revenue acceleration; reject invalid freshness and future IPO evidence.
 // Judge length metadata distinguishes attempted from actual shortening.
-export const REPORT_SPEC_VERSION = "1.8.0" as const;
+// 1.9.0 (recommendation review 2026-10-04): beta requires completed regular
+// US month-end sessions; monthly/quarterly/annual FRED changes use calendar lags.
+export const REPORT_SPEC_VERSION = "1.9.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Legacy-read leniency

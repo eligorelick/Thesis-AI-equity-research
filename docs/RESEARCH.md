@@ -714,7 +714,13 @@ Parameters*).
 
 **What the code has.** The keyless estimate is an OLS on 24–60 monthly
 log returns from adjacent shared month-ends within a 60-calendar-month window.
-Missing interior months do not form a return or extend the window. It already
+Both series must contain the regular US final-session date (weekends,
+Memorial Day and Good Friday accounted for; exceptional closures and non-US
+calendars are not modeled). Missing interior months or final sessions do not
+form a return or extend the window. Keyless beta additionally withholds bars
+dated on or after the UTC observation day: date-only daily history cannot prove
+that today's final-session bar has settled. This conservative rule waits until
+the next UTC day even after market close; quote/chart history is unchanged. It already
 reports its **standard error** and R², then the Blume
 2/3–1/3 shrink (§7.1) — the same fixed weights whether SE is 0.05 or 0.40.
 The provider beta carries no SE at all.

@@ -105,6 +105,7 @@ import {
   SeverityProbMatrix,
   ShareBar,
   TracedFigure,
+  TracedNumberSourceDetails,
   TracedStat,
   type MatrixItem,
 } from "./primitives";
@@ -1024,6 +1025,7 @@ export function ValuationSection({
               </span>
             </div>
           )}
+          {dcf.perShare && <TracedNumberSourceDetails n={dcf.perShare} label="DCF provenance" />}
           {fairValue ? (
             <p className="text-[10px] leading-snug text-faint">
               {fairValue.status === "available"

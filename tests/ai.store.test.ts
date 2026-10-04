@@ -19,10 +19,11 @@ describe.skipIf(process.platform === "darwin")("protected connection storage", (
     })));
     expect(readAiStore()?.hostId).toBe(host);
     expect(readAiStore()?.profiles).toHaveLength(2);
-    expect(fs.existsSync(path.join(aiDirectory(), "connections.lock"))).toBe(false);
+    expect(fs.existsSync(path.join(aiDirectory(), "connections.lock"))).toBe(true);
     if (process.platform !== "win32") {
       expect(fs.statSync(aiDirectory()).mode & 0o777).toBe(0o700);
       expect(fs.statSync(path.join(aiDirectory(), "connections.v1.json")).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(path.join(aiDirectory(), "connections.lock")).mode & 0o777).toBe(0o600);
     }
   }, 60_000);
   it("does not overwrite an unreadable credential file with an empty account list", async () => {

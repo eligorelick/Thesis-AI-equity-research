@@ -199,10 +199,26 @@ function fakeYahoo(opts: { fail?: Set<string>; instrumentType?: string; splits?:
     const lastSession = Date.UTC(2026, 7, 31, 13, 30) / 1000;
     const n = isQuote ? 5 : 1250;
     const start = isQuote ? lastSession - 4 * 86400 : lastSession - (n - 1) * 86400;
-    const timestamp = isSplitList
+    const rawTimestamp = isSplitList
       ? Array.from({ length: 128 }, (_, i) => Date.UTC(1995, i * 3, 1, 13, 30) / 1000)
       : Array.from({ length: n }, (_, i) => start + i * 86400);
-    const close = timestamp.map((_, i) => (symbol === "SPY" ? 400 : 150) * Math.exp(0.0002 * i));
+    // Fixture-only: history month-ends must be real sessions for the beta
+    // reference. Omit terminal weekend bars and the month-end Good Friday in this
+    // window. Keep each surviving date's original price; quote/split fixtures
+    // and the existing quote expectations retain their original samples.
+    const samples = rawTimestamp.map((stamp, i) => ({ stamp, close: (symbol === "SPY" ? 400 : 150) * Math.exp(0.0002 * i) }))
+      .filter(({ stamp }) => {
+        if (isQuote || isSplitList) return true;
+        const date = new Date(stamp * 1000);
+        if (date.toISOString().slice(0, 10) === "2024-03-29") return false;
+        const weekday = date.getUTCDay();
+        if (weekday !== 0 && weekday !== 6) return true;
+        const nextWeekday = new Date(date);
+        nextWeekday.setUTCDate(date.getUTCDate() + (weekday === 6 ? 2 : 1));
+        return nextWeekday.getUTCMonth() === date.getUTCMonth();
+      });
+    const timestamp = samples.map((sample) => sample.stamp);
+    const close = samples.map((sample) => sample.close);
     // Yahoo's split events, stamped at the session's open, as the chart carries them.
     const events = opts.splits === undefined || opts.splits.length === 0
       ? {}
@@ -210,7 +226,7 @@ function fakeYahoo(opts: { fail?: Set<string>; instrumentType?: string; splits?:
           const date = Date.parse(`${e.session}T13:30:00Z`) / 1000;
           return [String(date), { date, numerator: e.numerator, denominator: e.denominator, splitRatio: `${e.numerator}:${e.denominator}` }];
         })) } };
-    return new Response(JSON.stringify({ chart: { result: [{ ...events, meta: { currency: "USD", symbol, exchangeName: "NMS", fullExchangeName: "NasdaqGS", instrumentType: opts.instrumentType ?? "EQUITY", firstTradeDate: 345479400, regularMarketTime: lastSession + 23400, gmtoffset: -14400, regularMarketPrice: close[n - 1], regularMarketDayHigh: 1, regularMarketDayLow: 1, regularMarketVolume: 5, fiftyTwoWeekHigh: 1, fiftyTwoWeekLow: 1, chartPreviousClose: 1, longName: "Apple Inc." }, timestamp, indicators: { quote: [{ open: close, high: close, low: close, close, volume: close.map(() => 1000) }], adjclose: [{ adjclose: close }] } }], error: null } }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ chart: { result: [{ ...events, meta: { currency: "USD", symbol, exchangeName: "NMS", fullExchangeName: "NasdaqGS", instrumentType: opts.instrumentType ?? "EQUITY", firstTradeDate: 345479400, regularMarketTime: lastSession + 23400, gmtoffset: -14400, regularMarketPrice: close.at(-1), regularMarketDayHigh: 1, regularMarketDayLow: 1, regularMarketVolume: 5, fiftyTwoWeekHigh: 1, fiftyTwoWeekLow: 1, chartPreviousClose: 1, longName: "Apple Inc." }, timestamp, indicators: { quote: [{ open: close, high: close, low: close, close, volume: close.map(() => 1000) }], adjclose: [{ adjclose: close }] } }], error: null } }), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
   return createYahooClient({ fetchImpl: impl, limiter: makeLimiter(1000, 1000), now: () => NOW, maxRetries: 0 });
 }
@@ -745,6 +761,22 @@ describe("applyKeylessFallbacks", () => {
     // value now sit between the slope and the sample size.
     expect(note).toMatch(/^profile: beta -?\d+\.\d{3} ± \d+\.\d{3} \(OLS standard error\), Blume-adjusted -?\d+\.\d{3}, from \d+ monthly log returns/);
     expect(note).toMatch(/\(R² \d\.\d{2}\)$/);
+  });
+
+  it.each([
+    ["2026-08-31", "2026-07-31"],
+    ["2026-09-01", "2026-08-31"],
+  ])("keyless beta at UTC observation day %s uses completed prior-day bars through %s", async (today, betaEnd) => {
+    const out = await applyKeylessFallbacks(inputs({ today }));
+    const note = out.notes.find(n => /^profile: beta /.test(n));
+    expect(note).toContain(`→ ${betaEnd}`);
+    expect(note).toMatch(/even after market close/);
+    expect(out.gaps.find(g => g.field === "profile.beta.method")?.reason).toContain(`${today} UTC`);
+    // The conservative observation-day rule is local to beta. Quote and chart
+    // consumers retain the same newest vendor data, including today's bar.
+    expect(out.members.eodPrices.ok).toBe(true);
+    if (out.members.eodPrices.ok) expect(out.members.eodPrices.value.data.rows.some(row => row.date === "2026-08-31")).toBe(true);
+    expect(out.members.quote.ok).toBe(true);
   });
 
   it("classifies an ETF from Yahoo's instrumentType so the instrument guard refuses it", async () => {

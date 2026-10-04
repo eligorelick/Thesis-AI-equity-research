@@ -446,6 +446,82 @@ describe("fred parseFredCsv", () => {
 });
 
 describe("fred client-side units transforms (keyless mode)", () => {
+  it("uses the same calendar month last year when an intermediate row is absent", () => {
+    const rows = Array.from({ length: 14 }, (_, i) => ({ date: new Date(Date.UTC(2024, i, 1)).toISOString().slice(0, 10), value: 100 + i }))
+      .filter((row) => row.date !== "2024-06-01");
+    const result = applyFredUnits(rows, "pc1");
+    expect(result).toHaveLength(2);
+    expect(result[0].date).toBe("2025-01-01");
+    expect(result[0].value).toBeCloseTo(12, 10);
+    expect(result[1].date).toBe("2025-02-01");
+    expect(result[1].value).toBeCloseTo((113 / 101 - 1) * 100, 10);
+  });
+
+  it("withholds period changes across an absent month instead of annualizing the gap", () => {
+    const rows = [
+      { date: "2024-04-01", value: 100 }, { date: "2024-05-01", value: 101 },
+      { date: "2024-07-01", value: 104 }, { date: "2024-08-01", value: 105 },
+    ];
+    expect(applyFredUnits(rows, "chg")).toEqual([{ date: "2024-05-01", value: 1 }, { date: "2024-08-01", value: 1 }]);
+    for (const units of ["pch", "pca", "cch", "cca"] as const) {
+      expect(applyFredUnits(rows, units).map((row) => row.date)).toEqual(["2024-05-01", "2024-08-01"]);
+    }
+  });
+
+  it("uses calendar quarter lags across an absent intermediate quarter", () => {
+    const rows = Array.from({ length: 6 }, (_, i) => ({ date: new Date(Date.UTC(2024, 3 * i, 1)).toISOString().slice(0, 10), value: 100 + i }))
+      .filter((row) => row.date !== "2024-07-01");
+    const result = applyFredUnits(rows, "ch1");
+    expect(result).toEqual([{ date: "2025-01-01", value: 4 }, { date: "2025-04-01", value: 4 }]);
+    expect(applyFredUnits(rows, "chg")).toEqual([
+      { date: "2024-04-01", value: 1 }, { date: "2025-01-01", value: 1 }, { date: "2025-04-01", value: 1 },
+    ]);
+  });
+
+  it("withholds annual changes across an absent year", () => {
+    const rows = [{ date: "2021-01-01", value: 100 }, { date: "2022-01-01", value: 101 }, { date: "2024-01-01", value: 104 }, { date: "2025-01-01", value: 105 }];
+    expect(applyFredUnits(rows, "chg")).toEqual([{ date: "2022-01-01", value: 1 }, { date: "2025-01-01", value: 1 }]);
+    expect(applyFredUnits(rows, "pc1").map((row) => row.date)).toEqual(["2022-01-01", "2025-01-01"]);
+  });
+
+  it("withholds a monthly year-ago comparison when that specific operand is absent", () => {
+    const rows = Array.from({ length: 14 }, (_, i) => ({ date: new Date(Date.UTC(2024, i, 1)).toISOString().slice(0, 10), value: 100 + i }))
+      .filter((row) => row.date !== "2024-01-01");
+    const result = applyFredUnits(rows, "pc1");
+    expect(result).toHaveLength(1);
+    expect(result[0].date).toBe("2025-02-01");
+    expect(result[0].value).toBeCloseTo((113 / 101 - 1) * 100, 10);
+  });
+
+  it("withholds ambiguous duplicate calendar slots rather than selecting by row order", () => {
+    const rows = [{ date: "2024-01-01", value: 100 }, { date: "2024-03-01", value: 101 }, { date: "2024-04-01", value: 104 }];
+    expect(inferObsPerYear(rows)).toBe(4); // sparse spacing alone cannot prove monthly frequency
+    expect(applyFredUnits(rows, "chg")).toEqual([]); // Jan/Mar conflict in the inferred Q1 slot
+    expect(applyFredUnits([...rows].reverse(), "chg")).toEqual([]);
+  });
+
+  it("retains daily observation-lag conventions across a weekend", () => {
+    const rows = [{ date: "2024-05-30", value: 100 }, { date: "2024-05-31", value: 101 }, { date: "2024-06-03", value: 104 }];
+    expect(inferObsPerYear(rows)).toBe(260);
+    expect(applyFredUnits(rows, "chg")).toEqual([{ date: "2024-05-31", value: 1 }, { date: "2024-06-03", value: 3 }]);
+  });
+
+  it("applies calendar lags through keyless CSV and discloses inferred frequency", async () => {
+    const csv = "observation_date,CPIAUCSL\n" + Array.from({ length: 14 }, (_, i) => {
+      const date = new Date(Date.UTC(2024, i, 1)).toISOString().slice(0, 10);
+      return date === "2024-06-01" ? "" : `${date},${100 + i}`;
+    }).join("\n");
+    const result = await series("CPIAUCSL", { units: "pc1" }, {
+      fetchImpl: async () => new Response(csv), minRequestIntervalMs: 0, retryDelaysMs: [],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.data).toHaveLength(2);
+    expect(result.value.data[0].value).toBeCloseTo(12, 10);
+    expect(result.value.data[1].value).toBeCloseTo((113 / 101 - 1) * 100, 10);
+    expect(result.value.endpoint).toContain("frequency inferred from spacing");
+  });
+
   it("preserves missing CSV periods when calculating year-ago changes", async () => {
     const csv = "observation_date,CPIAUCSL\n" + Array.from({ length: 14 }, (_, i) => {
       const date = new Date(Date.UTC(2025, i, 1)).toISOString().slice(0, 10);

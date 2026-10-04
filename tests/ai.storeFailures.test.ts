@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const fake = vi.hoisted(() => ({ protect: vi.fn() }));
 vi.mock("node:child_process", () => ({ execFileSync: (...args: unknown[]) => fake.protect(...args) }));
@@ -44,7 +45,7 @@ describe("credential protection and lock failures", () => {
     await expect(withAiStore(mutate)).rejects.toThrow("credentials were not replaced");
     expect(mutate).not.toHaveBeenCalled();
     expect(fs.readFileSync(file, "utf8")).toBe(saved);
-    expect(fs.existsSync(path.join(aiDirectory(), "connections.lock"))).toBe(false);
+    expect(fs.existsSync(path.join(aiDirectory(), "connections.lock"))).toBe(true);
   });
 
   it.each(["linux", "win32"])("retains valid v1 registrations, signed-out selection and unknown metadata on %s", async (host) => {
@@ -81,59 +82,29 @@ describe("credential protection and lock failures", () => {
     expect(fs.readFileSync(file, "utf8")).toBe(saved);
     expect(fake.protect).toHaveBeenCalledTimes(1);
     expect(fake.protect.mock.calls[0][1].join(" ")).toContain("Unprotect");
-    expect(fs.existsSync(path.join(aiDirectory(), "connections.lock"))).toBe(false);
+    expect(fs.existsSync(path.join(aiDirectory(), "connections.lock"))).toBe(true);
   });
 
-  it.each(["write", "close"])("cleans its acquired lock when the PID %s fails", async (operation) => {
-    const originalWrite = fs.writeFileSync;
-    const originalClose = fs.closeSync;
-    let ownedFd: number | undefined;
-    let failed = false;
-    const failure = Object.assign(new Error("lock I/O failed"), { code: "EIO" });
-    vi.spyOn(fs, "writeFileSync").mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
-      if (typeof args[0] === "number" && args[1] === String(process.pid)) {
-        ownedFd = args[0];
-        if (operation === "write" && !failed) { failed = true; throw failure; }
-      }
-      return originalWrite(...args);
-    });
-    vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
-      if (operation === "close" && fd === ownedFd && !failed) { failed = true; throw failure; }
-      return originalClose(fd);
-    });
-    try {
-      const mutate = vi.fn(() => {});
-      await expect(withAiStore(mutate)).rejects.toBe(failure);
-      expect(mutate).not.toHaveBeenCalled();
-      expect(() => fs.fstatSync(ownedFd!)).toThrow();
-      expect(fs.existsSync(path.join(aiDirectory(), "connections.lock"))).toBe(false);
-      await expect(withAiStore(() => "retry")).resolves.toBe("retry");
-    } finally {
-      if (ownedFd !== undefined) { try { originalClose(ownedFd); } catch { /* already closed */ } }
-    }
+  it.each(["write", "rename"])("preserves saved credentials and releases ownership after a JSON %s failure", async (operation) => {
+    await withAiStore(() => {});
+    const file = path.join(aiDirectory(), "connections.v1.json"); const saved = fs.readFileSync(file, "utf8");
+    const failure = Object.assign(new Error("credential I/O failed"), { code: "EIO" });
+    if (operation === "write") vi.spyOn(fs, "writeFileSync").mockImplementation(() => { throw failure; });
+    else vi.spyOn(fs, "renameSync").mockImplementation(() => { throw failure; });
+    const mutate = vi.fn(() => {});
+    await expect(withAiStore(mutate)).rejects.toBe(failure); expect(mutate).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(file, "utf8")).toBe(saved);
+    expect(fs.existsSync(path.join(aiDirectory(), "connections.lock"))).toBe(true);
+    vi.restoreAllMocks(); await expect(withAiStore(() => "retry")).resolves.toBe("retry");
   });
 
-  it("preserves a lock write failure when removing the owned partial lock also fails", async () => {
-    const originalWrite = fs.writeFileSync;
-    const originalRemove = fs.rmSync;
-    const lock = path.join(aiDirectory(), "connections.lock");
-    let ownedFd: number | undefined;
-    const failure = Object.assign(new Error("lock write failed"), { code: "EIO" });
-    vi.spyOn(fs, "writeFileSync").mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
-      if (typeof args[0] === "number" && args[1] === String(process.pid)) { ownedFd = args[0]; throw failure; }
-      return originalWrite(...args);
-    });
-    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
-      if (target === lock) throw Object.assign(new Error("cleanup denied"), { code: "EPERM" });
-      return originalRemove(target, options);
-    });
-    try {
-      const mutate = vi.fn(() => {});
-      await expect(withAiStore(mutate)).rejects.toBe(failure);
-      expect(mutate).not.toHaveBeenCalled();
-      expect(() => fs.fstatSync(ownedFd!)).toThrow();
-      expect(fs.existsSync(lock)).toBe(true);
-    } finally { originalRemove(lock, { force: true }); }
+  it("keeps saved credentials and the permanent mutex after a rejected async mutation", async () => {
+    await withAiStore(() => {});
+    const file = path.join(aiDirectory(), "connections.v1.json"); const saved = fs.readFileSync(file, "utf8");
+    const mutate = vi.fn(async () => { await Promise.resolve(); throw new Error("mutation failed"); });
+    await expect(withAiStore(mutate)).rejects.toThrow("mutation failed"); expect(mutate).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(file, "utf8")).toBe(saved);
+    await expect(withAiStore(() => "retry")).resolves.toBe("retry");
   });
 
   it("uses OS locations independently of report database overrides", () => {
@@ -155,28 +126,36 @@ describe("credential protection and lock failures", () => {
     expect(() => readAiStore()).toThrow("credentials were not replaced");
     expect(fs.readFileSync(file, "utf8")).toBe(saved);
   });
-  it("removes a stale dead-owner lock and always unlocks failed mutations", async () => {
+  it("refuses a legacy dead-owner lock without deleting or rewriting it", async () => {
     ensurePrivateDirectory(aiDirectory()); const lock = path.join(aiDirectory(), "connections.lock");
     fs.writeFileSync(lock, "12345");
     vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("dead"), { code: "ESRCH" }); });
-    await withAiStore(() => {}); expect(fs.existsSync(lock)).toBe(false);
-    await expect(withAiStore(() => { throw new Error("mutation failed"); })).rejects.toThrow("mutation failed");
-    expect(fs.existsSync(lock)).toBe(false);
+    const mutate = vi.fn(() => {});
+    await expect(withAiStore(mutate)).rejects.toThrow("Stop all Thesis servers");
+    expect(mutate).not.toHaveBeenCalled();
+    expect(fs.readFileSync(lock, "utf8")).toBe("12345");
+    expect(fs.existsSync(path.join(aiDirectory(), "connections.v1.json"))).toBe(false);
   });
   it("reports a Windows startup timeout without persisting partial credentials", async () => {
     system("win32");
     fake.protect.mockImplementation(() => { throw Object.assign(new Error("private diagnostic"), { code: "ETIMEDOUT" }); });
     await expect(withAiStore(() => {})).rejects.toThrow("Windows protection timed out");
     expect(fs.existsSync(path.join(aiDirectory(), "connections.v1.json"))).toBe(false);
-    expect(fs.existsSync(path.join(aiDirectory(), "connections.lock"))).toBe(false);
+    expect(fs.existsSync(path.join(aiDirectory(), "connections.lock"))).toBe(true);
+    fake.protect.mockImplementation((_exe, _args, options) => options.input);
+    await expect(withAiStore(() => "retry")).resolves.toBe("retry");
   });
   it("times out behind a live writer instead of overwriting its lock", async () => {
     ensurePrivateDirectory(aiDirectory()); const lock = path.join(aiDirectory(), "connections.lock");
-    fs.writeFileSync(lock, String(process.pid));
+    await withAiStore(() => {});
+    const owner = new Database(lock); owner.exec("BEGIN IMMEDIATE");
     vi.useFakeTimers();
-    const result = expect(withAiStore(() => {})).rejects.toThrow("busy");
-    await vi.advanceTimersByTimeAsync(40_200); await result;
-    expect(fs.readFileSync(lock, "utf8")).toBe(String(process.pid));
+    const mutate = vi.fn(() => {});
+    try {
+      const result = expect(withAiStore(mutate)).rejects.toThrow("busy");
+      await vi.advanceTimersByTimeAsync(40_200); await result;
+      expect(mutate).not.toHaveBeenCalled(); expect(owner.inTransaction).toBe(true);
+    } finally { owner.exec("ROLLBACK"); owner.close(); }
   });
   it.each([
     { protection: "unsupported", data: "{}" },

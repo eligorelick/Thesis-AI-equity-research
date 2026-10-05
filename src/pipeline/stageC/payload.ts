@@ -245,7 +245,9 @@ export interface ContextPayload {
 // change financial evidence; do not resume partial passes under prior rules.
 // 1.10.0 (recommendation review 2026-10-04): completed-session beta and
 // calendar-aligned FRED lags change evidence; prior partial passes cannot resume.
-export const PAYLOAD_VERSION = "1.10.0" as const;
+// 1.11.0 (D-39, 2026-10-05): growth-anchor CAGR span rule changes the DCF
+// evidence sent to analysts; prior partial passes cannot resume.
+export const PAYLOAD_VERSION = "1.11.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Small pure helpers

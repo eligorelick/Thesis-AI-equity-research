@@ -21,7 +21,8 @@ based on extensive research, testing, and data analysis."
 
 ## Current implementation map — 2026-10-05
 
-Source and test definitions checked at `010a055`. The numbered Changes, Tests
+Source and test definitions checked on 2026-10-05, including the same-day
+D-39 growth-anchor span rule. The numbered Changes, Tests
 and Live validation sections retain the September 2 record. Their prices,
 model choices and verification measurements are historical observations.
 
@@ -33,10 +34,10 @@ model choices and verification measurements are historical observations.
 | 4/11: financial forensics and overlays | [Forensics](../../../src/pipeline/stageB/forensics.ts) withholds financial-route F_CFO/F_ACCRUAL/current-ratio/gross-margin signals; the denominator reflects what is evaluable. [Routing](../../../src/pipeline/stageB/sectorRouting.ts) uses net income alone for the unprofitable overlay on bank/insurer/mortgage-REIT routes. [Forensic](../../../tests/stageB.forensics.test.ts) and [routing](../../../tests/stageB.sectorRouting.test.ts) tests cover these rules; later common-ownership corrections are D-34. |
 | 5/6/10: macro units and deterministic verification | [FRED](../../../src/providers/fred.ts), [payload](../../../src/pipeline/stageC/payload.ts), [provenance](../../../src/pipeline/stageC/provenance.ts) and [passes](../../../src/pipeline/stageC/passes.ts) register units and distinguish text-source citations from verified numeric records. [FRED tests](../../../tests/finra.fred.test.ts) include explicit missing-period lag cases; [provenance tests](../../../tests/stageC.provenance.test.ts) cover unit/period matching. A citation-coverage rate is not independent confirmation of the issuer fact or all narrative claims. |
 | 7: analyst repair | [Runner](../../../src/pipeline/jobRunner.ts) retains `MAX_ANALYST_REPAIRS = 1` with separate billed artifacts and safe discarded-attempt disclosure. [Runner tests](../../../tests/jobRunner.test.ts) and [pass tests](../../../tests/stageC.payload.passes.test.ts) cover repair/recovery. ChatGPT and Gemini now feed the same pipeline through separate [AI adapters](../../../src/ai); the original Claude-only live experiments do not validate those connections. |
-| 8: growth anchor | D-18 superseded the lower-CAGR/sign-disagreement rule. [Valuation](../../../src/pipeline/stageB/valuation.ts) takes the median of available historical, fundamental and currency-compatible analyst methods. The October acceleration diagnostic separately requires an actual three-year span within ±0.05 year; degraded CAGR series remain visible. [Growth tests](../../../tests/stageB.growth.returns.capital.test.ts) cover that distinction. |
+| 8: growth anchor | D-18 superseded the lower-CAGR/sign-disagreement rule. [Valuation](../../../src/pipeline/stageB/valuation.ts) takes the median of available historical, fundamental and currency-compatible analyst methods; a 3y or 5y CAGR counts only when its measured span is its window (±0.25 year, D-39). The October acceleration diagnostic separately requires an actual three-year span within ±0.05 year; degraded CAGR series remain visible. [Growth tests](../../../tests/stageB.growth.returns.capital.test.ts) cover that distinction. |
 | 9: whole-balance anchor | [Compute](../../../src/pipeline/compute.ts) selects the newer whole balance row, or discloses fallback to the older complete row without mixing fields across periods. [Anchor tests](../../../tests/compute.runwayAnchor.test.ts) and [TTM integration](../../../tests/stageB.ttm.compute.test.ts) cover this. Return-ratio averaging separately requires adjacent fiscal years; an anchor selection is not proof of a valid averaging window. |
 
-Current report spec is **1.9.0** and payload **1.10.0**. Currency and split-basis
+Current report spec is **1.10.0** and payload **1.11.0**. Currency and split-basis
 guards can withhold outputs the September sweep once displayed. See
 [METHODOLOGY](../../METHODOLOGY.md) for present calculations and
 [the October audit](../../audit/2026-10-03-repository-audit.md) for recorded

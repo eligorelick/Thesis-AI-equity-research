@@ -36,6 +36,7 @@ import {
 import type { DataBundle } from "@/pipeline/types";
 import type { ForensicFlag } from "@/pipeline/stageB/forensics";
 import { scoreToBand } from "@/pipeline/stageB/grading";
+import { windowCagr } from "@/pipeline/stageB/growth";
 import { CORE_SERIES, fredFigureUnit, type FredUnits } from "@/providers/fred";
 import { MIN_HEADLINE_EVIDENCE } from "@/report/assessment";
 import { establishedCurrency } from "@/report/format";
@@ -501,10 +502,8 @@ function balanceSheetSection(
 
 function bestMeasuredCagr(points: ComputedMetrics["growth"]["revenueCagrs"]): { windowYears: number; cagrPct: number } | null {
   for (const window of [5, 3, 1]) {
-    const point = points.find((p) => p.windowYears === window);
-    if (point && isNum(point.cagrPct) && (!isNum(point.actualYears) || Math.abs(point.actualYears - window) <= 0.25)) {
-      return { windowYears: window, cagrPct: point.cagrPct };
-    }
+    const { cagrPct } = windowCagr(points, window);
+    if (cagrPct !== null) return { windowYears: window, cagrPct };
   }
   return null;
 }
@@ -542,7 +541,6 @@ function valuationSection(
     const target = byName.get(scenario.name);
     return {
       ...scenario,
-      horizon: target ? "explicit DCF horizon" : "n/a",
       assumptions: target
         ? [
             `Deterministic Stage B target (${targets?.method ?? "scenario-targets"} ${targets?.methodVersion ?? ""}): revenue growth ${fmtSignedPp(target.growthDeltaPp)} and operating margin ${fmtSignedPp(target.marginDeltaPp)} versus the base DCF path.`.replace("  ", " "),
@@ -554,6 +552,7 @@ function valuationSection(
       ],
     };
   });
+  // applyScenarioTargets also sets each horizon label, as on the AI path (D-40).
   const withTargets = applyScenarioTargets({ ...stub, graded, scenarios }, computed.scenarioTargets);
   const withFairValue = applyFairValue(withTargets, computed.fairValue);
   const withDisplay = applyDcfDisplay(withFairValue, computed.valuation);

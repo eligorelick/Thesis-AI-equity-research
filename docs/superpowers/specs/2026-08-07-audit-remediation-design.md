@@ -33,7 +33,7 @@
 
 ## Current implementation map — 2026-10-05
 
-Checked against source and test definitions at `010a055`. This map describes
+Checked against source and test definitions on 2026-10-05. This map describes
 the present implementation; it does not rerun the August audit, certify every
 original criterion, or replace its recorded verification. The Architecture
 section below is the original design, including interfaces and dependencies
@@ -48,7 +48,7 @@ that later work changed.
 | M8/M13: local request and settings boundaries | [Proxy](../../../src/proxy.ts), [request security](../../../src/app/requestSecurity.ts), [company loading](../../../src/pipeline/companyLoad.ts) and [settings queue](../../../src/settings/writeQueue.ts) implement the local boundaries and ordered writes. [Same-origin](../../../tests/api.routes.sameOrigin.test.ts), [company loading](../../../tests/companyLoad.test.ts) and [write-queue](../../../tests/settings.writeQueue.test.ts) tests provide executable evidence. AI credentials use a separate [store](../../../src/ai/store.ts); a permanent [SQLite mutex](../../../src/ai/mutex.ts) replaces stale-PID recovery, with stopped-server migration and native process evidence in the [recommendations ledger](../../audit/2026-10-04-recommendations.md). |
 | L2/M12: dependencies and gates | [package.json](../../../package.json), the lockfile, [CI](../../../.github/workflows/ci.yml) and coverage configs are authoritative. August version targets are historical; Node remains `>=22.18.0`, and `verify` includes dependency shape, typecheck, lint, product/integration tests, both coverage contracts, build and security audit. Branch protection and absence of advisories require fresh external evidence. |
 
-Later financial conventions use report spec **1.9.0** and payload **1.10.0**.
+Later financial conventions use report spec **1.10.0** and payload **1.11.0**.
 Stored reports retain their original bytes; successful historical verification
 does not imply a new report will have complete data or a verified AI assessment.
 

@@ -22,7 +22,7 @@ import type { CompanyRoute, ManifestEntry, SectorRoute } from "@/types/core";
 import { deriveFcf } from "@/pipeline/stageB/financialValues";
 import { latestOnOrBeforeWithin } from "@/pipeline/stageB/asOfSelection";
 import { metricPolicy } from "@/pipeline/stageB/sectorRouting";
-import { linearRegressionSlope, yearsBetweenDates } from "@/pipeline/stageB/growth";
+import { CAGR_SPAN_TOLERANCE_YEARS, linearRegressionSlope, yearsBetweenDates } from "@/pipeline/stageB/growth";
 import {
   contiguousQuarterWindows,
   normalizeQuarterRows,
@@ -262,6 +262,14 @@ export interface DcfAssumptionInputs {
   revenueCagr3yPct: number | null;
   /** 5y revenue CAGR in percent — one of the growth-anchor methods (D-18). */
   revenueCagr5yPct?: number | null;
+  /**
+   * D-39: the measured span of a 3y / 5y CAGR that was computed but excluded
+   * because that span is not its window (growth.ts `windowCagr`). The method
+   * is then listed as unavailable with this span. Absent or null means the
+   * CAGR is either the window's own or was not computed at all.
+   */
+  revenueCagr3yExcludedSpanYears?: number | null;
+  revenueCagr5yExcludedSpanYears?: number | null;
   /**
    * WS6 (D-18): the log-linear regression method of the growth anchor. Absent
    * or null makes it an unavailable method, named as such in the basis.
@@ -628,16 +636,22 @@ export function buildDcfAssumptions(inputs: DcfAssumptionInputs): BuildDcfAssump
       detail: `unavailable: ${trend === null ? "no annual revenue trend supplied" : "fewer than 3 positive annual revenue observations"}`,
     });
   }
-  if (isNum(inputs.revenueCagr3yPct)) {
-    methods.push({ name: "3y revenue CAGR", valuePct: inputs.revenueCagr3yPct, detail: `${fmtNum(inputs.revenueCagr3yPct)}%` });
-  } else {
-    methods.push({ name: "3y revenue CAGR", valuePct: null, detail: "unavailable: no 3-year revenue CAGR" });
-  }
-  if (isNum(inputs.revenueCagr5yPct)) {
-    methods.push({ name: "5y revenue CAGR", valuePct: inputs.revenueCagr5yPct, detail: `${fmtNum(inputs.revenueCagr5yPct)}%` });
-  } else {
-    methods.push({ name: "5y revenue CAGR", valuePct: null, detail: "unavailable: no 5-year revenue CAGR" });
-  }
+  // D-39: a window whose CAGR was computed over a different span is not that
+  // window's method; say what was measured instead of "no CAGR".
+  const cagrMethod = (window: 3 | 5, pct: number | null | undefined, excludedSpan: number | null | undefined): GrowthAnchorMethod => {
+    const name = `${window}y revenue CAGR`;
+    if (isNum(pct)) return { name, valuePct: pct, detail: `${fmtNum(pct)}%` };
+    if (isNum(excludedSpan)) {
+      return {
+        name,
+        valuePct: null,
+        detail: `unavailable: measured span ${excludedSpan.toFixed(2)} years, not the ${window}-year window (±${CAGR_SPAN_TOLERANCE_YEARS}-year tolerance)`,
+      };
+    }
+    return { name, valuePct: null, detail: `unavailable: no ${window}-year revenue CAGR` };
+  };
+  methods.push(cagrMethod(3, inputs.revenueCagr3yPct, inputs.revenueCagr3yExcludedSpanYears));
+  methods.push(cagrMethod(5, inputs.revenueCagr5yPct, inputs.revenueCagr5yExcludedSpanYears));
   if (analyst.value !== null) {
     methods.push({
       name: "analyst-consensus case",

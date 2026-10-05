@@ -6,8 +6,8 @@ in; later entries supersede earlier choices. `Unreleased` records merged work
 not yet identified here as a new tagged/package release. Use
 [README](README.md) and the [methodology](docs/METHODOLOGY.md) for present guidance.
 
-Current source at `010a055` (documentation reconciliation 2026-10-05) declares
-application **0.1.0**, report spec **1.9.0** and payload **1.10.0**. The checked-in
+Current source declares application **0.1.0**, report spec **1.10.0** and
+payload **1.11.0** (growth-anchor span and scenario horizon, 2026-10-05). The checked-in
 Claude registry prefers Opus 5.5 for `auto` and Sonnet 5.5 as Haiku's judge floor;
 ChatGPT/Gemini account connections have their own model selection. These are
 repository settings, not confirmation of live provider entitlement. The
@@ -16,6 +16,20 @@ repository settings, not confirmation of live provider entitlement. The
 verification and the replacement of the stale-PID credential-lock protocol.
 Stored reports retain their
 original versions and bytes; source merge does not deploy or publish a release.
+
+## Unreleased — growth-anchor span and scenario horizon (2026-10-05)
+
+- The DCF growth anchor uses a 3y or 5y revenue CAGR only when its measured
+  span is that window (±0.25 years, grading's rule, now one shared helper). A
+  degraded window is listed as unavailable with its span instead of entering
+  the median under a label it does not measure (D-39). DEMO's anchor falls from
+  three methods to the regression alone; its fair value moves 152.09 → 152.06.
+  The displayed CAGR series is unchanged.
+- AI reports label each computed scenario target's horizon in code ("explicit
+  DCF horizon", or "n/a" without a target), as data-only reports already did,
+  instead of keeping the judge's free text such as "12 months" (D-40).
+- Report spec **1.10.0** and payload **1.11.0**; saved reports keep their
+  stamps, and partial AI passes from 1.10.0 do not resume.
 
 ## Unreleased — documentation reconciliation (2026-10-05)
 

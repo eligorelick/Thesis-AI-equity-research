@@ -2517,12 +2517,23 @@ function buildAsOfMap(bundle: DataBundle): Record<string, string> {
  * report — never on the cached payload).
  */
 /**
+ * The horizon label printed beside a computed scenario target (D-40). The
+ * target is a present-value DCF sensitivity over the explicit DCF horizon,
+ * not a twelve-month forecast, so the label is set here and a scenario with
+ * no non-null computed target reads "n/a". Shared by the AI and data-only reports.
+ */
+export const SCENARIO_TARGET_HORIZON = "explicit DCF horizon";
+
+/**
  * Overwrite each scenario's priceTarget with the DETERMINISTIC computed target
  * (Stage B {@link computeScenarioTargets}; 2026-07-11 scenario-credibility
  * checkpoint), so the judge/LLM number can never control the headline. A scenario
  * with no available computed target — the block is `suppressed`/absent, or that
  * scenario's per-share is null — gets `priceTarget: null` (a target is SUPPRESSED,
- * never fabricated). The judge's scenario NARRATIVE (probability, assumptions,
+ * never fabricated). The horizon beside it is {@link SCENARIO_TARGET_HORIZON}
+ * when that scenario's computed per-share is non-null and "n/a" otherwise
+ * (D-40), so a null target never carries a horizon.
+ * The judge's scenario NARRATIVE (probability, assumptions,
  * whatWouldHaveToBeTrue) is preserved verbatim. Pure; returns a new valuation.
  */
 export function applyScenarioTargets(
@@ -2535,10 +2546,11 @@ export function applyScenarioTargets(
   }
   return {
     ...valuation,
-    scenarios: valuation.scenarios.map((s) => ({
-      ...s,
-      priceTarget: byName.get(s.name) ?? null,
-    })),
+    scenarios: valuation.scenarios.map((s) => {
+      const priceTarget = byName.get(s.name) ?? null;
+      // A target listed with a null perShare is still no target: "n/a".
+      return { ...s, priceTarget, horizon: priceTarget !== null ? SCENARIO_TARGET_HORIZON : "n/a" };
+    }),
   };
 }
 

@@ -7,7 +7,7 @@ that every citation resolves to a heading here. That check proves section
 existence; it does not prove that the prose and implementation agree.
 
 Implementation statements were reconciled with the current source and synthetic
-tests on 2026-10-05, including report 1.9.0 / payload 1.10.0. Dated live observations and literature reviews below remain
+tests on 2026-10-05, including report 1.10.0 / payload 1.11.0. Dated live observations and literature reviews below remain
 historical evidence, not a claim that provider coverage or market inputs are
 unchanged today. The application does not implement the research candidates
 merely because this document recommends them. For the current computational
@@ -937,7 +937,8 @@ rate for long rests, in their words, on shaky foundations.
 **What the code has.** A ten-year linear fade from the anchor to the terminal
 rate, and an anchor that is the median of available methods among four
 candidates, three of which read
-the same filed history (METHODOLOGY *Growth anchor*).
+the same filed history (METHODOLOGY *Growth anchor*). A 3y or 5y CAGR counts
+only when its measured span is its window (±0.25 years, D-39).
 
 **Verdict — keep, and let §8.2 test it.** The ten-year fade is the mainstream
 convention and the anchor is already biased toward the filed record over

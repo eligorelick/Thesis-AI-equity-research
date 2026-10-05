@@ -79,6 +79,7 @@ import {
   JUDGE_MODEL_FLOOR,
   JUDGE_RETRY_PREVIOUS_OUTPUT_CAP,
   JUDGE_MAX_TOKENS,
+  SCENARIO_TARGET_HORIZON,
   type PassDeps,
   type RunPassOutcome,
 } from "@/pipeline/stageC/passes";
@@ -635,10 +636,16 @@ describe("payload determinism + provenance", () => {
       // date-validity rules. The pre-manifest prompt and numeric registry stay
       // unchanged here; only the fingerprint's version-bearing data changes.
       // 2026-10-04 (D-38): calendar conventions; only version bytes changed here.
-      fingerprint: "1.10.0:8e34554b",
-      promptBytes: 94_366,
+      // 2026-10-05 (D-39, payload 1.11.0): this fixture's five annual years
+      // span 4.00 years, so its "5y" revenue CAGR is no longer a growth-anchor
+      // method (listed unavailable with its measured span; +97 prompt bytes of
+      // anchor text). The anchor becomes the median of the regression and the
+      // 3y CAGR, so the DCF figures in the registry (provenanceHash) and the
+      // finance block (financeHash) move; counts and ids are unchanged.
+      fingerprint: "1.11.0:8da073fa",
+      promptBytes: 94_463,
       provenanceCount: 365,
-      provenanceHash: "323c9887",
+      provenanceHash: "b444c624",
       provenanceIdsHash: "a3f69ec6",
       citationCount: 11,
       citationHash: "7ebe5276",
@@ -652,7 +659,8 @@ describe("payload determinism + provenance", () => {
       // affected. See tests/stageB.projections.test.ts "FCF basis change".
       // 2026-10-03: P/TBV basis now explicitly deducts preferred equity;
       // this general-company fixture has zero preferred, so values are unchanged.
-      financeHash: "48b12e68",
+      // 2026-10-05 (D-39): the growth anchor drops the 4-year "5y" CAGR.
+      financeHash: "ef6e55f2",
     });
   });
 
@@ -775,7 +783,7 @@ describe("payload determinism + provenance", () => {
     const second = buildInputs().payload;
     const ids = first.provenanceRegistry!.map((entry) => entry.id);
 
-    expect(first.payloadVersion).toBe("1.10.0");
+    expect(first.payloadVersion).toBe("1.11.0");
     expect(first.provenanceRegistry).toEqual(second.provenanceRegistry);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toContain("payload.quote.price");
@@ -1912,7 +1920,7 @@ describe("assembleReport", () => {
     expect(report.meta.disclaimer).toBe(
       "Informational only — not investment advice. This report contains A-F letter grades and scenario price targets; both are model outputs derived from the data and assumptions disclosed here, and neither is a recommendation to buy, sell, or hold any security.",
     );
-    expect(report.meta.specVersion).toBe("1.9.0");
+    expect(report.meta.specVersion).toBe("1.10.0");
     // verifyModel is no longer stamped (deterministic verification, no model);
     // the schema keeps it OPTIONAL so legacy persisted reports still parse.
     expect(report.meta.verifyModel).toBeUndefined();
@@ -2044,6 +2052,40 @@ describe("scenario price targets — deterministic injection (assembly)", () => 
     expect(report.scenarioTargets?.status).toBe("suppressed");
     expect(report.scenarioTargets?.missingReasons.length).toBeGreaterThan(0);
     expect(() => ReportSchema.parse(report)).not.toThrow();
+  });
+
+  // D-40: the horizon printed beside a computed target describes that target,
+  // so it is set in code like the data-only path, never left as judge prose.
+  it("replaces a judge-written scenario horizon with the computed target's horizon label", () => {
+    const { computed } = buildInputs();
+    computed.scenarioTargets = availableTargets({ bull: 305, base: 250, bear: 205 });
+    const jo = judgeOutput();
+    for (const s of jo.valuation.scenarios) s.horizon = "12 months";
+    const report = assemble(computed, jo);
+    for (const s of report.valuation.scenarios) expect(s.horizon).toBe("explicit DCF horizon");
+    expect(SCENARIO_TARGET_HORIZON).toBe("explicit DCF horizon");
+
+    computed.scenarioTargets = suppressedTargets();
+    const suppressed = assemble(computed, jo);
+    for (const s of suppressed.valuation.scenarios) expect(s.horizon).toBe("n/a");
+  });
+
+  it("reads \"n/a\" beside a null target inside an otherwise available block", () => {
+    const { computed } = buildInputs();
+    const targets = availableTargets({ bull: 305, base: 250, bear: 205 });
+    // ScenarioTargetSchema allows a null perShare (e.g. a non-finite perturbed DCF).
+    targets.targets.find((t) => t.name === "bear")!.perShare = null;
+    computed.scenarioTargets = targets;
+    const jo = judgeOutput();
+    for (const s of jo.valuation.scenarios) s.horizon = "12 months";
+    const report = assemble(computed, jo);
+    const byName = new Map(report.valuation.scenarios.map((s) => [s.name, s]));
+    expect(byName.get("bear")!.priceTarget).toBeNull();
+    expect(byName.get("bear")!.horizon).toBe("n/a");
+    for (const name of ["bull", "base"] as const) {
+      expect(byName.get(name)!.priceTarget).not.toBeNull();
+      expect(byName.get(name)!.horizon).toBe(SCENARIO_TARGET_HORIZON);
+    }
   });
 
   it("labels injected targets computed-derived (source computed.scenarioTargets.*), not source-verified facts", () => {

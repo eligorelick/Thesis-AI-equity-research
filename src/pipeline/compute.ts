@@ -43,6 +43,7 @@ import {
 } from "@/pipeline/stageB/financialMetrics";
 import {
   computeGrowth,
+  windowCagr,
   type GrowthResult,
   type GrowthIncomeRow,
   type GrowthCashFlowRow,
@@ -2376,10 +2377,6 @@ interface ValuationCtx {
   quote: FmpRawRow | null;
 }
 
-function cagrPctFor(growth: GrowthResult, window: number): number | null {
-  const p = growth.revenueCagrs.find((c) => c.windowYears === window);
-  return p ? p.cagrPct : null;
-}
 
 function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResult {
   const { route, incomeAnnual, balanceAnnual, balanceQuarterly, incomeQuarterly, ttmInc, ttmCf, growth, wacc, roic, profile, quote, evIncludeLeases } = ctx;
@@ -2495,11 +2492,18 @@ function computeValuation(bundle: DataBundle, ctx: ValuationCtx): ValuationResul
     : null;
 
   const rf = riskFreePct(bundle);
+  const revenueCagr3y = windowCagr(growth.revenueCagrs, 3);
+  const revenueCagr5y = windowCagr(growth.revenueCagrs, 5);
   const dcfInputs: DcfAssumptionInputs | null =
     route.base === "general" && !route.overlays.includes("pre-revenue")
       ? {
-          revenueCagr3yPct: cagrPctFor(growth, 3),
-          revenueCagr5yPct: cagrPctFor(growth, 5),
+          // D-39: a CAGR feeds the anchor only when its measured span is its
+          // window (the rule grading applies); a degraded window is named as
+          // unavailable with the span it actually measured.
+          revenueCagr3yPct: revenueCagr3y.cagrPct,
+          revenueCagr3yExcludedSpanYears: revenueCagr3y.excludedSpanYears,
+          revenueCagr5yPct: revenueCagr5y.cagrPct,
+          revenueCagr5yExcludedSpanYears: revenueCagr5y.excludedSpanYears,
           // WS6 (D-18): the log-linear regression method of the growth anchor.
           revenueLogLinear: growth.revenueLogLinear,
           analystEstimates,

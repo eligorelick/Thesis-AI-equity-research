@@ -17,7 +17,7 @@ verification and the replacement of the stale-PID credential-lock protocol.
 Stored reports retain their
 original versions and bytes; source merge does not deploy or publish a release.
 
-## Unreleased — growth-anchor span (2026-10-05)
+## Unreleased — growth-anchor span and scenario horizon (2026-10-05)
 
 - The DCF growth anchor uses a 3y or 5y revenue CAGR only when its measured
   span is that window (±0.25 years, grading's rule, now one shared helper). A
@@ -25,6 +25,9 @@ original versions and bytes; source merge does not deploy or publish a release.
   the median under a label it does not measure (D-39). DEMO's anchor falls from
   three methods to the regression alone; its fair value moves 152.09 → 152.06.
   The displayed CAGR series is unchanged.
+- AI reports label each computed scenario target's horizon in code ("explicit
+  DCF horizon", or "n/a" without a target), as data-only reports already did,
+  instead of keeping the judge's free text such as "12 months" (D-40).
 - Report spec **1.10.0** and payload **1.11.0**; saved reports keep their
   stamps, and partial AI passes from 1.10.0 do not resume.
 

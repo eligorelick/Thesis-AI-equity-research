@@ -13,6 +13,24 @@ reversibility, the choice, and why. Reversible and disclosed beats clever.
 
 Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
 
+## D-40 (scenario horizon 2026-10-05) The horizon beside a computed target is set in code
+
+- **Problem**: AI reports replaced each scenario's price target with the
+  deterministic Stage B target but kept the judge's free-text `horizon`, so a
+  present-value DCF sensitivity could print as "12 months" (DEMO's sample
+  judge output does, beside three suppressed targets).
+- **Options**: (a) keep judge text; (b) set the label in `applyScenarioTargets`
+  from one constant, matching the data-only report; (c) drop the field, which
+  changes the report shape.
+- **Choice**: (b). `SCENARIO_TARGET_HORIZON` ("explicit DCF horizon") when a
+  computed target exists for the scenario, "n/a" otherwise. The data-only path
+  now takes the label from the same function. Probability, assumptions and
+  conditions stay the judge's.
+- **Compatibility**: no shape or payload change; the AI payload never carried
+  the label. Ships with report 1.10.0 (D-39); saved reports keep their stored
+  text. The three DEMO horizons are recorded in the `scenario-horizon-label`
+  delta group.
+
 ## D-39 (growth-anchor span 2026-10-05) A CAGR method counts only over its own window
 
 - **Problem**: the DCF growth anchor read the 3y and 5y revenue CAGRs without

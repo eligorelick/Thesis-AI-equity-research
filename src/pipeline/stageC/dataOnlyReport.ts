@@ -541,7 +541,6 @@ function valuationSection(
     const target = byName.get(scenario.name);
     return {
       ...scenario,
-      horizon: target ? "explicit DCF horizon" : "n/a",
       assumptions: target
         ? [
             `Deterministic Stage B target (${targets?.method ?? "scenario-targets"} ${targets?.methodVersion ?? ""}): revenue growth ${fmtSignedPp(target.growthDeltaPp)} and operating margin ${fmtSignedPp(target.marginDeltaPp)} versus the base DCF path.`.replace("  ", " "),
@@ -553,6 +552,7 @@ function valuationSection(
       ],
     };
   });
+  // applyScenarioTargets also sets each horizon label, as on the AI path (D-40).
   const withTargets = applyScenarioTargets({ ...stub, graded, scenarios }, computed.scenarioTargets);
   const withFairValue = applyFairValue(withTargets, computed.fairValue);
   const withDisplay = applyDcfDisplay(withFairValue, computed.valuation);

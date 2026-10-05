@@ -79,6 +79,7 @@ import {
   JUDGE_MODEL_FLOOR,
   JUDGE_RETRY_PREVIOUS_OUTPUT_CAP,
   JUDGE_MAX_TOKENS,
+  SCENARIO_TARGET_HORIZON,
   type PassDeps,
   type RunPassOutcome,
 } from "@/pipeline/stageC/passes";
@@ -2051,6 +2052,22 @@ describe("scenario price targets — deterministic injection (assembly)", () => 
     expect(report.scenarioTargets?.status).toBe("suppressed");
     expect(report.scenarioTargets?.missingReasons.length).toBeGreaterThan(0);
     expect(() => ReportSchema.parse(report)).not.toThrow();
+  });
+
+  // D-40: the horizon printed beside a computed target describes that target,
+  // so it is set in code like the data-only path, never left as judge prose.
+  it("replaces a judge-written scenario horizon with the computed target's horizon label", () => {
+    const { computed } = buildInputs();
+    computed.scenarioTargets = availableTargets({ bull: 305, base: 250, bear: 205 });
+    const jo = judgeOutput();
+    for (const s of jo.valuation.scenarios) s.horizon = "12 months";
+    const report = assemble(computed, jo);
+    for (const s of report.valuation.scenarios) expect(s.horizon).toBe("explicit DCF horizon");
+    expect(SCENARIO_TARGET_HORIZON).toBe("explicit DCF horizon");
+
+    computed.scenarioTargets = suppressedTargets();
+    const suppressed = assemble(computed, jo);
+    for (const s of suppressed.valuation.scenarios) expect(s.horizon).toBe("n/a");
   });
 
   it("labels injected targets computed-derived (source computed.scenarioTargets.*), not source-verified facts", () => {

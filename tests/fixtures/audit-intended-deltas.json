@@ -4814,6 +4814,30 @@
           "after": 136.71903130791367
         }
       ]
+    },
+    {
+      "name": "scenario-horizon-label",
+      "decisions": [
+        "D-40"
+      ],
+      "reason": "On the AI path the horizon beside each scenario target was free text from the judge; DEMO-sample.json says \"12 months\" for all three scenarios although METHODOLOGY states the targets are present-value DCF sensitivities, not twelve-month forecasts. Under D-40 applyScenarioTargets sets it from one shared constant, as the data-only report already did: \"explicit DCF horizon\" when a computed target exists for the scenario, \"n/a\" otherwise. DEMO has too little history for scenario dispersion, so its targets are suppressed and its three horizons become \"n/a\" beside their null targets. No number moves.",
+      "deltas": [
+        {
+          "path": "report.valuation.scenarios.0.horizon",
+          "before": "12 months",
+          "after": "n/a"
+        },
+        {
+          "path": "report.valuation.scenarios.1.horizon",
+          "before": "12 months",
+          "after": "n/a"
+        },
+        {
+          "path": "report.valuation.scenarios.2.horizon",
+          "before": "12 months",
+          "after": "n/a"
+        }
+      ]
     }
   ]
 }

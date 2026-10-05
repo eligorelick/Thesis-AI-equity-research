@@ -72,6 +72,8 @@ import type { Grade, ClaimLabel, ManifestEntry } from "@/types/core";
 // US month-end sessions; monthly/quarterly/annual FRED changes use calendar lags.
 // 1.10.0 (D-39, 2026-10-05): a 3y/5y revenue CAGR enters the DCF growth anchor
 // only when its measured span is its window; DCF, targets and notes can move.
+// D-40 (same release): AI-report scenario horizon labels are set in code, not
+// by the judge; the report shape is unchanged.
 export const REPORT_SPEC_VERSION = "1.10.0" as const;
 
 /* ------------------------------------------------------------------------ *

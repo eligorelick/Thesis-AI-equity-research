@@ -268,6 +268,14 @@ The point estimate is the median; the range is min..max across the available
 methods. Methods that could not be computed are named in the assumption block
 and disclosed as a `valuation.dcf.growthAnchor` manifest entry.
 
+A three- or five-year CAGR enters the anchor only when its measured span is
+its window: a CAGR whose `actualYears` differs from the window by more than
+0.25 years (`CAGR_SPAN_TOLERANCE_YEARS`, the tolerance grading uses, applied
+through `windowCagr` in `growth.ts`) is excluded and listed as unavailable with
+its measured span, e.g. "measured span 2.00 years, not the 3-year window". With
+two annual years of history both windows are excluded rather than counting one
+two-year rate twice. The degraded CAGR series is still displayed with its span.
+
 The median is then **clamped to [−10%, +25%]**, and the anchor the report
 prints is the clamped value — the same number the growth path fades from.
 When the clamp moves it, the anchor's basis says so, the growth-path basis
@@ -1310,7 +1318,10 @@ model value at zero and discloses the raw result; raw valuation arithmetic
 can remain negative. Upside uses the published rounded per-share divided by
 the comparable positive current price, minus one. Unknown/unmatched price
 currency prevents upside. Scenario targets are present-value DCF
-sensitivities, not twelve-month analyst forecasts. `verified: true` on these
+sensitivities, not twelve-month analyst forecasts. The horizon label beside
+each target is set in code (`SCENARIO_TARGET_HORIZON` in `passes.ts`):
+"explicit DCF horizon" when a computed target exists for that scenario and
+"n/a" otherwise, on AI and data-only reports alike; the judge does not set it. `verified: true` on these
 computed records means traced to deterministic inputs, not predictive or
 independent factual verification.
 

@@ -16,13 +16,13 @@ Saved reports expose expandable number provenance, including missing evidence. L
   technicals, grades and forensic indicators in deterministic TypeScript, on a
   sector route drawn from the industry label and SIC code and checked against
   filed facts, which can refine broad financial-industry labels when corroborated.
-- Optionally runs separate bull and bear analyses and a judge
-  pass, verifies every cited number without another model call, and turns
+- Optionally runs separate bull and bear analyses and a judge pass, traces
+  cited numbers against the registry without another model call, and turns
   missing inputs into disclosed gaps rather than fabricated values.
 
 ## Quick start
 
-Node.js 22.18.0 or newer and npm (`package.json`); CI tests Node 24.
+Node.js 22.18.0 or newer and npm (`package.json`); CI tests Node 24. The test suite is only known to pass on Node 24: on Node 22.22.0, 6 tests fail.
 
 ```powershell
 git clone https://github.com/eligorelick/Thesis-AI-equity-research.git
@@ -53,7 +53,7 @@ reasoning choices and opt-in Fast speed. Reports retain actual execution details
 Sign-in runs no inference; failures never switch to paid API usage. Claude API
 remains separately billed. Plan allowances and credit settings apply; API dollar
 caps do not measure them. See [setup, controls and limits](docs/PRIVACY.md#ai-connection-setup).
-Live inference remains unverified. Stop all Thesis servers before changing credential-lock versions; see [upgrade/downgrade guidance](docs/PRIVACY.md).
+Connections have offline test coverage only; inference through a live ChatGPT or Gemini account has not been verified. Stop all Thesis servers before changing credential-lock versions; see [upgrade/downgrade guidance](docs/PRIVACY.md).
 
 ## Configuration
 
@@ -135,7 +135,7 @@ choices are labelled house conventions beside the affected figures.
 coefficients, estimation populations and limits; the source cites it by section.
 
 With AI off or unavailable, reports retain deterministic results and disclose
-missing analysis. Failed AI runs may retain charges; no completed analyst grade exists.
+missing analysis. Failed AI runs may retain charges and produce such a report: it has no analyst assessment, and any letter grade is a deterministic score band.
 ## AI analysis
 
 Two analysts build the bull and bear cases independently: neither sees the

@@ -22,8 +22,9 @@ Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
 - **Options**: (a) keep judge text; (b) set the label in `applyScenarioTargets`
   from one constant, matching the data-only report; (c) drop the field, which
   changes the report shape.
-- **Choice**: (b). `SCENARIO_TARGET_HORIZON` ("explicit DCF horizon") when a
-  computed target exists for the scenario, "n/a" otherwise. The data-only path
+- **Choice**: (b). `SCENARIO_TARGET_HORIZON` ("explicit DCF horizon") when the
+  scenario's computed per-share target is non-null, "n/a" otherwise, including
+  a null target inside an available block. The data-only path
   now takes the label from the same function. Probability, assumptions and
   conditions stay the judge's.
 - **Compatibility**: no shape or payload change; the AI payload never carried
@@ -72,7 +73,8 @@ not resume under the new financial conventions. No forecast probability or AI
 accuracy gain is inferred merely from passing regression tests.
 ## Current implementation crosswalk — 2026-10-05
 
-Source and test definitions checked at `010a055`; this is a status crosswalk,
+Source and test definitions checked on 2026-10-05, through the D-39/D-40
+changes that set report 1.10.0 / payload 1.11.0; this is a status crosswalk,
 not a fresh verification of historical runs or external account permissions.
 
 | Decision group | Current disposition and authoritative source |
@@ -80,8 +82,8 @@ not a fresh verification of historical runs or external account permissions.
 | D-01–D-06: Claude model/request registry | Implemented in [registry](../../src/models/registry.ts), [JSON snapshot](../../config/models.json) and [Claude provider](../../src/providers/anthropic.ts). `autoPreference` starts with Opus 5.5 and `judgeFloorModelId` is Sonnet 5.5; the Opus 5/Sonnet 5 choices below are historical. [Registry tests](../../tests/modelRegistry.test.ts) and [request-shaping tests](../../tests/anthropic.requestShaping.test.ts) cover the local rules. |
 | D-07–D-10: lease, presumed spend and admission | Implemented by [scheduler](../../src/pipeline/jobScheduler.ts), [runner](../../src/pipeline/jobRunner.ts) and [lease timing](../../src/pipeline/leaseTiming.ts). Default admission is per request; `pass` compatibility mode still exists despite the original “one release” intention. [Admission](../../tests/requestAdmission.test.ts) and [presumed-spend tests](../../tests/scheduler.presumedSpend.test.ts) cover the invariants. |
 | D-11–D-17 and D-34: sources and financial routes | [Bundle](../../src/pipeline/dataBundle.ts), [keyless](../../src/pipeline/keyless.ts), [successor](../../src/edgar/successor.ts) and [routing](../../src/pipeline/stageB/sectorRouting.ts) implement reserved fixtures, issuer-gated fallback, predecessor history, beta and corroborated financial classification. Recorded `fixtures/edgar/xom_successor_*` headers supersede the original deferred synthetic-only fixture choice. Keyless Form 4 trade reconstruction remains deferred. |
-| D-18/D-19/D-24–D-26/D-28–D-31/D-35/D-37/D-38: financial conventions | [Compute](../../src/pipeline/compute.ts), [Stage B](../../src/pipeline/stageB) and [split resolution](../../src/edgar/splits.ts) implement the evolving growth, capital, currency, common-ownership, share-basis and calendar rules. Report spec 1.9.0 and payload 1.10.0 identify the latest conventions; older version stamps below describe their individual batches. See [METHODOLOGY](../METHODOLOGY.md) for a coherent current formula description. |
-| D-20: judge protocol | [Judge protocol](../../src/pipeline/stageC/judgeProtocol.ts) and [Stage C](../../src/pipeline/stageC/index.ts) implement selected order, protected-content-aware shortening, exact excess and reconstructed-resume disclosure. Persisting the original complete protocol on the synthesize artifact remains unimplemented; a resumed protocol can re-derive order using the current setting, with unknown lengths disclosed. [Protocol tests](../../tests/stageC.judgeProtocol.test.ts) cover the recorded metadata. |
+| D-18/D-19/D-24–D-26/D-28–D-31/D-35/D-37–D-39: financial conventions | [Compute](../../src/pipeline/compute.ts), [Stage B](../../src/pipeline/stageB) and [split resolution](../../src/edgar/splits.ts) implement the evolving growth, capital, currency, common-ownership, share-basis and calendar rules. Report spec 1.10.0 and payload 1.11.0 identify the latest conventions; older version stamps below describe their individual batches. See [METHODOLOGY](../METHODOLOGY.md) for a coherent current formula description. |
+| D-20/D-40: judge protocol | [Judge protocol](../../src/pipeline/stageC/judgeProtocol.ts) and [Stage C](../../src/pipeline/stageC/index.ts) implement selected order, protected-content-aware shortening, exact excess and reconstructed-resume disclosure. Persisting the original complete protocol on the synthesize artifact remains unimplemented; a resumed protocol can re-derive order using the current setting, with unknown lengths disclosed. [Protocol tests](../../tests/stageC.judgeProtocol.test.ts) cover the recorded metadata. Scenario horizon labels are set by `applyScenarioTargets` in [passes](../../src/pipeline/stageC/passes.ts), not the judge (D-40); [pass tests](../../tests/stageC.payload.passes.test.ts) cover null and suppressed targets. |
 | D-21/D-22/D-27/D-32: local boundaries and tooling | [Request security](../../src/app/requestSecurity.ts), [environment](../../src/config/env.ts), [scripts](../../package.json) and the [Next lint adapter](../../scripts/next-eslint-glob/index.cjs) are authoritative. Node remains `>=22.18.0`; historical package targets and README line counts are not current dependency state. |
 | D-33/D-36/D-37/D-38: connections and display | [AI connections](../../src/ai/connections.ts), [credential store](../../src/ai/store.ts), [native mutex](../../src/ai/mutex.ts) and [appearance](../../src/appearance/preference.ts) implement explicit connections and browser appearance persistence. Current is the default; Research workspace is optional and Decision brief remains a prototype. The permanent SQLite mutex replaces the F08 stale-PID protocol; stopped-server upgrades and local-filesystem requirements remain. Recorded grade/DCF evidence and paginated chart tables are implemented; see the [recommendations ledger](2026-10-04-recommendations.md). |
 

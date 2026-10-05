@@ -6,8 +6,8 @@ in; later entries supersede earlier choices. `Unreleased` records merged work
 not yet identified here as a new tagged/package release. Use
 [README](README.md) and the [methodology](docs/METHODOLOGY.md) for present guidance.
 
-Current source at `010a055` (documentation reconciliation 2026-10-05) declares
-application **0.1.0**, report spec **1.9.0** and payload **1.10.0**. The checked-in
+Current source declares application **0.1.0**, report spec **1.10.0** and
+payload **1.11.0** (growth-anchor span and scenario horizon, 2026-10-05). The checked-in
 Claude registry prefers Opus 5.5 for `auto` and Sonnet 5.5 as Haiku's judge floor;
 ChatGPT/Gemini account connections have their own model selection. These are
 repository settings, not confirmation of live provider entitlement. The

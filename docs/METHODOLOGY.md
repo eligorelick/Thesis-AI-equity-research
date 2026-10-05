@@ -4,7 +4,8 @@ What Thesis computes, from which inputs, under which conventions, and where a
 convention is this project's own choice rather than a standard.
 
 The implemented behavior below was checked against the source and synthetic
-tests on 2026-10-05, including the report 1.9.0 / payload 1.10.0 changes. The historical literature citations remain the project's
+tests on 2026-10-05 and reflects report 1.10.0 / payload 1.11.0, including the
+same-day growth-anchor span (D-39) and scenario-horizon (D-40) rules. The historical literature citations remain the project's
 research rationale; a passing test validates implementation behavior, not the
 predictive validity of a model or a live provider's contract.
 
@@ -1320,8 +1321,10 @@ the comparable positive current price, minus one. Unknown/unmatched price
 currency prevents upside. Scenario targets are present-value DCF
 sensitivities, not twelve-month analyst forecasts. The horizon label beside
 each target is set in code (`SCENARIO_TARGET_HORIZON` in `passes.ts`):
-"explicit DCF horizon" when a computed target exists for that scenario and
-"n/a" otherwise, on AI and data-only reports alike; the judge does not set it. `verified: true` on these
+"explicit DCF horizon" when that scenario's computed per-share target is
+non-null and "n/a" otherwise (including a null target inside an available
+block), on AI and data-only reports alike; the judge does not set it.
+`verified: true` on these
 computed records means traced to deterministic inputs, not predictive or
 independent factual verification.
 

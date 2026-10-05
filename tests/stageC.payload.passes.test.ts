@@ -2070,6 +2070,24 @@ describe("scenario price targets — deterministic injection (assembly)", () => 
     for (const s of suppressed.valuation.scenarios) expect(s.horizon).toBe("n/a");
   });
 
+  it("reads \"n/a\" beside a null target inside an otherwise available block", () => {
+    const { computed } = buildInputs();
+    const targets = availableTargets({ bull: 305, base: 250, bear: 205 });
+    // ScenarioTargetSchema allows a null perShare (e.g. a non-finite perturbed DCF).
+    targets.targets.find((t) => t.name === "bear")!.perShare = null;
+    computed.scenarioTargets = targets;
+    const jo = judgeOutput();
+    for (const s of jo.valuation.scenarios) s.horizon = "12 months";
+    const report = assemble(computed, jo);
+    const byName = new Map(report.valuation.scenarios.map((s) => [s.name, s]));
+    expect(byName.get("bear")!.priceTarget).toBeNull();
+    expect(byName.get("bear")!.horizon).toBe("n/a");
+    for (const name of ["bull", "base"] as const) {
+      expect(byName.get(name)!.priceTarget).not.toBeNull();
+      expect(byName.get(name)!.horizon).toBe(SCENARIO_TARGET_HORIZON);
+    }
+  });
+
   it("labels injected targets computed-derived (source computed.scenarioTargets.*), not source-verified facts", () => {
     const { computed } = buildInputs();
     computed.scenarioTargets = availableTargets();

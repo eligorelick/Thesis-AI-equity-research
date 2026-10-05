@@ -9,6 +9,29 @@ audits and decisions remain historical evidence. The owner authorized merging
 pull request #5 into `main` on 2026-10-04 after verification. Deployment remains
 outside this authorization; the PR records the merge outcome and commit.
 
+## Record status and source reconciliation — 2026-10-05
+
+This is the dated October audit and follow-up record. Source reconciliation at
+`010a055` confirms the changes from PR #5 and PR #6 are in the checked-out source.
+All counts, coverage, timings, browser checks and advisory results below are
+their recorded observations; this documentation reconciliation does not repeat
+them or imply that an old preview server is still running. Current source uses
+application 0.1.0, report spec 1.9.0 and payload 1.10.0.
+
+| Current claim | Source and regression definitions |
+| --- | --- |
+| Financial/date conventions A03/A07/A08/A16/F02–F04 | [Beta](../../src/pipeline/stageB/betaEstimate.ts), [valuation](../../src/pipeline/stageB/valuation.ts), [FRED](../../src/providers/fred.ts), [returns](../../src/pipeline/stageB/returns.ts), [routing](../../src/pipeline/stageB/sectorRouting.ts) and [Stage A](../../src/pipeline/stageA/validate.ts); [beta](../../tests/stageB.betaEstimate.test.ts), [valuation](../../tests/stageB.valuation.test.ts), [FRED](../../tests/finra.fred.test.ts), [growth/returns](../../tests/stageB.growth.returns.capital.test.ts), [routing](../../tests/stageB.sectorRouting.test.ts) and [validation](../../tests/stageA.validate.test.ts) cases. |
+| Read/export integrity A01/A02 | [Query](../../src/report/query.ts) and [corrected export](../../src/report/export/correctedCli.ts); [history/export tests](../../tests/report.history.export.test.ts). Existing output files are refused; multi-file publication across power loss and cleanup under filesystem refusal remain limited as recorded below. |
+| Billing/stream evidence A04–A06/A10 | [Scheduler](../../src/pipeline/jobScheduler.ts), [Claude provider](../../src/providers/anthropic.ts), [Gemini adapter](../../src/ai/gemini.ts) and [runner](../../src/pipeline/jobRunner.ts); [runner](../../tests/jobRunner.test.ts), [Claude](../../tests/anthropic.test.ts) and [Gemini tests](../../tests/ai.gemini.test.ts). |
+| Credential validation/cleanup F05/F06 and later F08 replacement | [Store](../../src/ai/store.ts), [native mutex](../../src/ai/mutex.ts), [mutex tests](../../tests/ai.mutex.test.ts), [store tests](../../tests/ai.store.test.ts) and [failure tests](../../tests/ai.storeFailures.test.ts). The permanent marker-only SQLite mutex replaces stale-PID path deletion. Stopped-server upgrade/downgrade and local-filesystem requirements apply; native process evidence and remaining platform limits are recorded in the [recommendations ledger](2026-10-04-recommendations.md). |
+| Appearance and evidence F01/F07/D-36 | [Preference](../../src/appearance/preference.ts), [report sections](../../src/components/report/sections.tsx), [judge protocol](../../src/pipeline/stageC/judgeProtocol.ts); [appearance tests](../../tests/appearance.preference.test.ts), [detail-surface tests](../../tests/report.surface.detail.test.ts) and [protocol tests](../../tests/stageC.judgeProtocol.test.ts). Decision brief remains outside production appearance options. |
+
+The [decision crosswalk](DECISIONS.md#current-implementation-crosswalk--2026-10-05),
+[remediation disposition](REMEDIATION-REPORT.md#current-disposition--2026-10-05)
+and historical spec implementation maps separate today's source behavior from
+superseded plans. A source/test-definition check is not a live provider test,
+new cost measurement, rights determination or empirical model calibration.
+
 ## Scope and baseline
 
 Started from clean `main`, commit `4088d4b5902b8e7b4ea83ed383f617c39d6fb648`,
@@ -286,7 +309,8 @@ Deferred recommendations and limits:
   remain limitations; existing destination bytes are protected.
 - Future Vite native-loader notices are pre-existing and unsuppressed. Model
   quality, screen-reader usability and every browser/OS combination remain
-  unverified. No paid API inference, merge or deployment occurred.
+  unverified. No paid API inference, merge or deployment occurred during the
+  initial audit; the separately authorized later merge is recorded below.
 
 ## Initial audit and UI verification
 
@@ -440,3 +464,61 @@ all deferred recommendations above. `Unreleased` changelog headings remain
 appropriate: merging source does not publish a packaged release or deploy it.
 Final branch checks and the merge commit are linked from
 [pull request #5](https://github.com/eligorelick/Thesis-AI-equity-research/pull/5).
+
+## Documentation reconciliation — 2026-10-04
+
+At this earlier checkpoint, reviewed all 15 tracked Markdown documents at source commit `dc994db` and
+added [OPERATIONS](../OPERATIONS.md), bringing the maintained inventory to 16.
+This pass changes documentation, environment-example comments, generated-table
+wording and the release documentation contract; it does not change application
+calculations, network behavior, credentials, saved reports or model registry.
+
+| Document group | Source-backed reconciliation |
+| --- | --- |
+| README and `.env.example` | Installation/engine, fixture versus AI traffic, source coverage, actual `fmp` fallback, row provenance, setting precedence, leases, startup reads and command print/write behavior. The table distinguishes shipped values from commented opt-in examples. |
+| OPERATIONS | Pages, local APIs/error statuses, settings CAS, AI selection, durable job/SSE/cancel/retry behavior, launcher scripts, persistence, exports, maintenance and troubleshooting. |
+| METHODOLOGY and RESEARCH | Input/currency/quarter eligibility, domicile ERP, return/capital alignment, FCFF/taxes/reverse valuation, projections/scenarios, score completeness, indicators and deterministic/model ownership. Historical research and proposed improvements remain distinguished from implementation. |
+| CLAUDE-USAGE, PRIVACY and DATA-RIGHTS | Configured registry assumptions, selected AI transport, request/usage accounting, outbound payloads, storage/deletion, maintenance traffic, export contents and provider restrictions without asserting license enforcement. |
+| CHANGELOG, audit records and design specs | Historical counts/costs/commits are preserved; current status maps identify superseded assumptions and remaining limitations. |
+
+Verification on Windows Node 24.11.1/npm 11.6.2: the full product rerun passed
+**201 files / 4,580 tests**, with two opt-in SEC checks skipped; integration
+passed all four tests; TypeScript and ESLint exited 0. The initial broad run,
+concurrent with other checks, hit the unchanged Next ESLint subprocess probe's
+5,000ms timeout. An isolated five-file recheck passed 68 tests, including all
+28 Next-glob cases, and the full product rerun passed without changing code,
+timeouts or coverage floors. The exact cause of the temporary delay was not
+established. Generated-block and local-link contracts are part of the product
+suite; the new guide is included in the release Markdown allowlist.
+
+This was documentation verification, not another full `npm run verify`: build,
+coverage and online security audit were not rerun for these prose changes.
+No live inference or provider sweep was performed. External account access,
+pricing, rights interpretation and predictive calibration remain subject to
+their disclosed limits. At this checkpoint, F08 and reconstructed judge-protocol
+limitations remained open. The later recommendations batch replaces the F08
+locking protocol; original judge-protocol persistence remains unimplemented.
+
+## Final documentation reconciliation against current main — 2026-10-05
+
+The owner authorized merging after verification. The final branch uses source
+base `010a055`, including PR #6. Its 16 existing Markdown documents plus the
+new operations guide form a 17-document maintained inventory. This supersedes
+the earlier 15-to-16 checkpoint above without changing its recorded results.
+
+Three independent source reviewers checked financial/research, operational,
+and historical documentation. Corrections include single-method growth anchors,
+ROIC cash-only fallback, actual FCF/SBC missingness, tax/whole-balance selection,
+heuristic other-income flags, chart-table location and paid-Claude capacity.
+Current maps now describe the permanent credential mutex, calendar/UTC beta
+cutoff, FRED period lags and report 1.9.0 / payload 1.10.0. Recorded experiments
+and proposed research retain their dates and bounded claims. Application
+calculations, saved report bytes, credentials and dependency policy are unchanged.
+
+Fresh local Windows verification: dependency shape, TypeScript and ESLint pass;
+product tests pass **208 files / 4,714 tests**, with two opt-in SEC checks skipped;
+integration passes all four tests. Generated-block and documentation-release
+checks pass **4 files / 40 tests**. The final pull request records the required
+Linux full verification (including both coverage contracts, build and security)
+and Windows smoke outcomes. Merge remains gated on both required checks.
+No live inference or external entitlement sweep is part of this verification.

@@ -1,6 +1,6 @@
 # Full codebase audit — 2026-09-06
 
-> **Historical audit evidence; guidance reviewed 2026-10-03.** “Complete”
+> **Historical audit evidence; guidance reconciled 2026-10-05.** “Complete”
 > below means this September review closed, with the recorded September 7
 > live follow-up. Its commits, file-line references, dependency versions,
 > model choices, costs, test counts, coverage, and zero-vulnerability result
@@ -18,6 +18,30 @@ is recorded in §1 step 5.
 possible and based on extensive research/evidence/testing. Ensure no errors or
 mistakes in the code or logic. And make sure all docs are 100% accurate to the
 current codebase."
+
+## Current disposition — 2026-10-05
+
+Checked against source and test definitions at `010a055`; the numbered audit
+sections below remain the September record. Their file-line references identify
+that tree, and their counts, coverage, costs and dependency/advisory results are
+not fresh measurements of the current checkout.
+
+| September area | Later implementation status and evidence |
+| --- | --- |
+| Claude models, costs and live-run route | The checked-in [registry](../../../config/models.json) now prefers Opus 5.5 for `auto` and Sonnet 5.5 for Haiku's judge floor. [AI connections](../../../src/ai/connections.ts) also support explicit ChatGPT and Gemini connections. September's Haiku/Sonnet 5 paid run remains evidence for that one run; it does not establish new model entitlement or live OAuth/Gemini inference. |
+| Beta, valuation bounds, capital averaging and growth | [Beta](../../../src/pipeline/stageB/betaEstimate.ts) now counts adjacent monthly pairs inside five calendar years; [valuation](../../../src/pipeline/stageB/valuation.ts) checks inclusive reverse-DCF bounds; [returns](../../../src/pipeline/stageB/returns.ts) uses adjacent annual capital or the disclosed single-period fallback; [growth](../../../src/pipeline/stageB/growth.ts) withholds a three-year acceleration benchmark with a different actual horizon. [Beta](../../../tests/stageB.betaEstimate.test.ts), [valuation](../../../tests/stageB.valuation.test.ts) and [growth/returns](../../../tests/stageB.growth.returns.capital.test.ts) tests cover these corrections. |
+| Currency, common ownership and splits | Subsequent [compute](../../../src/pipeline/compute.ts), [statements](../../../src/edgar/statements.ts), [keyless](../../../src/pipeline/keyless.ts) and [split](../../../src/edgar/splits.ts) changes enforce known compatible currencies, common-income/equity bases, operating income and one price-session share basis. September outputs are not recalculated in this record; [METHODOLOGY](../../METHODOLOGY.md) describes the present conventions. |
+| Report persistence/export and runtime | [Query](../../../src/report/query.ts) now withholds mismatched issuer bodies; [corrected CLI](../../../src/report/export/correctedCli.ts) refuses existing destinations. [Scheduler](../../../src/pipeline/jobScheduler.ts) advances reconciled job revisions; adapters preserve prior billing and UTF-8 stream boundaries. Report spec **1.9.0** and payload **1.10.0** supersede earlier stamps while retaining saved bytes. [History/export](../../../tests/report.history.export.test.ts) and [runner](../../../tests/jobRunner.test.ts) tests retain these boundaries. |
+| UI and evidence display | [Appearance](../../../src/appearance) supports optional Research workspace with Current default. Watchlist errors, chart gaps and metadata disclosures received later repairs. Decision brief is a comparison prototype. The historical UI findings do not constitute comprehensive accessibility validation. |
+| Retained open follow-ups | [Judge protocol](../../../src/pipeline/stageC/judgeProtocol.ts) still imports the hash from payload; [Stage C](../../../src/pipeline/stageC/index.ts) reconstructs protocol on durable replay rather than persisting the original full protocol; [consistency](../../../src/pipeline/stageC/consistency.ts) retains optional-century FY matching; [runner tests](../../../tests/jobRunner.test.ts) retain the configuration-call-count assertion. The separate F08 credential-lock race was addressed by the permanent [SQLite mutex](../../../src/ai/mutex.ts); stopped-server migration and remaining platform limits are recorded in the [recommendations ledger](../../audit/2026-10-04-recommendations.md). |
+
+For detailed current design deviations, see the implementation maps in the
+[August remediation design](../specs/2026-08-07-audit-remediation-design.md),
+[temporal design](../specs/2026-08-09-provider-temporal-integrity-design.md),
+[analysis-quality design](../specs/2026-09-02-analysis-quality-design.md) and
+[keyless design](../specs/2026-09-02-keyless-data-path-design.md). Fresh verification
+uses [package scripts](../../../package.json); the later recorded gates and
+merge evidence are in the [October audit](../../audit/2026-10-03-repository-audit.md).
 
 ## 1. Method
 
@@ -1274,8 +1298,8 @@ Listed so that nothing below is mistaken for verified.
    prices in config/models.json and Blume's fitted coefficients as quoted in
    RESEARCH §7.1 were not re-fetched from their sources.
    One live paid run was made after the audit closed (§1 step 6); it is a
-   single issuer on the cheapest route, not the sweep §9 item 2 of the
-   remediation report still calls for.
+   single issuer on the cheapest route, not the broader measured-cost work in
+   the remediation report's “Open questions for the owner” section.
 2. **Finder coverage.** 28 of 34 finder passes completed before the session
    limit; the six slices no finder reached (the in-flight diff, tooling and
    CI, every document except the README, the evidence base) were audited

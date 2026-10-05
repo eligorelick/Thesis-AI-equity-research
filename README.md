@@ -1,7 +1,7 @@
 # Thesis
 
 Thesis is a local-first equity research app with financial calculations and optional AI.
-Saved reports expose expandable number provenance and optional, paginated price/relative-strength data tables, including missing evidence. **Settings → Appearance** switches between the default Current design and optional Research workspace; the choice is saved in this browser.
+Saved reports expose expandable number provenance, including missing evidence. Live analysis and the synthetic sample offer optional, paginated price/relative-strength data tables. **Settings → Appearance** switches between the default Current design and optional Research workspace; the choice is saved in this browser.
 
 > **Informational only — not investment advice.** Grades and price targets are
 > model outputs from disclosed data and assumptions, not human recommendations.
@@ -22,7 +22,7 @@ Saved reports expose expandable number provenance and optional, paginated price/
 
 ## Quick start
 
-Node.js 22.18 or newer and npm. CI tests Node 24; Node 20 reached end of life.
+Node.js 22.18.0 or newer and npm (`package.json`); CI tests Node 24.
 
 ```powershell
 git clone https://github.com/eligorelick/Thesis-AI-equity-research.git
@@ -41,8 +41,8 @@ Open <http://127.0.0.1:3000>; development and production both bind to
 come from SEC EDGAR and Yahoo. With no key at all, `/report/sample` renders a
 fictional report, and `/company/DEMO` and `/company/DBNK` are reserved strings
 served from `fixtures/fmp` whatever keys are set. None of the three reaches a
-provider: the two company slices say so in the manifest and the sample is
-labelled synthetic throughout; any other symbol is a live request.
+market-data provider: the company slices disclose fixtures and the sample is synthetic.
+Other symbols use live/cache data; generating fixture reports can still call selected AI.
 
 ## AI connections
 
@@ -62,64 +62,64 @@ Live inference remains unverified. Stop all Thesis servers before changing crede
 Every key is optional. This table is generated from `.env.example`, which
 carries the long form of each one, so the two cannot drift apart.
 
-| Key | Default | What it does |
+| Key | Shipped value / opt-in example | What it does |
 | --- | --- | --- |
 | `FMP_API_KEY` | unset | Financial Modeling Prep key — any plan. |
-| `ANTHROPIC_API_KEY` | unset | Anthropic — enables the bull/bear/judge LLM passes + web search. |
-| `FRED_API_KEY` | unset | FRED — free key from https://fred.stlouisfed.org/docs/api/api_key.html The macro dashboard. |
+| `ANTHROPIC_API_KEY` | unset | Anthropic key enables Claude analyst/judge passes when Claude API is selected. |
+| `FRED_API_KEY` | unset | FRED key enables authenticated macro-series requests. |
 | `FINNHUB_API_KEY` | unset | Finnhub — free-tier key. |
 | `EDGAR_CONTACT` | unset | SEC EDGAR is keyless but REQUIRES a declared contact in the User-Agent of every request. |
 | `THESIS_STATEMENT_SOURCE` | `auto` | Where the income statement, balance sheet and cash flow history comes from. |
-| `ANALYSIS_MODEL` | `auto` | Model used for the analysis pipeline (bull/bear/judge passes). |
-| `ANALYSIS_EFFORT` | `high` | Reasoning effort for the LLM passes: low \| medium \| high \| xhigh \| max. |
+| `ANALYSIS_MODEL` | `auto` | Claude model used when the Claude API connection is selected. |
+| `ANALYSIS_EFFORT` | `high` | Claude reasoning effort: low \| medium \| high \| xhigh \| max. |
 | `THESIS_JUDGE_ORDER` | `random` | Which order the judge/synthesis pass reads the two analyst cases in. |
 | `ANTHROPIC_ADMIN_KEY` | unset | Optional Admin API key (distinct from ANTHROPIC_API_KEY). |
-| `THESIS_MAX_ACTIVE_JOBS` | `1` | Cross-process concurrency is enforced in SQLite. |
-| `THESIS_MAX_ACTIVE_LLM_CALLS` | `2` | Cross-process concurrency is enforced in SQLite. |
+| `THESIS_MAX_ACTIVE_JOBS` | `1` | Maximum concurrent report jobs across processes sharing the SQLite database. |
+| `THESIS_MAX_ACTIVE_LLM_CALLS` | `2` | Maximum concurrent paid Claude permits across processes sharing the SQLite database. |
 | `THESIS_MAX_JOB_COST_USD` | unset | Optional exact USD caps. |
 | `THESIS_MAX_ROLLING_COST_USD` | unset | Optional exact USD caps. |
 | `THESIS_RESERVATION_MODE` | `request` | How paid work is admitted against these caps: one reservation per provider request, or one per pass. |
 | `THESIS_STREAM_IDLE_SECONDS` | `300` | Base gap with no stream event after which a paid request is abandoned, scaled by analysis effort. |
-| `THESIS_ROLLING_COST_WINDOW_MINUTES` | `1440` | Maximum supported window: 52,560,000 minutes (100 years). |
-| `THESIS_PAID_PASS_LEASE_SECONDS` | `900` | Anthropic requests time out after 600 seconds waiting for response headers. |
-| `THESIS_JOB_LEASE_SECONDS` | `900` | Anthropic requests time out after 600 seconds waiting for response headers. |
-| `THESIS_RESUME_ON_START` | `1` | Startup hold. |
-| `THESIS_EV_INCLUDE_LEASES` | `1` (opt in) | Keep the OPERATING-lease liability in enterprise value and in the DCF equity bridge. |
+| `THESIS_ROLLING_COST_WINDOW_MINUTES` | `1440` | Rolling paid-cost window in minutes (1440 means 24 hours). |
+| `THESIS_PAID_PASS_LEASE_SECONDS` | `900` | Paid-pass lease lifetime in seconds, renewed every quarter of its TTL. |
+| `THESIS_JOB_LEASE_SECONDS` | `900` | Job-claim lease lifetime in seconds, never shorter than the paid-pass lease. |
+| `THESIS_RESUME_ON_START` | `1` | Automatically resume queued work at startup with 1, or hold it with 0. |
+| `THESIS_EV_INCLUDE_LEASES` | `1` (opt in) | Include a separable operating-lease liability only when explicitly set to 1. |
 | `THESIS_ALLOWED_HOST` | unset | `npm run dev` and `npm start` bind to 127.0.0.1 by default. |
-| `THESIS_TOKEN_FILE` | unset (opt in) | Mutating routes (report, retry, cancel, settings, watchlist, resume) reject a request that carries neither browser Fetch Metadata nor a matching Origin. |
-| `THESIS_DB_PATH` | unset (opt in) | The SQLite DB defaults to the OS app-data directory (so its WAL/SHM writes do not trigger Next.js dev-server rebuilds from inside the repo). |
-| `THESIS_DATA_DIR` | unset (opt in) | The SQLite DB defaults to the OS app-data directory (so its WAL/SHM writes do not trigger Next.js dev-server rebuilds from inside the repo). |
+| `THESIS_TOKEN_FILE` | unset (opt in) | Override the startup token file path (default `<data dir>/csrf-token`). |
+| `THESIS_DB_PATH` | unset (opt in) | Override the SQLite file (default `<data dir>/thesis.db`). |
+| `THESIS_DATA_DIR` | unset (opt in) | Override the app-data directory used by the default DB and startup token. |
 | `THESIS_IMPORT_LEGACY_DB` | `1` (opt in) | One-time migration only. |
 | `NEXT_TELEMETRY_DISABLED` | `1` | The Next.js CLI behind `npm run dev` / `npm run build` posts anonymous usage events to telemetry.nextjs.org unless this is set. |
 
 <!-- END GENERATED: config -->
 
-Stored settings beat environment variables, which beat defaults; reset with `npm run settings:reset -- --yes`.
+Claude model/effort settings beat environment/defaults; reset with `npm run settings:reset -- --yes`. [Operations](docs/OPERATIONS.md) covers AI selection, jobs, exports and API contracts.
 
 ## Where the numbers come from
 
-With an FMP key of any plan, FMP is the primary source. Lower tiers cap the
-`limit` parameter at five periods and restrict some endpoints and symbols;
-Thesis reads the cap from FMP's own rejection, retries within it, and fills the
-rest from keyless sources. Five fiscal years still support the growth, returns,
-forensic, DCF and scoring modules; the own-history multiple rank needs eight
-quarters and waits for them.
+With an FMP key, FMP is primary unless the statement policy selects EDGAR.
+Thesis reads history limits from FMP's rejection and retries within them;
+restricted endpoints and symbols use available fallbacks or disclosed gaps.
+Some plans return five periods; that depth can support annual calculations,
+subject to each module's input gates. The own-history multiple rank needs eight
+compatible quarterly observations and waits for them.
 
 Configure `EDGAR_CONTACT` even with a free FMP key. Thesis learns explicit access
 restrictions and skips repeat refusals for 15 minutes; see [fallback limits](docs/PRIVACY.md#limited-fmp-access).
 
-With no key at all, set `EDGAR_CONTACT` and real US filers still produce a full
-report: statements, share counts and public float from SEC EDGAR XBRL company
+With no FMP key, set `EDGAR_CONTACT` for real US filers' research:
+supported statements, share counts and public float from SEC EDGAR XBRL company
 facts, prices from Yahoo's unofficial chart endpoint, and the profile and
 enterprise values derived from the two. `THESIS_STATEMENT_SOURCE` chooses
-between the vendor and EDGAR; where both serve, no period mixes sources and the
+between the vendor and EDGAR; no statement row mixes source fields, and the
 manifest names how many each served.
 
 Where a filer uses an extension tag the field is `null` rather than a guess,
 and each stand-in is named in the manifest with the periods it served. Analyst
 estimates, price targets, peers, insider trades (SEC Form 4), institutional
 ownership, news, transcripts, executive compensation and segment revenue have
-no keyless source, as do IFRS filers' statements, and all stay disclosed gaps.
+no implemented keyless source; IFRS-only facts also remain disclosed gaps.
 See [License and data rights](docs/DATA-RIGHTS.md) for what each allows.
 ## What the numbers mean
 
@@ -135,7 +135,7 @@ choices are labelled house conventions beside the affected figures.
 coefficients, estimation populations and limits; the source cites it by section.
 
 With AI off or unavailable, reports retain deterministic results and disclose
-that no analyst pass ran; the narrative sections remain empty.
+missing analysis. Failed AI runs may retain charges; no completed analyst grade exists.
 ## AI analysis
 
 Two analysts build the bull and bear cases independently: neither sees the
@@ -154,7 +154,7 @@ each figure be traced to the record it cites — and separately checks the prose
 around figures it can locate: a direction word must match the sign of its
 change, a period naming a year must match the cited year, a unit word must fit
 the registered unit, and a claim naming a person must rest on a filing, a
-transcript, a registry figure or the payload's own executive rows; any other
+transcript, a registry figure or attributed executive/insider rows; any other
 source, or none, fails it. Checked is printed beside cited, never merged into it.
 
 Claude model prices and limits come from `config/models.json`; unknown IDs
@@ -183,7 +183,7 @@ Analyst requests also reserve eight $0.01 searches; the judge never searches.
 
 The worst case is every request one pass could make (36: six transport attempts,
 each able to pause and resume five times); in the default request mode it is
-reported, not reserved, so a job cap need only cover the requests in flight, while
+reported, not reserved; a job cap covers settled spend plus in-flight reservations, while
 `THESIS_RESERVATION_MODE=pass` reserves it whole. Neither reservation column varies
 with effort — both bound a request at the model's full context and output ceiling.
 
@@ -240,10 +240,10 @@ repository's [private advisory form](https://github.com/eligorelick/Thesis-AI-eq
 | `npm run check:dependencies` | Assert the dependency tree's shape. |
 | `npm run models:refresh` | Diff config/models.json against the published model list and prices. Sends no model request. |
 | `npm run costs:reconcile` | Lower presumed spend rows against the Usage and Cost API. Needs ANTHROPIC_ADMIN_KEY. |
-| `npm run docs:config` | Regenerate the README's configuration and commands tables. |
-| `npm run docs:pricing` | Regenerate the README's cost table from the model registry. |
-| `npm run audit:deltas` | Refresh the audited fixture comparison's intended-delta list. |
-| `npm run audit:security` | Dependency audit at the release threshold. |
+| `npm run docs:config` | Print config/commands tables; add -- --write to update README. |
+| `npm run docs:pricing` | Print registry-derived pricing; add -- --write to update README. |
+| `npm run audit:deltas` | Print fixture comparison's intended deltas; add -- --write to update the intended-delta list. |
+| `npm run audit:security` | Audit production and dev dependencies; fail on low or higher severity. |
 | `npm run verify` | Everything the release gate runs, in order. |
 
 <!-- END GENERATED: commands -->

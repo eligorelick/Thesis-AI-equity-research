@@ -1,8 +1,37 @@
 # Changelog
 
-Entries below the current repository audit record earlier development batches.
-Their model defaults, prices and migration advice describe those dates; use
-README and the current usage/methodology documents for present guidance.
+Entries record dated development batches. “Now”, migration advice, model
+defaults, prices, version stamps and validation describe the batch they appear
+in; later entries supersede earlier choices. `Unreleased` records merged work
+not yet identified here as a new tagged/package release. Use
+[README](README.md) and the [methodology](docs/METHODOLOGY.md) for present guidance.
+
+Current source at `010a055` (documentation reconciliation 2026-10-05) declares
+application **0.1.0**, report spec **1.9.0** and payload **1.10.0**. The checked-in
+Claude registry prefers Opus 5.5 for `auto` and Sonnet 5.5 as Haiku's judge floor;
+ChatGPT/Gemini account connections have their own model selection. These are
+repository settings, not confirmation of live provider entitlement. The
+[October audit](docs/audit/2026-10-03-repository-audit.md) and later
+[recommendations ledger](docs/audit/2026-10-04-recommendations.md) record
+verification and the replacement of the stale-PID credential-lock protocol.
+Stored reports retain their
+original versions and bytes; source merge does not deploy or publish a release.
+
+## Unreleased — documentation reconciliation (2026-10-05)
+
+- Reconcile all maintained Markdown with the current source; add detailed
+  [application operations and API contracts](docs/OPERATIONS.md).
+- Correct keyless coverage, fixture/AI traffic, per-row source provenance and
+  the implemented `fmp` policy's missing-member fallback. Document currency and
+  temporal eligibility, valuation arithmetic, projections, scores and indicators.
+- Explain AI selection, actual/presumed costs, retry/cancel behavior, plaintext
+  research storage, export formats and provider-rights limitations.
+- Preserve historical findings while mapping their current implementation and
+  unresolved limits. Regenerate README configuration/commands/pricing and keep
+  the documentation release contract aligned with the new guide.
+- Reconcile the final branch against PR #6's permanent credential mutex,
+  completed-session beta/calendar FRED rules, current version stamps and
+  expandable evidence/chart-data controls before integration.
 
 ## Unreleased — evidence-qualified recommendations (2026-10-04)
 

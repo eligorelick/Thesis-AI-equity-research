@@ -1,32 +1,60 @@
 # Privacy and safety
 
-Thesis runs on your machine. Its database, its cache, and every report it
-generates are local files. This page lists exactly what leaves the machine, who
-receives it, where the data is kept, and how to delete it.
+Thesis runs on your machine and persists its database, cache, report history
+and AI connection state locally. Report generation can send evidence to remote
+AI services and request market/filing data. Local-first storage does not mean
+offline execution or provider-side deletion. This page describes the current
+application paths; provider retention, browser behavior and operating-system
+backups are outside Thesis's control.
 
 ## What leaves the machine
 
-Nothing goes to Thesis or its authors. There is no telemetry, no analytics, no
-crash reporting, and no update check. The only outbound requests the
-application makes are the provider calls below, and each one goes only to the
-provider it names. One thing outside the application: the Next.js CLI that
+The checked-in app has no author-operated telemetry, analytics, crash-report
+or update-check endpoint. Application requests use the providers below;
+developer/maintenance commands and browser sign-in have additional behavior
+described separately. Every remote service can observe connection metadata
+such as your IP address, request time and headers. The Next.js CLI that
 `npm run dev` and `npm run build` invoke has its own anonymous usage
 telemetry (`telemetry.nextjs.org`). `.env.example` ships
 `NEXT_TELEMETRY_DISABLED=1`, which turns it off once copied to `.env`;
 `npx next telemetry disable` turns it off for every project on the machine.
 
-| Recipient | Sent on every request | Only when |
+| Recipient | Data/credentials sent by the relevant request | Trigger |
 | --- | --- | --- |
 | SEC EDGAR (`www.sec.gov`, `data.sec.gov`, `efts.sec.gov`) | `EDGAR_CONTACT`, verbatim, as the `User-Agent`; the ticker, CIK, and filing paths being read | A real contact is configured (`src/providers/edgar.ts` `EDGAR_USER_AGENT`, `hasConfiguredEdgarIdentity`) |
-| Anthropic (`api.anthropic.com`) | The analysis prompt and the serialized ticker context payload; `ANTHROPIC_API_KEY` | Claude API is selected and a key is configured |
+| Anthropic (`api.anthropic.com`) | The analysis prompt and evidence payload for inference; `ANTHROPIC_API_KEY` for authenticated Messages/Models calls | Claude API runs a pass, or `auto` resolves the available model catalog |
 | OpenAI (`auth.openai.com`, `api.openai.com`) | OAuth registration, token renewal/revocation and account model catalog; research prompt and ticker payload for inference | You connect ChatGPT, request its models, or run a report using that connection |
-| Google through the official Gemini CLI | Google OAuth and CLI service requests; the research prompt and ticker payload for inference | You connect Gemini or run a report using that connection |
-| Anthropic's server-side web search | Search queries the model composes, executed by Anthropic on its own servers | The model chooses to search; capped at `MAX_PROVIDER_WEB_SEARCHES` = 8 uses per request (`src/providers/anthropic.ts`) |
+| Google through the official Gemini CLI | Google OAuth and CLI service requests; the research prompt and evidence payload for inference | You connect Gemini or run a report using that connection; the CLI owns its service endpoints |
+| Anthropic's server-side web search | Search queries the model composes, executed by Anthropic on its servers and subject to its search service behavior | A Claude analyst chooses to search; capped at `MAX_PROVIDER_WEB_SEARCHES` = 8 uses per request, including separate retry/resumption requests (`src/providers/anthropic.ts`) |
 | Financial Modeling Prep (`financialmodelingprep.com`) | The symbol and endpoint parameters; `FMP_API_KEY` in an `apikey` header, never in the URL | `FMP_API_KEY` is set |
-| Yahoo (`query1.finance.yahoo.com`) | The symbol and the requested date range; a Thesis-identifying `User-Agent` (`YAHOO_DEFAULT_USER_AGENT`, mandatory — the endpoint answers 429 without one). It names the product only: **`EDGAR_CONTACT` is never sent to Yahoo**, or to any provider other than SEC | Prices are needed and FMP could not serve them |
-| FRED (`api.stlouisfed.org`, `fred.stlouisfed.org`) | The series id; `FRED_API_KEY` as an `api_key` query parameter. Without a key, the keyless `fredgraph.csv` fallback sends the series id only | Macro series are requested |
-| Finnhub (`finnhub.io`) | The symbol; `FINNHUB_API_KEY` in an `X-Finnhub-Token` header | `FINNHUB_API_KEY` is set |
-| FINRA (`api.finra.org`) | The symbol and date range. Keyless: no credential is configured or sent | Short-interest data is requested |
+| Yahoo (`query1.finance.yahoo.com`) | The symbol, chart parameters/date range and a product-identifying `User-Agent` (`YAHOO_DEFAULT_USER_AGENT`). **`EDGAR_CONTACT` is not used by the Yahoo client** | Quote or price history fallback is needed and FMP could not serve it |
+| FRED (`api.stlouisfed.org`, `fred.stlouisfed.org`) | Series ID, date range and transformation parameters; keyed requests include `FRED_API_KEY` as an `api_key` query parameter. The keyless `fredgraph.csv` fallback sends no credential | Macro series are requested; CSV also provides a fallback when keyed retrieval fails |
+| Finnhub (`finnhub.io`) | Symbol, endpoint/date parameters; `FINNHUB_API_KEY` in an `X-Finnhub-Token` header | `FINNHUB_API_KEY` is set |
+| FINRA (`api.finra.org`) | Partition requests; symbol and requested settlement cycles in short-interest queries. The production path configures no FINRA credential | Short-interest data is requested |
+
+Cache hits may avoid these requests. Expired hits can trigger a background
+refresh even while the UI displays stored data. Opening a company page can
+fetch data without starting paid AI research. AI off disables inference;
+it does not disable market-data or SEC requests. Fixture market data does not
+disable a selected, connected AI provider.
+
+`npm run models:refresh` separately reads Anthropic's Models API with the
+ordinary API key and its public pricing page (`platform.claude.com`).
+`npm run costs:reconcile` reads the organization's Cost API at
+`api.anthropic.com/v1/organizations/cost_report` using
+`ANTHROPIC_ADMIN_KEY`, sending a date window/pagination parameters, not a
+research payload. It can make that remote read in its default dry run; no
+report path calls the Admin API. Package installation/security audits can
+contact package registries or advisory services. Thesis does not control
+those developer tools' telemetry.
+
+Browser OAuth involves the provider's sign-in website and any identity
+services the browser follows. Clicking source, documentation or quota links
+also opens external sites under the browser's own privacy settings. The table
+is not an inventory of all traffic from Chrome, the operating system or the
+separately installed Gemini CLI.
+
+## What the AI provider receives
 
 What the selected AI provider's research payload contains, precisely
 (`src/pipeline/stageC/payload.ts`, `src/pipeline/stageC/prompts.ts`):
@@ -38,20 +66,51 @@ What the selected AI provider's research payload contains, precisely
 - The ticker context payload: the computed financial figures, ratios,
   valuation inputs, macro series, and public peer-company comparisons used
   for that company, each tagged with its source and as-of date.
+- Compact statements and analyst estimates/targets, insider activity and
+  sentiment, institutional holders, executives/compensation, short interest,
+  segments, news/press snippets, validation flags, missing-data disclosures
+  and numeric/prose provenance registries when available.
+- Research instructions and output schemas. Synthesis additionally receives
+  the bull and bear model outputs; repair requests can include rejected output
+  and validation feedback. Paused Claude requests append earlier assistant
+  content. These texts can repeat provider-derived evidence.
 
-All of it is public company data plus figures derived from it. Your private
-files and watchlist are not included. Public data for peers and market
+This is provider-supplied company/market data, public filing excerpts and
+derived figures, including data available only under a vendor subscription.
+Public records can name executives, insiders and institutional holders.
+The research payload builder does not read arbitrary private files or include
+your complete watchlist. A requested symbol still reveals which company you
+are researching. Public data for peers and market
 benchmarks can support the selected company's analysis. The payload is
 deterministic: the same inputs produce the same bytes.
+
+Text budgets are 18,000 characters for the latest transcript, 14,000 each for
+annual risk factors and MD&A, 8,000 for quarterly MD&A, and 6,000 for news
+snippets. Compact statement extracts keep five annual and four quarterly
+periods, and list-shaped sources generally keep twelve rows. These are
+character/row limits, not a guaranteed overall prompt-token limit. Truncation
+is disclosed. The database can cache full provider responses beyond what the
+model receives.
+
+ChatGPT requests set `store: false` and stream Responses API output. That
+request option does not establish zero retention by OpenAI. Gemini is prompted
+to use only supplied evidence and is configured to deny tools, hooks, MCP,
+extensions and project context. Subscription adapters expose no additional
+web-search tool; Claude analysts retain bounded server-side search. Thesis
+does not train a model or change provider account data-use/retention policies.
 
 ## Keys
 
 Keys are read from `.env` on the server and never reach the browser.
 `src/config/env.ts` is marked `server-only` and additionally throws if it is
 ever evaluated with a `window` present, so a client bundle cannot import it.
-Each key is sent only to the provider it belongs to, in a header wherever the
-provider supports one, so keys stay out of logged URLs and out of the
-`api_cache` rows.
+The built-in clients send each key to its provider. FMP and Finnhub use
+headers; FRED requires an `api_key` URL query parameter. Cache parameters omit
+those keys. This is not a blanket guarantee that keys cannot appear in
+external network diagnostics or an unexpected dependency error. The app
+does not encrypt `.env`, and the server-only boundary does not protect it from
+other processes running with your account's filesystem access. Avoid sharing
+environment files, connection directories or unreviewed diagnostic output.
 
 The `X-Thesis-Token` that non-browser clients use for mutating routes is not a
 credential for anything remote, and not a lock on the API either. It is a marker
@@ -66,6 +125,18 @@ database and `.env`. The token is minted fresh at every server start into the
 data directory (see below), restricted to its owner where the operating system
 enforces file modes, never logged, and never sent to the browser or to any
 provider.
+
+The npm dev/start scripts bind to **127.0.0.1**. The request-wide proxy rejects
+direct Hosts outside loopback or the exact `THESIS_ALLOWED_HOST` allowlist,
+including read routes. Company landing GET/HEAD requests additionally reject
+cross-origin subresource/speculation requests using Fetch Metadata, while
+allowing normal top-level navigation and header-free local scripts. Mutating
+routes use the guard above. Thesis has no user login or caller authentication;
+allowlisting a LAN host does not add either, and an allowed client can read
+reports and invoke actions. AI connection GET/POST additionally require the
+same-origin/token guard and strict localhost/127.0.0.1/[::1] access, even with
+a LAN allowlist. Local browser traffic uses HTTP under the default
+scripts; HTTPS to remote providers does not encrypt the local database.
 
 ## Where local data is kept
 
@@ -88,17 +159,43 @@ application-data directory (`src/db/paths.ts`):
 `THESIS_DB_PATH` overrides the file; `THESIS_DATA_DIR` overrides the directory.
 SQLite writes `thesis.db-wal` and `thesis.db-shm` beside the database file.
 
-It holds your watchlist, generated reports, job history and per-pass cost
-records, saved settings, and the `api_cache` table of provider responses.
+On Windows, `APPDATA` is the fallback if `LOCALAPPDATA` is unavailable. Blank
+path overrides are treated as unset. The resolved active path is printed by
+the database opener. A legacy workspace `data/thesis.db` is ignored by default;
+`THESIS_IMPORT_LEGACY_DB=1` intentionally copies it and any WAL/SHM siblings
+only when no explicit DB path is set and the destination does not exist. The
+old copy is retained, so deleting the active database does not delete that
+legacy copy. Turn off the import flag before expecting a fresh database.
+
+It holds your watchlist, generated reports, job history and per-pass/request
+cost records, saved settings, and the `api_cache` table of provider responses.
+Jobs retain analyst snapshots, payload fingerprints, errors and step detail;
+`job_pass_artifacts` retain settled outputs/failures, usage and cost evidence;
+`job_llm_leases` hold in-flight reservation/lease metadata. These records may
+contain model text and evidence absent from a final exported report. Public
+API responses can include full filing HTML, transcripts and names appearing
+in financial records.
+
+The SQLite database has **no application encryption at rest**. Cache bodies at
+or above 65,536 UTF-8 bytes are gzip-compressed; compression is not encryption.
+The app creates the database directory without tightening its filesystem
+permissions. Access therefore depends on the OS, chosen directory permissions,
+disk encryption and any backup/sync software you use. Reports, watchlist and
+ordinary settings are intentionally served to the local browser; being
+server-only does not make them inaccessible to that browser.
 
 AI connections are kept separately in the OS user's `Thesis/ai` directory:
 `%LOCALAPPDATA%` on Windows, `$HOME/Library/Application Support` on macOS,
 and `$XDG_CONFIG_HOME` or `$HOME/.config` on Linux. Database path overrides
 do not move these credentials. ChatGPT's `connections.v1.json` is encrypted
-with Windows DPAPI on Windows and restricted to its owner on macOS/Linux.
+with Windows DPAPI for the current Windows user; on macOS/Linux it stores
+plaintext JSON inside an owner-only file (0600) and directory (0700).
 It contains a stable installation ID, separate account registrations and
-tokens, and the selected report connection. Only account labels and status
-reach the browser. Tokens are excluded from reports, source control and logs.
+tokens, and the selected report connection. Connection IDs, account labels
+(including ChatGPT email when available), connection/plan status,
+selection/model controls and pending sign-in URLs can reach the browser.
+Access/refresh/identity tokens stay in the server-side store and are not
+intentionally serialized into reports or browser responses.
 
 The v1 credential reader validates the fields connection code consumes before
 allowing a mutation. Malformed records produce a storage error and are left
@@ -129,10 +226,14 @@ telemetry, extensions, hooks, MCP and tools are disabled; prompts are passed
 on standard input rather than command-line arguments. The CLI may retain its
 own session files inside this directory. Disconnect stops local child
 processes, waits for exit, and removes that directory. The official CLI storage
-override preserves your normal browser profile. An empty environment file in
+override preserves your normal browser profile. This CLI directory has no
+Thesis-added DPAPI encryption; the CLI manages its own credential/session
+files. An empty environment file in
 its work directory prevents loading credentials from ancestor directories.
-AI connections are owned by one live Thesis server per OS user; another server
-cannot connect, refresh, or disconnect them until the owning server stops.
+Connection lifecycle and inference operations claim one live Thesis server
+per OS user; another server cannot connect, refresh or disconnect them until
+the owning server stops. Status reads and selection saves are not an
+authentication boundary and do not themselves claim that runtime ownership.
 Remove the CLI's remote authorization
 from Google Account connections if needed. ChatGPT disconnect clears local
 tokens and attempts to revoke the renewable session; an unconfirmed remote
@@ -154,16 +255,26 @@ was. The server prints the resolved path at every start:
 - Cached provider rows are deleted 30 days after their stored TTL expires
   (`src/cache/maintenance.ts`, `PURGE_EXPIRED_MARGIN_SECONDS`). The sweep runs
   when the database is opened, at most once every 24 hours, and reclaims the
-  file space with `VACUUM`. Filings and transcripts carry a 10-year TTL, so in
+  file space with `VACUUM` when rows were compressed or purged. Failed sweeps
+  warn and do not block startup. Filings and transcripts carry a 10-year TTL, so in
   practice they are kept, not purged.
 - Reports, jobs, cost records, the watchlist, and settings are never expired.
   They persist until you delete them, and Thesis has no delete-report command:
   removing them means removing the database.
+- Pass artifacts and completed job history have no automatic time-based
+  retention limit. Normal lease settlement/recovery removes relevant live
+  reservations, but this is bookkeeping, not a general history purge.
+- Prompt-cache expiry at the AI provider is separate from SQLite retention
+  and does not establish deletion of provider logs. Disconnecting an account
+  stops/clears local state as described above; it does not delete old research
+  reports, downloads or remote provider records.
 
 ## Deleting local data
 
 - Reports, cache and database settings: quit Thesis and delete the database file together with its
-  `-wal` and `-shm` siblings. The next start creates an empty database. The
+  `-wal` and `-shm` siblings. Disable `THESIS_IMPORT_LEGACY_DB` first if set,
+  or a retained workspace copy can be imported again. The next start otherwise
+  creates an empty database. The
   `csrf-token` file is deleted separately, at the path the server printed at
   startup — `THESIS_TOKEN_FILE` if you set it, otherwise `csrf-token` in the
   application-data directory, which is not necessarily the directory the
@@ -177,19 +288,34 @@ was. The server prints the resolved path at every start:
   variable, which beats the built-in default (`src/settings/settings.ts`,
   `resolveValue`) — so a model or effort choice saved from the Settings page
   goes on overriding `.env` until this command deletes it. Without `--yes` it
-  prints the rows it would delete and changes nothing. Two internal rows are
+  prints the rows it would delete without deleting settings; the CLI opens the
+  existing database directly without app schema/cache maintenance. Two internal rows are
   always kept, because neither is a setting: the cache-maintenance stamp and
   the settings revision counter. AI connection selections are managed separately.
 - AI connections: disconnect accounts in Settings, then quit Thesis and delete
   its `ai` directory described above to remove retained registration metadata.
   Deleting local files alone does not revoke remote grants; use the provider's
   account settings if remote revocation was not confirmed.
+- Appearance: clear the `thesis-ui-design` cookie or choose Current. Exported
+  Markdown, HTML, JSON, printed PDFs, legacy database copies, backups and
+  browser downloads must be deleted separately. The app does not erase them
+  when the active database is removed. Deleting files is not secure disk erasure.
 
 ## Sharing a report
 
 An exported report embeds provider data and, when a filing or transcript was
 cited, quoted excerpts of it. Sending one sends that data along with it — see
 [License and data rights](DATA-RIGHTS.md).
+
+The regular Markdown export and print/PDF HTML use persisted report content
+without running new inference. `format=pdf` returns a self-contained HTML
+document that invokes the browser's print dialog; the PDF is produced by the
+browser. `npm run export:corrected -- --db <file> --report <id> --out <file.html>`
+opens the named database read-only and creates new HTML and JSON files. That
+JSON can expose richer structured content than the printed pages. These
+exports contain no configured provider keys or OAuth tokens by design, but
+retain research symbols, model/execution evidence, dates, sources, costs and
+any relevant public-person names. Inspect content before sharing it.
 
 ## AI connection setup
 
@@ -199,7 +325,7 @@ also be switched off for data-only reports.
 
 | Connection | Authorization | Usage |
 | --- | --- | --- |
-| ChatGPT | Official browser OAuth for local open-source apps; eligible Plus/Pro account | Your ChatGPT plan allowance and account credit settings |
+| ChatGPT | Browser OAuth with the required `chatgpt.tokens.use.direct` scope; account/provider eligibility applies | Your ChatGPT plan allowance and account credit settings |
 | Gemini | Official Gemini CLI 0.36.x, installed separately; Google browser sign-in | Your Google CLI allowance and account settings |
 | Claude | Optional `ANTHROPIC_API_KEY` | Separately billed Anthropic API usage |
 
@@ -209,7 +335,7 @@ preserving the normal browser profile for sign-in/autofill. Thesis gives
 Gemini an isolated local home and disables
 tools, extensions, hooks, MCP and inherited API keys. CLI support is restricted
 to the reviewed 0.36 minor line; newer minor releases need compatibility review.
-Only one running Thesis server per OS user can manage or use AI connections;
+Only one running Thesis server per OS user can own connection lifecycles/inference;
 stop that server before moving these connections to another local instance.
 Its Google connection
 is separate from an existing personal CLI login. See Google's
@@ -244,10 +370,12 @@ ChatGPT model choices refresh for the selected account. GPT-6.1 Sol can also
 be requested explicitly if the account catalog has not listed it yet; that
 choice is marked as access unconfirmed and can still be rejected by OpenAI.
 ChatGPT reasoning and Standard/Fast speed are saved with the connection.
-Fast is opt-in and consumes more allowance; see [OpenAI's current speed
-rules](https://learn.chatgpt.com/docs/agent-configuration/speed).
+Fast is opt-in; check its current allowance/credit effects in
+[OpenAI's speed rules](https://learn.chatgpt.com/docs/agent-configuration/speed).
 Reports, exports and history retain actual provider model and usage evidence;
-the requested speed is shown separately from the returned tier. Missing or
+the requested speed is shown separately from the returned tier. Successful
+ChatGPT output requires a completed event, usable final text, valid model ID
+and nonnegative integer input/output usage. Missing or
 inconsistent provider evidence stays unknown. Gemini reports every observed
 model when its CLI uses several, without guessing which wrote the final response.
 

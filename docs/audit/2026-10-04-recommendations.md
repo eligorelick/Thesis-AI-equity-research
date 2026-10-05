@@ -1,8 +1,16 @@
 # Critical review of the seven audit recommendations
 
-This is the follow-up to [the repository audit](2026-10-03-repository-audit.md), requested after PR #5 merged. Baseline: `dc994db7e1927e3a315d48bde1454be107083198`. Work is isolated on `codex/evidence-improvements`. The current UI remains the default; Research workspace remains an opt-in setting. No private reports, credentials or settings are used for verification, and no paid inference is authorized.
+This is the dated follow-up to [the repository audit](2026-10-03-repository-audit.md), requested after PR #5 merged. Baseline: `dc994db7e1927e3a315d48bde1454be107083198`. Work was isolated on `codex/evidence-improvements`. The current UI remains the default; Research workspace remains an opt-in setting. Verification used no private reports, credentials or settings and no paid inference.
 
 Review and integration: [pull request #6](https://github.com/eligorelick/Thesis-AI-equity-research/pull/6) records the final full-check counts, native Windows/Linux CI results, reviewed commit and merge outcome. The focused checkpoints below document each implementation separately. Merge requires all repository gates and the native Linux lock run; focused passes alone do not establish release readiness. Deployment and a hot upgrade of an existing server are outside this change.
+
+**Final integration status, checked 2026-10-05:** PR #6 merged on
+2026-10-04 at 22:12:10 UTC as `010a055`. Both required `full` and
+`windows-smoke` CI checks succeeded, including the native Linux mutex suite.
+Pending/gate language in the measured checkpoints below describes intermediate
+stages before those final checks and merge; their original counts remain dated
+evidence. Native macOS, network filesystems, live inference and provider
+entitlements remain outside that verification.
 
 ## Decision standard
 

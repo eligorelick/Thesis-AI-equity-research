@@ -1,6 +1,6 @@
 # Keyless data path — design
 
-> **Historical design record; guidance reviewed 2026-10-03.** The Problem
+> **Historical design record; guidance reconciled 2026-10-05.** The Problem
 > section describes behavior before the September 2 implementation; it does
 > not describe today's keyless path. The implemented-status and deviations
 > paragraphs are essential context for the proposed interfaces below.
@@ -19,6 +19,28 @@
 **Original status:** approved for implementation (owner directive of 2026-09-02: "make sure it works if users don't have an FMP subscription")
 **Plan:** executed on 2026-09-02; the step-by-step plan was retired by the audit of 2026-09-06 (this document and its deviations paragraph are the record).
 
+## Current implementation map — 2026-10-05
+
+Source and test definitions checked at `010a055`. The Sources, Approach,
+Components and Data flow below preserve the original proposal and its
+September deviations. They are not a current API reference or a guarantee of
+complete statements, a DCF or an AI report for every SEC registrant.
+
+| Area | Present implementation and evidence |
+| --- | --- |
+| Fallback admission | [Bundle](../../../src/pipeline/dataBundle.ts) and [keyless orchestration](../../../src/pipeline/keyless.ts) fill eligible members per source result/statement-source policy. Issuer-bound replacements require SEC ticker/registrant confirmation; a vendor CIK alone is insufficient. SPY/sector benchmark prices may fall back independently on keyed plans. [Bundle tests](../../../tests/dataBundle.keyless.test.ts) exercise both boundaries and blocked-identity disclosure. |
+| Fixtures and unsupported instruments | [Reserved symbols](../../../src/providers/reservedSymbols.ts) keep DEMO/DBNK synthetic whatever keys are configured. [Instrument support](../../../src/pipeline/stageB/instrumentSupport.ts) rejects ETF/fund company analysis. [Reserved tests](../../../tests/dataBundle.reservedSymbols.test.ts) and [instrument tests](../../../tests/stageB.instrumentSupport.test.ts) cover these paths. Fixture preservation means immutable audited fixture bytes and dated intended deltas, not that newly generated fixture reports remain byte-identical forever. |
+| Yahoo transport and quote | [Yahoo](../../../src/providers/yahoo.ts) uses its fixed browser-style Thesis user agent, never the SEC contact identity. Previous close comes from the chart's prior session, with chart-range previous close only as fallback. History TTL is 24 hours and quote TTL 15 minutes. Dividend-adjusted `adjClose` is used for beta when both series provide it. [Yahoo tests](../../../tests/yahoo.client.test.ts) and [beta tests](../../../tests/stageB.betaEstimate.test.ts) cover these semantics. |
+| Statement builder | [Statements](../../../src/edgar/statements.ts) requires `asOf` and `vendorSplits` as well as symbol/CIK/history limits; `basisDay` and bank-revenue override are additional options. Results include rows, gaps, substitutions, restatements and withholding details. Annual core forms include 40-F. Operating-income derivations remove tagged non-operating components and unsafe add-backs; cash aggregates may use available filed components with notes. [Statement](../../../tests/edgar.statements.test.ts) and [keyless tests](../../../tests/keyless.test.ts) are the executable contract. |
+| Currency and shares | [Split resolution](../../../src/edgar/splits.ts), [vendor split evidence](../../../src/providers/splitEvents.ts) and keyless share guards establish the price-session share basis or withhold affected EPS, counts and capitalization. Money comparisons require compatible established currencies; no general ADR/FX conversion bridge is implemented. [Share-basis tests](../../../tests/keyless.splitBasis.test.ts) and [currency tests](../../../tests/currency.priceComparison.test.ts) cover the current restrictions. |
+| Successors and beta | [Successor resolution](../../../src/edgar/successor.ts) can supply eligible predecessor periods with lineage; [successor tests](../../../tests/edgar.successor.test.ts) use recorded headers. [Beta](../../../src/pipeline/stageB/betaEstimate.ts) counts at least 24 adjacent monthly return pairs inside five calendar years and reports raw/Blume/uncertainty/price basis. Both series must supply the regular US final-session date; the keyless caller withholds current/future UTC-day bars until the next day. Exceptional closures and non-US calendars remain unmodeled; see [calendar decisions](../../audit/2026-10-04-recommendations.md#6-calendar-alignment--implemented). |
+| Optional sources | [Bundle](../../../src/pipeline/dataBundle.ts) uses configured Finnhub news and upcoming-earnings fallbacks when FMP cannot serve them, with source provenance. These require a Finnhub key; this is not fully keyless news/calendar coverage. [Fallback tests](../../../tests/dataBundle.finnhub.test.ts) and [access tests](../../../tests/fmp.access.test.ts) cover secondary-source and learned FMP refusal behavior. Keyless SEC Form 4 trade reconstruction remains unimplemented. |
+
+Public access alone does not establish rights for redistribution or AI input;
+see [DATA-RIGHTS](../../DATA-RIGHTS.md). The current missing-data policy may
+produce a degraded report or withhold a model, especially for IFRS, missing
+tags, unsupported currencies/share bases or unavailable source services.
+
 ## Problem
 
 Without `FMP_API_KEY`, the pipeline serves only the two fictional fixtures
@@ -27,7 +49,8 @@ key, FMP refuses some endpoints outright and some symbols (the SPDR sector
 ETFs) on price history. A user without a paid subscription therefore gets no
 report at all, even though every statement the analyzer needs is public.
 
-The goal: a complete deterministic report for any US-listed SEC registrant
+The original goal (aspirational, not a universal coverage guarantee): a complete
+deterministic report for any US-listed SEC registrant
 with no paid data subscription, from public sources, with the same
 provenance, validation and disclosed-gap discipline the FMP path has.
 

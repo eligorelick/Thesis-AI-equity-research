@@ -51,10 +51,10 @@ export const COMMAND_DESCRIPTIONS = {
   "settings:reset": "Delete stored settings rows so .env takes precedence again. Needs --yes.",
   "models:refresh": "Diff config/models.json against the published model list and prices. Sends no model request.",
   "costs:reconcile": "Lower presumed spend rows against the Usage and Cost API. Needs ANTHROPIC_ADMIN_KEY.",
-  "docs:pricing": "Regenerate the README's cost table from the model registry.",
-  "docs:config": "Regenerate the README's configuration and commands tables.",
-  "audit:deltas": "Refresh the audited fixture comparison's intended-delta list.",
-  "audit:security": "Dependency audit at the release threshold.",
+  "docs:pricing": "Print registry-derived pricing; add -- --write to update README.",
+  "docs:config": "Print config/commands tables; add -- --write to update README.",
+  "audit:deltas": "Print fixture comparison's intended deltas; add -- --write to update the intended-delta list.",
+  "audit:security": "Audit production and dev dependencies; fail on low or higher severity.",
   "check:dependencies": "Assert the dependency tree's shape.",
   "export:corrected": "Write corrected HTML/JSON from a stored run; requires new output filenames.",
 };
@@ -164,7 +164,7 @@ export function renderConfigBlock(sections, schemaKeys) {
   lines.push("Every key is optional. This table is generated from `.env.example`, which");
   lines.push("carries the long form of each one, so the two cannot drift apart.");
   lines.push("");
-  lines.push("| Key | Default | What it does |");
+  lines.push("| Key | Shipped value / opt-in example | What it does |");
   lines.push("| --- | --- | --- |");
   for (const section of sections) {
     for (const entry of section.entries) {

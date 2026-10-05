@@ -1,6 +1,6 @@
 # Audit Remediation Design
 
-> **Historical design record; guidance reconciled 2026-10-04.** The status,
+> **Historical design record; guidance reconciled 2026-10-05.** The status,
 > dependency targets, branch names, test counts, and verification requirements
 > below describe the August remediation. They are not current installation
 > instructions or evidence that today's tree passes. Use the
@@ -31,9 +31,9 @@
 > the workspace, and branch protection requiring `CI / full` is documented but
 > NOT OBSERVED.
 
-## Current implementation map — 2026-10-04
+## Current implementation map — 2026-10-05
 
-Checked against source and test definitions at `dc994db`. This map describes
+Checked against source and test definitions at `010a055`. This map describes
 the present implementation; it does not rerun the August audit, certify every
 original criterion, or replace its recorded verification. The Architecture
 section below is the original design, including interfaces and dependencies
@@ -41,14 +41,14 @@ that later work changed.
 
 | Original area | Present implementation and evidence |
 | --- | --- |
-| H1/H2, M4/M5: provider identity, provenance, cache admission | [FMP](../../../src/providers/fmp.ts), [EDGAR](../../../src/providers/edgar.ts), [XBRL](../../../src/edgar/xbrl.ts) and [bundle construction](../../../src/pipeline/dataBundle.ts) validate scoped identity and carry source envelopes. [FMP admission tests](../../../tests/fmp.cacheAdmission.test.ts), [EDGAR admission tests](../../../tests/edgar.jsonCacheAdmission.test.ts) and [Stage A manifest tests](../../../tests/stageA.manifest.test.ts) cover these boundaries. Observation-date fallbacks depend on the endpoint; see the later [temporal design's current map](2026-08-09-provider-temporal-integrity-design.md#current-implementation-map--2026-10-04). |
+| H1/H2, M4/M5: provider identity, provenance, cache admission | [FMP](../../../src/providers/fmp.ts), [EDGAR](../../../src/providers/edgar.ts), [XBRL](../../../src/edgar/xbrl.ts) and [bundle construction](../../../src/pipeline/dataBundle.ts) validate scoped identity and carry source envelopes. [FMP admission tests](../../../tests/fmp.cacheAdmission.test.ts), [EDGAR admission tests](../../../tests/edgar.jsonCacheAdmission.test.ts) and [Stage A manifest tests](../../../tests/stageA.manifest.test.ts) cover these boundaries. Observation-date fallbacks depend on the endpoint; see the later [temporal design's current map](2026-08-09-provider-temporal-integrity-design.md#current-implementation-map--2026-10-05). |
 | H3–H5, M1–M3: supported instruments and finance inputs | [Instrument support](../../../src/pipeline/stageB/instrumentSupport.ts), [compute](../../../src/pipeline/compute.ts), [quarter windows](../../../src/pipeline/stageB/quarterWindows.ts) and [technicals](../../../src/pipeline/stageB/technicals.ts) enforce company-instrument, whole-balance, null, currency and time-window boundaries. Evidence includes [instrument tests](../../../tests/stageB.instrumentSupport.test.ts), [balance-anchor tests](../../../tests/compute.runwayAnchor.test.ts), [TTM tests](../../../tests/stageB.ttm.compute.test.ts) and [currency tests](../../../tests/currency.stageB.test.ts). EDGAR's available-component cash aggregate differs from a blanket requirement that both cash and short-term investment tags exist; a missing component is not an invented zero. |
 | H6, M6/M10/M11, L1: immutable reports and shared surfaces | [Report reads](../../../src/report/schema.ts), [issuer-safe query](../../../src/report/query.ts), [diff](../../../src/report/diff.ts), [surface manifest](../../../src/report/surfaceManifest.ts) and [Markdown serializers](../../../src/report/export/markdownEscape.ts) are implemented. Later issuer-row guards and exclusive corrected-export destinations supplement the original design. [Legacy safety](../../../tests/report.legacyEntitySafety.test.ts), [history/export](../../../tests/report.history.export.test.ts), [surface](../../../tests/report.surfaceManifest.test.ts) and [escaping](../../../tests/report.markdownEscape.test.ts) tests retain the compatibility contracts. |
 | M7/M9, L3: paid work and streaming | [Artifacts](../../../src/pipeline/jobArtifacts.ts), [scheduler](../../../src/pipeline/jobScheduler.ts), [runner](../../../src/pipeline/jobRunner.ts) and the [stream route](../../../src/app/api/report/[jobId]/stream/route.ts) implement durable artifacts, fenced leases, revisions and cleanup. The default is now per-request cost admission; `pass` remains an accepted compatibility mode, so the original pass-reservation architecture is not the sole current path. [Request admission](../../../tests/requestAdmission.test.ts), [presumed spend](../../../tests/scheduler.presumedSpend.test.ts) and [stream tests](../../../tests/api.routes.stream.test.ts) exercise these contracts. |
-| M8/M13: local request and settings boundaries | [Proxy](../../../src/proxy.ts), [request security](../../../src/app/requestSecurity.ts), [company loading](../../../src/pipeline/companyLoad.ts) and [settings queue](../../../src/settings/writeQueue.ts) implement the local boundaries and ordered writes. [Same-origin](../../../tests/api.routes.sameOrigin.test.ts), [company loading](../../../tests/companyLoad.test.ts) and [write-queue](../../../tests/settings.writeQueue.test.ts) tests provide executable evidence. AI credentials use a separate [store](../../../src/ai/store.ts); its stale-lock recovery race remains open in the [current audit](../../audit/2026-10-03-repository-audit.md#follow-up--2026-10-04). |
+| M8/M13: local request and settings boundaries | [Proxy](../../../src/proxy.ts), [request security](../../../src/app/requestSecurity.ts), [company loading](../../../src/pipeline/companyLoad.ts) and [settings queue](../../../src/settings/writeQueue.ts) implement the local boundaries and ordered writes. [Same-origin](../../../tests/api.routes.sameOrigin.test.ts), [company loading](../../../tests/companyLoad.test.ts) and [write-queue](../../../tests/settings.writeQueue.test.ts) tests provide executable evidence. AI credentials use a separate [store](../../../src/ai/store.ts); a permanent [SQLite mutex](../../../src/ai/mutex.ts) replaces stale-PID recovery, with stopped-server migration and native process evidence in the [recommendations ledger](../../audit/2026-10-04-recommendations.md). |
 | L2/M12: dependencies and gates | [package.json](../../../package.json), the lockfile, [CI](../../../.github/workflows/ci.yml) and coverage configs are authoritative. August version targets are historical; Node remains `>=22.18.0`, and `verify` includes dependency shape, typecheck, lint, product/integration tests, both coverage contracts, build and security audit. Branch protection and absence of advisories require fresh external evidence. |
 
-Later financial conventions use report spec **1.8.0** and payload **1.9.0**.
+Later financial conventions use report spec **1.9.0** and payload **1.10.0**.
 Stored reports retain their original bytes; successful historical verification
 does not imply a new report will have complete data or a verified AI assessment.
 

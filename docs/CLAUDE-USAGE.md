@@ -156,7 +156,10 @@ subscription adapters, which do not invoke Claude fallbacks.
 
 `THESIS_MAX_JOB_COST_USD` and `THESIS_MAX_ROLLING_COST_USD` are optional;
 both are **uncapped by default**. `THESIS_ROLLING_COST_WINDOW_MINUTES` defaults
-to **1,440**. Default concurrency is one active job and two active paid calls.
+to **1,440**. Default concurrency is one active job and two positive-USD Claude
+permits (requests in request mode, whole passes in pass mode). Subscription
+calls reserve no USD and do not occupy this paid-capacity limit; active-job
+limits and provider allowances still apply.
 Limits use persisted costs plus live reservations across workers sharing the
 database; they do not cover usage in other apps, other databases, market-data
 subscriptions, provider credits, taxes or an independently changed price sheet.

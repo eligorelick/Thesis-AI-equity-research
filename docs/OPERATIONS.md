@@ -49,6 +49,14 @@ exports use fixed fictional data; reload resets the lab. Decision brief remains
 a prototype there, while the production Settings page offers Current and
 Research workspace.
 
+Both production designs expose recorded grade-input and DCF provenance through
+keyboard-accessible expandable details. Price and relative-strength charts have
+optional data tables using the exact prepared chart values, paginated at 30 rows
+with the newest page first in live company analysis and the synthetic sample;
+saved report pages do not inject live charts. Missing values remain distinct from zero; relative
+strength series can have different baseline dates. These controls expose saved
+evidence, not independently verified accuracy or calibrated forecast probabilities.
+
 Symbols are trimmed, validated as 1–12 ASCII characters with alphanumeric ends
 and internal dots/hyphens, then uppercased. Dot/hyphen share-class spellings are
 treated as issuer aliases for relevant watchlist/report lookups. Lexical validity
@@ -112,8 +120,11 @@ presentation independently of stored research/model settings.
 
 Generation runs fetch → validate → compute → bull → bear → synthesize → verify.
 Neither analyst sees the other's output; they share payload/model context and
-are not statistically independent. The runner can overlap their requests when
-the durable permit limit allows it. Verification is deterministic and makes no
+are not statistically independent. The runner can overlap their requests;
+paid Claude work must fit durable permit and budget limits. The active-LLM-call
+limit counts positive-USD Claude reservations; ChatGPT/Gemini calls reserve no
+USD and are constrained by active jobs and provider allowances instead.
+Verification is deterministic and makes no
 model call. Missing/disabled AI or certain computation/pass failures can produce
 a saved data-only report, with gaps and any incurred costs disclosed. A `done`
 job therefore means a saved result, not necessarily completed AI analysis.
@@ -201,6 +212,14 @@ The default database is `<data directory>/thesis.db`. Windows uses
 `THESIS_DATA_DIR` changes the default directory and token location. Neither
 redirects AI credentials, which have their own OS-profile store. SQLite data,
 API cache, saved reports and `.env` have no application-level encryption.
+
+Credential mutations use the separate permanent `connections.lock` SQLite
+mutex in the AI directory, holding native ownership across the read, async
+mutation and save. Process exit releases ownership without deleting the file.
+Stop every Thesis server before upgrading or downgrading this protocol; migrate
+only an incompatible lock when instructed, preserving credentials and Gemini
+directories. Never delete a live lock. See [migration and filesystem limits](PRIVACY.md)
+and the [native process verification record](audit/2026-10-04-recommendations.md).
 
 Back up a stopped database with any remaining `-wal`/`-shm` sidecars, or use a
 SQLite-aware backup while running. A copied DB without its uncheckpointed WAL

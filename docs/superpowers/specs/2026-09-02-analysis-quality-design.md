@@ -1,6 +1,6 @@
 # Analysis quality — design
 
-> **Historical design and live-run record; guidance reconciled 2026-10-04.**
+> **Historical design and live-run record; guidance reconciled 2026-10-05.**
 > The issuer prices, valuation outputs, model choices, costs, and validation
 > below describe the September 2 experiments and are not current market data
 > or recommendations. Some approaches have since been replaced: section 8
@@ -19,9 +19,9 @@ rerun of the affected issuers produced.
 **Directive:** "improve the codebase to be the best possible equity analyzer
 based on extensive research, testing, and data analysis."
 
-## Current implementation map — 2026-10-04
+## Current implementation map — 2026-10-05
 
-Source and test definitions checked at `dc994db`. The numbered Changes, Tests
+Source and test definitions checked at `010a055`. The numbered Changes, Tests
 and Live validation sections retain the September 2 record. Their prices,
 model choices and verification measurements are historical observations.
 
@@ -36,7 +36,7 @@ model choices and verification measurements are historical observations.
 | 8: growth anchor | D-18 superseded the lower-CAGR/sign-disagreement rule. [Valuation](../../../src/pipeline/stageB/valuation.ts) takes the median of available historical, fundamental and currency-compatible analyst methods. The October acceleration diagnostic separately requires an actual three-year span within ±0.05 year; degraded CAGR series remain visible. [Growth tests](../../../tests/stageB.growth.returns.capital.test.ts) cover that distinction. |
 | 9: whole-balance anchor | [Compute](../../../src/pipeline/compute.ts) selects the newer whole balance row, or discloses fallback to the older complete row without mixing fields across periods. [Anchor tests](../../../tests/compute.runwayAnchor.test.ts) and [TTM integration](../../../tests/stageB.ttm.compute.test.ts) cover this. Return-ratio averaging separately requires adjacent fiscal years; an anchor selection is not proof of a valid averaging window. |
 
-Current report spec is **1.8.0** and payload **1.9.0**. Currency and split-basis
+Current report spec is **1.9.0** and payload **1.10.0**. Currency and split-basis
 guards can withhold outputs the September sweep once displayed. See
 [METHODOLOGY](../../METHODOLOGY.md) for present calculations and
 [the October audit](../../audit/2026-10-03-repository-audit.md) for recorded

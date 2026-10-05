@@ -1,6 +1,6 @@
 # Keyless data path — design
 
-> **Historical design record; guidance reconciled 2026-10-04.** The Problem
+> **Historical design record; guidance reconciled 2026-10-05.** The Problem
 > section describes behavior before the September 2 implementation; it does
 > not describe today's keyless path. The implemented-status and deviations
 > paragraphs are essential context for the proposed interfaces below.
@@ -19,9 +19,9 @@
 **Original status:** approved for implementation (owner directive of 2026-09-02: "make sure it works if users don't have an FMP subscription")
 **Plan:** executed on 2026-09-02; the step-by-step plan was retired by the audit of 2026-09-06 (this document and its deviations paragraph are the record).
 
-## Current implementation map — 2026-10-04
+## Current implementation map — 2026-10-05
 
-Source and test definitions checked at `dc994db`. The Sources, Approach,
+Source and test definitions checked at `010a055`. The Sources, Approach,
 Components and Data flow below preserve the original proposal and its
 September deviations. They are not a current API reference or a guarantee of
 complete statements, a DCF or an AI report for every SEC registrant.
@@ -33,7 +33,7 @@ complete statements, a DCF or an AI report for every SEC registrant.
 | Yahoo transport and quote | [Yahoo](../../../src/providers/yahoo.ts) uses its fixed browser-style Thesis user agent, never the SEC contact identity. Previous close comes from the chart's prior session, with chart-range previous close only as fallback. History TTL is 24 hours and quote TTL 15 minutes. Dividend-adjusted `adjClose` is used for beta when both series provide it. [Yahoo tests](../../../tests/yahoo.client.test.ts) and [beta tests](../../../tests/stageB.betaEstimate.test.ts) cover these semantics. |
 | Statement builder | [Statements](../../../src/edgar/statements.ts) requires `asOf` and `vendorSplits` as well as symbol/CIK/history limits; `basisDay` and bank-revenue override are additional options. Results include rows, gaps, substitutions, restatements and withholding details. Annual core forms include 40-F. Operating-income derivations remove tagged non-operating components and unsafe add-backs; cash aggregates may use available filed components with notes. [Statement](../../../tests/edgar.statements.test.ts) and [keyless tests](../../../tests/keyless.test.ts) are the executable contract. |
 | Currency and shares | [Split resolution](../../../src/edgar/splits.ts), [vendor split evidence](../../../src/providers/splitEvents.ts) and keyless share guards establish the price-session share basis or withhold affected EPS, counts and capitalization. Money comparisons require compatible established currencies; no general ADR/FX conversion bridge is implemented. [Share-basis tests](../../../tests/keyless.splitBasis.test.ts) and [currency tests](../../../tests/currency.priceComparison.test.ts) cover the current restrictions. |
-| Successors and beta | [Successor resolution](../../../src/edgar/successor.ts) can supply eligible predecessor periods with lineage; [successor tests](../../../tests/edgar.successor.test.ts) use recorded headers. [Beta](../../../src/pipeline/stageB/betaEstimate.ts) counts at least 24 adjacent monthly return pairs inside five calendar years, reports raw/Blume/uncertainty/price basis and retains the day-26 completion heuristic; it does not select 60 arbitrary shared observations across gaps. |
+| Successors and beta | [Successor resolution](../../../src/edgar/successor.ts) can supply eligible predecessor periods with lineage; [successor tests](../../../tests/edgar.successor.test.ts) use recorded headers. [Beta](../../../src/pipeline/stageB/betaEstimate.ts) counts at least 24 adjacent monthly return pairs inside five calendar years and reports raw/Blume/uncertainty/price basis. Both series must supply the regular US final-session date; the keyless caller withholds current/future UTC-day bars until the next day. Exceptional closures and non-US calendars remain unmodeled; see [calendar decisions](../../audit/2026-10-04-recommendations.md#6-calendar-alignment--implemented). |
 | Optional sources | [Bundle](../../../src/pipeline/dataBundle.ts) uses configured Finnhub news and upcoming-earnings fallbacks when FMP cannot serve them, with source provenance. These require a Finnhub key; this is not fully keyless news/calendar coverage. [Fallback tests](../../../tests/dataBundle.finnhub.test.ts) and [access tests](../../../tests/fmp.access.test.ts) cover secondary-source and learned FMP refusal behavior. Keyless SEC Form 4 trade reconstruction remains unimplemented. |
 
 Public access alone does not establish rights for redistribution or AI input;

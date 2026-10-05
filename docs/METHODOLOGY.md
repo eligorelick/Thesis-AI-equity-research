@@ -4,7 +4,7 @@ What Thesis computes, from which inputs, under which conventions, and where a
 convention is this project's own choice rather than a standard.
 
 The implemented behavior below was checked against the source and synthetic
-tests on 2026-10-04. The historical literature citations remain the project's
+tests on 2026-10-05, including the report 1.9.0 / payload 1.10.0 changes. The historical literature citations remain the project's
 research rationale; a passing test validates implementation behavior, not the
 predictive validity of a model or a live provider's contract.
 
@@ -166,7 +166,7 @@ rate)` row) and in the report's computed-returns notes.
 | Beta | Provider profile beta, **mean-reversion adjusted** (0.667·raw + 0.333 — the Bloomberg 2/3–1/3 weighting of Blume's finding, not his fitted 0.371 + 0.635·β; see [RESEARCH §7.1](RESEARCH.md)), clamped to [0.6, 2.0] | Raw beta outside (0, 4] is unusable and the WACC fails closed rather than inventing market exposure. One set of constants serves the WACC and the keyless beta estimate, so a report prints one adjusted beta. |
 | Cost of equity | rf + beta × ERP | Clamped to [rf + 2.5%, 25%]. |
 | Cost of debt | `effective` (interest expense ÷ average debt), `historical` (the issuer's last year that still disclosed interest), or `synthetic` (rf + rating spread from interest coverage, Damodaran's January 2026 table) | The method actually used is named. An effective rate outside [rf − 1, rf + 19] is rejected in favour of the synthetic rating. Debt below 2% of assets is treated as noise, and the note says whether a synthetic rating then ran. Interest expense and the EBIT it is scored against come from **one** statement basis — the trailing twelve months when both are available, else the latest annual statement for both legs — and the basis is named; a mixed pair is the last resort and is labelled as such. |
-| Tax rate | Observed effective rate (ratios TTM, else annual ratios, else TTM tax expense ÷ pre-tax income) | Clamped to [0%, 35%]. Where it came from is named. No universal statutory rate is ever assumed. |
+| Tax rate | Select the first ratios-TTM row, or the first annual-ratios row when no TTM row exists; use its effective-rate field, otherwise TTM tax expense ÷ pre-tax income | A present TTM row lacking tax does not cause a second lookup in annual ratios. Clamped to [0%, 35%]. Where it came from is named. No universal statutory rate is assumed. |
 | Weights | Market value of equity (market capitalisation) and book debt as a market-value proxy: total debt **less the operating-lease liability** where the balance sheet discloses it (the EV bridge's lease rule, below), averaged over the two quarter-ends of the trailing-twelve-month window when the interest figure is TTM, else over the latest two fiscal-year ends | Stated as E% / D%, with the pair of balances and the lease basis named. When the statements' currency differs from the quote currency (the ADR case) the weights are suppressed rather than silently mixed. On the financial routes, which value on the cost of equity alone, a WACC-only shortfall is disclosed as a warning rather than blocking the report. |
 
 The final WACC is clamped to [max(6%, rf + 1%), 20%]; a clamp that moves the
@@ -206,6 +206,11 @@ lease adjustment described below. An unavailable observed tax rate withholds
 that year's NOPAT/ROIC; non-positive invested capital is not interpreted as
 an exceptional return. This historical NOPAT is separate from the forward
 DCF's projected loss-carryforward logic.
+
+When short-term investments are genuinely unreported, returns can instead net
+cash alone and disclose that narrower invested-capital basis. Conflicting
+combined cash/component values do not qualify for this fallback; they withhold
+the affected invested capital and return.
 
 ROTE is income available to common / average tangible common equity, with
 preferred allocations required when preferred equity is outstanding. Tangible
@@ -271,13 +276,14 @@ median)". Nothing prints the pre-clamp median as if it were the anchor.
 
 **Three of the four methods read the same series.** The regression, the 3-year
 CAGR and the 5-year CAGR are all functions of the same annual revenue history,
-so the median is weighted roughly three to one toward that history and the
-analyst-consensus case rarely moves it — it can only shift the median when it
-lands between the three history-derived values, and never sets the anchor on
-its own. That is a deliberate bias toward the filed record over sell-side
-expectations, but it means the consensus case should not be read as an equal
-fourth vote. The range printed beside the point estimate is where a large
-analyst/history disagreement becomes visible.
+so when all four are available, three inputs reflect correlated historical
+evidence. For four inputs the median averages the two middle values; consensus
+outside the historical range can still change which historical pair is averaged
+(5%, 10%, 15%, 100% gives 12.5%, versus a historical-only median of 10%). Every
+available method receives one place in the sorted median, but those places are
+not independent votes. When only one method is eligible, including consensus,
+it supplies the anchor alone, subject to the same clamp; no range is available.
+The printed method count, unavailable methods and range disclose these limits.
 
 **Two rules were retired here, and the assumption block says so.** The former
 "lower of the 3Y/5Y CAGR" rule let whichever window happened to be worse
@@ -388,13 +394,17 @@ it as an operating expense that should not be added back.
 
 Both figures are reported and never conflated:
 
-- `fcfBeforeSbc` — operating cash flow + capital expenditure (capex arrives
-  negative), the vendor convention.
+- `fcfBeforeSbc` — a finite supplied `freeCashFlow` value takes precedence;
+  otherwise operating cash flow + capital expenditure (capex arrives negative)
+  is derived and labeled. This is the before-SBC vendor convention.
 - `fcf` — the same figure less SBC, the house default.
 
-A year with no disclosed SBC is left unadjusted, says so per row, and raises an
-info-level `capital.fcf.sbc` manifest entry, so an unadjusted year is never
-silently compared with an adjusted one. SBC as a percentage of FCF is measured
+For a row with computable FCF, missing or numeric-zero SBC is treated as
+undisclosed by this implementation and left unadjusted, with a note on that row. The info-level
+`capital.fcf.sbc` manifest entry applies when the latest row has computable FCF
+but no usable SBC; older affected rows have row notes rather than separate
+manifest entries. A negative SBC credit is retained with its sign and increases
+after-SBC FCF. SBC as a percentage of FCF is measured
 against the **before** figure: dividing SBC by an FCF it has already been
 subtracted from would count it twice.
 
@@ -550,8 +560,12 @@ cash evidence withholds house net debt. Combined cash below reported cash,
 or disagreement with the component sum beyond `max(1, abs(combined) × 1e-6)`
 is a conflict; it cannot fall back to a narrower cash-only convention. Vendor
 net debt is diagnostic evidence only, because it can omit short-term investments.
-The selected balance is the newest whole quarterly/annual row, so the bridge
-does not assemble debt and cash from different fiscal periods.
+The anchor compares the latest quarterly and annual whole rows. It selects the
+newer unless that row lacks finite debt, stockholders' equity or combined cash
+and the older row has all three; then it uses the older whole row with a note
+and info gap. When neither is complete, the newer remains selected and missing
+inputs withhold affected results. The bridge never assembles debt and cash from
+different fiscal periods.
 
 **The OPERATING-lease liability is excluded by default; the finance-lease
 liability is not.** The option to keep the operating slice in is
@@ -587,7 +601,8 @@ follows the identical convention through net debt, so the two can never
 disagree.
 
 **Invested capital and the WACC's debt leg share the lease basis.** ROIC's
-invested capital (debt + equity − cash and short-term investments) and the
+invested capital (debt + equity − cash and short-term investments, with the
+disclosed cash-only fallback when investments are unreported) and the
 average debt behind the effective cost of debt and the E/D weights remove the
 same operating-lease slice by default and keep it when the option is on, so
 the discount rate, the return on capital and the enterprise value are on one
@@ -1370,7 +1385,7 @@ seven days of each series' latest observation; starts are shared dates on or
 before the requested cutoff, with seven-day tolerance. Conflicting same-date
 closes cannot establish an endpoint. These are price returns, not dividend
 total returns. Volume trend compares complete 20-row and 90-row averages:
-above 1.2 is rising, below 0.8 falling, otherwise flat. RSI 70/30, proximity
+at least 1.2 is rising, at most 0.8 falling, otherwise flat. RSI 70/30, proximity
 to highs/lows, recent crossover and drawdown flags are house display rules,
 not return forecasts. See `tests/stageB.technicals.test.ts`,
 `tests/stageB.range52wHistory.test.ts` and

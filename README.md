@@ -1,7 +1,7 @@
 # Thesis
 
 Thesis is a local-first equity research app with financial calculations and optional AI.
-Saved reports expose expandable number provenance and optional, paginated price/relative-strength data tables, including missing evidence. **Settings → Appearance** switches between the default Current design and optional Research workspace; the choice is saved in this browser.
+Saved reports expose expandable number provenance, including missing evidence. Live analysis and the synthetic sample offer optional, paginated price/relative-strength data tables. **Settings → Appearance** switches between the default Current design and optional Research workspace; the choice is saved in this browser.
 
 > **Informational only — not investment advice.** Grades and price targets are
 > model outputs from disclosed data and assumptions, not human recommendations.
@@ -75,7 +75,7 @@ carries the long form of each one, so the two cannot drift apart.
 | `THESIS_JUDGE_ORDER` | `random` | Which order the judge/synthesis pass reads the two analyst cases in. |
 | `ANTHROPIC_ADMIN_KEY` | unset | Optional Admin API key (distinct from ANTHROPIC_API_KEY). |
 | `THESIS_MAX_ACTIVE_JOBS` | `1` | Maximum concurrent report jobs across processes sharing the SQLite database. |
-| `THESIS_MAX_ACTIVE_LLM_CALLS` | `2` | Maximum concurrent AI permits across processes sharing the SQLite database. |
+| `THESIS_MAX_ACTIVE_LLM_CALLS` | `2` | Maximum concurrent paid Claude permits across processes sharing the SQLite database. |
 | `THESIS_MAX_JOB_COST_USD` | unset | Optional exact USD caps. |
 | `THESIS_MAX_ROLLING_COST_USD` | unset | Optional exact USD caps. |
 | `THESIS_RESERVATION_MODE` | `request` | How paid work is admitted against these caps: one reservation per provider request, or one per pass. |
@@ -183,7 +183,7 @@ Analyst requests also reserve eight $0.01 searches; the judge never searches.
 
 The worst case is every request one pass could make (36: six transport attempts,
 each able to pause and resume five times); in the default request mode it is
-reported, not reserved, so a job cap need only cover the requests in flight, while
+reported, not reserved; a job cap covers settled spend plus in-flight reservations, while
 `THESIS_RESERVATION_MODE=pass` reserves it whole. Neither reservation column varies
 with effort — both bound a request at the model's full context and output ceiling.
 

@@ -7,7 +7,7 @@ that every citation resolves to a heading here. That check proves section
 existence; it does not prove that the prose and implementation agree.
 
 Implementation statements were reconciled with the current source and synthetic
-tests on 2026-10-04. Dated live observations and literature reviews below remain
+tests on 2026-10-05, including report 1.9.0 / payload 1.10.0. Dated live observations and literature reviews below remain
 historical evidence, not a claim that provider coverage or market inputs are
 unchanged today. The application does not implement the research candidates
 merely because this document recommends them. For the current computational
@@ -468,11 +468,14 @@ ordinary and the flags say only what the two years show.
 
 ### 5.3 One-time items
 
-**House rule.** `one-time-items` fires when items presented as non-recurring
-are material to the period. `serial-one-time-items` fires when they recur
-across years, which is the more informative of the two: an item that appears
-every year is a cost of doing business being presented as an exception, and it
-inflates every "adjusted" figure built on top of it.
+**House rule.** These flags use aggregate `totalOtherIncomeExpensesNet`, not
+verified issuer descriptions of non-recurring charges. When its absolute value
+exceeds 10% of absolute nonzero operating income in at least three of the last
+five fiscal years, `serial-one-time-items` fires. Otherwise `one-time-items`
+fires for a qualifying latest-year breach. Missing operands are unevaluable.
+Repeated material other income/expense warrants checking earnings quality; it
+does not establish that the issuer called an item exceptional, excluded it from
+adjusted earnings, or misstated those earnings.
 
 ### 5.4 Recurring discontinued operations
 
@@ -516,8 +519,10 @@ could convey.
 **House rule.** The Piotroski signals ΔROA and Δasset turnover need three
 fiscal years, because the current and prior ratios each use beginning-of-year
 assets: the prior ratio needs the third year's closing asset balance. With only two
-years available the score is reported **out of 7**, with the denominator stated
-and the two missing signals named. It is never reported out of 9 with the
+years available the score is reported **out of at most 7**, with the actual
+evaluable denominator stated and missing signals named. Seven requires all
+retained signals to be evaluable; financial-route exclusions or other missing
+inputs can reduce it further. It is never reported out of 9 with the
 missing signals scored as zero, which would understate a company for having a
 short filing history rather than for anything about its finances.
 
@@ -887,11 +892,14 @@ each of the prior three years) carry nothing, while the remaining
 "opportunistic" trades earn about **82 basis points a month** of abnormal
 return.
 
-**What the code has.** FMP's insider endpoints are refused on the entry
-tier; the keyless report shows Finnhub's aggregate MSPR sentiment, which read
-−100 for Apple in most months because executives sell routinely under
-pre-arranged plans — precisely the flow the literature calls uninformative,
-presented as a persistent negative reading.
+**What the code has.** The September 2026 review observed entry-tier FMP
+insider refusals and Apple aggregate Finnhub MSPR readings of −100 in most
+months. Those observations are historical, not universal current plan access
+or evidence that each sale used a pre-arranged plan. Today the bundle can use
+Finnhub sentiment only with configured Finnhub credentials and available
+evidence; otherwise it records a gap. Aggregate MSPR does not distinguish
+routine from opportunistic trades, and SEC Form 4 trade reconstruction remains
+unimplemented.
 
 **Data paths.** Two, both free: the issuer's EDGAR submissions list its Form 4
 filings, each an XML ownership document (one request per filing; Apple files
@@ -910,10 +918,15 @@ data set is the cheaper first implementation and needs no per-filing parser.
 
 ### 8.6 The keyless sweep rerun
 
-Not a research question. The 21-issuer sweep of 2026-09-02 is the only broad
-regression check on real filings, the audit changed the lease bases, the DCF
-bridge, the grid, routing and the forensics, and a rerun costs nothing but
-EDGAR and Yahoo requests. **Do it** before any of the above ships.
+The 21-issuer sweep of 2026-09-02 is a dated live-provider check, not current
+coverage. It is now complemented by the six-issuer, twelve-annual-period offline
+reference cohort in `fixtures/financial/annual-reference-cohort.json` and
+`tests/stageB.realIssuerReferences.test.ts`. Those independently transcribed
+references check normalized arithmetic, annual ordering, DuPont and sector
+policies; they do not test raw SEC parser coverage or current provider access.
+A renewed live sweep remains proposed before adopting the research candidates
+above, with truthful SEC identity and traffic limits; it needs market/EDGAR
+requests but no paid inference.
 
 ### 8.7 Fade horizon and the growth anchor
 
@@ -922,7 +935,8 @@ or two years is not persistent, so a valuation that carries a high near-term
 rate for long rests, in their words, on shaky foundations.
 
 **What the code has.** A ten-year linear fade from the anchor to the terminal
-rate, and an anchor that is the median of four methods, three of which read
+rate, and an anchor that is the median of available methods among four
+candidates, three of which read
 the same filed history (METHODOLOGY *Growth anchor*).
 
 **Verdict — keep, and let §8.2 test it.** The ten-year fade is the mainstream

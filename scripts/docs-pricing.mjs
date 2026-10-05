@@ -102,7 +102,7 @@ export function renderPricingBlock(registry, sizing) {
   lines.push("");
   lines.push(`The worst case is every request one pass could make (${maxRequestsPerPass}: six transport attempts,`);
   lines.push("each able to pause and resume five times); in the default request mode it is");
-  lines.push("reported, not reserved, so a job cap need only cover the requests in flight, while");
+  lines.push("reported, not reserved; a job cap covers settled spend plus in-flight reservations, while");
   lines.push("`THESIS_RESERVATION_MODE=pass` reserves it whole. Neither reservation column varies");
   lines.push("with effort — both bound a request at the model's full context and output ceiling.");
   lines.push("");

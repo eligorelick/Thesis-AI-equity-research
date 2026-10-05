@@ -6,16 +6,18 @@ in; later entries supersede earlier choices. `Unreleased` records merged work
 not yet identified here as a new tagged/package release. Use
 [README](README.md) and the [methodology](docs/METHODOLOGY.md) for present guidance.
 
-Current source at `dc994db` (documentation reconciliation 2026-10-04) declares
-application **0.1.0**, report spec **1.8.0** and payload **1.9.0**. The checked-in
+Current source at `010a055` (documentation reconciliation 2026-10-05) declares
+application **0.1.0**, report spec **1.9.0** and payload **1.10.0**. The checked-in
 Claude registry prefers Opus 5.5 for `auto` and Sonnet 5.5 as Haiku's judge floor;
 ChatGPT/Gemini account connections have their own model selection. These are
 repository settings, not confirmation of live provider entitlement. The
-[October audit](docs/audit/2026-10-03-repository-audit.md) records verification and
-the unresolved credential stale-lock recovery race. Stored reports retain their
+[October audit](docs/audit/2026-10-03-repository-audit.md) and later
+[recommendations ledger](docs/audit/2026-10-04-recommendations.md) record
+verification and the replacement of the stale-PID credential-lock protocol.
+Stored reports retain their
 original versions and bytes; source merge does not deploy or publish a release.
 
-## Unreleased — documentation reconciliation (2026-10-04)
+## Unreleased — documentation reconciliation (2026-10-05)
 
 - Reconcile all maintained Markdown with the current source; add detailed
   [application operations and API contracts](docs/OPERATIONS.md).
@@ -27,6 +29,9 @@ original versions and bytes; source merge does not deploy or publish a release.
 - Preserve historical findings while mapping their current implementation and
   unresolved limits. Regenerate README configuration/commands/pricing and keep
   the documentation release contract aligned with the new guide.
+- Reconcile the final branch against PR #6's permanent credential mutex,
+  completed-session beta/calendar FRED rules, current version stamps and
+  expandable evidence/chart-data controls before integration.
 
 ## Unreleased — evidence-qualified recommendations (2026-10-04)
 

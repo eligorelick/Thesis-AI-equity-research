@@ -288,8 +288,8 @@ was. The server prints the resolved path at every start:
   variable, which beats the built-in default (`src/settings/settings.ts`,
   `resolveValue`) — so a model or effort choice saved from the Settings page
   goes on overriding `.env` until this command deletes it. Without `--yes` it
-  prints the rows it would delete without deleting settings; opening the
-  database can still perform schema/cache maintenance. Two internal rows are
+  prints the rows it would delete without deleting settings; the CLI opens the
+  existing database directly without app schema/cache maintenance. Two internal rows are
   always kept, because neither is a setting: the cache-maintenance stamp and
   the settings revision counter. AI connection selections are managed separately.
 - AI connections: disconnect accounts in Settings, then quit Thesis and delete

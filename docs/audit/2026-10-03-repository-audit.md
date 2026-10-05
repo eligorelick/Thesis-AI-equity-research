@@ -9,25 +9,25 @@ audits and decisions remain historical evidence. The owner authorized merging
 pull request #5 into `main` on 2026-10-04 after verification. Deployment remains
 outside this authorization; the PR records the merge outcome and commit.
 
-## Record status and source reconciliation — 2026-10-04
+## Record status and source reconciliation — 2026-10-05
 
 This is the dated October audit and follow-up record. Source reconciliation at
-`dc994db` confirms the changes from PR #5 are in the checked-out merge commit.
+`010a055` confirms the changes from PR #5 and PR #6 are in the checked-out source.
 All counts, coverage, timings, browser checks and advisory results below are
 their recorded observations; this documentation reconciliation does not repeat
 them or imply that an old preview server is still running. Current source uses
-application 0.1.0, report spec 1.8.0 and payload 1.9.0.
+application 0.1.0, report spec 1.9.0 and payload 1.10.0.
 
 | Current claim | Source and regression definitions |
 | --- | --- |
 | Financial/date conventions A03/A07/A08/A16/F02–F04 | [Beta](../../src/pipeline/stageB/betaEstimate.ts), [valuation](../../src/pipeline/stageB/valuation.ts), [FRED](../../src/providers/fred.ts), [returns](../../src/pipeline/stageB/returns.ts), [routing](../../src/pipeline/stageB/sectorRouting.ts) and [Stage A](../../src/pipeline/stageA/validate.ts); [beta](../../tests/stageB.betaEstimate.test.ts), [valuation](../../tests/stageB.valuation.test.ts), [FRED](../../tests/finra.fred.test.ts), [growth/returns](../../tests/stageB.growth.returns.capital.test.ts), [routing](../../tests/stageB.sectorRouting.test.ts) and [validation](../../tests/stageA.validate.test.ts) cases. |
 | Read/export integrity A01/A02 | [Query](../../src/report/query.ts) and [corrected export](../../src/report/export/correctedCli.ts); [history/export tests](../../tests/report.history.export.test.ts). Existing output files are refused; multi-file publication across power loss and cleanup under filesystem refusal remain limited as recorded below. |
 | Billing/stream evidence A04–A06/A10 | [Scheduler](../../src/pipeline/jobScheduler.ts), [Claude provider](../../src/providers/anthropic.ts), [Gemini adapter](../../src/ai/gemini.ts) and [runner](../../src/pipeline/jobRunner.ts); [runner](../../tests/jobRunner.test.ts), [Claude](../../tests/anthropic.test.ts) and [Gemini tests](../../tests/ai.gemini.test.ts). |
-| Credential validation/cleanup F05/F06, unresolved F08 | [Store](../../src/ai/store.ts), [store tests](../../tests/ai.store.test.ts) and [failure tests](../../tests/ai.storeFailures.test.ts). Shape validation and acquisition cleanup exist; dead-owner recovery still removes a path after PID inspection without atomic ownership transfer. A passing ordinary stale-lock test does not prove the race fixed. |
+| Credential validation/cleanup F05/F06 and later F08 replacement | [Store](../../src/ai/store.ts), [native mutex](../../src/ai/mutex.ts), [mutex tests](../../tests/ai.mutex.test.ts), [store tests](../../tests/ai.store.test.ts) and [failure tests](../../tests/ai.storeFailures.test.ts). The permanent marker-only SQLite mutex replaces stale-PID path deletion. Stopped-server upgrade/downgrade and local-filesystem requirements apply; native process evidence and remaining platform limits are recorded in the [recommendations ledger](2026-10-04-recommendations.md). |
 | Appearance and evidence F01/F07/D-36 | [Preference](../../src/appearance/preference.ts), [report sections](../../src/components/report/sections.tsx), [judge protocol](../../src/pipeline/stageC/judgeProtocol.ts); [appearance tests](../../tests/appearance.preference.test.ts), [detail-surface tests](../../tests/report.surface.detail.test.ts) and [protocol tests](../../tests/stageC.judgeProtocol.test.ts). Decision brief remains outside production appearance options. |
 
-The [decision crosswalk](DECISIONS.md#current-implementation-crosswalk--2026-10-04),
-[remediation disposition](REMEDIATION-REPORT.md#current-disposition--2026-10-04)
+The [decision crosswalk](DECISIONS.md#current-implementation-crosswalk--2026-10-05),
+[remediation disposition](REMEDIATION-REPORT.md#current-disposition--2026-10-05)
 and historical spec implementation maps separate today's source behavior from
 superseded plans. A source/test-definition check is not a live provider test,
 new cost measurement, rights determination or empirical model calibration.
@@ -467,7 +467,7 @@ Final branch checks and the merge commit are linked from
 
 ## Documentation reconciliation — 2026-10-04
 
-Reviewed all 15 tracked Markdown documents at source commit `dc994db` and
+At this earlier checkpoint, reviewed all 15 tracked Markdown documents at source commit `dc994db` and
 added [OPERATIONS](../OPERATIONS.md), bringing the maintained inventory to 16.
 This pass changes documentation, environment-example comments, generated-table
 wording and the release documentation contract; it does not change application
@@ -495,5 +495,30 @@ This was documentation verification, not another full `npm run verify`: build,
 coverage and online security audit were not rerun for these prose changes.
 No live inference or provider sweep was performed. External account access,
 pricing, rights interpretation and predictive calibration remain subject to
-their disclosed limits. F08 and reconstructed judge-protocol limitations remain
-open; accurate documentation does not resolve those implementation gaps.
+their disclosed limits. At this checkpoint, F08 and reconstructed judge-protocol
+limitations remained open. The later recommendations batch replaces the F08
+locking protocol; original judge-protocol persistence remains unimplemented.
+
+## Final documentation reconciliation against current main — 2026-10-05
+
+The owner authorized merging after verification. The final branch uses source
+base `010a055`, including PR #6. Its 16 existing Markdown documents plus the
+new operations guide form a 17-document maintained inventory. This supersedes
+the earlier 15-to-16 checkpoint above without changing its recorded results.
+
+Three independent source reviewers checked financial/research, operational,
+and historical documentation. Corrections include single-method growth anchors,
+ROIC cash-only fallback, actual FCF/SBC missingness, tax/whole-balance selection,
+heuristic other-income flags, chart-table location and paid-Claude capacity.
+Current maps now describe the permanent credential mutex, calendar/UTC beta
+cutoff, FRED period lags and report 1.9.0 / payload 1.10.0. Recorded experiments
+and proposed research retain their dates and bounded claims. Application
+calculations, saved report bytes, credentials and dependency policy are unchanged.
+
+Fresh local Windows verification: dependency shape, TypeScript and ESLint pass;
+product tests pass **208 files / 4,714 tests**, with two opt-in SEC checks skipped;
+integration passes all four tests. Generated-block and documentation-release
+checks pass **4 files / 40 tests**. The final pull request records the required
+Linux full verification (including both coverage contracts, build and security)
+and Windows smoke outcomes. Merge remains gated on both required checks.
+No live inference or external entitlement sweep is part of this verification.

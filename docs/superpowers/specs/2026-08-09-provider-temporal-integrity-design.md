@@ -1,6 +1,6 @@
 # Provider and Temporal Integrity Remediation Design
 
-> **Historical design record; guidance reconciled 2026-10-04.** The status below
+> **Historical design record; guidance reconciled 2026-10-05.** The status below
 > records the August implementation, which already differed from this plan's
 > proposed architecture. The eight defects and original verification contract
 > remain evidence of that work, not instructions to rerun the old four
@@ -27,9 +27,9 @@
 > 2026-09-06
 > ([`../audits/2026-09-06-full-codebase-audit.md`](../audits/2026-09-06-full-codebase-audit.md)).
 
-## Current implementation map — 2026-10-04
+## Current implementation map — 2026-10-05
 
-Source and test definitions checked at `dc994db`. The Architecture and
+Source and test definitions checked at `010a055`. The Architecture and
 verification contract below describe the original proposal, not a new claim
 that every provider uses the same date algorithm or that all regression suites
 were run for this documentation reconciliation.

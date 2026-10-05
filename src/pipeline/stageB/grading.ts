@@ -29,7 +29,7 @@
 
 import type { CompanyRouteResult } from "@/pipeline/stageB/sectorRouting";
 import type { MetricPolicy } from "@/pipeline/stageB/sectorRouting";
-import type { GrowthResult } from "@/pipeline/stageB/growth";
+import { windowCagr, type GrowthResult } from "@/pipeline/stageB/growth";
 import type { RoicResult, RoicVsWaccSpread, RoteResult, WaccResult } from "@/pipeline/stageB/returns";
 import type { CapitalResult } from "@/pipeline/stageB/capital";
 import { ALTMAN_ZONES, type AltmanVariant, type ForensicsReport } from "@/pipeline/stageB/forensics";
@@ -475,33 +475,18 @@ const IMPLIED_VS_ACHIEVABLE_BAND: readonly BandPoint[] = [
  * ------------------------------------------------------------------------ */
 
 /**
- * A window's CAGR, but only when the span actually measured IS that window.
- *
- * `actualYears` can differ from `windowYears` in both directions — short when
- * history runs out, and LONG when a restated fiscal year is collapsed out of
- * the series. Reading `cagrPct` without checking meant a four-year rate was
- * consumed as the labelled three-year one and fed to the DCF's growth anchor.
- * The disclosure note alone does not protect a numeric consumer.
+ * A window's CAGR, but only when the span actually measured IS that window
+ * (growth.ts `windowCagr`, shared with the DCF growth anchor). Reading
+ * `cagrPct` without checking meant a four-year rate was consumed as the
+ * labelled three-year one. The disclosure note alone does not protect a
+ * numeric consumer.
  */
 function cagr(
   result: { windowYears: number; cagrPct: number | null; actualYears?: number | null }[],
   window: number,
 ): number | null {
-  const p = result.find((c) => c.windowYears === window);
-  if (!p || !isNum(p.cagrPct)) return null;
-  // Absent actualYears (hand-built fixtures) is treated as matching.
-  if (isNum(p.actualYears) && Math.abs(p.actualYears - window) > CAGR_SPAN_TOLERANCE_YEARS) {
-    return null;
-  }
-  return p.cagrPct;
+  return windowCagr(result, window).cagrPct;
 }
-
-/**
- * Tolerance for "the span is the window", covering 52/53-week fiscal calendars
- * (a 53-week year is ~1.019 years, so a 5-year window can legitimately measure
- * ~5.1 years).
- */
-const CAGR_SPAN_TOLERANCE_YEARS = 0.25;
 
 /** 5y CAGR, falling back to 3y then 1y — each only if its span matches. */
 function bestCagr(

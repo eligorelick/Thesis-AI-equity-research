@@ -13,6 +13,33 @@ reversibility, the choice, and why. Reversible and disclosed beats clever.
 
 Format: `D-nn (WSn) Title` → Options / Risks / Choice / Why / Disclosure.
 
+## D-39 (growth-anchor span 2026-10-05) A CAGR method counts only over its own window
+
+- **Problem**: the DCF growth anchor read the 3y and 5y revenue CAGRs without
+  checking the span each actually measured. With two annual years of history,
+  one two-year rate entered the median twice, labelled "3y" and "5y"; with
+  four, a four-year rate entered as "5y". Grading and the data-only
+  achievable-growth comparison already rejected such windows (±0.25 years).
+- **Options**: (a) keep the degraded rates as anchor methods and rely on the
+  growth-series horizon notes; (b) exclude a window whose measured span is not
+  the window, with grading's tolerance; (c) relabel a degraded rate as an
+  N-year method. (a) double-counts one measurement under two names; (c) would
+  change the method set D-18 defines.
+- **Risks**: the anchor can rest on fewer methods (DEMO: the regression alone,
+  no range), and the fair value moves slightly when the regression and the
+  degraded CAGR differ (DEMO 152.09 → 152.06). Short histories already show the
+  regression's n and R².
+- **Choice**: (b). One helper, `windowCagr` in `growth.ts`, holds the rule and
+  `CAGR_SPAN_TOLERANCE_YEARS` (0.25) for grading, the DCF anchor and the
+  data-only comparison. An excluded window is listed as unavailable with its
+  measured span and named in the `valuation.dcf.growthAnchor` gap. The degraded
+  CAGR series stays displayed with its span (D-37), and the acceleration
+  benchmark keeps its own ±0.05-year rule.
+- **Compatibility**: report 1.10.0 and payload 1.11.0 identify the convention;
+  saved reports keep their stamps and bytes, and partial AI passes stored under
+  1.10.0 do not resume. Intended DEMO deltas are recorded in the
+  `growth-anchor-span-window` group.
+
 ## D-38 (recommendation review 2026-10-04) Evidence-qualified improvements
 
 Follow-up to the merged repository audit: assess all seven recommendations,

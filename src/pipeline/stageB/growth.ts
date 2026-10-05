@@ -73,6 +73,37 @@ export interface CagrPoint {
   note?: string;
 }
 
+/**
+ * Tolerance for "the span is the window", covering 52/53-week fiscal calendars
+ * (a 53-week year is ~1.019 years, so a 5-year window can legitimately measure
+ * ~5.1 years).
+ */
+export const CAGR_SPAN_TOLERANCE_YEARS = 0.25;
+
+/**
+ * A window's CAGR, but only when the span actually measured IS that window.
+ *
+ * `actualYears` can differ from `windowYears` in both directions — short when
+ * history runs out, and LONG when a restated fiscal year is collapsed out of
+ * the series. The degraded value stays in the displayed series (with its
+ * span); a consumer that names the window — grading, the DCF growth anchor,
+ * the data-only achievable-growth comparison — reads it through here.
+ * `excludedSpanYears` is the measured span of a computed CAGR rejected for
+ * not matching, so the consumer can say why. Absent `actualYears`
+ * (hand-built fixtures) is treated as matching.
+ */
+export function windowCagr(
+  rows: ReadonlyArray<{ windowYears: number; cagrPct: number | null; actualYears?: number | null }>,
+  window: number,
+): { cagrPct: number | null; excludedSpanYears: number | null } {
+  const p = rows.find((c) => c.windowYears === window);
+  if (!p || !isFiniteNumber(p.cagrPct)) return { cagrPct: null, excludedSpanYears: null };
+  if (isFiniteNumber(p.actualYears) && Math.abs(p.actualYears - window) > CAGR_SPAN_TOLERANCE_YEARS) {
+    return { cagrPct: null, excludedSpanYears: p.actualYears };
+  }
+  return { cagrPct: p.cagrPct, excludedSpanYears: null };
+}
+
 export interface MarginPoint {
   date: string;
   /** Margin in percent, full precision; null when revenue ≤ 0 or numerator missing. */

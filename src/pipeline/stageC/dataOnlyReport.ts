@@ -36,6 +36,7 @@ import {
 import type { DataBundle } from "@/pipeline/types";
 import type { ForensicFlag } from "@/pipeline/stageB/forensics";
 import { scoreToBand } from "@/pipeline/stageB/grading";
+import { windowCagr } from "@/pipeline/stageB/growth";
 import { CORE_SERIES, fredFigureUnit, type FredUnits } from "@/providers/fred";
 import { MIN_HEADLINE_EVIDENCE } from "@/report/assessment";
 import { establishedCurrency } from "@/report/format";
@@ -501,10 +502,8 @@ function balanceSheetSection(
 
 function bestMeasuredCagr(points: ComputedMetrics["growth"]["revenueCagrs"]): { windowYears: number; cagrPct: number } | null {
   for (const window of [5, 3, 1]) {
-    const point = points.find((p) => p.windowYears === window);
-    if (point && isNum(point.cagrPct) && (!isNum(point.actualYears) || Math.abs(point.actualYears - window) <= 0.25)) {
-      return { windowYears: window, cagrPct: point.cagrPct };
-    }
+    const { cagrPct } = windowCagr(points, window);
+    if (cagrPct !== null) return { windowYears: window, cagrPct };
   }
   return null;
 }

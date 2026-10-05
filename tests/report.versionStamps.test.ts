@@ -1,7 +1,7 @@
 /**
  * Version stamps after the 2026-10-04 audit follow-up, and legacy reads.
- * Report 1.9.0 and payload 1.10.0 apply calendar-aligned beta and FRED
- * lag conventions. Earlier stamps:
+ * Report 1.10.0 and payload 1.11.0 admit a 3y/5y revenue CAGR to the DCF
+ * growth anchor only when its measured span is its window (D-39). Earlier stamps:
  *
  *  - REPORT_SPEC_VERSION 1.4.0: every share count and per-share figure is on
  *    the share basis of the price it meets, or withheld. A 1.3.0 report's
@@ -74,21 +74,21 @@ function newReport(): Report {
 }
 
 describe("new version stamps", () => {
-  it("stamps completed-session beta and calendar-lag conventions", () => {
-    expect(REPORT_SPEC_VERSION).toBe("1.9.0");
-    expect(PAYLOAD_VERSION).toBe("1.10.0");
+  it("stamps the growth-anchor CAGR span convention", () => {
+    expect(REPORT_SPEC_VERSION).toBe("1.10.0");
+    expect(PAYLOAD_VERSION).toBe("1.11.0");
   });
 
   it("stamps a newly built report and payload with them", () => {
-    expect(newReport().meta.specVersion).toBe("1.9.0");
+    expect(newReport().meta.specVersion).toBe("1.10.0");
     const bundle = completeCurrencyBundle({});
     const payload = assembleContextPayload(bundle, runStageB(bundle), VALIDATION);
-    expect(payload.payloadVersion).toBe("1.10.0");
-    expect(payloadFingerprint(payload)).toMatch(/^1\.10\.0:[0-9a-f]{8}$/);
-    expect(serializePayloadForPrompt(payload)).toMatch(/^# CONTEXT PAYLOAD \(payloadVersion 1\.10\.0\)/);
+    expect(payload.payloadVersion).toBe("1.11.0");
+    expect(payloadFingerprint(payload)).toMatch(/^1\.11\.0:[0-9a-f]{8}$/);
+    expect(serializePayloadForPrompt(payload)).toMatch(/^# CONTEXT PAYLOAD \(payloadVersion 1\.11\.0\)/);
   });
 
-  it.each(["1.7.0", "1.8.0", "1.9.0"])("never resumes a pass stored under prior %s financial conventions", (version) => {
+  it.each(["1.7.0", "1.8.0", "1.9.0", "1.10.0"])("never resumes a pass stored under prior %s financial conventions", (version) => {
     const bundle = completeCurrencyBundle({});
     const payload = assembleContextPayload(bundle, runStageB(bundle), VALIDATION);
     const prior = payloadFingerprint({ ...payload, payloadVersion: version });
@@ -96,7 +96,7 @@ describe("new version stamps", () => {
     expect(payloadFingerprint(payload)).not.toBe(prior);
   });
 
-  it.each(["1.6.0", "1.7.0", "1.8.0"])("does not compare a prior %s report as the same financial convention", (version) => {
+  it.each(["1.6.0", "1.7.0", "1.8.0", "1.9.0"])("does not compare a prior %s report as the same financial convention", (version) => {
     const before = newReport();
     before.meta.specVersion = version;
     const after = newReport();

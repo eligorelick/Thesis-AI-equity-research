@@ -3,7 +3,7 @@
     "auditedBaseCommit": "524d09e81b00b08fe6af386011d34759a5e02fc0",
     "projectionSha256": "68222fc50a0b264723163fd76b7555dbff8fbf1e3269e82d4e36f4d3673d0376"
   },
-  "generatedAt": "2026-10-04",
+  "generatedAt": "2026-10-05",
   "keyedArrays": [
     "report.appendix.missingData",
     "stageB.gaps"
@@ -3346,670 +3346,9 @@
       "reason": "The 2026-09-30 currency-integrity rule for analyst estimates (D-28): an estimate is money only in the currency its own row states or a documented provider convention, and a listing currency that matches the statements is not evidence. The DEMO analyst-estimate rows carry no currency, as FMP's do not, so the DCF growth anchor no longer takes the analyst-consensus case built from the FY2026 and FY2027 revenue estimates; its point estimate is the median of the three remaining methods (the log-linear revenue regression and the 3- and 5-year CAGRs, 9.1089%). The near-term growth path, every DCF year row, the terminal and present values, the sensitivity grid, the DCF per share and the fair value (146.23 to 152.09) and the valuation aspect's DCF-upside driver (265.58 to 280.23) move with it; the assumption block no longer carries the estimates' as-of date. Three disclosures are added (valuation.analystEstimates.currency, valuation.dcf.analystGrowth, valuation.dcf.growthAnchor), so the later Stage B gaps and report manifest entries shift by index without changing.",
       "deltas": [
         {
-          "path": "report.fairValue.perShare.value",
-          "before": 146.23,
-          "after": 152.09
-        },
-        {
-          "path": "report.fairValue.upsidePct",
-          "before": 265.575,
-          "after": 280.22499999999997
-        },
-        {
-          "path": "report.scores.aspects.valuation.drivers.0.value",
-          "before": 265.58,
-          "after": 280.23
-        },
-        {
-          "path": "report.valuation.dcf.assumptions.2.basis",
-          "before": "held flat at current 20% under improving dated-margin regime (5y median 19%, slope 1pp/year)",
-          "after": "median of 3 available growth methods = 9.11%, range 9.1% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case unavailable: no usable analyst revenue estimates (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)."
-        },
-        {
-          "path": "report.valuation.dcf.assumptions.2.value",
-          "before": "20.0% → 20.0%",
-          "after": "9.1% (range 9.1% – 9.1%)"
-        },
-        {
-          "path": "report.valuation.dcf.assumptions.3.basis",
-          "before": "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, as of 2025-12-31)",
-          "after": "linear fade over the explicit 10-year horizon from 9.11% (median of the available growth methods (log-linear revenue regression 9.1%, 3y revenue CAGR 9.11%, 5y revenue CAGR 9.11%)) to the terminal rate 2.5% in year 10; median of 3 available growth methods = 9.11%, range 9.1% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case unavailable: no usable analyst revenue estimates (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)."
-        },
-        {
-          "path": "report.valuation.dcf.perShare.value",
-          "before": 146.23,
-          "after": 152.09
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.0.perShare",
-          "before": 166.376092292583,
-          "after": 171.19464386850754
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.1.perShare",
-          "before": 167.7149851175111,
-          "after": 171.64106298355026
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.2.perShare",
-          "before": 169.2211734983775,
-          "after": 172.08748209859291
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.3.perShare",
-          "before": 170.9424020912171,
-          "after": 172.53390121363563
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.4.perShare",
-          "before": 172.94649343185347,
-          "after": 172.9803203286783
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.5.perShare",
-          "before": 155.24133879734714,
-          "after": 160.69151921289097
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.6.perShare",
-          "before": 156.0003561762538,
-          "after": 161.0944125491401
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.7.perShare",
-          "before": 156.82318027878264,
-          "after": 161.49730588538912
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.8.perShare",
-          "before": 157.72643914234646,
-          "after": 161.90019922163822
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.9.perShare",
-          "before": 158.73308812865395,
-          "after": 162.30309255788728
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.10.perShare",
-          "before": 145.54397447067558,
-          "after": 151.363215136345
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.11.perShare",
-          "before": 145.888476635414,
-          "after": 151.72808967240871
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.12.perShare",
-          "before": 146.23297880015247,
-          "after": 152.09296420847244
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.13.perShare",
-          "before": 146.57748096489092,
-          "after": 152.4578387445361
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.14.perShare",
-          "before": 146.92198312962938,
-          "after": 152.8227132805998
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.15.perShare",
-          "before": 137.02303327015306,
-          "after": 143.0274985712121
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.16.perShare",
-          "before": 137.07019569277645,
-          "after": 143.3589752641525
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.17.perShare",
-          "before": 137.07839478363584,
-          "after": 143.69045195709288
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.18.perShare",
-          "before": 137.03897964504117,
-          "after": 144.02192865003326
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.19.perShare",
-          "before": 136.940533723176,
-          "after": 144.35340534297364
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.20.perShare",
-          "before": 129.477139616909,
-          "after": 135.53775028252716
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.21.perShare",
-          "before": 129.31120340693457,
-          "after": 135.83973894680193
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.22.perShare",
-          "before": 129.08313762406544,
-          "after": 136.1417276110767
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.23.perShare",
-          "before": 128.78009840764705,
-          "after": 136.44371627535148
-        },
-        {
-          "path": "report.valuation.dcf.sensitivityGrid.24.perShare",
-          "before": 128.38543965803257,
-          "after": 136.74570493962625
-        },
-        {
-          "path": "report.valuation.dcf.upsidePct",
-          "before": 265.575,
-          "after": 280.22499999999997
-        },
-        {
-          "path": "stageB.fairValue.perShare.value",
-          "before": 146.23,
-          "after": 152.09
-        },
-        {
-          "path": "stageB.fairValue.upsidePct",
-          "before": 265.575,
-          "after": 280.22499999999997
-        },
-        {
-          "path": "stageB.scores.aspects.valuation.drivers.0.value",
-          "before": 265.58,
-          "after": 280.23
-        },
-        {
           "path": "stageB.valuation.assumptions.asOf.estimates",
           "before": "2027-12-31",
           "after": null
-        },
-        {
-          "path": "stageB.valuation.assumptions.growthAnchor",
-          "beforeMissing": true,
-          "after": {
-            "pointPct": 9.108945117996182,
-            "rangePct": [
-              9.102622070718525,
-              9.108945117996182
-            ],
-            "methods": [
-              {
-                "name": "log-linear revenue regression",
-                "valuePct": 9.102622070718525,
-                "detail": "9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1"
-              },
-              {
-                "name": "3y revenue CAGR",
-                "valuePct": 9.108945117996182,
-                "detail": "9.11%"
-              },
-              {
-                "name": "5y revenue CAGR",
-                "valuePct": 9.108945117996182,
-                "detail": "9.11%"
-              },
-              {
-                "name": "analyst-consensus case",
-                "valuePct": null,
-                "detail": "unavailable: no usable analyst revenue estimates"
-              }
-            ],
-            "unavailable": [
-              "analyst-consensus case"
-            ],
-            "basis": "median of 3 available growth methods = 9.11%, range 9.1% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case unavailable: no usable analyst revenue estimates (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)."
-          }
-        },
-        {
-          "path": "stageB.valuation.assumptions.growthPath.basis",
-          "before": "linear fade from 7.89% (analyst consensus revenue, avg implied growth over next 2 fiscal years (through 2027-12-31)) to terminal 2.5% by year 10",
-          "after": "linear fade over the explicit 10-year horizon from 9.11% (median of the available growth methods (log-linear revenue regression 9.1%, 3y revenue CAGR 9.11%, 5y revenue CAGR 9.11%)) to the terminal rate 2.5% in year 10; median of 3 available growth methods = 9.11%, range 9.1% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case unavailable: no usable analyst revenue estimates (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)."
-        },
-        {
-          "path": "stageB.valuation.assumptions.growthPath.value.0",
-          "before": 7.888888888888889,
-          "after": 9.108945117996182
-        },
-        {
-          "path": "stageB.valuation.assumptions.growthPath.value.1",
-          "before": 7.290123456790123,
-          "after": 8.374617882663273
-        },
-        {
-          "path": "stageB.valuation.assumptions.growthPath.value.2",
-          "before": 6.691358024691358,
-          "after": 7.640290647330364
-        },
-        {
-          "path": "stageB.valuation.assumptions.growthPath.value.3",
-          "before": 6.092592592592593,
-          "after": 6.905963411997455
-        },
-        {
-          "path": "stageB.valuation.assumptions.growthPath.value.4",
-          "before": 5.493827160493828,
-          "after": 6.171636176664546
-        },
-        {
-          "path": "stageB.valuation.assumptions.growthPath.value.5",
-          "before": 4.895061728395062,
-          "after": 5.4373089413316364
-        },
-        {
-          "path": "stageB.valuation.assumptions.growthPath.value.6",
-          "before": 4.296296296296296,
-          "after": 4.702981705998727
-        },
-        {
-          "path": "stageB.valuation.assumptions.growthPath.value.7",
-          "before": 3.697530864197531,
-          "after": 3.9686544706658182
-        },
-        {
-          "path": "stageB.valuation.assumptions.growthPath.value.8",
-          "before": 3.098765432098766,
-          "after": 3.234327235332909
-        },
-        {
-          "path": "stageB.valuation.assumptions.notes.0",
-          "before": "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%",
-          "after": "Near-term growth anchor: median of 3 available growth methods = 9.11%, range 9.1% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case unavailable: no usable analyst revenue estimates (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)."
-        },
-        {
-          "path": "stageB.valuation.dcf.enterpriseValue",
-          "before": 28677760654.031258,
-          "after": 29879057662.736847
-        },
-        {
-          "path": "stageB.valuation.dcf.equityValue",
-          "before": 29977760654.031258,
-          "after": 31179057662.736847
-        },
-        {
-          "path": "stageB.valuation.dcf.perShare",
-          "before": 146.23297880015247,
-          "after": 152.09296420847244
-        },
-        {
-          "path": "stageB.valuation.dcf.pvExplicit",
-          "before": 14200057180.89785,
-          "after": 14545205284.659609
-        },
-        {
-          "path": "stageB.valuation.dcf.pvTerminal",
-          "before": 14477703473.133406,
-          "after": 15333852378.077236
-        },
-        {
-          "path": "stageB.valuation.dcf.terminalShare",
-          "before": 0.5048407945024906,
-          "after": 0.5131973220561299
-        },
-        {
-          "path": "stageB.valuation.dcf.terminalValue",
-          "before": 33568192262.428688,
-          "after": 35548814437.737465
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.0.ebit",
-          "before": 2697222222.2222223,
-          "after": 2727723627.949905
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.0.fcff",
-          "before": 1595946759.2592597,
-          "after": 1560844724.8343184
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.0.growthPct",
-          "before": 7.888888888888889,
-          "after": 9.108945117996182
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.0.nopat",
-          "before": 1966724537.0370374,
-          "after": 1988965145.380139
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.0.pv",
-          "before": 1526848189.0941052,
-          "after": 1493275793.0690434
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.0.reinvestment",
-          "before": 370777777.7777776,
-          "after": 428120420.5458207
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.0.revenue",
-          "before": 13486111111.11111,
-          "after": 13638618139.749523
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.1.ebit",
-          "before": 2893853052.1262,
-          "after": 2956160058.685829
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.1.fcff",
-          "before": 1741252142.392903,
-          "after": 1726907394.0365233
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.1.growthPct",
-          "before": 7.290123456790123,
-          "after": 8.374617882663273
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.1.nopat",
-          "before": 2110918102.6123817,
-          "after": 2156367883.8200607
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.1.pv",
-          "before": 1524733847.0201824,
-          "after": 1512202741.5407531
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.1.reinvestment",
-          "before": 369665960.2194786,
-          "after": 429460489.7835374
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.1.revenue",
-          "before": 14469265260.631,
-          "after": 14780800293.429144
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.2.ebit",
-          "before": 3087491120.5524225,
-          "after": 3182019279.169718
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.2.fcff",
-          "before": 1888999203.554957,
-          "after": 1897403589.5682359
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.2.growthPct",
-          "before": 6.691358024691358,
-          "after": 7.640290647330364
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.2.nopat",
-          "before": 2253038772.1962547,
-          "after": 2322018924.077947
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.2.pv",
-          "before": 1513976278.1400638,
-          "after": 1520762300.7945943
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.2.reinvestment",
-          "before": 364039568.6412978,
-          "after": 424615334.5097113
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.2.revenue",
-          "before": 15437455602.762112,
-          "after": 15910096395.848589
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.3.ebit",
-          "before": 3275599375.860153,
-          "after": 3401768366.351884
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.3.fcff",
-          "before": 2037588409.2147698,
-          "after": 2070208717.9567118
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.3.growthPct",
-          "before": 6.092592592592593,
-          "after": 6.905963411997455
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.3.nopat",
-          "before": 2391231929.193303,
-          "after": 2483337001.859184
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.3.pv",
-          "before": 1494715972.3478506,
-          "after": 1518715415.7775207
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.3.reinvestment",
-          "before": 353643519.9785333,
-          "after": 413128283.9024719
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.3.revenue",
-          "before": 16377996879.300764,
-          "after": 17008841831.759418
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.4.ebit",
-          "before": 3455555144.040124,
-          "after": 3611713133.495987
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.4.fcff",
-          "before": 2185260718.3870907,
-          "after": 2242922931.1391506
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.4.growthPct",
-          "before": 5.493827160493828,
-          "after": 6.171636176664546
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.4.nopat",
-          "before": 2523577562.565436,
-          "after": 2637619093.3700647
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.4.pv",
-          "before": 1467237408.5221174,
-          "after": 1506042637.3747866
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.4.reinvestment",
-          "before": 338316844.1783454,
-          "after": 394696162.2309141
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.4.revenue",
-          "before": 17277775720.20062,
-          "after": 18058565667.479935
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.5.ebit",
-          "before": 3624706701.3996186,
-          "after": 3808093134.638813
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.5.fcff",
-          "before": 2330126548.909354,
-          "after": 2412915193.731469
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.5.growthPct",
-          "before": 4.895061728395062,
-          "after": 5.4373089413316364
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.5.nopat",
-          "before": 2648131476.7452044,
-          "after": 2782109595.879982
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.5.pv",
-          "before": 1431962215.2504165,
-          "after": 1482946974.6875834
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.5.reinvestment",
-          "before": 318004927.8358502,
-          "after": 369194402.148513
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.5.revenue",
-          "before": 18123533506.998093,
-          "after": 19040465673.194065
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.6.ebit",
-          "before": 3780434841.163454,
-          "after": 3987187058.1082697
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.6.fcff",
-          "before": 2470201344.469651,
-          "after": 2577380686.028029
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.6.growthPct",
-          "before": 4.296296296296296,
-          "after": 4.702981705998727
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.6.nopat",
-          "before": 2762970247.2256613,
-          "after": 2914077262.150607
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.6.pv",
-          "before": 1389438480.1567645,
-          "after": 1449849029.013258
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.6.reinvestment",
-          "before": 292768902.75601006,
-          "after": 336696576.1225782
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.6.revenue",
-          "before": 18902174205.81727,
-          "after": 19935935290.541348
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.7.ebit",
-          "before": 3920217586.216349,
-          "after": 4145424735.543692
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.7.fcff",
-          "before": 2603447020.008648,
-          "after": 2733410316.674952
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.7.growthPct",
-          "before": 3.697530864197531,
-          "after": 3.9686544706658182
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.7.nopat",
-          "before": 2866238580.7080913,
-          "after": 3030897150.253546
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.7.pv",
-          "before": 1340326582.9243398,
-          "after": 1407374538.0148792
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.7.reinvestment",
-          "before": 262791560.69944328,
-          "after": 297486833.5785943
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.7.revenue",
-          "before": 19601087931.081745,
-          "after": 20727123677.71846
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.8.ebit",
-          "before": 4041695933.6410785,
-          "after": 4279501336.785609
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.8.fcff",
-          "before": 2727818246.380814,
-          "after": 2878070351.569982
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.8.growthPct",
-          "before": 3.098765432098766,
-          "after": 3.234327235332909
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.8.nopat",
-          "before": 2956197539.5393047,
-          "after": 3130134361.904785
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.8.pv",
-          "before": 1285382062.9140253,
-          "after": 1356334828.9117367
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.8.reinvestment",
-          "before": 228379293.1584908,
-          "after": 252064010.3348033
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.8.revenue",
-          "before": 20208479668.20539,
-          "after": 21397506683.928043
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.9.ebit",
-          "before": 4142738331.982105,
-          "after": 4386488870.205249
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.9.fcff",
-          "before": 2841312241.349679,
-          "after": 3008489439.760284
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.9.nopat",
-          "before": 3031271950.2308083,
-          "after": 3209626002.589206
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.9.pv",
-          "before": 1225436144.5279837,
-          "after": 1297701025.4754524
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.9.reinvestment",
-          "before": 189959708.88112947,
-          "after": 201136562.82892242
-        },
-        {
-          "path": "stageB.valuation.dcf.yearRows.9.revenue",
-          "before": 20713691659.910522,
-          "after": 21932444351.02624
-        },
-        {
-          "path": "stageB.valuation.gaps.3",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.dcf.growthAnchor",
-            "reason": "growth-anchor method(s) unavailable: analyst-consensus case — the point estimate is the median of the 3 that were computable",
-            "severity": "info"
-          }
         },
         {
           "path": "stageB.valuation.gaps.4",
@@ -4040,136 +3379,6 @@
               "fmp:/stable/analyst-estimates"
             ]
           }
-        },
-        {
-          "path": "stageB.valuation.notes.0",
-          "before": "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%",
-          "after": "Near-term growth anchor: median of 3 available growth methods = 9.11%, range 9.1% to 9.11% — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR 9.11%; 5y revenue CAGR 9.11%; analyst-consensus case unavailable: no usable analyst revenue estimates (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)."
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.0.0",
-          "before": 166.376092292583,
-          "after": 171.19464386850754
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.0.1",
-          "before": 167.7149851175111,
-          "after": 171.64106298355026
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.0.2",
-          "before": 169.2211734983775,
-          "after": 172.08748209859291
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.0.3",
-          "before": 170.9424020912171,
-          "after": 172.53390121363563
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.0.4",
-          "before": 172.94649343185347,
-          "after": 172.9803203286783
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.1.0",
-          "before": 155.24133879734714,
-          "after": 160.69151921289097
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.1.1",
-          "before": 156.0003561762538,
-          "after": 161.0944125491401
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.1.2",
-          "before": 156.82318027878264,
-          "after": 161.49730588538912
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.1.3",
-          "before": 157.72643914234646,
-          "after": 161.90019922163822
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.1.4",
-          "before": 158.73308812865395,
-          "after": 162.30309255788728
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.2.0",
-          "before": 145.54397447067558,
-          "after": 151.363215136345
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.2.1",
-          "before": 145.888476635414,
-          "after": 151.72808967240871
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.2.2",
-          "before": 146.23297880015247,
-          "after": 152.09296420847244
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.2.3",
-          "before": 146.57748096489092,
-          "after": 152.4578387445361
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.2.4",
-          "before": 146.92198312962938,
-          "after": 152.8227132805998
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.3.0",
-          "before": 137.02303327015306,
-          "after": 143.0274985712121
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.3.1",
-          "before": 137.07019569277645,
-          "after": 143.3589752641525
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.3.2",
-          "before": 137.07839478363584,
-          "after": 143.69045195709288
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.3.3",
-          "before": 137.03897964504117,
-          "after": 144.02192865003326
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.3.4",
-          "before": 136.940533723176,
-          "after": 144.35340534297364
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.4.0",
-          "before": 129.477139616909,
-          "after": 135.53775028252716
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.4.1",
-          "before": 129.31120340693457,
-          "after": 135.83973894680193
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.4.2",
-          "before": 129.08313762406544,
-          "after": 136.1417276110767
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.4.3",
-          "before": 128.78009840764705,
-          "after": 136.44371627535148
-        },
-        {
-          "path": "stageB.valuation.sensitivity.perShare.4.4",
-          "before": 128.38543965803257,
-          "after": 136.74570493962625
         }
       ]
     },
@@ -4471,15 +3680,6 @@
           }
         },
         {
-          "path": "report.appendix.missingData.50",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.dcf.growthAnchor",
-            "reason": "growth-anchor method(s) unavailable: analyst-consensus case — the point estimate is the median of the 3 that were computable",
-            "severity": "info"
-          }
-        },
-        {
           "path": "report.appendix.missingData.51",
           "beforeMissing": true,
           "after": {
@@ -4727,15 +3927,6 @@
           }
         },
         {
-          "path": "stageB.gaps.49",
-          "beforeMissing": true,
-          "after": {
-            "field": "valuation.dcf.growthAnchor",
-            "reason": "growth-anchor method(s) unavailable: analyst-consensus case — the point estimate is the median of the 3 that were computable",
-            "severity": "info"
-          }
-        },
-        {
           "path": "stageB.gaps.50",
           "beforeMissing": true,
           "after": {
@@ -4803,16 +3994,824 @@
       ]
     },
     {
-      "name": "calendar-session-lag-conventions",
+      "name": "growth-anchor-span-window",
       "decisions": [
-        "D-38"
+        "D-39"
       ],
-      "reason": "Completed regular US month-end beta and calendar-period FRED lags change financial conventions. The audited DEMO fixture has no affected beta/monthly macro inputs: only report.meta.specVersion moves to 1.9.0; its computed values and provenance remain unchanged.",
+      "reason": "DEMO has two years of annual revenue history, so its 3y and 5y revenue CAGRs both measure 2.00 years. The DCF growth anchor used to count that one two-year rate twice, as '3y revenue CAGR 9.11%' and '5y revenue CAGR 9.11%', beside the regression. Under D-39 a CAGR whose measured span differs from its window by more than 0.25 years (grading's tolerance, now growth.ts windowCagr) is excluded from the anchor and listed as unavailable with its span. The anchor falls from the 3-method median 9.11% to the single regression rate 9.10%, so the fade path, DCF year rows, terminal value, sensitivity grid, per-share/fair value (152.09 -> 152.06), upside (280.22 -> 280.15), the valuation upside driver value and the growth-anchor notes/basis/gap text move. No grade score, band or the composite moves; the displayed CAGR series is unchanged (D-37). report.meta.specVersion moves to 1.10.0 for the new convention.",
       "deltas": [
+        {
+          "path": "report.appendix.missingData.50",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.dcf.growthAnchor",
+            "reason": "growth-anchor method(s) unavailable: 3y revenue CAGR, 5y revenue CAGR, analyst-consensus case — the point estimate is the median of the 1 that were computable",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "report.fairValue.perShare.value",
+          "before": 146.23,
+          "after": 152.06
+        },
+        {
+          "path": "report.fairValue.upsidePct",
+          "before": 265.575,
+          "after": 280.15
+        },
         {
           "path": "report.meta.specVersion",
           "before": "1.2.0",
-          "after": "1.9.0"
+          "after": "1.10.0"
+        },
+        {
+          "path": "report.scores.aspects.valuation.drivers.0.value",
+          "before": 265.58,
+          "after": 280.16
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.2.basis",
+          "before": "held flat at current 20% under improving dated-margin regime (5y median 19%, slope 1pp/year)",
+          "after": "median of 1 available growth method = 9.1% (single method; no range) — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR unavailable: measured span 2.00 years, not the 3-year window (±0.25-year tolerance); 5y revenue CAGR unavailable: measured span 2.00 years, not the 5-year window (±0.25-year tolerance); analyst-consensus case unavailable: no usable analyst revenue estimates (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)."
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.2.value",
+          "before": "20.0% → 20.0%",
+          "after": "9.1% (single method)"
+        },
+        {
+          "path": "report.valuation.dcf.assumptions.3.basis",
+          "before": "latest annual FY 2025-12-31 revenue / invested capital (totalDebt + totalStockholdersEquity - cashAndShortTermInvestments, as of 2025-12-31)",
+          "after": "linear fade over the explicit 10-year horizon from 9.1% (median of the available growth methods (log-linear revenue regression 9.1%)) to the terminal rate 2.5% in year 10; median of 1 available growth method = 9.1% (single method; no range) — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR unavailable: measured span 2.00 years, not the 3-year window (±0.25-year tolerance); 5y revenue CAGR unavailable: measured span 2.00 years, not the 5-year window (±0.25-year tolerance); analyst-consensus case unavailable: no usable analyst revenue estimates (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)."
+        },
+        {
+          "path": "report.valuation.dcf.perShare.value",
+          "before": 146.23,
+          "after": 152.06
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.0.perShare",
+          "before": 166.376092292583,
+          "after": 171.15840197589566
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.1.perShare",
+          "before": 167.7149851175111,
+          "after": 171.6046893594757
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.2.perShare",
+          "before": 169.2211734983775,
+          "after": 172.05097674305577
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.3.perShare",
+          "before": 170.9424020912171,
+          "after": 172.49726412663574
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.4.perShare",
+          "before": 172.94649343185347,
+          "after": 172.9435515102158
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.5.perShare",
+          "before": 155.24133879734714,
+          "after": 160.65822199357265
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.6.perShare",
+          "before": 156.0003561762538,
+          "after": 161.06099644215163
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.7.perShare",
+          "before": 156.82318027878264,
+          "after": 161.4637708907306
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.8.perShare",
+          "before": 157.72643914234646,
+          "after": 161.86654533930957
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.9.perShare",
+          "before": 158.73308812865395,
+          "after": 162.26931978788855
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.10.perShare",
+          "before": 145.54397447067558,
+          "after": 151.3325195712894
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.11.perShare",
+          "before": 145.888476635414,
+          "after": 151.69728643845028
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.12.perShare",
+          "before": 146.23297880015247,
+          "after": 152.06205330561116
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.13.perShare",
+          "before": 146.57748096489092,
+          "after": 152.426820172772
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.14.perShare",
+          "before": 146.92198312962938,
+          "after": 152.79158703993286
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.15.perShare",
+          "before": 137.02303327015306,
+          "after": 142.9991153002795
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.16.perShare",
+          "before": 137.07019569277645,
+          "after": 143.33049417951045
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.17.perShare",
+          "before": 137.07839478363584,
+          "after": 143.66187305874143
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.18.perShare",
+          "before": 137.03897964504117,
+          "after": 143.99325193797242
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.19.perShare",
+          "before": 136.940533723176,
+          "after": 144.32463081720337
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.20.perShare",
+          "before": 129.477139616909,
+          "after": 135.5114330997847
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.21.perShare",
+          "before": 129.31120340693457,
+          "after": 135.81333265181695
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.22.perShare",
+          "before": 129.08313762406544,
+          "after": 136.11523220384916
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.23.perShare",
+          "before": 128.78009840764705,
+          "after": 136.4171317558814
+        },
+        {
+          "path": "report.valuation.dcf.sensitivityGrid.24.perShare",
+          "before": 128.38543965803257,
+          "after": 136.71903130791367
+        },
+        {
+          "path": "report.valuation.dcf.upsidePct",
+          "before": 265.575,
+          "after": 280.15
+        },
+        {
+          "path": "stageB.fairValue.perShare.value",
+          "before": 146.23,
+          "after": 152.06
+        },
+        {
+          "path": "stageB.fairValue.upsidePct",
+          "before": 265.575,
+          "after": 280.15
+        },
+        {
+          "path": "stageB.gaps.49",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.dcf.growthAnchor",
+            "reason": "growth-anchor method(s) unavailable: 3y revenue CAGR, 5y revenue CAGR, analyst-consensus case — the point estimate is the median of the 1 that were computable",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.scores.aspects.valuation.drivers.0.value",
+          "before": 265.58,
+          "after": 280.16
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthAnchor",
+          "beforeMissing": true,
+          "after": {
+            "pointPct": 9.102622070718525,
+            "rangePct": null,
+            "methods": [
+              {
+                "name": "log-linear revenue regression",
+                "valuePct": 9.102622070718525,
+                "detail": "9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1"
+              },
+              {
+                "name": "3y revenue CAGR",
+                "valuePct": null,
+                "detail": "unavailable: measured span 2.00 years, not the 3-year window (±0.25-year tolerance)"
+              },
+              {
+                "name": "5y revenue CAGR",
+                "valuePct": null,
+                "detail": "unavailable: measured span 2.00 years, not the 5-year window (±0.25-year tolerance)"
+              },
+              {
+                "name": "analyst-consensus case",
+                "valuePct": null,
+                "detail": "unavailable: no usable analyst revenue estimates"
+              }
+            ],
+            "unavailable": [
+              "3y revenue CAGR",
+              "5y revenue CAGR",
+              "analyst-consensus case"
+            ],
+            "basis": "median of 1 available growth method = 9.1% (single method; no range) — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR unavailable: measured span 2.00 years, not the 3-year window (±0.25-year tolerance); 5y revenue CAGR unavailable: measured span 2.00 years, not the 5-year window (±0.25-year tolerance); analyst-consensus case unavailable: no usable analyst revenue estimates (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)."
+          }
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.basis",
+          "before": "linear fade from 7.89% (analyst consensus revenue, avg implied growth over next 2 fiscal years (through 2027-12-31)) to terminal 2.5% by year 10",
+          "after": "linear fade over the explicit 10-year horizon from 9.1% (median of the available growth methods (log-linear revenue regression 9.1%)) to the terminal rate 2.5% in year 10; median of 1 available growth method = 9.1% (single method; no range) — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR unavailable: measured span 2.00 years, not the 3-year window (±0.25-year tolerance); 5y revenue CAGR unavailable: measured span 2.00 years, not the 5-year window (±0.25-year tolerance); analyst-consensus case unavailable: no usable analyst revenue estimates (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)."
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.0",
+          "before": 7.888888888888889,
+          "after": 9.102622070718525
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.1",
+          "before": 7.290123456790123,
+          "after": 8.368997396194244
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.2",
+          "before": 6.691358024691358,
+          "after": 7.635372721669963
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.3",
+          "before": 6.092592592592593,
+          "after": 6.9017480471456825
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.4",
+          "before": 5.493827160493828,
+          "after": 6.168123372621403
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.5",
+          "before": 4.895061728395062,
+          "after": 5.434498698097122
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.6",
+          "before": 4.296296296296296,
+          "after": 4.700874023572841
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.7",
+          "before": 3.697530864197531,
+          "after": 3.9672493490485614
+        },
+        {
+          "path": "stageB.valuation.assumptions.growthPath.value.8",
+          "before": 3.098765432098766,
+          "after": 3.2336246745242807
+        },
+        {
+          "path": "stageB.valuation.assumptions.notes.0",
+          "before": "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%",
+          "after": "Near-term growth anchor: median of 1 available growth method = 9.1% (single method; no range) — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR unavailable: measured span 2.00 years, not the 3-year window (±0.25-year tolerance); 5y revenue CAGR unavailable: measured span 2.00 years, not the 5-year window (±0.25-year tolerance); analyst-consensus case unavailable: no usable analyst revenue estimates (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)."
+        },
+        {
+          "path": "stageB.valuation.dcf.enterpriseValue",
+          "before": 28677760654.031258,
+          "after": 29872720927.650288
+        },
+        {
+          "path": "stageB.valuation.dcf.equityValue",
+          "before": 29977760654.031258,
+          "after": 31172720927.650288
+        },
+        {
+          "path": "stageB.valuation.dcf.perShare",
+          "before": 146.23297880015247,
+          "after": 152.06205330561116
+        },
+        {
+          "path": "stageB.valuation.dcf.pvExplicit",
+          "before": 14200057180.89785,
+          "after": 14543393335.214699
+        },
+        {
+          "path": "stageB.valuation.dcf.pvTerminal",
+          "before": 14477703473.133406,
+          "after": 15329327592.435589
+        },
+        {
+          "path": "stageB.valuation.dcf.terminalShare",
+          "before": 0.5048407945024906,
+          "after": 0.5131547149508806
+        },
+        {
+          "path": "stageB.valuation.dcf.terminalValue",
+          "before": 33568192262.428688,
+          "after": 35538324525.536705
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.ebit",
+          "before": 2697222222.2222223,
+          "after": 2727565551.7679634
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.fcff",
+          "before": 1595946759.2592597,
+          "after": 1561026644.173703
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.growthPct",
+          "before": 7.888888888888889,
+          "after": 9.102622070718525
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.nopat",
+          "before": 1966724537.0370374,
+          "after": 1988849881.4974735
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.pv",
+          "before": 1526848189.0941052,
+          "after": 1493449837.1244655
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.reinvestment",
+          "before": 370777777.7777776,
+          "after": 427823237.3237705
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.0.revenue",
+          "before": 13486111111.11111,
+          "after": 13637827758.839815
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.ebit",
+          "before": 2893853052.1262,
+          "after": 2955835441.7749147
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.fcff",
+          "before": 1741252142.392903,
+          "after": 1726983699.1385512
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.growthPct",
+          "before": 7.290123456790123,
+          "after": 8.368997396194244
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.nopat",
+          "before": 2110918102.6123817,
+          "after": 2156131092.35162
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.pv",
+          "before": 1524733847.0201824,
+          "after": 1512269559.7064977
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.reinvestment",
+          "before": 369665960.2194786,
+          "after": 429147393.21306884
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.1.revenue",
+          "before": 14469265260.631,
+          "after": 14779177208.874573
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.ebit",
+          "before": 3087491120.5524225,
+          "after": 3181524494.7936497
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.fcff",
+          "before": 1888999203.554957,
+          "after": 1897362444.7787037
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.growthPct",
+          "before": 6.691358024691358,
+          "after": 7.635372721669963
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.nopat",
+          "before": 2253038772.1962547,
+          "after": 2321657864.453925
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.pv",
+          "before": 1513976278.1400638,
+          "after": 1520729323.390557
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.reinvestment",
+          "before": 364039568.6412978,
+          "after": 424295419.6752213
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.2.revenue",
+          "before": 15437455602.762112,
+          "after": 15907622473.968246
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.ebit",
+          "before": 3275599375.860153,
+          "after": 3401105299.4825315
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.fcff",
+          "before": 2037588409.2147698,
+          "after": 2070041041.2448125
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.growthPct",
+          "before": 6.092592592592593,
+          "after": 6.9017480471456825
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.nopat",
+          "before": 2391231929.193303,
+          "after": 2482852954.059911
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.pv",
+          "before": 1494715972.3478506,
+          "after": 1518592407.307399
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.reinvestment",
+          "before": 353643519.9785333,
+          "after": 412811912.8150983
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.3.revenue",
+          "before": 16377996879.300764,
+          "after": 17005526497.412657
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.ebit",
+          "before": 3455555144.040124,
+          "after": 3610889670.3873787
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.fcff",
+          "before": 2185260718.3870907,
+          "after": 2242623104.382533
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.growthPct",
+          "before": 5.493827160493828,
+          "after": 6.168123372621403
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.nopat",
+          "before": 2523577562.565436,
+          "after": 2637017721.683646
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.pv",
+          "before": 1467237408.5221174,
+          "after": 1505841314.4166846
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.reinvestment",
+          "before": 338316844.1783454,
+          "after": 394394617.301113
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.4.revenue",
+          "before": 17277775720.20062,
+          "after": 18054448351.936893
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.ebit",
+          "before": 3624706701.3996186,
+          "after": 3807123422.5143037
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.fcff",
+          "before": 2330126548.909354,
+          "after": 2412481691.4019623
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.growthPct",
+          "before": 4.895061728395062,
+          "after": 5.434498698097122
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.nopat",
+          "before": 2648131476.7452044,
+          "after": 2781401145.400581
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.pv",
+          "before": 1431962215.2504165,
+          "after": 1482680549.672012
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.reinvestment",
+          "before": 318004927.8358502,
+          "after": 368919453.99861884
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.5.revenue",
+          "before": 18123533506.998093,
+          "after": 19035617112.571518
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.ebit",
+          "before": 3780434841.163454,
+          "after": 3986091498.5286365
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.fcff",
+          "before": 2470201344.469651,
+          "after": 2576816578.0942516
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.growthPct",
+          "before": 4.296296296296296,
+          "after": 4.700874023572841
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.nopat",
+          "before": 2762970247.2256613,
+          "after": 2913276561.001197
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.pv",
+          "before": 1389438480.1567645,
+          "after": 1449531702.4559205
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.reinvestment",
+          "before": 292768902.75601006,
+          "after": 336459982.9069452
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.6.revenue",
+          "before": 18902174205.81727,
+          "after": 19930457492.64318
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.ebit",
+          "before": 3920217586.216349,
+          "after": 4144229687.5564938
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.fcff",
+          "before": 2603447020.008648,
+          "after": 2732723604.235611
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.growthPct",
+          "before": 3.697530864197531,
+          "after": 3.9672493490485614
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.nopat",
+          "before": 2866238580.7080913,
+          "after": 3030023399.6079826
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.pv",
+          "before": 1340326582.9243398,
+          "after": 1407020964.4601989
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.reinvestment",
+          "before": 262791560.69944328,
+          "after": 297299795.37237155
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.7.revenue",
+          "before": 19601087931.081745,
+          "after": 20721148437.782467
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.ebit",
+          "before": 4041695933.6410785,
+          "after": 4278238521.3022804
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.fcff",
+          "before": 2727818246.380814,
+          "after": 2877274099.6192937
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.growthPct",
+          "before": 3.098765432098766,
+          "after": 3.2336246745242807
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.nopat",
+          "before": 2956197539.5393047,
+          "after": 3129210707.061373
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.pv",
+          "before": 1285382062.9140253,
+          "after": 1355959582.9582393
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.reinvestment",
+          "before": 228379293.1584908,
+          "after": 251936607.44207966
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.8.revenue",
+          "before": 20208479668.20539,
+          "after": 21391192606.511402
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.ebit",
+          "before": 4142738331.982105,
+          "after": 4385194484.334838
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.fcff",
+          "before": 2841312241.349679,
+          "after": 3007601680.475504
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.nopat",
+          "before": 3031271950.2308083,
+          "after": 3208678890.976711
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.pv",
+          "before": 1225436144.5279837,
+          "after": 1297318093.7227235
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.reinvestment",
+          "before": 189959708.88112947,
+          "after": 201077210.501207
+        },
+        {
+          "path": "stageB.valuation.dcf.yearRows.9.revenue",
+          "before": 20713691659.910522,
+          "after": 21925972421.674187
+        },
+        {
+          "path": "stageB.valuation.gaps.3",
+          "beforeMissing": true,
+          "after": {
+            "field": "valuation.dcf.growthAnchor",
+            "reason": "growth-anchor method(s) unavailable: 3y revenue CAGR, 5y revenue CAGR, analyst-consensus case — the point estimate is the median of the 1 that were computable",
+            "severity": "info"
+          }
+        },
+        {
+          "path": "stageB.valuation.notes.0",
+          "before": "EBIT margin regime improving: dated 5y slope 1pp/year; target 20% versus current 20% and median 19%",
+          "after": "Near-term growth anchor: median of 1 available growth method = 9.1% (single method; no range) — methods: log-linear revenue regression 9.1%/yr fitted over 3 annual years (2023-12-31 to 2025-12-31), R2 1; 3y revenue CAGR unavailable: measured span 2.00 years, not the 3-year window (±0.25-year tolerance); 5y revenue CAGR unavailable: measured span 2.00 years, not the 5-year window (±0.25-year tolerance); analyst-consensus case unavailable: no usable analyst revenue estimates (house rule, WS6 D-18: median of methods; the former \"lower of the 3y/5y CAGR\" and sign-disagreement rules are RETIRED)."
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.0.0",
+          "before": 166.376092292583,
+          "after": 171.15840197589566
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.0.1",
+          "before": 167.7149851175111,
+          "after": 171.6046893594757
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.0.2",
+          "before": 169.2211734983775,
+          "after": 172.05097674305577
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.0.3",
+          "before": 170.9424020912171,
+          "after": 172.49726412663574
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.0.4",
+          "before": 172.94649343185347,
+          "after": 172.9435515102158
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.1.0",
+          "before": 155.24133879734714,
+          "after": 160.65822199357265
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.1.1",
+          "before": 156.0003561762538,
+          "after": 161.06099644215163
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.1.2",
+          "before": 156.82318027878264,
+          "after": 161.4637708907306
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.1.3",
+          "before": 157.72643914234646,
+          "after": 161.86654533930957
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.1.4",
+          "before": 158.73308812865395,
+          "after": 162.26931978788855
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.2.0",
+          "before": 145.54397447067558,
+          "after": 151.3325195712894
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.2.1",
+          "before": 145.888476635414,
+          "after": 151.69728643845028
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.2.2",
+          "before": 146.23297880015247,
+          "after": 152.06205330561116
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.2.3",
+          "before": 146.57748096489092,
+          "after": 152.426820172772
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.2.4",
+          "before": 146.92198312962938,
+          "after": 152.79158703993286
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.3.0",
+          "before": 137.02303327015306,
+          "after": 142.9991153002795
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.3.1",
+          "before": 137.07019569277645,
+          "after": 143.33049417951045
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.3.2",
+          "before": 137.07839478363584,
+          "after": 143.66187305874143
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.3.3",
+          "before": 137.03897964504117,
+          "after": 143.99325193797242
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.3.4",
+          "before": 136.940533723176,
+          "after": 144.32463081720337
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.4.0",
+          "before": 129.477139616909,
+          "after": 135.5114330997847
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.4.1",
+          "before": 129.31120340693457,
+          "after": 135.81333265181695
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.4.2",
+          "before": 129.08313762406544,
+          "after": 136.11523220384916
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.4.3",
+          "before": 128.78009840764705,
+          "after": 136.4171317558814
+        },
+        {
+          "path": "stageB.valuation.sensitivity.perShare.4.4",
+          "before": 128.38543965803257,
+          "after": 136.71903130791367
         }
       ]
     }

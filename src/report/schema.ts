@@ -70,7 +70,9 @@ import type { Grade, ClaimLabel, ManifestEntry } from "@/types/core";
 // Judge length metadata distinguishes attempted from actual shortening.
 // 1.9.0 (recommendation review 2026-10-04): beta requires completed regular
 // US month-end sessions; monthly/quarterly/annual FRED changes use calendar lags.
-export const REPORT_SPEC_VERSION = "1.9.0" as const;
+// 1.10.0 (D-39, 2026-10-05): a 3y/5y revenue CAGR enters the DCF growth anchor
+// only when its measured span is its window; DCF, targets and notes can move.
+export const REPORT_SPEC_VERSION = "1.10.0" as const;
 
 /* ------------------------------------------------------------------------ *
  * Legacy-read leniency

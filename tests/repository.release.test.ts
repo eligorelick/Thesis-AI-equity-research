@@ -68,6 +68,7 @@ const ALLOWED_MARKDOWN = new Set([
   "docs/CLAUDE-USAGE.md",
   "docs/DATA-RIGHTS.md",
   "docs/METHODOLOGY.md",
+  "docs/OPERATIONS.md",
   // The evidence base the forensic code cites by section. `research §N` was
   // cited from three source files for months with no such document in the
   // repository; docs.lint now asserts every citation resolves to a heading.
@@ -429,15 +430,14 @@ describe("public release contract", () => {
 
   // The engines floor moved to 22.18 and the README says so, so the old
   // "Node.js 24 LTS" requirement line is gone (WS9, D-22). The facts that
-  // matter are unchanged and still pinned: the tested version, the floor, that
-  // Node 20 is out of support, and that branch protection is a human step.
+  // matter are pinned: the tested version, the package engine floor,
+  // and that branch protection is a human step.
   it("documents the supported Node versions and branch protection", () => {
     const readme = read("README.md");
     const pkg = JSON.parse(read("package.json")) as { engines: { node: string } };
     expect(pkg.engines.node).toBe(">=22.18.0");
-    expect(readme).toContain("Node.js 22.18 or newer");
+    expect(readme).toContain(`Node.js ${pkg.engines.node.slice(2)} or newer`);
     expect(readme).toMatch(/CI tests Node 24/);
-    expect(readme).toMatch(/Node 20 reached end of life/);
     expect(readme).not.toContain("compatibility lane");
     expect(readme).toMatch(/Protect `main` by requiring\s+the `full` and `windows-smoke` checks/);
   });

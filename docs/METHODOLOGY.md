@@ -3,8 +3,14 @@
 What Thesis computes, from which inputs, under which conventions, and where a
 convention is this project's own choice rather than a standard.
 
-Two rules govern everything below. Every number carries a source and an as-of
-date. Where a rule is a house convention rather than an established method, it
+The implemented behavior below was checked against the source and synthetic
+tests on 2026-10-04. The historical literature citations remain the project's
+research rationale; a passing test validates implementation behavior, not the
+predictive validity of a model or a live provider's contract.
+
+Two rules govern everything below. Reported numeric claims use provenance
+records with source and as-of information where established; missing dates,
+units or currency can prevent verification. Where a rule is a house convention rather than an established method, it
 says so in the same breath as the number it produces — in the DCF assumption
 block, in the report's missing-data manifest, or both.
 
@@ -56,6 +62,97 @@ Sources referred to by name throughout:
 
 ---
 
+## Input eligibility, period selection and currency
+
+Stage A fetches and checks a bundle; `src/pipeline/compute.ts` adapts that bundle
+into the pure Stage B modules. Provider availability is not itself evidence
+that every field can enter a calculation. A failed fetch, a successful empty
+response, an unresolved share basis, an ambiguous restatement and an unsupported
+business-model metric have different reasons in the missing-data manifest.
+
+The keyless layer in `src/pipeline/keyless.ts` requires EDGAR registrant
+confirmation before substituting issuer data. Under `auto`, usable FMP rows
+stand and EDGAR can append strictly older whole rows per statement family;
+`edgar` rebuilds the six statement members from filed facts; `fmp` disables
+older-period and predecessor append, but currently still permits EDGAR
+replacement of failed/empty members. No statement row splices FMP fields with
+EDGAR fields; different statement families can have different sources for the
+same fiscal period. Provenance therefore belongs to each row rather than a
+promise of one provider for an entire period. See
+`tests/dataBundle.historyDepth.test.ts` and `tests/keyless.test.ts`.
+
+**Instrument boundary.** `classifyInstrumentSupport` in
+`src/pipeline/stageB/instrumentSupport.ts` rejects a profile explicitly marked
+`isEtf` or `isFund`. Company loading, report admission and Stage B enforce that
+boundary; the workflow supports individual companies. False, absent or unknown
+flags do not prove that a security is a company: the classifier permits those
+inputs, so identification still depends on provider evidence. ADRs are a
+company overlay, not an unsupported-instrument classification.
+
+**Whole rows and restatements.** Annual and quarterly statement normalization
+uses `src/pipeline/stageB/quarterWindows.ts`. A period end must be a real,
+exact Gregorian `YYYY-MM-DD`. Duplicate rows for one period survive only when
+one whole row is provably later than every other row using `acceptedDate`,
+or `filingDate` when acceptance is absent. Date-only recency represents the
+entire day; tied or overlapping intervals, invalid recency, or missing recency
+reject the whole duplicate period. Values are not selected field by field
+from conflicting restatements.
+
+**TTM.** The newest four normalized quarters are usable only when consecutive
+period ends are 70–135 days apart and the newest-to-oldest period-end span is
+250–320 days. If an earlier quarter is available, an interval under 70 days
+into the oldest slot rejects that slot as a transition/stub period. A long gap
+before the window alone does not reject it: earlier history can be missing.
+The newest window drives the current TTM; the pipeline does not relabel an older
+valid window as current after the newest one fails. Relevant calculations fall
+back to the explicitly dated annual statement or become unavailable. Each
+summed field needs all four numeric inputs; weighted-average share counts use
+a four-quarter average rather than a sum. Own-history construction scans older
+candidate windows separately and can retain valid windows beyond rejected ones.
+
+**Currency evidence.** Income, cash-flow and balance rows carry their own
+presentation currency. An unlabeled row may use another statement's label only
+when fiscal period and filing identity establish that it is from the same
+filing. Date coincidence alone and the latest annual currency are insufficient
+evidence for an unlabeled quarter. Conflicting labels within that filing fail
+closed. A TTM sum requires all quarters to be established in one currency.
+
+The model uses the established TTM income currency when it agrees with the
+latest annual income currency, or when that annual label is unknown; otherwise
+it uses the annual currency. Cash-flow TTM must match that model currency.
+Each family of history is truncated at its first incompatible
+or unestablished currency observation. Growth, return denominators, capital
+series, projections and own-history calculations therefore do not cross a
+presentation-currency change. A dimensionless margin within one statement may
+still be shown on a row that cannot enter a cross-period money calculation.
+Original statement rows remain available in their own currency or labeled
+unknown. No FX series or automatic conversion is supplied.
+
+`src/pipeline/stageB/priceCurrency.ts` permits a model/quote comparison only
+when both currencies are known three-letter codes and equal. Unknown currency
+is an unproven comparison as well as a known mismatch. This withholds price
+multiples, market-cap reverse valuations, market-value capital weights and
+upside calculations. An equity-only intrinsic figure that does not require
+the quote can remain in statement currency; FCFF valuation also depends on
+the WACC's market-value weights. Same-currency checks do not independently
+resolve ADR ordinary-share/receipt ratios: established share basis remains a
+separate prerequisite.
+
+**Analyst-estimate currency.** `src/pipeline/estimateCurrency.ts` requires the
+estimate row's own `reportedCurrency`/`currency` or a documented provider
+convention. The provider-convention constant is currently null. A matching
+listing currency does not establish an estimate's currency. All estimate rows
+must share the model currency to enter the consensus growth method; otherwise
+they are disclosed as currency unknown or incompatible and excluded. Monetary
+estimate/target fields with unknown currency cannot become verified money
+merely because they are present in the payload.
+
+These contracts are covered by `tests/stageB.quarterWindows.test.ts`,
+`tests/stageB.ttm.compute.test.ts`, `tests/currency.quarterEvidence.test.ts`,
+`tests/currency.annualCompatibility.test.ts`,
+`tests/currency.priceComparison.test.ts` and
+`tests/currency.analystEstimates.test.ts`.
+
 ## WACC inputs
 
 The discount rate is never printed as a bare percentage. Every input is named
@@ -65,7 +162,7 @@ rate)` row) and in the report's computed-returns notes.
 | Input | Source | Convention |
 | --- | --- | --- |
 | Risk-free rate | FMP treasury rates (`year10`), else **FRED `DGS10`** | The series id and the observation date are both stated. |
-| Equity risk premium | FMP market-risk-premium (US `totalEquityRiskPremium`), else the dated **Damodaran** implied-ERP fallback | The fallback carries its own publication date and is rejected once it is older than 210 days rather than used stale. A value outside [3%, 25%] is treated as implausible and falls back. |
+| Equity risk premium | FMP market-risk-premium `totalEquityRiskPremium` for the issuer's domicile, with country-code/name alias matching; an absent or conflicting domicile row falls back to the unambiguous US row with disclosure, then the dated **Damodaran US** implied-ERP fallback if the selected input is missing or implausible | Conflicting distinct premiums for one country are not chosen by array order. The static fallback is 4.18%, dated 2026-07-01 in `returns.ts`; it requires a valid analysis date, cannot post-date that analysis, and expires after 210 days. A value outside [3%, 25%] falls back. This domicile rule is a house assumption, not an estimate of geographic revenue exposure. |
 | Beta | Provider profile beta, **mean-reversion adjusted** (0.667·raw + 0.333 — the Bloomberg 2/3–1/3 weighting of Blume's finding, not his fitted 0.371 + 0.635·β; see [RESEARCH §7.1](RESEARCH.md)), clamped to [0.6, 2.0] | Raw beta outside (0, 4] is unusable and the WACC fails closed rather than inventing market exposure. One set of constants serves the WACC and the keyless beta estimate, so a report prints one adjusted beta. |
 | Cost of equity | rf + beta × ERP | Clamped to [rf + 2.5%, 25%]. |
 | Cost of debt | `effective` (interest expense ÷ average debt), `historical` (the issuer's last year that still disclosed interest), or `synthetic` (rf + rating spread from interest coverage, Damodaran's January 2026 table) | The method actually used is named. An effective rate outside [rf − 1, rf + 19] is rejected in favour of the synthetic rating. Debt below 2% of assets is treated as noise, and the note says whether a synthetic rating then ran. Interest expense and the EBIT it is scored against come from **one** statement basis — the trailing twelve months when both are available, else the latest annual statement for both legs — and the basis is named; a mixed pair is the last resort and is labelled as such. |
@@ -87,6 +184,57 @@ the current WACC was applied to them. FRED history is fetched five years back,
 so roughly five fiscal years can carry their own rate.
 
 ---
+
+## Growth, annual returns and capital diagnostics
+
+`src/pipeline/stageB/growth.ts` reports requested 1/3/5/10-year revenue,
+diluted-EPS and before-SBC FCF CAGRs as `(end/start)^(1/years) − 1`.
+Non-positive endpoints or sign flips withhold the CAGR. Short history degrades
+to the available span, with `actualYears` and dates shown. A material difference
+between row-count span and elapsed-date span (more than 0.1 years) uses elapsed
+years and records irregularity. Margin trends use gross/operating/net income
+over positive revenue, up to ten annual observations, and OLS slopes in
+percentage points per elapsed year with at least three usable points. Named
+valuation/scoring consumers separately check that a degraded CAGR actually
+matches the window they require.
+
+`src/pipeline/stageB/returns.ts` computes up to five annual return observations.
+ROIC is annual `EBIT × (1 − observed effective tax rate) / invested capital`,
+with the tax rate clamped to [0%, 35%], invested capital equal to debt plus
+stockholders' equity less cash and short-term investments, and the operating
+lease adjustment described below. An unavailable observed tax rate withholds
+that year's NOPAT/ROIC; non-positive invested capital is not interpreted as
+an exceptional return. This historical NOPAT is separate from the forward
+DCF's projected loss-carryforward logic.
+
+ROTE is income available to common / average tangible common equity, with
+preferred allocations required when preferred equity is outstanding. Tangible
+common equity subtracts goodwill, other intangibles and preferred from equity.
+DuPont reports `net margin × asset turnover × equity multiplier = ROE`, where
+the factors are NI/revenue, revenue/average assets and average assets/average
+equity. Matching annual return balances use the 45-day tolerance in `returns.ts` and
+adjacent annual averaging rule below. Missing eligible prior balances use a
+disclosed single-period denominator. ROTE is retained on the financial routes
+where ROIC is inapplicable; it is not computed by substituting a vendor ROE.
+
+`src/pipeline/stageB/capital.ts` derives capex/revenue, capex/D&A, before- and
+after-SBC FCF conversion, share trends, SBC intensity, interest coverage and
+net debt/EBITDA where the route permits them. Conversion requires positive
+net income, and leverage requires positive EBITDA. Maintenance capex
+`min(abs(capex), D&A)` and growth capex `max(0, abs(capex) − D&A)` are house
+heuristics, not a filed maintenance/development split.
+
+Buyback price discipline is a proxy: within each fiscal cash-flow window,
+average the available market-cap history and divide by basic weighted-average
+shares (diluted fallback disclosed). Negative repurchase cash flow is converted
+to positive dollars spent; implied shares bought equal spend / proxy price.
+The aggregate price is total covered spend / total implied shares. Its
+premium/discount is `(current price − proxy paid price) / proxy paid price`;
+positive means the current price exceeds the proxy paid price. Partial dollar
+coverage is disclosed. It is not the actual transaction-price record and is
+withheld for ADRs or unmatched/unknown quote/statement currencies.
+See `tests/stageB.growth.returns.capital.test.ts`,
+`tests/stageB.returnsCurrencyAndIc.test.ts` and `tests/stageB.rote.test.ts`.
 
 ## Growth anchor
 
@@ -192,18 +340,22 @@ explicit horizon. That is the Koller/Goedhart/Wessels recommendation for most
 firms. Applied to every issuer, however, it values an evidenced compounder as
 if its returns collapsed to the cost of capital in year 11.
 
-So: when ROIC exceeded the WACC in **each of the last four or more fiscal
-years on record**, half the median spread is carried in perpetuity, capped at
+So: the implementation sorts computable annual ROIC observations newest-first
+and inspects at most five. When ROIC exceeded the applicable WACC in **all of
+at least four of those observations**, half the median spread is carried in perpetuity, capped at
 **5 percentage points**. A carried spread below 0.5pp is treated as noise and
 the default holds. Anything short of that evidence keeps the default, and the
-reason is written into the assumption notes. This follows McKinsey's RONIC
+reason is written into the assumption notes. Missing-ROIC years are excluded
+before this test, and the helper does not require that the retained annual
+dates are consecutive; this is evidence from available observations, not proof
+of four uninterrupted years. This follows McKinsey's RONIC
 guidance (a top-quintile ROIC advantage roughly halves over 10–15 years rather
 than closing) and Damodaran's allowance of perpetual excess returns only when
 they are modest.
 
 Each fiscal year is compared to **its own** WACC where one could be recomputed
-(see *WACC inputs* above); otherwise the current WACC is applied to every year
-and the note says exactly that. Any year that could not be recomputed also
+(see *WACC inputs* above); otherwise the current WACC is applied to that missing
+year and the note names the fallback years. Any year that could not be recomputed also
 reaches the missing-data manifest as `returns.wacc.history`, including the
 partial case where only some years are missing. When a history is supplied but
 no year carries a computable ROIC there is no comparison at all, and the note
@@ -389,6 +541,17 @@ Preferred and minority interests are claims senior to common equity, so they
 belong in EV; undisclosed means zero, following the provider's convention. The
 DCF's equity bridge is the same identity read backwards: equity value =
 EV − net debt − minority interest − preferred equity.
+
+`src/pipeline/stageB/netDebt.ts` owns the `NET_DEBT_V1` resolver: debt minus
+the combined cash-and-short-term-investments field, or minus both separately
+disclosed cash components when the combined field is unavailable. Negative
+total debt, absent debt, missing cash components, or contradictory combined
+cash evidence withholds house net debt. Combined cash below reported cash,
+or disagreement with the component sum beyond `max(1, abs(combined) × 1e-6)`
+is a conflict; it cannot fall back to a narrower cash-only convention. Vendor
+net debt is diagnostic evidence only, because it can omit short-term investments.
+The selected balance is the newest whole quarterly/annual row, so the bridge
+does not assemble debt and cash from different fiscal periods.
 
 **The OPERATING-lease liability is excluded by default; the finance-lease
 liability is not.** The option to keep the operating slice in is
@@ -983,19 +1146,310 @@ denominator used, and the notes state that the score is not comparable to a
 
 ---
 
+## FCFF arithmetic, sensitivity and reverse valuation
+
+`src/pipeline/stageB/valuation.ts` returns full-precision model values. Rates
+ending in `Pct` are percentage units (8 means 8%); the debt tax shield uses
+a fractional effective rate. Display rounding does not feed the DCF engine.
+
+For each explicit year `t`, with rates converted to fractions:
+
+```
+revenue_t = revenue_(t-1) × (1 + growth_t)
+EBIT_t = revenue_t × EBIT_margin_t
+reinvestment_t = max(0, (revenue_t − revenue_(t-1)) / sales_to_capital)
+FCFF_t = NOPAT_t − reinvestment_t
+PV_t = FCFF_t / (1 + WACC)^(t − 0.5)
+```
+
+The reinvestment floor means shrinking revenue releases no capital in this
+model. NOPAT is EBIT less cash tax: a loss earns no cash tax refund. Projected
+losses accumulate a net-operating-loss balance and shelter later positive EBIT
+inside the explicit horizon. No jurisdictional carryforward limits, opening
+tax-loss asset or residual tax asset in the terminal value are modeled. The
+year rows report the effective tax rate actually applied, including shelter.
+
+The continuing value uses the last explicit margin and tax assumption:
+
+```
+EBIT_(N+1) = revenue_N × (1 + terminal_growth) × margin_N
+NOPAT_(N+1) = EBIT_(N+1) × (1 − tax_N), if EBIT_(N+1) > 0
+             EBIT_(N+1), otherwise
+terminal_FCFF = NOPAT_(N+1) × (1 − terminal_growth / terminal_ROIC)
+terminal_value = terminal_FCFF / (WACC − terminal_growth)
+PV_terminal = terminal_value / (1 + WACC)^(N − 0.5)
+EV = sum(PV_t) + PV_terminal
+```
+
+The mid-year timing applies to the terminal discount as well as explicit cash
+flows. Terminal reinvestment greater than 100% is capped at 100% with a note;
+non-positive terminal ROIC substitutes zero reinvestment with a note. Negative
+terminal growth is not floored here. Missing net debt prevents EV-to-equity
+bridging; missing/non-positive diluted shares prevents per-share valuation.
+Preferred and minority claims are subtracted separately, with null treated as
+zero. The bridge recorded on the base result is reused by scenario reruns.
+
+The **5 × 5 sensitivity grid** uses WACC and terminal-growth offsets of
+−1, −0.5, 0, +0.5 and +1 percentage points. It holds explicit paths fixed and
+retains the base terminal excess spread above each cell's own WACC. A cell
+inside the 1.5pp Gordon guard is null, rather than moved to a different growth
+rate. Sensitivity growth is an axis experiment; it is not a new base-case
+terminal-growth recommendation.
+
+The **reverse DCF** first searches constant explicit-horizon revenue growth
+over [−20%, 60%], retaining the base margins, taxes, sales-to-capital, terminal
+assumptions and bridge. This constant growth is a different path from the
+forward DCF's fading growth and is labeled accordingly. A 17-point prescan
+finds exact roots or sign-change intervals; multiple branches choose the
+interval nearest base year-one growth. Bisection stops at 0.01pp interval
+width, 80 iterations, or valuation error under 0.05% of price. A non-positive
+year-one base FCFF skips that inversion; no growth root also falls back to
+solving a terminal EBIT margin in [0%, 60%], with a margin fade over the full
+explicit horizon and the base growth path held. Failure to bracket either
+quantity reports no solution and explains the range; it does not extrapolate
+an answer. See `tests/stageB.valuation.test.ts`,
+`tests/stageB.dcfLossTax.test.ts` and `tests/stageB.dcfDisplay.test.ts`.
+
+## Overlays and cash runway
+
+`src/pipeline/stageB/sectorRouting.ts` composes overlays with the base business
+route. **Unprofitable** means negative selected net income or negative selected
+operating cash flow, with dated annual fallbacks when TTM is unavailable.
+For banks, insurers and mortgage REITs, negative OCF alone cannot trigger it:
+funding flows are operating cash flows on those balance sheets. The overlay
+suppresses the general FCFF DCF; it is a house applicability rule and does not
+establish that every future cash flow will be negative.
+
+**Pre-revenue** means selected revenue below USD 10 million. The threshold is
+evaluated only on established USD statements; a foreign-currency amount is
+not compared with the dollar cutoff. Missing revenue does not imply zero.
+**Recent IPO** requires an actual, valid, non-future IPO date within 24 months
+of the bundle's analysis date. Fewer than eight quarters alone is incomplete
+coverage, not proof of a recent listing. The overlays replace or suppress
+inapplicable long-history and valuation sections with disclosed reasons.
+
+Runway uses the newest whole quarterly/annual balance as its liquidity anchor,
+cash plus short-term investments (with supported balance-sheet fallbacks), and
+up to four usable recent cash-flow quarters. Average quarterly burn is the
+negative of mean `(OCF + signed capex)`, using **before-SBC** cash flow.
+It does not average only loss-making quarters: positive quarters remain in
+the average. Missing component rows are excluded with reasons; a mean at or
+above zero is self-funding and has no exhaustion estimate. Runway quarters
+equal liquidity / average burn, and exhaustion date is anchored on the
+balance date plus `runway × 365.25/4` days. Burn quarters must share an
+established currency and liquidity must share that currency before the ratio
+can be published. The estimate assumes unchanged burn and no financing, asset
+sales or operating response. See `tests/compute.runwayAnchor.test.ts`,
+`tests/stageB.sectorRouting.test.ts` and `tests/currency.stageB.test.ts`.
+
+## Projections, scenario targets and intrinsic-value display
+
+`src/pipeline/stageB/projections.ts` displays the first five years of the
+general-route DCF's explicit path, with up to four annual historical points.
+Revenue, operating margin and FCFF come from the DCF year rows. Forward EPS
+equals EBIT times the median historical net-income/positive-EBIT ratio, divided
+by diluted shares compounded at the measured annualized share-count trend.
+A missing positive share anchor, conversion history or share trend withholds
+EPS rather than assuming flat shares. Fiscal labels advance from the DCF's
+statement anchor, so a TTM-anchored path need not start from the last annual
+fiscal-year label.
+
+Sample revenue-growth dispersion uses at least three positive, approximately
+annual growth intervals (0.7–1.3 elapsed years); sample operating-margin
+dispersion uses at least three margin levels. Off-annual revenue pairs are
+excluded individually, so surviving intervals can still support a fan.
+Growth sigma is capped at 25pp and margin sigma at 12pp. The joint shock is
+`dg = sigma_growth` and `dm = sigma_margin × correlation(growth, margin)`
+from at least three paired annual observations. Missing correlation leaves
+scenario margins at base with disclosure. The scenario perturbation gives
+the growth and margin bounds headroom for the requested shock; it does not
+simply reapply the narrower base-case clamps. Neither sigma nor the band is
+a fitted confidence interval.
+
+The versioned `UNBACKTESTED_SCENARIO_PRIOR_2026_07` weighted projection is
+25% bull + 50% base + 25% bear. These are display weights, not estimated
+probabilities. The orchestrator supplies `capital.fcf.series[].fcf` as the
+chart's historical FCF: levered cash flow after the house SBC deduction where
+disclosed, unadjusted where SBC is absent. Its forward FCF is unlevered FCFF;
+the seam is disclosed
+as a change of basis, not a forecast improvement. Scenario FCF paths can
+cross because growth also requires reinvestment.
+
+`src/pipeline/stageB/scenarioTargets.ts` reruns the same DCF and base equity
+bridge for two joint shocks. It labels the more valuable extreme bull and
+the less valuable one bear, retaining the deltas that produced each. Negative
+correlation can therefore make the bull target's growth delta negative.
+The base target reuses the DCF per-share. Perturbed targets are floored at
+zero with a warning. A non-positive base DCF per-share suppresses the entire
+target block; thin dispersion, unavailable WACC/bridge and non-DCF routes
+also suppress it. Sigma rounding to 0.00pp in either series makes target
+correlation unavailable and gives a degenerate-dispersion disclosure. The fan
+and targets share the dispersion helper, but the target labels are ordered
+by valuation while chart paths retain their growth-shock labels.
+
+`src/pipeline/stageB/fairValue.ts` resolves the deterministic route value:
+FCFF DCF for general companies and excess-return equity value for financial
+routes. Equity REITs, pre-revenue and DCF-suppressed routes have no intrinsic
+per-share card in this implementation. The published card floors a negative
+model value at zero and discloses the raw result; raw valuation arithmetic
+can remain negative. Upside uses the published rounded per-share divided by
+the comparable positive current price, minus one. Unknown/unmatched price
+currency prevents upside. Scenario targets are present-value DCF
+sensitivities, not twelve-month analyst forecasts. `verified: true` on these
+computed records means traced to deterministic inputs, not predictive or
+independent factual verification.
+
+See `tests/stageB.projections.test.ts`, `tests/stageB.scenarioTargets.test.ts`,
+`tests/projection.operatingIncome.test.ts` and `tests/stageB.fairValue.test.ts`.
+
+## Numeric grades and completeness
+
+`src/pipeline/stageB/grading.ts` owns versioned house bands
+(`SCORE_BANDS_2026_07`). Each metric is mapped to 0–100 by piecewise-linear
+interpolation between the source's named breakpoints and held at endpoint
+scores beyond them. A/B/C/D/F thresholds are 85/70/55/40; there is no E.
+These bands have not been outcome-backtested.
+
+| Aspect | General weight | Financial weight | Equity-REIT weight | Quantitative evidence |
+| --- | ---: | ---: | ---: | --- |
+| Fundamentals | 20 | 15 | 15 | Revenue/EPS/FCF growth and operating-margin slope |
+| Valuation | 20 | 22 | 25 | DCF upside, reverse-implied growth and own-history ranks; financials use implied-vs-current starting ROE and book ranks; equity REITs use FFO/AFFO rank |
+| Quality | 15 | 26 | 15 | ROIC−WACC and applicable forensic models |
+| Balance sheet | 15 | 10 | 15 | Net debt/EBITDA, interest coverage, before-SBC FCF conversion, SBC/FCF, share trend |
+| Moat | 15 | 15 | 15 | ROIC level/stability and gross margin; financials substitute ROTE level/stability |
+| Leadership | 10 | 7 | 10 | Buyback-price proxy, applicable return spread, share trend, SBC/revenue |
+| Technicals | 5 | 5 | 5 | SMA gap, RSI-14, 52-week position and six-month SPY-relative return |
+
+The financial vector covers banks, insurers and mortgage REITs. Their numeric
+balance-sheet aspect is explicitly unscored: route metrics can compute capital
+information, but the scoring engine has no calibrated capital-adequacy signal.
+Moat and leadership scores are quantitative proxies, not a finding about the
+company's competitive advantage or management competence.
+
+An aspect is the weighted mean of available, route-permitted signal scores.
+Its `dataCompleteness` is used signal weight / all intended signal weight;
+Piotroski's used weight is additionally scaled by `outOf/9`. Missing data
+contributes no score but reduces completeness; zero available evidence yields
+a null score. The composite first weights each available aspect by its route
+weight times that completeness. Its coverage ceiling excludes wholly
+route-inapplicable aspects and signal weight suppressed by route policy.
+If `R` is that evidence-weighted mean and `C` is available weight / the
+route-applicable ceiling, the published composite is `50 + (R − 50) × C`.
+Thus sparse favorable evidence shrinks toward neutral; full route-applicable
+coverage leaves the mean unchanged. A null composite is retained when no
+aspect has evidence. This score completeness is distinct from the report's
+provider/XBRL, citation and consistency coverage measures.
+
+Altman values are mapped onto the original model's 1.81/2.99 zones before
+scoring, so different variants share comparable grade bands. Scoring growth
+prefers a genuine 5Y CAGR, then 3Y, then 1Y; a span differing by more than
+0.25 years is excluded as that named window. The stricter revenue-acceleration
+benchmark has its own ±0.05-year rule. See `tests/stageB.grading.test.ts`.
+
+## Technical indicators
+
+`src/pipeline/stageB/technicals.ts` computes indicators locally from supplied
+EOD OHLCV; it does not use FMP indicator endpoints. Invalid dates and unusable
+prices are dropped and rows are sorted ascending. Unavailable volume becomes
+null and preserves valid price observations; a volume average requires the
+entire recent window rather than treating missing volume as zero.
+
+SMA uses 50/200 trading rows. RSI-14 and ATR-14 use Wilder smoothing, seeded
+by the simple mean of their first 14 changes/true ranges; a flat RSI is 50.
+ATR true range is `max(high−low, |high−prior close|, |low−prior close|)` from
+the second bar. EMA is SMA-seeded with multiplier `2/(n+1)`; MACD uses
+12/26 EMAs and a nine-observation signal EMA. SMA and MACD crosses ignore
+exact-zero spreads and require reversal of the last nonzero sign.
+
+52-week ranges and 1/3/5-year drawdowns use calendar dates rather than a
+fixed row count, with seven-day start tolerance. The range requires adequate
+calendar coverage, and drawdown discloses incomplete history. Relative
+strength is the stock's close-price return minus benchmark return in percentage
+points over 3/6/12 calendar months. Endpoints must be shared dates and within
+seven days of each series' latest observation; starts are shared dates on or
+before the requested cutoff, with seven-day tolerance. Conflicting same-date
+closes cannot establish an endpoint. These are price returns, not dividend
+total returns. Volume trend compares complete 20-row and 90-row averages:
+above 1.2 is rising, below 0.8 falling, otherwise flat. RSI 70/30, proximity
+to highs/lows, recent crossover and drawdown flags are house display rules,
+not return forecasts. See `tests/stageB.technicals.test.ts`,
+`tests/stageB.range52wHistory.test.ts` and
+`tests/charts.relativeStrengthRebase.test.ts`.
+
+## Stage A checks and report verification
+
+`src/pipeline/stageA/validate.ts` checks up to four annual balance-sheet
+identities with a 0.5%-of-assets tolerance. Total equity including minority
+interest is preferred; otherwise stockholders' equity plus disclosed minority
+interest is used. Legitimately negative equity is retained. Missing identity
+inputs are skipped with reasons, not passed.
+
+Revenue/net-income FMP↔XBRL checks cover the latest annual and quarterly
+periods at a 0.5% tolerance, using the applicable tag chains and filed currency.
+EDGAR-reconstructed rows are marked as the same source and skipped for that
+cross-check: comparing a number to the facts that produced it is not independent
+verification. A total consolidated-income fallback versus vendor common-income
+figure carries a basis caution. Staleness checks separately consider filing
+cadence, stale statement-cache envelopes, quote as-of dates (seven days),
+and the last institutional quarter whose 45-day deadline passed. ADR cadence
+allows a half-year reporting interval instead of assuming domestic 10-Qs.
+Fixture staleness markers denote synthetic mode and do not count as cache-TTL
+failures. Implausible zero interest expense/SG&A values are recorded as
+undisclosed. Validation describes gaps and cautions; it does not certify every
+input or force the whole report to stop on every failed check.
+See `tests/stageA.validate.test.ts`, `tests/report.completenessXbrl.test.ts`
+and `tests/stageA.manifest.test.ts`.
+
+`src/pipeline/stageC/payload.ts` builds numeric and citation registries from
+eligible provider/filing evidence and computed outputs. The bull/bear and
+judge passes interpret that context. Deterministic scores, multiples,
+projections, scenario targets, intrinsic value, DCF assumptions and grid cells
+are injected from Stage B; a model-authored replacement is not the authority
+for those tables. AI narrative grades and qualitative case text remain model
+judgments and can diverge from numeric bands when explained.
+
+Verification in `src/pipeline/stageC/passes.ts` and `provenance.ts` matches
+source identity, value, compatible unit/currency and as-of/period. A fetched
+web URL can establish citation retrieval, not numeric correctness. A computed
+record is `computed-derived`; a forecast never becomes an observed fact
+because its calculation can be traced. Unresolved claims remain disclosed,
+and retrieved citation dates do not permit arbitrary report dates to verify.
+
+`src/pipeline/stageC/consistency.ts` separately checks locally identifiable
+direction words against signed changes, year phrases against cited record
+years, unit words against record families, and sourcing of named individuals.
+The period-word check compares years only; it does not adjudicate fiscal
+quarters. A number that cannot be located confidently in its sentence is
+unchecked, not guessed. Coverage and checked counts accompany the results,
+so these checks are not a comprehensive proof that the narrative is true.
+
+`src/pipeline/stageC/dataOnlyReport.ts` preserves available deterministic
+sections and missing reasons when AI is unavailable or a pass fails. The
+report's execution metadata distinguishes requested mode and actual outcome;
+data-only does not mean a complete provider bundle. Historical stored reports
+retain their original computation and version stamps; changing this document
+does not recompute them. See `tests/stageC.deterministicInjection.test.ts`,
+`tests/stageC.provenance.test.ts`, `tests/stageC.verifyChecks.test.ts`,
+`tests/degradation.report.test.ts` and `tests/report.executionMetadata.test.ts`.
+
 ## Disclaimer scope
 
-Every report carries this text verbatim:
+New reports carry this text verbatim; historical reports retain the disclaimer
+saved when they were generated:
 
 > Informational only — not investment advice. This report contains A-F letter
 > grades and scenario price targets; both are model outputs derived from the
 > data and assumptions disclosed here, and neither is a recommendation to buy,
 > sell, or hold any security.
 
-The disclaimer names what the report actually emits. It grades seven aspects on
-an A–F scale and prints bull, base and bear scenario price targets; both are
-deterministic model outputs computed from the inputs disclosed above, and both
-are only as good as those inputs. Neither is a rating. The report contains no
+The disclaimer names the report's output families. Seven aspects have
+deterministic numeric scores and A–F bands when applicable evidence supports
+them; AI reports additionally carry model-authored qualitative grades. Data-only
+reports do not invent narrative assessments, and unsupported aspects can remain
+unscored. Bull, base and bear scenario price targets are deterministic model
+outputs only when the DCF and dispersion evidence support them; otherwise the
+target block is suppressed with reasons. Neither kind of grade is a
+recommendation. The report contains no
 buy, sell or hold recommendation, no allocation directive, and no price target
 authored by a person.
 

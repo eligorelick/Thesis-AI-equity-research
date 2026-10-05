@@ -6,9 +6,32 @@
 > [2026-10-03 repository audit](2026-10-03-repository-audit.md); current setup is
 > in the [README](../../README.md). Subsequent releases supersede earlier choices.
 
-What the 2026-09-02 audit asked for, what was built, and what was not. Every
-claim here is checkable against a commit; where a criterion was not met the
-reason is stated rather than the criterion quietly dropped.
+What the 2026-09-02 audit asked for, what was built, and what was not. The
+historical claims and counts below belong to their recorded batches; current
+dispositions are separated here so an old deferral is not read as an open task.
+
+## Current disposition — 2026-10-04
+
+Checked against source and test definitions at `dc994db`; no historical live
+run, test count or advisory result was re-measured for this documentation update.
+
+| Historical item | Present disposition and evidence |
+| --- | --- |
+| WS1 model defaults | The checked-in [registry](../../config/models.json) now prefers Opus 5.5 and floors Haiku's judge at Sonnet 5.5. Explicit saved selections remain preserved. [Request shaping](../../tests/anthropic.requestShaping.test.ts) covers capabilities; historical cost measurements below do not estimate current account/subscription usage. |
+| WS2/WS3 reservations and failure billing | [Scheduler](../../src/pipeline/jobScheduler.ts), [runner](../../src/pipeline/jobRunner.ts) and [admission tests](../../tests/requestAdmission.test.ts) retain per-request default admission and presumed failure settlement. `pass` mode remains accepted rather than removed after one release. Reconciliation updates the ledger/job revision; it does not rewrite already saved report bytes. |
+| WS4 successor fixture deferred/open question | Closed by the recorded fetch/revision of D-14: four `fixtures/edgar/xom_successor_*` files are checked in. [Successor tests](../../tests/edgar.successor.test.ts) show the 8-K12B names only the successor and the jointly filed 10-Q/POSASR provide the co-registration. The earlier synthetic fixture remains a separate branch case. No new owner approval is needed to read the already recorded fixtures. |
+| WS4 keyless insider trades | Still unimplemented: [bundle](../../src/pipeline/dataBundle.ts) requests trade/statistic rows from FMP, while Finnhub sentiment is a separate input. No SEC Form 4 trade reconstruction exists. Configured Finnhub news/earnings fallbacks were subsequently added; they require a key and retain gaps/provenance. |
+| WS5/WS6 calculations | [Stage B](../../src/pipeline/stageB) and [compute](../../src/pipeline/compute.ts) retain financial-route models and median growth. Subsequent changes enforce common earnings/common equity, adjacent-year averaging, operating-income basis, currency and split integrity, plus a true three-year acceleration horizon. Report spec 1.8.0/payload 1.9.0 supersede the older stamps below. |
+| WS7 protocol follow-ups | [Stage C](../../src/pipeline/stageC/index.ts) still reconstructs protocol from setting/seed on durable replay and discloses unknown case lengths; persisting the full original protocol remains open. [Judge protocol](../../src/pipeline/stageC/judgeProtocol.ts) still imports `fnv1a32` from payload; [consistency](../../src/pipeline/stageC/consistency.ts) still accepts a two-digit FY form; the runner test still pins `getConfig` call count. These are retained code facts, not newly reproduced failure claims. |
+| WS8/WS9 and later connections/UI | [Request security](../../src/app/requestSecurity.ts), [AI adapters](../../src/ai), [appearance](../../src/appearance) and generated documentation are present. Current remains the default with optional Research workspace. Credential shape and acquisition-failure handling improved, but the stale-lock recovery race remains unresolved in F08 of the [October audit](2026-10-03-repository-audit.md#follow-up--2026-10-04). |
+
+The original “What was deferred” and “Open questions” sections remain dated
+September evidence. Their successor-fixture and Opus 5 statements are superseded
+by this map and later decisions; their requests for broader paid measurement
+were not fulfilled by this documentation reconciliation. Review the
+[October audit](2026-10-03-repository-audit.md) for subsequent verification and
+explicit remaining limits, and [DATA-RIGHTS](../DATA-RIGHTS.md) for unresolved
+provider terms rather than treating keyless public access as permission.
 
 Read alongside:
 
@@ -183,7 +206,9 @@ with a test that drives the real scheduler rather than a stand-in.
 
 **Eleven of twelve met.** Reserved fixture symbols reach no provider whatever
 keys are set; EDGAR backfills history an FMP plan truncates, with per-period
-provenance and no period mixing sources; tag synonyms carry a taxonomy year and
+provenance and no statement row mixing fields from different sources; individual
+statement families can use different providers for the same fiscal period.
+Tag synonyms carry a taxonomy year and
 a review date; derived operating income subtracts non-operating items and is
 never derived for a bank; multi-class cover shares are summed with the breakdown
 disclosed; public float carries its own measurement date; restatements are

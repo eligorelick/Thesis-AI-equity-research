@@ -1,6 +1,6 @@
 # Analysis quality — design
 
-> **Historical design and live-run record; guidance reviewed 2026-10-03.**
+> **Historical design and live-run record; guidance reconciled 2026-10-04.**
 > The issuer prices, valuation outputs, model choices, costs, and validation
 > below describe the September 2 experiments and are not current market data
 > or recommendations. Some approaches have since been replaced: section 8
@@ -18,6 +18,29 @@ leaves that moved, and the live validation section records what a keyless
 rerun of the affected issuers produced.
 **Directive:** "improve the codebase to be the best possible equity analyzer
 based on extensive research, testing, and data analysis."
+
+## Current implementation map — 2026-10-04
+
+Source and test definitions checked at `dc994db`. The numbered Changes, Tests
+and Live validation sections retain the September 2 record. Their prices,
+model choices and verification measurements are historical observations.
+
+| September change | Present implementation, supersession and evidence |
+| --- | --- |
+| 1: terminal excess-return rule | [Valuation](../../../src/pipeline/stageB/valuation.ts) retains the four-year minimum, newest-five usable-ROIC window, half-median carry, 5pp cap and 0.5pp floor as house conventions. Each year's own recomputed WACC is used when supplied, with a disclosed current-WACC fallback; the old wording comparing every year to one WACC is incomplete. Sensitivity cells preserve the base excess above their own WACC. [Valuation tests](../../../tests/stageB.valuation.test.ts) cover the assumptions and independent boundary cases. |
+| 2: statement stand-ins | [Statements](../../../src/edgar/statements.ts) keeps disclosed cash-interest/equity/debt fallback chains. The operating-income derivation is now more conservative than “pretax income + interest”: it subtracts tagged non-operating components, handles the chosen pretax element's equity-method basis and withholds unsafe add-backs. EBIT follows established operating income. [Statement tests](../../../tests/edgar.statements.test.ts) and [keyless tests](../../../tests/keyless.test.ts) cover the derivations. |
+| 3: EDGAR/successor robustness | [EDGAR](../../../src/providers/edgar.ts) and [XBRL](../../../src/edgar/xbrl.ts) accept numeric/digit-string CIKs and validate responses. Core annual forms include 40-F. The no-predecessor-fetch limitation below was superseded: [successor resolution](../../../src/edgar/successor.ts), [bundle orchestration](../../../src/pipeline/dataBundle.ts) and [keyless merging](../../../src/pipeline/keyless.ts) can append eligible predecessor periods with lineage and warnings. [Recorded successor tests](../../../tests/edgar.successor.test.ts) exercise the actual co-registration headers. IFRS-only facts remain a disclosed coverage limitation. |
+| 4/11: financial forensics and overlays | [Forensics](../../../src/pipeline/stageB/forensics.ts) withholds financial-route F_CFO/F_ACCRUAL/current-ratio/gross-margin signals; the denominator reflects what is evaluable. [Routing](../../../src/pipeline/stageB/sectorRouting.ts) uses net income alone for the unprofitable overlay on bank/insurer/mortgage-REIT routes. [Forensic](../../../tests/stageB.forensics.test.ts) and [routing](../../../tests/stageB.sectorRouting.test.ts) tests cover these rules; later common-ownership corrections are D-34. |
+| 5/6/10: macro units and deterministic verification | [FRED](../../../src/providers/fred.ts), [payload](../../../src/pipeline/stageC/payload.ts), [provenance](../../../src/pipeline/stageC/provenance.ts) and [passes](../../../src/pipeline/stageC/passes.ts) register units and distinguish text-source citations from verified numeric records. [FRED tests](../../../tests/finra.fred.test.ts) include explicit missing-period lag cases; [provenance tests](../../../tests/stageC.provenance.test.ts) cover unit/period matching. A citation-coverage rate is not independent confirmation of the issuer fact or all narrative claims. |
+| 7: analyst repair | [Runner](../../../src/pipeline/jobRunner.ts) retains `MAX_ANALYST_REPAIRS = 1` with separate billed artifacts and safe discarded-attempt disclosure. [Runner tests](../../../tests/jobRunner.test.ts) and [pass tests](../../../tests/stageC.payload.passes.test.ts) cover repair/recovery. ChatGPT and Gemini now feed the same pipeline through separate [AI adapters](../../../src/ai); the original Claude-only live experiments do not validate those connections. |
+| 8: growth anchor | D-18 superseded the lower-CAGR/sign-disagreement rule. [Valuation](../../../src/pipeline/stageB/valuation.ts) takes the median of available historical, fundamental and currency-compatible analyst methods. The October acceleration diagnostic separately requires an actual three-year span within ±0.05 year; degraded CAGR series remain visible. [Growth tests](../../../tests/stageB.growth.returns.capital.test.ts) cover that distinction. |
+| 9: whole-balance anchor | [Compute](../../../src/pipeline/compute.ts) selects the newer whole balance row, or discloses fallback to the older complete row without mixing fields across periods. [Anchor tests](../../../tests/compute.runwayAnchor.test.ts) and [TTM integration](../../../tests/stageB.ttm.compute.test.ts) cover this. Return-ratio averaging separately requires adjacent fiscal years; an anchor selection is not proof of a valid averaging window. |
+
+Current report spec is **1.8.0** and payload **1.9.0**. Currency and split-basis
+guards can withhold outputs the September sweep once displayed. See
+[METHODOLOGY](../../METHODOLOGY.md) for present calculations and
+[the October audit](../../audit/2026-10-03-repository-audit.md) for recorded
+verification and remaining limits.
 
 ## Problem
 
@@ -187,11 +210,12 @@ note, and nets it out of a `LongTermDebt` total the same way it nets
   registrant — when one is known (`describeEmptyStatements` in
   `src/pipeline/keyless.ts`).
 
-The predecessor's history is not fetched: EDGAR gives no structured link and
+**Historical limitation, superseded by D-14:** the predecessor's history was
+not fetched in this September 2 implementation. EDGAR gives no structured link and
 the accession prefix of the successor's own filings (`0000034088-…`, the old
 Exxon CIK) is a filer-agent convention, not an identity claim. Until the
-successor files its first 10-K, XOM's keyless statements stay a disclosed
-gap.
+successor filed its first 10-K, this implementation left XOM's keyless statements
+as a disclosed gap. The current successor path is described in the map above.
 
 ### 4. Piotroski on financial routes (`src/pipeline/stageB/forensics.ts`)
 

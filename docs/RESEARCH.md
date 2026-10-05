@@ -3,7 +3,16 @@
 The forensic scores in this application are published academic models, not
 inventions of this project. This document is the evidence base for them. The
 source code cites it by section (`research §2.5` and so on), and a test asserts
-that every citation resolves to a heading here, so the two cannot drift apart.
+that every citation resolves to a heading here. That check proves section
+existence; it does not prove that the prose and implementation agree.
+
+Implementation statements were reconciled with the current source and synthetic
+tests on 2026-10-04. Dated live observations and literature reviews below remain
+historical evidence, not a claim that provider coverage or market inputs are
+unchanged today. The application does not implement the research candidates
+merely because this document recommends them. For the current computational
+contract, period/currency guards, reporting and formulas, see
+[METHODOLOGY.md](METHODOLOGY.md).
 
 Three kinds of statement appear below, and they are never mixed:
 
@@ -146,6 +155,45 @@ SGI deserves its own caution: growth is not misconduct. It is in the model
 because growth creates the *incentive* to sustain a trend, which is why fast
 growers trip the M-score routinely and why a flagged score is a prompt to look,
 never a finding.
+
+**Implemented arithmetic.** `computeBeneish` in
+`src/pipeline/stageB/forensics.ts` computes the following, before index
+neutralization and the house clamps (§2.5). `t` is the latest annual period,
+`p` the adjacent prior annual period, and all statement amounts must share the
+model's established currency:
+
+```
+DSRI = (receivables_t / sales_t) / (receivables_p / sales_p)
+GMI  = gross_margin_p / gross_margin_t
+AQI  = [1 − (current_assets_t + net_PPE_t) / assets_t]
+       / [1 − (current_assets_p + net_PPE_p) / assets_p]
+SGI  = sales_t / sales_p
+DEPI = [DA_p / (DA_p + net_PPE_p)] / [DA_t / (DA_t + net_PPE_t)]
+SGAI = (SGA_t / sales_t) / (SGA_p / sales_p)
+LVGI = [(long_term_debt_t + current_liabilities_t) / assets_t]
+       / [(long_term_debt_p + current_liabilities_p) / assets_p]
+TATA = (continuing_net_income_t − CFO_t) / assets_t
+```
+
+Receivables use `accountsReceivables` in both years where available, otherwise
+`netReceivables` in both; mixed definitions are not compared. Combined SG&A
+must be disclosed/nonzero in both years; otherwise the comparison uses the
+same available G&A and/or selling-and-marketing components in both, naming a
+narrower component-only base. TATA prefers continuing-operations net income
+and discloses a total-net-income fallback. The cash-flow TATA is the selected
+implementation basis, not a claim to reproduce the paper's original
+balance-sheet accrual construction. The diagnostic balance-sheet TATA is
+`[Δcurrent assets − Δcash − (Δcurrent liabilities − Δshort-term debt −
+Δtax payables) − DA_t] / assets_t`; short-term debt is disclosed as a proxy
+for current maturities of long-term debt.
+
+Missing non-TATA index inputs resolve to neutral 1.0 with named notes; missing
+TATA suppresses M. A prior asset-quality denominator near zero (absolute
+value below `1e-12`) neutralizes AQI. Non-positive gross margin neutralizes
+GMI and produces a caution, rather than interpreting a ratio of losses.
+Either year's revenue below 10 million **statement-currency units** suppresses
+the indices. That raw-currency floor is a house guard, not a USD-converted
+materiality test, and differs from the USD-only pre-revenue overlay.
 
 **House rule — the DEPI basis.** Beneish defines the depreciation rate on
 depreciation of PP&E, net of the amortisation of intangibles. The filed
@@ -291,6 +339,21 @@ for exactly the fast-growing companies the score is meant to evaluate.
 
 ---
 
+**Implemented departures and missing inputs.** The implementation uses
+continuing-operations net income where disclosed, otherwise total net income,
+with a note. Leverage compares long-term debt / average total assets; when
+the third balance is absent, prior leverage uses prior closing assets as a
+disclosed proxy. Zero long-term debt in both years earns the deleveraging point
+under a noncanonical no-deterioration convention. Equity issuance is tested
+against a default de-minimis of zero. Missing `commonStockIssuance` withholds
+the signal and reduces the denominator; it does not award a no-issuance point.
+Strict improvement tests use `>` or `<`, so equality does not normally earn a
+change point. Actual evaluable signals determine `outOf`, which can be below
+7/5/3 when data are missing; an empty battery has a null score. Route-specific
+financial variants and scoring evidence weights are described in
+[METHODOLOGY.md](METHODOLOGY.md). See `tests/stageB.forensics.test.ts` and
+`tests/stageB.finOtherSuppression.test.ts`.
+
 ## 4. Accrual ratios
 
 Richard Sloan, *Do Stock Prices Fully Reflect Information in Accruals and Cash
@@ -298,9 +361,11 @@ Flows About Future Earnings?*, The Accounting Review 71(3), 1996; Hribar &
 Collins, *Errors in Estimating Accruals*, Journal of Accounting Research 40(1),
 2002; Richardson, Sloan, Soliman & Tuna on accrual reliability, 2005.
 
-**Published — the cash-flow approach is primary.** Accruals are computed as
-(net income − operating cash flow − investing cash flow) scaled by net
-operating assets. Hribar & Collins showed that the older balance-sheet approach
+**Implemented — the cash-flow approach is primary.** Aggregate accruals are computed as
+(net income − operating cash flow − investing cash flow) scaled by **average**
+net operating assets. This is the project's broad aggregate-accrual formulation,
+not the narrower `(NI − CFO) / assets` used for Beneish TATA and not a claim
+to reproduce Sloan's original measure. Hribar & Collins showed that the older balance-sheet approach
 (differencing successive balance sheets) introduces measurement error whenever
 a non-operating event moves the balance sheet — acquisitions, divestitures,
 currency translation. Both are computed and reported; the cash-flow figure is
@@ -319,7 +384,7 @@ and the report does not claim to.
 
 ### 4.2 Which formulation is used
 
-**Published.** Two are computed. The cash-flow approach (Hribar–Collins) is
+**Implemented.** Two are computed. The cash-flow approach is
 primary; the balance-sheet approach (ΔNOA) is reported beside it. Where they
 diverge materially the divergence is itself disclosed, because the gap between
 them is a reliable marker of an acquisition, a divestiture or currency
@@ -333,8 +398,18 @@ therefore a display convention, not a finding. This project uses |ratio| < 0.10
 *unremarkable*, < 0.20 *elevated*, otherwise *red*, and labels them heuristic
 wherever they appear.
 
+`computeAccruals` defines each period's `NOA = total assets − cash and
+short-term investments − (total liabilities − total debt)`. The two aggregates
+are `NI − CFO − CFI` (net income from the cash-flow statement first, income
+statement otherwise) and `NOA_t − NOA_p`. Both use the same scaler. Investing
+cash flow retains its statement sign, so an investing outflow increases this
+broad accrual measure. Missing CFI withholds the cash-flow ratio rather than
+assuming no investment; the balance-sheet ratio can still remain available.
+An absolute difference greater than 0.10 between the ratios adds a house
+divergence note. See `tests/stageB.forensics.test.ts`.
+
 **House rule — the scaler.** Net operating assets can be zero or negative,
-which makes the ratio meaningless or sign-flipped. Where NOA ≤ 0 or is
+which makes the ratio meaningless or sign-flipped. When average NOA ≤ 0 or is
 unavailable, the ratio is rescaled by **average total assets** and the
 substitution is disclosed on the number.
 
@@ -347,6 +422,25 @@ They are heuristics over the filed statements, every one of which states its
 own threshold in the report next to the flag it produced, and every one of
 which is marked `heuristic`. They exist to surface a pattern for a reader to
 investigate, never to score a company.
+
+The implemented thresholds in `FORENSICS_HOUSE_RULES`
+(`src/pipeline/stageB/forensics.ts`) are:
+
+| Flag | Implemented trigger |
+| --- | --- |
+| Receivables / inventory growth gap | Growth exceeds revenue growth by **more than** 15pp (warn), more than 25pp (flag), and the balance itself grew more than 10% |
+| Inventory overhang | Revenue fell more than 10% while inventory grew; publish informational overhang instead of the growth-gap flag |
+| Other-item materiality | `abs(totalOtherIncomeExpensesNet) / abs(operatingIncome) > 10%`; zero operating income cannot scale the test |
+| Serial other items | Materiality breached in at least three distinct fiscal dates among the latest five rows |
+| Discontinued operations | Nonzero discontinued-operations income in at least two of the latest five annual rows |
+| Revenue floor for growth gaps | Prior revenue at least 10 million statement-currency units and positive, with computable current revenue |
+
+The "one-time" flag is a proxy based on aggregate non-operating/other income
+and expense: the code does not verify that an issuer presented every included
+item as exceptional. It can include recurring non-operating results. Growth
+flags require an adjacent annual pair; cross-year alignment and currency guards
+can withhold them. Missing input reasons reach the manifest. These flags are
+separate diagnostics and are not directly additional scoring signals.
 
 Growth-based flags are suppressed entirely when base-year revenue is below a
 floor, because a percentage change on a near-zero base is arithmetic noise
@@ -513,11 +607,21 @@ uncorrelated with the market.
 
 **Published — the ERP source.** Aswath Damodaran's implied equity risk premium,
 which is forward-looking (backed out of index prices and expected cash flows)
-rather than a historical average. The provider's own US premium is preferred
-when available; the Damodaran figure is the dated fallback.
+rather than a historical average. The implementation prefers the provider's
+total premium for the issuer's domicile, resolving country codes and country
+names through aliases (`selectEquityRiskPremium` in `src/pipeline/compute.ts`).
+An absent or conflicting domicile premium uses the unambiguous US row with a
+disclosure; an unknown domicile also needs that disclosure. A selected input
+outside the plausibility band or unavailable US input invokes the dated static
+Damodaran **US** fallback. Domicile is a house approximation of equity-market
+exposure, not a geographic revenue-weighted country-risk model.
 
-**House rule — staleness.** An implied ERP more than **210 days** old is
-rejected rather than used. An ERP is a market observation, not a constant, and
+**House rule — staleness.** The static fallback (4.18%, dated 2026-07-01 in
+`src/pipeline/stageB/returns.ts`) more than **210 days** old is rejected rather
+than used. Missing/invalid analysis dates and a fallback post-dating analysis
+also reject it. The vendor ERP date is the fetch date, not an independently
+verified publication date: the static freshness gate is not a blanket age
+test on vendor premiums. An ERP is a market observation, not a constant, and
 a year-old one can be a full percentage point wrong after a repricing — which
 moves a terminal value by far more than it sounds.
 
@@ -553,11 +657,13 @@ the report labels it a HOUSE CONVENTION in those words wherever it appears.
 **House rule — the Gordon guard.** The base case requires WACC − g ≥ 2.0
 percentage points (1.5 in the sensitivity grid, where a tighter guard would
 blank the cells the grid exists to show). As the denominator approaches zero
-the terminal value approaches infinity; the guard bounds that, and when it
-binds the report says so rather than printing the result.
+the terminal value approaches infinity. The base-case guard reduces terminal
+growth to WACC minus 2pp and reports the adjusted calculation; a sensitivity
+cell inside its 1.5pp guard is withheld rather than clamped to a different cell.
 
 **House rule — terminal ROIC.** Returns fade to the cost of capital by default.
-Where ROIC exceeded WACC in each of the last four or more fiscal years, half
+Where all of at least four available observations among the newest five
+computable annual ROICs exceeded their applicable WACC, half
 the median spread is carried in perpetuity, capped at 5 percentage points. This
 is a convention about competitive advantage, not a finding, and it is labelled
 as one.
@@ -581,6 +687,36 @@ data, and a reader is entitled to know which.
 ---
 
 ## 8. Candidate improvements, weighed against the evidence
+
+**Status as of the 2026-10-04 source audit.** This section preserves the
+2026-09-07 review and its ordering of proposed work. Peer statistics are still
+not populated, scenario weights remain unbacktested, beta still uses fixed
+2/3–1/3 shrinkage, and no Form 4 classifier, G-score or point-in-time backtest
+harness is implemented. The dated entry-tier provider observations are evidence
+about those historical runs, not a current entitlement guarantee. The following
+implementation qualifications supersede the older feasibility assumptions:
+
+- Unknown-currency analyst EPS/revenue/price-target estimates are not eligible
+  monetary registry inputs. A future forward-multiple workflow needs explicit
+  currency and share-basis evidence as well as a populated estimate field
+  (`src/pipeline/estimateCurrency.ts`).
+- The fan and target dispersion includes growth/margin correlation;
+  off-annual growth pairs are skipped individually, while margin-level
+  dispersion can use the surviving annual history. Thin evidence suppresses
+  the fan/targets. These are two DCF joint shocks, not a statistically fitted
+  price interval, so ±1σ of input growth does not imply two-thirds coverage of
+  realized prices (`src/pipeline/stageB/projections.ts`, `scenarioTargets.ts`).
+- The current extractor resolves restatements using available filings, not an
+  analysis-date cutoff. Rebuilding a genuine historical report requires filtering
+  facts and submissions by filing/acceptance date, dated quote/price adjustment
+  and split coverage, historical risk/ERP inputs, and all other metadata before
+  reconstruction. The static ERP fallback rejects historical dates before its
+  publication; the current quote/profile must not leak into historical weights.
+  This is proposed new tooling, not an existing backtest mode.
+
+Source-grounded behavior is described in [METHODOLOGY.md](METHODOLOGY.md);
+the papers below motivate experiments and do not validate this implementation's
+coverage or forecast error.
 
 The audit of 2026-09-06 closed with a list of things that might make the
 analyzer better. This section asks, for each one, whether the published
@@ -617,7 +753,8 @@ missing input. The FMP `stock-peers` member IS fetched and IS served on the
 entry-tier plan — the live run of 2026-09-07 returned eight names for Apple —
 but FMP's list is "same exchange, same sector, similar market cap", which put
 a $13B solar-tracker maker and a micro-cap beside Apple. `analyst-estimates`
-is also served on that plan, so a forward EPS exists for the issuer.
+was also served in that historical run, so the response contained a forward EPS
+field. That alone does not establish its currency or eligibility for valuation.
 
 **Cost.** Each peer's multiples need its quote and ratios (two FMP requests
 per peer, about sixteen on a run that makes forty), against a small daily
@@ -657,16 +794,20 @@ in aggregate.
 bull and bear built from the issuer's own annual growth and margin dispersion
 at `DISPERSION_K = 1.0`, capped; the fan and the scenario targets share that σ.
 
-**Feasibility.** A point-in-time backtest is possible with no paid call: every
+**Historical feasibility proposal.** A point-in-time backtest could avoid paid
+LLM calls: every
 companyfacts fact carries its `filed` date and the extractor already
-resolves periods on max(filed), so a Stage B report "as of" a past date can be
-rebuilt by dropping facts filed after it; prices come from the keyless chart
-history. One companyfacts fetch per issuer, cached, Stage B only.
+resolves periods on max(filed). Filtering facts filed after the intended date is
+a necessary first step, but does not alone reconstruct a historical Stage B
+report. Quotes, profile metadata, splits and adjustment bases, risk inputs and
+statement reconstruction also need date-aware snapshots (see the qualifications
+above). No such complete harness is currently supplied.
 
 **Verdict — beneficial for calibration, not for point accuracy; do it before
 touching the weights by hand.** Measure three things over a few dozen issuers
 and ten year-ends: the share of realised one- and three-year prices inside the
-bull–bear band (a ±1σ band should hold roughly two thirds), the sign and size
+bull–bear sensitivity band (measure coverage without assuming that ±1σ input
+shocks form a normal price interval), the sign and size
 of the median error (Bessembinder predicts the base path is too high for most
 names and too low for the few), and whether the fan's σ ranks issuers by
 realised dispersion at all. The literature says point accuracy near 45% error

@@ -1,6 +1,6 @@
 # Provider and Temporal Integrity Remediation Design
 
-> **Historical design record; guidance reviewed 2026-10-03.** The status below
+> **Historical design record; guidance reconciled 2026-10-04.** The status below
 > records the August implementation, which already differed from this plan's
 > proposed architecture. The eight defects and original verification contract
 > remain evidence of that work, not instructions to rerun the old four
@@ -18,13 +18,40 @@
 
 > **Status: all eight Scope defects fixed on `main` (2026-08-31)**, though by a
 > different implementation than the Architecture section prescribes: the
-> observation date of every provider payload is derived from the payload's own
-> newest eligible period end (`asOf`), never from the fetch time, and each
+> observation date of company facts is derived from the payload's own
+> newest eligible core-form period end (`asOf`), rather than its fetch time; other
+> endpoints use their own observation rules and disclosed fallbacks. Each
 > defect carries a regression test in the provider suites (tests/fmp.*.test.ts,
 > tests/edgar.*.test.ts, tests/dataBundle.*.test.ts). The plan and the audit
 > record that tracked the per-defect tests were retired by the audit of
 > 2026-09-06
 > ([`../audits/2026-09-06-full-codebase-audit.md`](../audits/2026-09-06-full-codebase-audit.md)).
+
+## Current implementation map — 2026-10-04
+
+Source and test definitions checked at `dc994db`. The Architecture and
+verification contract below describe the original proposal, not a new claim
+that every provider uses the same date algorithm or that all regression suites
+were run for this documentation reconciliation.
+
+| Scope defect | Present implementation and test evidence |
+| --- | --- |
+| 1: Finnhub sentiment identity/domain | [Finnhub](../../../src/providers/finnhub.ts) validates top-level/row issuer, month/year and MSPR. [Sentiment-contract tests](../../../tests/finnhub.sentimentContract.test.ts) cover these constraints. |
+| 2: hidden EDGAR content | [Extraction](../../../src/edgar/extract.ts) strips the documented `display:none` variants; [hidden-content tests](../../../tests/edgar.hiddenVariants.test.ts) cover decoy headings and visible controls. This is HTML extraction, not a full browser CSS visibility engine. |
+| 3–4: JSON cache admission | [FMP](../../../src/providers/fmp.ts), [EDGAR](../../../src/providers/edgar.ts) and [cache](../../../src/cache/apiCache.ts) validate operation-owned bodies before admission and on reads. [FMP](../../../tests/fmp.cacheAdmission.test.ts) and [EDGAR](../../../tests/edgar.jsonCacheAdmission.test.ts) tests cover malformed/wrong-entity responses and recovery. A valid empty response may still be cacheable even when the operation returns a no-data gap. |
+| 5: stale contributing statements | [Stage A validation](../../../src/pipeline/stageA/validate.ts) combines statement dates with contributing-envelope stale state. [Validation tests](../../../tests/stageA.validate.test.ts) also cover invalid full timestamps and calendar dates added in the October follow-up; freshness age still uses the written calendar day. |
+| 6: earnings observation versus event | [Bundle derivation](../../../src/pipeline/dataBundle.ts) keeps the event date in the row while retaining the source envelope's `asOf`/`fetchedAt`/stale metadata; [earnings tests](../../../tests/dataBundle.earnings.test.ts) cover this separation. |
+| 7: company-fact observation | [EDGAR](../../../src/providers/edgar.ts) calls `latestEligibleFactEnd`, returning a gap when there is no eligible core-form end. [Fact-date tests](../../../tests/edgar.factObservationDate.test.ts) cover foreign/amended forms, future ends and malformed points. |
+| 8: valid-empty FINRA | [FINRA](../../../src/providers/finra.ts) distinguishes `[]` from malformed bodies; [FINRA/FRED tests](../../../tests/finra.fred.test.ts) cover informational no-data and scope checks. |
+
+The universal “never fetch time” wording was too broad: FMP's `deriveAsOf`
+falls back to the fetch day when no eligible row date/timestamp exists, including
+forward-only event/forecast rows. SEC ticker-map envelopes use the map fetch
+day, and submissions use the latest filing day with a fetch-day fallback.
+These are distinct from company-fact fiscal ends. The source manifest carries
+the returned envelope; it does not prove point-in-time availability of every
+underlying statement. Current currency, share-basis and saved-report conventions
+are maintained in [METHODOLOGY](../../METHODOLOGY.md).
 
 ## Goal
 
